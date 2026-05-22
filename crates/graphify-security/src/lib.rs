@@ -2,7 +2,6 @@
 //!
 //! Ports `graphify-py/graphify/security.py`.
 
-use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -267,10 +266,16 @@ fn fetch_with(
     allow_private_ips: bool,
 ) -> Result<Vec<u8>, SecurityError> {
     validate_url_with(url, allow_private_ips)?;
-    let agent = ureq::AgentBuilder::new()
-        .timeout(timeout)
-        .redirects(0)
-        .build();
+    // ureq 3 redesigned the agent builder. We disable auto-redirects so we
+    // can re-validate the target URL on every hop, and disable the implicit
+    // status-as-error wrapping so 3xx responses return as `Ok(response)`
+    // (we need access to the `Location` header on those).
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build()
+        .into();
     fetch_inner(&agent, url, max_bytes, 10, allow_private_ips)
 }
 
@@ -282,64 +287,83 @@ fn fetch_inner(
     allow_private_ips: bool,
 ) -> Result<Vec<u8>, SecurityError> {
     let resp_result = agent
-        .request("GET", url)
-        .set("User-Agent", "Mozilla/5.0 graphify/1.0")
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 graphify/1.0")
         .call();
 
-    match resp_result {
-        Ok(resp) => read_response(resp, url, max_bytes),
-        Err(ureq::Error::Status(status, resp)) => {
-            // Handle 3xx redirects ourselves so we can re-validate the target.
-            if (300..400).contains(&status) {
-                if redirects_left == 0 {
-                    return Err(SecurityError::HttpStatus {
-                        url: url.to_string(),
-                        status,
-                    });
-                }
-                if let Some(loc) = resp.header("Location") {
-                    let next = match Url::parse(url).and_then(|base| base.join(loc)) {
-                        Ok(u) => u.to_string(),
-                        Err(e) => return Err(SecurityError::InvalidUrl(e)),
-                    };
-                    validate_url_with(&next, allow_private_ips)?;
-                    return fetch_inner(
-                        agent,
-                        &next,
-                        max_bytes,
-                        redirects_left - 1,
-                        allow_private_ips,
-                    );
-                }
-                return Err(SecurityError::HttpStatus {
-                    url: url.to_string(),
-                    status,
-                });
-            }
-            Err(SecurityError::HttpStatus {
+    let resp = match resp_result {
+        Ok(r) => r,
+        Err(e) => return Err(SecurityError::Transport(e.to_string())),
+    };
+
+    let status = resp.status().as_u16();
+
+    // 3xx redirect — re-validate the target URL before following.
+    if (300..400).contains(&status) {
+        if redirects_left == 0 {
+            return Err(SecurityError::HttpStatus {
                 url: url.to_string(),
                 status,
-            })
+            });
         }
-        Err(ureq::Error::Transport(t)) => Err(SecurityError::Transport(t.to_string())),
+        let location = resp
+            .headers()
+            .get("Location")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        if let Some(loc) = location {
+            let next = match Url::parse(url).and_then(|base| base.join(&loc)) {
+                Ok(u) => u.to_string(),
+                Err(e) => return Err(SecurityError::InvalidUrl(e)),
+            };
+            validate_url_with(&next, allow_private_ips)?;
+            return fetch_inner(
+                agent,
+                &next,
+                max_bytes,
+                redirects_left - 1,
+                allow_private_ips,
+            );
+        }
+        return Err(SecurityError::HttpStatus {
+            url: url.to_string(),
+            status,
+        });
     }
+
+    // Any non-2xx that is not a redirect is a hard failure.
+    if !(200..300).contains(&status) {
+        return Err(SecurityError::HttpStatus {
+            url: url.to_string(),
+            status,
+        });
+    }
+
+    read_response(resp, url, max_bytes)
 }
 
 fn read_response(
-    resp: ureq::Response,
+    resp: ureq::http::Response<ureq::Body>,
     url: &str,
     max_bytes: usize,
 ) -> Result<Vec<u8>, SecurityError> {
-    let mut reader = resp.into_reader().take((max_bytes as u64) + 1);
-    let mut buf = Vec::new();
-    std::io::copy(&mut reader, &mut buf)?;
-    if buf.len() > max_bytes {
-        return Err(SecurityError::SizeLimitExceeded {
+    // ureq 3's `Body::with_config().limit(N).read_to_vec()` returns
+    // `Err(BodyExceedsLimit)` when the response exceeds N bytes. We set
+    // the limit one byte higher than `max_bytes` so we can distinguish
+    // "fits exactly" from "exceeded" via the error path.
+    let limit = (max_bytes as u64) + 1;
+    match resp.into_body().with_config().limit(limit).read_to_vec() {
+        Ok(buf) if buf.len() > max_bytes => Err(SecurityError::SizeLimitExceeded {
             url: url.to_string(),
             mb: max_bytes / 1_048_576,
-        });
+        }),
+        Ok(buf) => Ok(buf),
+        Err(ureq::Error::BodyExceedsLimit(_)) => Err(SecurityError::SizeLimitExceeded {
+            url: url.to_string(),
+            mb: max_bytes / 1_048_576,
+        }),
+        Err(e) => Err(SecurityError::Transport(e.to_string())),
     }
-    Ok(buf)
 }
 
 /// Fetch `url` and return UTF-8 text (replacing bad bytes).

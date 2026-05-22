@@ -143,15 +143,19 @@ pub(crate) fn call_plain_openai_compat(
     }
 
     let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let agent = ureq::AgentBuilder::new().timeout(api_timeout()).build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(api_timeout()))
+        .build()
+        .into();
 
     let resp: PlainResp = agent
         .post(&endpoint)
-        .set("Authorization", &format!("Bearer {api_key}"))
-        .set("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
         .send_json(&body)
         .map_err(|e| LlmError::Http(e.to_string()))?
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| LlmError::Parse(e.to_string()))?;
 
     Ok(resp

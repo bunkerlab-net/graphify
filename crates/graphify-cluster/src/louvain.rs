@@ -12,14 +12,15 @@
 //!   build the contracted graph, repeat Phase 1.
 //! - Repeat for up to `max_level` levels.
 //!
-//! Tie-breaking is done with a seeded `rand::rngs::SmallRng` to match the
-//! Python `seed=42` behaviour.
+//! Tie-breaking is done with a seeded `rand::rngs::StdRng` to match the
+//! Python `seed=42` behaviour. `rand` 0.10 removed `SmallRng`, so we use the
+//! ChaCha-backed `StdRng` instead; the determinism guarantee is identical.
 
 use std::collections::HashMap;
 
 use rand::SeedableRng as _;
-use rand::rngs::SmallRng;
-use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom as _;
 
 const DEFAULT_SEED: u64 = 42;
 #[allow(clippy::cast_precision_loss)] // threshold is a heuristic, precision loss is acceptable
@@ -63,7 +64,7 @@ fn louvain_indices(
     // `final_community[i]` tracks the final community for each original node.
     let mut final_community: Vec<usize> = community.clone();
 
-    let mut rng = SmallRng::seed_from_u64(DEFAULT_SEED);
+    let mut rng = StdRng::seed_from_u64(DEFAULT_SEED);
 
     // Current graph state (may be contracted between passes)
     let mut cur_n = n_nodes;
@@ -126,7 +127,7 @@ fn louvain_phase1(
     resolution: f64,
     _threshold: f64,
     community: &mut [usize],
-    rng: &mut SmallRng,
+    rng: &mut StdRng,
 ) -> bool {
     // tot[c] = sum of degrees (strengths) of nodes in community c
     let degrees: Vec<f64> = (0..n)

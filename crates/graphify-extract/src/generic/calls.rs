@@ -199,8 +199,9 @@ fn extract_callee(
                     callee_name = Some(read_text_owned(first, source));
                 } else if first.kind() == "navigation_expression" {
                     is_member_call = true;
-                    // Reversed scan for last simple_identifier
-                    let count = first.child_count();
+                    // Reversed scan for last simple_identifier. tree-sitter 0.26
+                    // moved `Node::child` to take `u32`; cast inside the loop.
+                    let count = u32::try_from(first.child_count()).unwrap_or(0);
                     for i in (0..count).rev() {
                         if let Some(c) = first.child(i)
                             && matches!(c.kind(), "simple_identifier" | "identifier")
@@ -221,7 +222,7 @@ fn extract_callee(
                     if let Some(field) = first.child_by_field_name("field") {
                         callee_name = Some(read_text_owned(field, source));
                     } else {
-                        let count = first.child_count();
+                        let count = u32::try_from(first.child_count()).unwrap_or(0);
                         for i in (0..count).rev() {
                             if let Some(c) = first.child(i)
                                 && c.kind() == "identifier"

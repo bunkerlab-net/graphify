@@ -251,10 +251,7 @@ fn has_code(changed_paths: &[PathBuf]) -> bool {
 /// Returns `WatchError::Notify` if the underlying watcher cannot be
 /// initialised or if filesystem events cannot be received.
 pub fn watch(watch_path: &Path, debounce: f64) -> Result<(), WatchError> {
-    use notify_debouncer_full::{
-        DebounceEventResult, new_debouncer,
-        notify::{RecursiveMode, Watcher as _},
-    };
+    use notify_debouncer_full::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
     let debounce_dur = Duration::from_secs_f64(debounce);
     let out_dir_name = graphify_out();
@@ -269,8 +266,10 @@ pub fn watch(watch_path: &Path, debounce: f64) -> Result<(), WatchError> {
 
     let mut debouncer = new_debouncer(debounce_dur, None, tx).map_err(WatchError::Notify)?;
 
+    // notify-debouncer-full 0.7+ removed the `.watcher()` accessor; the
+    // `Debouncer` now implements `Watcher` directly, so we call `.watch()`
+    // on the debouncer itself.
     debouncer
-        .watcher()
         .watch(watch_path, RecursiveMode::Recursive)
         .map_err(WatchError::Notify)?;
 

@@ -63,17 +63,21 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
                 "max_tokens": max_tokens_u32,
                 "messages": [{"role": "user", "content": prompt}],
             });
-            let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .timeout_global(Some(timeout))
+                .build()
+                .into();
             let http_resp = agent
                 .post(endpoint)
-                .set("x-api-key", &key)
-                .set("anthropic-version", "2023-06-01")
-                .set("Content-Type", "application/json")
+                .header("x-api-key", &key)
+                .header("anthropic-version", "2023-06-01")
+                .header("Content-Type", "application/json")
                 .send_json(&body)
                 .map_err(|e| LlmError::Http(e.to_string()))?;
             // Deserialize just enough to extract the text.
             let val: serde_json::Value = http_resp
-                .into_json()
+                .into_body()
+                .read_json()
                 .map_err(|e| LlmError::Parse(e.to_string()))?;
             Ok(val["content"]
                 .as_array()

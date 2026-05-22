@@ -14,7 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 strsim = "0.11"
 thiserror = { workspace = true }
-twox-hash = "1"
+twox-hash = "2"
 
 [dev-dependencies]
 strsim = "0.11"

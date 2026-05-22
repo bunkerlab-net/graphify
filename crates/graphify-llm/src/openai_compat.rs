@@ -105,17 +105,21 @@ pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmErr
     }
 
     let endpoint = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
-    let agent = ureq::AgentBuilder::new().timeout(req.timeout).build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(req.timeout))
+        .build()
+        .into();
 
     let http_resp = agent
         .post(&endpoint)
-        .set("Authorization", &format!("Bearer {}", req.api_key))
-        .set("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", req.api_key))
+        .header("Content-Type", "application/json")
         .send_json(&body)
         .map_err(|e| LlmError::Http(e.to_string()))?;
 
     let resp_body: OaiResponse = http_resp
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| LlmError::Parse(e.to_string()))?;
 
     let choice = resp_body

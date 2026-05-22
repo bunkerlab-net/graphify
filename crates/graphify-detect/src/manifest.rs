@@ -92,7 +92,7 @@ pub fn md5_file(path: &Path) -> String {
             Err(_) => return String::new(),
         }
     }
-    let digest = ctx.compute();
+    let digest = ctx.finalize();
     format!("{digest:x}")
 }
 

@@ -6,7 +6,7 @@
 //!
 //! The Python reference attempts Leiden (graspologic) and falls back to
 //! `NetworkX`'s Louvain.  This crate ships a pure-Rust Louvain implementation
-//! (see `louvain.rs`) seeded with `rand::rngs::SmallRng` at seed 42 — the
+//! (see `louvain.rs`) seeded with `rand::rngs::StdRng` at seed 42 — the
 //! same seed the Python fallback uses.  Leiden is intentionally **not**
 //! implemented; no suitable Rust crate exists in the workspace and the
 //! structural-correctness tests do not require identical community IDs.

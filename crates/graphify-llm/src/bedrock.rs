@@ -160,25 +160,27 @@ pub fn call_bedrock(
         date_str,
     })?;
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(600))
-        .build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(600)))
+        .build()
+        .into();
     let mut req = agent
         .post(&endpoint)
-        .set("Content-Type", "application/json")
-        .set("x-amz-date", datetime_str);
+        .header("Content-Type", "application/json")
+        .header("x-amz-date", datetime_str);
 
     for (k, v) in &signed.extra_headers {
-        req = req.set(k, v);
+        req = req.header(k.as_str(), v.as_str());
     }
-    req = req.set("Authorization", &signed.authorization);
+    req = req.header("Authorization", &signed.authorization);
 
     let http_resp = req
-        .send_string(&body_str)
+        .send(&body_str)
         .map_err(|e| LlmError::Http(e.to_string()))?;
 
     let resp: BedrockResponse = http_resp
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| LlmError::Parse(e.to_string()))?;
 
     let text = resp

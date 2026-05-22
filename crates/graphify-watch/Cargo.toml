@@ -18,8 +18,8 @@ graphify-export = { workspace = true }
 graphify-extract = { workspace = true }
 graphify-report = { workspace = true }
 indexmap = { workspace = true }
-notify = "6"
-notify-debouncer-full = "0.3"
+notify = "8"
+notify-debouncer-full = "0.7"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

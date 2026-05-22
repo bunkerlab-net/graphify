@@ -91,7 +91,10 @@ pub fn call_claude(
 
     let endpoint = format!("{BASE_URL}/v1/messages");
     let timeout = crate::openai_compat::api_timeout();
-    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .build()
+        .into();
 
     let body = json!({
         "model": model,
@@ -102,14 +105,15 @@ pub fn call_claude(
 
     let http_resp = agent
         .post(&endpoint)
-        .set("x-api-key", api_key)
-        .set("anthropic-version", "2023-06-01")
-        .set("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("Content-Type", "application/json")
         .send_json(&body)
         .map_err(|e| LlmError::Http(e.to_string()))?;
 
     let resp: AnthropicResponse = http_resp
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| LlmError::Parse(e.to_string()))?;
 
     let raw_content = resp

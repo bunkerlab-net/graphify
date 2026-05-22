@@ -542,9 +542,11 @@ fn walk_julia(
                         context: None,
                         confidence_score: None,
                     });
-                    // Walk RHS only (last child)
-                    if node.child_count() >= 3
-                        && let Some(rhs) = node.child(node.child_count() - 1)
+                    // Walk RHS only (last child). tree-sitter 0.26 changed
+                    // `child()` to accept `u32`; cast the index explicitly.
+                    let count = u32::try_from(node.child_count()).unwrap_or(0);
+                    if count >= 3
+                        && let Some(rhs) = node.child(count - 1)
                     {
                         function_bodies.push((func_nid, rhs.start_byte(), rhs.end_byte(), false));
                     }
@@ -702,7 +704,8 @@ fn walk_calls_julia(
                     });
                 }
             } else if callee_node.kind() == "field_expression" && callee_node.child_count() >= 3 {
-                let method_node = callee_node.child(callee_node.child_count() - 1);
+                let count = u32::try_from(callee_node.child_count()).unwrap_or(0);
+                let method_node = callee_node.child(count - 1);
                 if let Some(mn) = method_node {
                     let method_name = read_text(mn, source);
                     let target_nid = make_id(&[stem, method_name]);
