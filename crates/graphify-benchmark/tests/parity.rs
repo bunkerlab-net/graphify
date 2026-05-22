@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use graphify_benchmark::{
-    SAMPLE_QUESTIONS, format_benchmark, hr, query_subgraph_tokens, run_benchmark,
+    SAMPLE_QUESTIONS, format_benchmark, hr, print_benchmark, query_subgraph_tokens, run_benchmark,
 };
 use graphify_build::{Graph, GraphKind};
 use indexmap::IndexMap;
@@ -254,4 +254,29 @@ fn test_hr_length() {
 #[test]
 fn test_sample_questions_not_empty() {
     assert!(!SAMPLE_QUESTIONS.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// print_benchmark — verifies the formatter contract (stdout capture is not
+// possible in unit tests; we call format_benchmark directly to assert shape).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_print_benchmark_formatter_contract() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_file = tmp.path().join("graph.json");
+    write_graph(&make_graph(), &graph_file);
+    let result = run_benchmark(&graph_file, Some(5_000), None)
+        .expect("run_benchmark")
+        .expect("some result");
+
+    // Verify the formatter produces the expected content — print_benchmark
+    // calls format_benchmark internally, so testing the formatter is equivalent.
+    let s = format_benchmark(Some(&result));
+    assert!(s.contains("reduction"), "should mention reduction");
+    assert!(s.contains('x'), "should contain 'x' for multiplier");
+
+    // Smoke test: print_benchmark should not panic.
+    print_benchmark(Some(&result));
+    print_benchmark(None);
 }

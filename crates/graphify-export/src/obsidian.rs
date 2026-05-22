@@ -45,6 +45,7 @@ fn safe_name(label: &str) -> String {
 
 // ── File-type → graphify tag ──────────────────────────────────────────────────
 
+/// Convert a graphify file-type string to its Obsidian tag path.
 fn ftype_tag(ftype: &str) -> String {
     match ftype {
         "code" => "graphify/code".to_string(),
@@ -57,6 +58,9 @@ fn ftype_tag(ftype: &str) -> String {
 
 // ── Dominant confidence for a node ───────────────────────────────────────────
 
+/// Return the most-frequently-occurring confidence string across all edges for `node_id`.
+///
+/// Falls back to `"EXTRACTED"` when the node has no edges.
 fn dominant_confidence(graph: &Graph, node_id: &str) -> String {
     let mut counts: IndexMap<String, usize> = IndexMap::new();
     for edge in graph.edges() {
@@ -78,6 +82,9 @@ fn dominant_confidence(graph: &Graph, node_id: &str) -> String {
 
 // ── Community reach ───────────────────────────────────────────────────────────
 
+/// Count the number of distinct communities that `node_id` connects to via edges.
+///
+/// Used in Obsidian note YAML to indicate cross-community bridging importance.
 fn community_reach(graph: &Graph, node_id: &str, node_community: &IndexMap<String, i64>) -> usize {
     let my_cid = node_community.get(node_id).copied();
     let mut other_cids: IndexMap<i64, ()> = IndexMap::new();

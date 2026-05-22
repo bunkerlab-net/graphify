@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -120,6 +121,10 @@ pub fn extract_julia(path: &Path) -> FileResult {
     }
 }
 
+/// Extract the function name from a Julia function signature node.
+///
+/// Handles both simple `function foo(...)` and `foo(...)::ReturnType` signatures by looking
+/// for a `call_expression` child whose callee is an `identifier`.
 fn func_name_from_signature(sig_node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     let mut cur = sig_node.walk();
     if cur.goto_first_child() {
@@ -157,6 +162,10 @@ fn func_name_from_signature(sig_node: tree_sitter::Node<'_>, source: &[u8]) -> O
     None
 }
 
+/// Recursively walk a Julia AST emitting nodes for modules, structs, and functions.
+///
+/// Handles `module_definition`, `struct_definition`, `function_definition`, `macro_definition`,
+/// and `import_statement`/`using_statement`. Mirrors Python `_walk_julia`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_julia(
     node: tree_sitter::Node<'_>,
@@ -641,6 +650,10 @@ fn walk_julia(
     }
 }
 
+/// Collect `calls` edges within a Julia function body's byte range.
+///
+/// Skips nested `function_definition` nodes. Emits `calls` edges for `call_expression` nodes
+/// whose callee matches a known NID. Mirrors Python `_walk_calls_julia`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_julia(
     node: tree_sitter::Node<'_>,
@@ -731,6 +744,10 @@ fn walk_calls_julia(
     }
 }
 
+/// Walk the body children of a `function_definition` node, calling `walk_calls_julia` on each.
+///
+/// Finds the `function_definition` node by byte range, then iterates its children starting
+/// after the signature, so nested function bodies are attributed to the right caller.
 // Walk children of a function_definition node (skipping signature)
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_julia_children(

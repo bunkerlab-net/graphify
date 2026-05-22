@@ -59,6 +59,11 @@ impl RebuildLock {
         self.acquired
     }
 
+    /// POSIX implementation of [`RebuildLock::acquire`] using `flock(2)`.
+    ///
+    /// Opens (or creates) `.rebuild.lock` in `out_dir`, calls `flock` with
+    /// `LOCK_EX` (and optionally `LOCK_NB` for non-blocking), then writes the
+    /// current PID into the file so external pollers can identify the holder.
     #[cfg(unix)]
     fn acquire_unix(out_dir: &Path, blocking: bool) -> Result<Self, WatchError> {
         use std::io::{Seek, Write};

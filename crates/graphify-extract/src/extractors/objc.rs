@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -110,6 +111,10 @@ pub fn extract_objc(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk an `ObjC` AST emitting nodes for interfaces, implementations, and methods.
+///
+/// Handles `@interface`, `@implementation`, `@protocol`, instance/class method declarations
+/// and definitions, and `#import` / `@import` directives. Mirrors Python `_walk_objc`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_objc(
     node: tree_sitter::Node<'_>,
@@ -523,6 +528,10 @@ fn walk_objc(
     }
 }
 
+/// Collect `calls` edges within an `ObjC` method body.
+///
+/// Recurses through the body AST, emitting `calls` edges for `message_expression` nodes whose
+/// selector matches a known method NID. Mirrors Python `_walk_calls_objc`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_objc(
     node: tree_sitter::Node<'_>,

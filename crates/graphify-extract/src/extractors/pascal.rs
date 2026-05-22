@@ -155,6 +155,10 @@ static PAS_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 
 // ── Project-root and unit-name resolution ─────────────────────────────────────
 
+/// Heuristically determine the Pascal project root by walking up until `.pas` files become sparse.
+///
+/// Travels up to 12 directories up from `from_path`, picking the deepest ancestor that contains
+/// at least two `.pas` files. Falls back to `from_path`'s parent if no better candidate is found.
 fn pascal_project_root(from_path: &Path) -> std::path::PathBuf {
     let mut best = from_path.parent().unwrap_or(from_path).to_path_buf();
     let mut current: std::path::PathBuf = best.clone();
@@ -192,6 +196,11 @@ fn pascal_project_root(from_path: &Path) -> std::path::PathBuf {
     best
 }
 
+/// Resolve a Pascal unit name to a project-relative NID string.
+///
+/// Searches sibling directories of `from_path` for a `.pas`/`.pp` file whose stem matches
+/// `unit_name` (case-insensitive). Falls back to a bare NID derived from `unit_name` if no
+/// file is found. Mirrors Python `_pascal_resolve_unit`.
 fn pascal_resolve_unit(from_path: &Path, unit_name: &str) -> String {
     let root = pascal_project_root(from_path);
     let lower = unit_name.to_lowercase();
@@ -226,6 +235,10 @@ fn pascal_resolve_unit(from_path: &Path, unit_name: &str) -> String {
     make_id1(unit_name)
 }
 
+/// Try to find a `.pas`/`.pp` file that defines `class_name` and return its NID.
+///
+/// Scans files in the same project tree for a case-insensitive match of the class name.
+/// Returns `None` when no file can be found, allowing the caller to skip the edge.
 fn pascal_resolve_class(from_path: &Path, class_name: &str) -> Option<String> {
     let prefix = class_name.chars().next().unwrap_or(' ');
     let unit_name = if prefix == 'T' || prefix == 'I' {
@@ -254,6 +267,10 @@ fn pascal_resolve_class(from_path: &Path, class_name: &str) -> Option<String> {
 
 // ── Regex helpers ─────────────────────────────────────────────────────────────
 
+/// Remove Pascal comments (`{...}`, `(*...*)`), `//` line comments, and string literals from text.
+///
+/// Necessary pre-processing step before regex-based section and identifier extraction, so that
+/// comment text does not accidentally match code patterns.
 fn pascal_strip_comments(text: &str) -> String {
     PAS_TOKEN_RE
         .replace_all(text, |caps: &regex::Captures<'_>| {
@@ -270,6 +287,11 @@ fn pascal_strip_comments(text: &str) -> String {
         .into_owned()
 }
 
+/// Split stripped Pascal source into `(interface_section, impl_start_line, impl_section, impl_line)`.
+///
+/// Returns byte-slice views of the `interface` and `implementation` sections, together with the
+/// 1-based line numbers of where each section starts. Used to separate declaration from definition
+/// for class and method extraction.
 fn pascal_split_sections(text: &str) -> (&str, usize, &str, usize) {
     #[allow(clippy::expect_used)] // literal patterns
     let iface_re = Regex::new(r"(?i)\binterface\b").expect("static");
@@ -297,6 +319,10 @@ fn pascal_split_sections(text: &str) -> (&str, usize, &str, usize) {
     }
 }
 
+/// Parse a Pascal `uses` clause, returning a list of unit names.
+///
+/// Handles multi-line clauses and strips trailing semicolons/commas. Returns an empty `Vec`
+/// when no `uses` keyword is found.
 fn pascal_split_uses(s: &str) -> Vec<String> {
     #[allow(clippy::expect_used)] // literal pattern; build cannot panic
     static IN_RE: LazyLock<Regex> =
@@ -315,6 +341,10 @@ fn pascal_split_uses(s: &str) -> Vec<String> {
     out
 }
 
+/// Parse the base-class list from a Pascal class declaration string.
+///
+/// Handles `TClass = class(TBase1, IFace2)` syntax, returning the parent names as a `Vec`.
+/// Returns an empty `Vec` when no parenthesised base list is present.
 fn pascal_split_bases(s: &str) -> Vec<String> {
     #[allow(clippy::expect_used)]
     let strip_re = Regex::new(r"<.*$").expect("static");
@@ -350,6 +380,10 @@ fn pascal_split_bases(s: &str) -> Vec<String> {
     out.into_iter().filter(|n| valid_re.is_match(n)).collect()
 }
 
+/// Locate the `begin`…`end` body of a Pascal routine starting at `start` byte offset.
+///
+/// Counts nested `begin`/`end` pairs to handle compound statements. Returns `(body_start,
+/// body_end)` as byte offsets, or `(start, start)` when no body is found.
 fn pascal_find_body(text: &str, start: usize) -> (usize, usize) {
     #[allow(clippy::expect_used)]
     let begin_re = Regex::new(r"(?i)\bbegin\b").expect("static");
@@ -372,6 +406,7 @@ fn pascal_find_body(text: &str, start: usize) -> (usize, usize) {
     (body_start, text.len())
 }
 
+/// Return the 1-based line number corresponding to `offset` bytes into `text`.
 fn lineno(text: &str, offset: usize) -> usize {
     text[..offset].chars().filter(|&c| c == '\n').count() + 1
 }
@@ -379,6 +414,12 @@ fn lineno(text: &str, offset: usize) -> usize {
 // ── Regex-based Pascal extractor ──────────────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
+/// Extract Pascal classes, methods, uses, and inheritance using regex scanning.
+///
+/// Strips comments, splits interface/implementation sections, then applies regex patterns to
+/// find class declarations, method definitions, `uses` clauses, and constructor calls. Used as
+/// the primary extraction path since there is no tree-sitter grammar for Pascal on crates.io.
+/// Mirrors Python `_extract_pascal_regex`.
 fn extract_pascal_regex(path: &Path) -> FileResult {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -688,6 +729,11 @@ pub fn extract_pascal(path: &Path) -> FileResult {
 
 // ── Shared form parser for .lfm / .dfm ───────────────────────────────────────
 
+/// Parse a Lazarus `.lfm` or Delphi `.dfm` text-form file, emitting component and event nodes.
+///
+/// Scans line-by-line for `object Name : ClassName` declarations and `OnXxx = Handler` event
+/// bindings. Component nodes are connected via `contains` edges; event handlers produce `handles`
+/// edges. Shared by `extract_lazarus_form` and `extract_delphi_form`.
 #[allow(clippy::too_many_lines)]
 fn parse_form_text(text: &str, path: &Path) -> FileResult {
     #[allow(clippy::expect_used)]

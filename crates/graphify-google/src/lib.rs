@@ -319,6 +319,10 @@ fn extract_file_id_from_url(url: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
+/// Extract a Drive file ID from explicit data fields or from the URL.
+///
+/// Checks `doc_id`, `file_id`, `fileId`, `id` fields first (in that order),
+/// then falls back to URL parsing and finally to `resource_id` with `type:id` format.
 fn extract_file_id(url: &str, data: &Value) -> Option<String> {
     // Explicit field names take priority, matching Python order.
     for key in &["doc_id", "file_id", "fileId", "id"] {
@@ -342,6 +346,9 @@ fn extract_file_id(url: &str, data: &Value) -> Option<String> {
     None
 }
 
+/// Extract an optional Drive resource key from data fields or URL query parameters.
+///
+/// Resource keys are needed for shared Drive items protected by link access.
 fn extract_resource_key(url: &str, data: &Value) -> Option<String> {
     for key in &["resource_key", "resourceKey"] {
         if let Some(v) = data.get(*key).and_then(Value::as_str)

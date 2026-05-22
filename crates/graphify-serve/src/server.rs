@@ -15,15 +15,21 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use graphify_prs::gh::ProcessGhClient;
+use graphify_prs::git::ProcessGitClient;
+
 use crate::tools::{
     load_community_labels, maybe_reload, resource_audit, resource_questions, resource_surprises,
-    tool_get_community, tool_get_neighbors, tool_get_node, tool_god_nodes, tool_graph_stats,
-    tool_query_graph, tool_shortest_path,
+    tool_get_community, tool_get_neighbors, tool_get_node, tool_get_pr_impact, tool_god_nodes,
+    tool_graph_stats, tool_list_prs, tool_query_graph, tool_shortest_path, tool_triage_prs,
 };
 use crate::{ReloadState, ServeError};
 
 // ── Tool schema ───────────────────────────────────────────────────────────────
 
+/// Static list of MCP tool descriptors broadcast on the `tools/list` request.
+// too_many_lines: the PR tool schemas are large JSON objects; splitting would harm readability.
+#[allow(clippy::too_many_lines)]
 fn tools_list() -> Vec<Value> {
     vec![
         json!({
@@ -99,9 +105,51 @@ fn tools_list() -> Vec<Value> {
                 "required": ["source", "target"]
             }
         }),
+        json!({
+            "name": "list_prs",
+            "description": "List open GitHub PRs with CI status, review state, and graph impact \
+        (which communities each PR touches, blast radius). Use this before starting \
+        work to check if a PR already covers the area you're about to change.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
+                    "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                    "limit": {"type": "integer", "description": "Maximum number of PRs to return (default 50)"}
+                }
+            }
+        }),
+        json!({
+            "name": "get_pr_impact",
+            "description": "Get detailed graph impact for a specific PR: which files it changes, \
+        which knowledge-graph communities are affected, and how many nodes are touched. \
+        Use this to assess merge risk or check for overlap with your current work.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pr_number": {"type": "integer", "description": "PR number to analyse"},
+                    "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."}
+                },
+                "required": ["pr_number"]
+            }
+        }),
+        json!({
+            "name": "triage_prs",
+            "description": "Return all actionable open PRs (correct base, not stale) with full graph impact data \
+        so you can reason about review priority, merge order, and conflict risk. \
+        Call this when the user asks 'what PRs should I review?' or 'what\\'s ready to merge?'",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
+                    "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."}
+                }
+            }
+        }),
     ]
 }
 
+/// Static list of MCP resource descriptors returned on a `resources/list` request.
 fn resources_list() -> Vec<Value> {
     vec![
         json!({"uri": "graphify://report", "name": "Graph Report", "description": "Full GRAPH_REPORT.md", "mimeType": "text/markdown"}),
@@ -117,11 +165,13 @@ fn resources_list() -> Vec<Value> {
 
 // needless_pass_by_value: `result` is passed to `json!` by value; refactoring
 // to `&Value` would require cloning at every call site.
+/// Build a JSON-RPC 2.0 success response envelope.
 #[allow(clippy::needless_pass_by_value)]
 fn ok_response(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
+/// Build a JSON-RPC 2.0 error response envelope with the given numeric error code.
 fn error_response(id: &Value, code: i64, message: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -132,6 +182,10 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 
 // ── Message dispatcher ────────────────────────────────────────────────────────
 
+/// Route a single MCP JSON-RPC message to the appropriate handler.
+///
+/// Returns `Some(response)` for request messages and `None` for notifications
+/// (which must not receive a reply per the JSON-RPC spec).
 fn dispatch(
     msg: &Value,
     graph: &mut Graph,
@@ -226,6 +280,10 @@ fn dispatch(
     }
 }
 
+/// Dispatch a `tools/call` MCP request to the matching tool handler.
+///
+/// Returns the tool's text output, which is wrapped in a `content` array
+/// by the caller before being sent back as a JSON-RPC response.
 fn dispatch_tool(
     name: &str,
     graph: &mut Graph,
@@ -241,10 +299,32 @@ fn dispatch_tool(
         "god_nodes" => tool_god_nodes(graph, arguments),
         "graph_stats" => tool_graph_stats(graph, communities),
         "shortest_path" => tool_shortest_path(graph, arguments, idf_cache),
+        "list_prs" => {
+            let args = Value::Object(arguments.clone());
+            match tool_list_prs(&args, &ProcessGhClient, &ProcessGitClient) {
+                Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
+                Err(e) => format!("Error: {e}"),
+            }
+        }
+        "get_pr_impact" => {
+            let args = Value::Object(arguments.clone());
+            match tool_get_pr_impact(graph, &args, &ProcessGhClient) {
+                Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
+                Err(e) => format!("Error: {e}"),
+            }
+        }
+        "triage_prs" => {
+            let args = Value::Object(arguments.clone());
+            match tool_triage_prs(&args, &ProcessGhClient, &ProcessGitClient) {
+                Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
+                Err(e) => format!("Error: {e}"),
+            }
+        }
         other => format!("Unknown tool: {other}"),
     }
 }
 
+/// Dispatch a `resources/read` MCP request by URI to the matching resource reader.
 fn dispatch_resource(
     uri: &str,
     graph: &Graph,

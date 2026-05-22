@@ -5,8 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use graphify_cache::{
-    _reset_stat_index_for_tests, body_content, cache_dir, cached_files, clear_cache, file_hash,
-    load_cached, save_cached,
+    _reset_stat_index_for_tests, body_content, cache_dir, cached_files, clear_cache,
+    ensure_atexit_flush_registered, file_hash, load_cached, save_cached,
 };
 use serde_json::json;
 use serial_test::serial;
@@ -209,4 +209,15 @@ fn cache_dir_creates_kind_subdir() {
     let dir = cache_dir(tmp.path(), "semantic").expect("cache_dir");
     assert!(dir.is_dir());
     assert!(dir.ends_with("semantic"));
+}
+
+// ── ensure_atexit_flush_registered ───────────────────────────────────────────
+
+#[test]
+fn ensure_atexit_flush_registered_is_idempotent() {
+    // Calling multiple times must not panic or have visible side-effects.
+    ensure_atexit_flush_registered();
+    ensure_atexit_flush_registered();
+    ensure_atexit_flush_registered();
+    // No assertion needed beyond "did not panic".
 }

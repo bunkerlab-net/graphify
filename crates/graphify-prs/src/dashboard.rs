@@ -11,6 +11,7 @@ use crate::model::{PrInfo, STATUS_ORDER};
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
+/// Truncate `s` to at most `n` Unicode scalar values, appending `…` if truncated.
 fn truncate(s: &str, n: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= n {
@@ -21,6 +22,7 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
+/// Map a PR status string to its ANSI-coloured representation for the dashboard.
 fn status_color(status: &str) -> String {
     match status {
         "READY" => green(status),
@@ -32,6 +34,7 @@ fn status_color(status: &str) -> String {
     }
 }
 
+/// Return a coloured CI status icon (`✓`, `✗`, `…`, `–`) for the given CI status string.
 fn ci_icon(status: &str) -> String {
     match status {
         "SUCCESS" => green("✓"),
@@ -42,6 +45,9 @@ fn ci_icon(status: &str) -> String {
     }
 }
 
+/// Return the sort priority of `status` (lower = higher priority in the dashboard).
+///
+/// Looks up `status` in `STATUS_ORDER`; unknown statuses fall to index 99.
 fn status_order_index(status: &str) -> usize {
     STATUS_ORDER.iter().position(|&s| s == status).unwrap_or(99)
 }

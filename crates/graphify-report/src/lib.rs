@@ -23,6 +23,8 @@
 //! }
 //! ```
 
+mod sections;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -32,6 +34,17 @@ use graphify_build::Graph;
 use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
+
+use sections::{
+    communities::{render_communities, render_nav_hubs},
+    detection::{
+        ConfidenceStats, render_ambiguous, render_corpus_check, render_gaps, render_summary,
+    },
+    god_nodes::render_god_nodes,
+    header::render_freshness,
+    suggestions::render_questions,
+    surprises::{render_hyperedges, render_surprising},
+};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -64,7 +77,7 @@ static MD_EXT: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Mirrors Python `_safe_community_name`.
-fn safe_community_name(label: &str) -> String {
+pub(crate) fn safe_community_name(label: &str) -> String {
     let normalised = label.replace("\r\n", " ").replace(['\r', '\n'], " ");
     let cleaned = UNSAFE_CHARS.replace_all(&normalised, "");
     let cleaned = cleaned.trim();
@@ -74,85 +87,6 @@ fn safe_community_name(label: &str) -> String {
     } else {
         cleaned.into_owned()
     }
-}
-
-// ---------------------------------------------------------------------------
-// Node classification helpers (mirrors Python `analyze._is_file_node` /
-// `_is_concept_node`).  These live here because `graphify-analyze` is a stub
-// and `report.py` calls them directly on `G`.
-// ---------------------------------------------------------------------------
-
-fn is_file_node(graph: &Graph, node_id: &str) -> bool {
-    let Some(attrs) = graph.node_data(node_id) else {
-        return false;
-    };
-    let label = attrs
-        .get("label")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if label.is_empty() {
-        return false;
-    }
-    // File-level hub: label matches the source filename.
-    let source_file = attrs
-        .get("source_file")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !source_file.is_empty() {
-        let filename = source_file.rsplit('/').next().unwrap_or(source_file);
-        if label == filename {
-            return true;
-        }
-    }
-    // Method stub: AST extractor labels methods as `.method_name()`.
-    if label.starts_with('.') && label.ends_with("()") {
-        return true;
-    }
-    // Module-level function stub: `name()` with degree <= 1.
-    if label.ends_with("()") && node_degree(graph, node_id) <= 1 {
-        return true;
-    }
-    false
-}
-
-fn is_concept_node(graph: &Graph, node_id: &str) -> bool {
-    let Some(attrs) = graph.node_data(node_id) else {
-        return true;
-    };
-    let source = attrs
-        .get("source_file")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if source.is_empty() {
-        return true;
-    }
-    // No file extension in the last path component → concept label, not a real file.
-    let last = source.rsplit('/').next().unwrap_or(source);
-    !last.contains('.')
-}
-
-/// Count how many edges involve `node_id` (undirected degree).
-fn node_degree(graph: &Graph, node_id: &str) -> usize {
-    graph
-        .edges()
-        .filter(|e| e.source == node_id || e.target == node_id)
-        .count()
-}
-
-// ---------------------------------------------------------------------------
-// Comma formatting — Python uses `f"{n:,}"` which inserts thousands commas.
-// ---------------------------------------------------------------------------
-
-fn fmt_comma(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out.chars().rev().collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -196,430 +130,6 @@ fn extract_labels(obj: &serde_json::Map<String, Value>) -> HashMap<i64, &str> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-// ---------------------------------------------------------------------------
-// Section renderers
-// ---------------------------------------------------------------------------
-
-fn render_corpus_check(
-    lines: &mut Vec<String>,
-    detection: Option<&serde_json::Map<String, Value>>,
-) {
-    lines.push("## Corpus Check".to_string());
-    if let Some(det) = detection {
-        if let Some(warning) = det.get("warning").and_then(Value::as_str) {
-            lines.push(format!("- {warning}"));
-        } else {
-            let total_files = det.get("total_files").and_then(Value::as_u64).unwrap_or(0);
-            let total_words = det.get("total_words").and_then(Value::as_u64).unwrap_or(0);
-            lines.push(format!(
-                "- {} files · ~{} words",
-                total_files,
-                fmt_comma(total_words)
-            ));
-            lines.push(
-                "- Verdict: corpus is large enough that graph structure adds value.".to_string(),
-            );
-        }
-    }
-}
-
-struct ConfidenceStats {
-    ext_pct: u64,
-    inf_pct: u64,
-    amb_pct: u64,
-    inf_edges_len: usize,
-    inf_avg: Option<f64>,
-}
-
-fn render_summary(
-    lines: &mut Vec<String>,
-    graph: &Graph,
-    communities: &Communities<'_>,
-    thin_count_summary: usize,
-    shown_count: usize,
-    stats: &ConfidenceStats,
-    token_cost: Option<&serde_json::Map<String, Value>>,
-) {
-    let ConfidenceStats {
-        ext_pct,
-        inf_pct,
-        amb_pct,
-        inf_edges_len,
-        inf_avg,
-    } = stats;
-    lines.push(String::new());
-    lines.push("## Summary".to_string());
-
-    let base = format!(
-        "- {} nodes · {} edges · {} communities",
-        graph.node_count(),
-        graph.edge_count(),
-        communities.len()
-    );
-    let thin_suffix = if thin_count_summary > 0 {
-        format!(" ({shown_count} shown, {thin_count_summary} thin omitted)")
-    } else {
-        String::new()
-    };
-    lines.push(format!("{base}{thin_suffix}"));
-
-    let extraction = {
-        let base = format!(
-            "- Extraction: {ext_pct}% EXTRACTED · {inf_pct}% INFERRED · {amb_pct}% AMBIGUOUS"
-        );
-        if let Some(avg) = inf_avg {
-            format!("{base} · INFERRED: {inf_edges_len} edges (avg confidence: {avg})")
-        } else {
-            base
-        }
-    };
-    lines.push(extraction);
-
-    let (inp, out) = token_cost.map_or((0, 0), |tc| {
-        (
-            tc.get("input").and_then(Value::as_u64).unwrap_or(0),
-            tc.get("output").and_then(Value::as_u64).unwrap_or(0),
-        )
-    });
-    lines.push(format!(
-        "- Token cost: {} input · {} output",
-        fmt_comma(inp),
-        fmt_comma(out)
-    ));
-}
-
-fn render_freshness(lines: &mut Vec<String>, commit: &str) {
-    let short = if commit.len() >= 8 {
-        &commit[..8]
-    } else {
-        commit
-    };
-    lines.push(String::new());
-    lines.push("## Graph Freshness".to_string());
-    lines.push(format!("- Built from commit: `{short}`"));
-    lines
-        .push("- Run `git rev-parse HEAD` and compare to check if the graph is stale.".to_string());
-    lines.push("- Run `graphify update .` after code changes (no API cost).".to_string());
-}
-
-fn render_nav_hubs(
-    lines: &mut Vec<String>,
-    non_empty: &[(i64, &Vec<&str>)],
-    community_labels: &HashMap<i64, &str>,
-) {
-    lines.push(String::new());
-    lines.push("## Community Hubs (Navigation)".to_string());
-    for (cid, _) in non_empty {
-        let label = community_labels
-            .get(cid)
-            .copied()
-            .map_or_else(|| format!("Community {cid}"), ToString::to_string);
-        let safe = safe_community_name(&label);
-        lines.push(format!("- [[_COMMUNITY_{safe}|{label}]]"));
-    }
-}
-
-fn render_god_nodes(lines: &mut Vec<String>, god_node_list: &[Value]) {
-    lines.push(String::new());
-    lines.push("## God Nodes (most connected - your core abstractions)".to_string());
-    for (i, node) in god_node_list.iter().enumerate() {
-        let label = node
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let degree = node.get("degree").and_then(Value::as_u64).unwrap_or(0);
-        lines.push(format!("{}. `{label}` - {degree} edges", i + 1));
-    }
-}
-
-fn render_surprising(lines: &mut Vec<String>, surprise_list: &[Value]) {
-    lines.push(String::new());
-    lines.push("## Surprising Connections (you probably didn't know these)".to_string());
-    if surprise_list.is_empty() {
-        lines.push(
-            "- None detected - all connections are within the same source files.".to_string(),
-        );
-        return;
-    }
-    for s in surprise_list {
-        let source = s.get("source").and_then(Value::as_str).unwrap_or_default();
-        let target = s.get("target").and_then(Value::as_str).unwrap_or_default();
-        let relation = s
-            .get("relation")
-            .and_then(Value::as_str)
-            .unwrap_or("related_to");
-        let note = s.get("note").and_then(Value::as_str).unwrap_or_default();
-        let src_files = s.get("source_files").and_then(Value::as_array);
-        let src0 = src_files
-            .and_then(|f| f.first())
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let src1 = src_files
-            .and_then(|f| f.get(1))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let conf = s
-            .get("confidence")
-            .and_then(Value::as_str)
-            .unwrap_or("EXTRACTED");
-        let cscore = s.get("confidence_score").and_then(Value::as_f64);
-        let conf_tag = if conf == "INFERRED" {
-            if let Some(cs) = cscore {
-                format!("INFERRED {cs:.2}")
-            } else {
-                conf.to_string()
-            }
-        } else {
-            conf.to_string()
-        };
-        let sem_tag = if relation == "semantically_similar_to" {
-            " [semantically similar]"
-        } else {
-            ""
-        };
-        lines.push(format!(
-            "- `{source}` --{relation}--> `{target}`  [{conf_tag}]{sem_tag}"
-        ));
-        let note_part = if note.is_empty() {
-            String::new()
-        } else {
-            format!("  _{note}_")
-        };
-        lines.push(format!("  {src0} → {src1}{note_part}"));
-    }
-}
-
-fn render_hyperedges(lines: &mut Vec<String>, hyperedges: &[Value]) {
-    lines.push(String::new());
-    lines.push("## Hyperedges (group relationships)".to_string());
-    for h in hyperedges {
-        let node_labels = h
-            .get("nodes")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-        let conf = h
-            .get("confidence")
-            .and_then(Value::as_str)
-            .unwrap_or("INFERRED");
-        let cscore = h.get("confidence_score").and_then(Value::as_f64);
-        let conf_tag = if let Some(cs) = cscore {
-            format!("{conf} {cs:.2}")
-        } else {
-            conf.to_string()
-        };
-        let label = h
-            .get("label")
-            .and_then(Value::as_str)
-            .or_else(|| h.get("id").and_then(Value::as_str))
-            .unwrap_or_default();
-        lines.push(format!("- **{label}** — {node_labels} [{conf_tag}]"));
-    }
-}
-
-fn render_communities(
-    lines: &mut Vec<String>,
-    graph: &Graph,
-    communities: &Communities<'_>,
-    cohesion_scores: &HashMap<i64, f64>,
-    community_labels: &HashMap<i64, &str>,
-    thin_count_summary: usize,
-    min_community_size: usize,
-) {
-    lines.push(String::new());
-    lines.push(format!(
-        "## Communities ({} total, {thin_count_summary} thin omitted)",
-        communities.len()
-    ));
-    for (cid, nodes) in communities {
-        let label = community_labels
-            .get(cid)
-            .copied()
-            .map_or_else(|| format!("Community {cid}"), ToString::to_string);
-        let score = cohesion_scores.get(cid).copied().unwrap_or(0.0);
-        let real_nodes: Vec<&&str> = nodes.iter().filter(|n| !is_file_node(graph, n)).collect();
-        if real_nodes.is_empty() || real_nodes.len() < min_community_size {
-            continue;
-        }
-        let display: Vec<String> = real_nodes
-            .iter()
-            .take(8)
-            .map(|n| {
-                graph
-                    .node_data(n)
-                    .and_then(|a| a.get("label"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(n)
-                    .to_string()
-            })
-            .collect();
-        let suffix = if real_nodes.len() > 8 {
-            format!(" (+{} more)", real_nodes.len() - 8)
-        } else {
-            String::new()
-        };
-        lines.push(String::new());
-        lines.push(format!("### Community {cid} - \"{label}\""));
-        lines.push(format!("Cohesion: {score:.2}"));
-        lines.push(format!(
-            "Nodes ({}): {}{}",
-            real_nodes.len(),
-            display.join(", "),
-            suffix
-        ));
-    }
-}
-
-fn render_ambiguous(lines: &mut Vec<String>, graph: &Graph) {
-    let ambiguous: Vec<&graphify_build::Edge> = graph
-        .edges()
-        .filter(|e| e.attrs.get("confidence").and_then(Value::as_str) == Some("AMBIGUOUS"))
-        .collect();
-    if ambiguous.is_empty() {
-        return;
-    }
-    lines.push(String::new());
-    lines.push("## Ambiguous Edges - Review These".to_string());
-    for edge in &ambiguous {
-        let ul = graph
-            .node_data(&edge.source)
-            .and_then(|a| a.get("label"))
-            .and_then(Value::as_str)
-            .unwrap_or(&edge.source);
-        let vl = graph
-            .node_data(&edge.target)
-            .and_then(|a| a.get("label"))
-            .and_then(Value::as_str)
-            .unwrap_or(&edge.target);
-        lines.push(format!("- `{ul}` → `{vl}`  [AMBIGUOUS]"));
-        let sf = edge
-            .attrs
-            .get("source_file")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let rel = edge
-            .attrs
-            .get("relation")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        lines.push(format!("  {sf} · relation: {rel}"));
-    }
-}
-
-fn render_gaps(
-    lines: &mut Vec<String>,
-    graph: &Graph,
-    communities: &Communities<'_>,
-    min_community_size: usize,
-    amb_pct: u64,
-) {
-    let isolated: Vec<&str> = graph
-        .nodes()
-        .filter(|(id, attrs)| {
-            node_degree(graph, id) <= 1
-                && !is_file_node(graph, id)
-                && !is_concept_node(graph, id)
-                && attrs.get("file_type").and_then(Value::as_str) != Some("rationale")
-        })
-        .map(|(id, _)| id.as_str())
-        .collect();
-
-    let thin_community_count = communities
-        .iter()
-        .filter(|(_, nodes)| {
-            let real = nodes.iter().filter(|n| !is_file_node(graph, n)).count();
-            real > 0 && real < 3
-        })
-        .count();
-
-    let gap_count = isolated.len() + thin_community_count;
-    if gap_count == 0 && amb_pct <= 20 {
-        return;
-    }
-
-    lines.push(String::new());
-    lines.push("## Knowledge Gaps".to_string());
-
-    if !isolated.is_empty() {
-        let isolated_labels: Vec<String> = isolated
-            .iter()
-            .take(5)
-            .map(|n| {
-                graph
-                    .node_data(n)
-                    .and_then(|a| a.get("label"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(n)
-                    .to_string()
-            })
-            .collect();
-        let suffix = if isolated.len() > 5 {
-            format!(" (+{} more)", isolated.len() - 5)
-        } else {
-            String::new()
-        };
-        let joined = isolated_labels
-            .iter()
-            .map(|l| format!("`{l}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!(
-            "- **{} isolated node(s):** {joined}{suffix}",
-            isolated.len()
-        ));
-        lines.push(
-            "  These have ≤1 connection - possible missing edges or undocumented components."
-                .to_string(),
-        );
-    }
-    if thin_community_count > 0 {
-        lines.push(format!(
-            "- **{thin_community_count} thin communities (<{min_community_size} nodes) omitted from report** — run `graphify query` to explore isolated nodes."
-        ));
-    }
-    if amb_pct > 20 {
-        lines.push(format!(
-            "- **High ambiguity: {amb_pct}% of edges are AMBIGUOUS.** Review the Ambiguous Edges section above."
-        ));
-    }
-}
-
-fn render_questions(lines: &mut Vec<String>, suggested_questions: &[Value]) {
-    lines.push(String::new());
-    lines.push("## Suggested Questions".to_string());
-    let no_signal = suggested_questions.len() == 1
-        && suggested_questions
-            .first()
-            .and_then(|q| q.get("type"))
-            .and_then(Value::as_str)
-            == Some("no_signal");
-    if no_signal {
-        let why = suggested_questions
-            .first()
-            .and_then(|q| q.get("why"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        lines.push(format!("_{why}_"));
-    } else {
-        lines.push("_Questions this graph is uniquely positioned to answer:_".to_string());
-        lines.push(String::new());
-        for q in suggested_questions {
-            if let Some(question) = q.get("question").and_then(Value::as_str)
-                && !question.is_empty()
-            {
-                lines.push(format!("- **{question}**"));
-                let why = q.get("why").and_then(Value::as_str).unwrap_or_default();
-                lines.push(format!("  _{why}_"));
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -714,18 +224,44 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
     // Non-empty communities (have at least one non-file node)
     let non_empty: Vec<(i64, &Vec<&str>)> = communities
         .iter()
-        .filter(|(_, nodes)| nodes.iter().any(|n| !is_file_node(graph, n)))
+        .filter(|(_, nodes)| nodes.iter().any(|n| !sections::is_file_node(graph, n)))
         .map(|(cid, nodes)| (*cid, nodes))
         .collect();
 
     let thin_count_summary = communities
         .iter()
         .filter(|(_, nodes)| {
-            let real = nodes.iter().filter(|n| !is_file_node(graph, n)).count();
+            let real = nodes
+                .iter()
+                .filter(|n| !sections::is_file_node(graph, n))
+                .count();
             real > 0 && real < min_community_size
         })
         .count();
     let shown_count = communities.len() - thin_count_summary;
+
+    // Isolated nodes (for the gaps section)
+    let isolated: Vec<&str> = graph
+        .nodes()
+        .filter(|(id, attrs)| {
+            sections::node_degree(graph, id) <= 1
+                && !sections::is_file_node(graph, id)
+                && !sections::is_concept_node(graph, id)
+                && attrs.get("file_type").and_then(Value::as_str) != Some("rationale")
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+
+    let thin_community_count = communities
+        .iter()
+        .filter(|(_, nodes)| {
+            let real = nodes
+                .iter()
+                .filter(|n| !sections::is_file_node(graph, n))
+                .count();
+            real > 0 && real < 3
+        })
+        .count();
 
     let mut lines: Vec<String> = Vec::new();
 
@@ -742,7 +278,7 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
     render_summary(
         &mut lines,
         graph,
-        &communities,
+        communities.len(),
         thin_count_summary,
         shown_count,
         &stats,
@@ -777,7 +313,14 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         min_community_size,
     );
     render_ambiguous(&mut lines, graph);
-    render_gaps(&mut lines, graph, &communities, min_community_size, amb_pct);
+    render_gaps(
+        &mut lines,
+        graph,
+        thin_community_count,
+        &isolated,
+        min_community_size,
+        amb_pct,
+    );
 
     if let Some(qs) = suggested_questions {
         render_questions(&mut lines, qs);

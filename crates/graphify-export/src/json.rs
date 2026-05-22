@@ -49,6 +49,7 @@ pub fn attach_hyperedges(graph: &mut Graph, hyperedges: &[Value]) {
 }
 
 /// Run `git rev-parse HEAD`, returning `None` if not in a git repo.
+/// Run `git rev-parse HEAD`, returning `None` if not in a git repo or on failure.
 fn git_head() -> Option<String> {
     let r = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -329,6 +330,8 @@ pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Copy `BACKUP_ARTIFACTS` from `out_dir` to `backup_dir`, returning the destination
+/// path if at least one file was copied.
 fn try_backup(
     out_dir: &Path,
     backup_dir: &Path,

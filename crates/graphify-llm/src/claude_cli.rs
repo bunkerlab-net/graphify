@@ -246,6 +246,8 @@ pub fn call_claude_cli_inner(
         output_tokens,
         model,
         finish_reason,
+        elapsed_seconds: 0.0,
+        failed_chunk_indices: vec![],
     })
 }
 

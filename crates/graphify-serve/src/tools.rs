@@ -7,11 +7,15 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use graphify_build::Graph;
+use graphify_prs::gh::GhClient;
+use graphify_prs::git::GitClient;
+use graphify_prs::graph::{FileIndex, build_file_index, compute_pr_impact};
 use graphify_security::sanitize_label;
 use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::ReloadState;
+use crate::ServeError;
 use crate::graph::{
     find_node, node_degree, predecessors, query_graph_text, score_nodes, shortest_path, successors,
 };
@@ -401,6 +405,212 @@ Use a more specific label or the exact node ID."
         "{prefix}Shortest path ({hops} hops):\n  {}",
         segments.join(" ")
     )
+}
+
+// ── PR tools ──────────────────────────────────────────────────────────────────
+
+/// List open PRs with CI status and graph impact.
+///
+/// Mirrors Python `_tool_list_prs`. Calls [`graphify_prs::fetch_prs`] then
+/// formats the result with [`graphify_prs::format_prs_text`].
+///
+/// # Errors
+///
+/// Returns `ServeError` when `gh` is unavailable or returns invalid data.
+pub fn tool_list_prs(
+    args: &Value,
+    gh: &dyn GhClient,
+    git: &dyn GitClient,
+) -> Result<Value, ServeError> {
+    tool_list_prs_with_clients(args, gh, git)
+}
+
+/// Inner implementation — separated for testability with injected clients.
+///
+/// # Errors
+///
+/// Returns `ServeError` on `gh` failures.
+pub fn tool_list_prs_with_clients(
+    args: &Value,
+    gh: &dyn GhClient,
+    git: &dyn GitClient,
+) -> Result<Value, ServeError> {
+    let repo = args.get("repo").and_then(Value::as_str);
+    let base = args.get("base").and_then(Value::as_str);
+    // cast_possible_truncation: limit is a small UI count; 32-bit truncation is safe.
+    #[allow(clippy::cast_possible_truncation)]
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map_or(50, |n| n as usize);
+
+    let prs = graphify_prs::fetch_prs(gh, git, repo, base, limit)
+        .map_err(|e| ServeError::Io(e.to_string()))?;
+
+    let items: Vec<Value> = prs
+        .iter()
+        .map(|pr| {
+            serde_json::json!({
+                "number": pr.number,
+                "title": pr.title,
+                "branch": pr.branch,
+                "base_branch": pr.base_branch,
+                "author": pr.author,
+                "status": pr.status(),
+                "ci_status": pr.ci_status,
+                "review_decision": pr.review_decision,
+                "days_old": pr.days_old(),
+                "draft": pr.is_draft,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "count": items.len(),
+        "prs": items,
+    }))
+}
+
+/// Get detailed graph impact for a single PR.
+///
+/// Mirrors Python `_tool_get_pr_impact`. Fetches the PR's changed files via
+/// the `gh` client, then intersects them with the in-memory graph index to
+/// identify affected nodes and communities.
+///
+/// # Errors
+///
+/// Returns `ServeError` when `gh` is unavailable or returns invalid data.
+pub fn tool_get_pr_impact(
+    graph: &Graph,
+    args: &Value,
+    gh: &dyn GhClient,
+) -> Result<Value, ServeError> {
+    tool_get_pr_impact_with_clients(graph, args, gh)
+}
+
+/// Inner implementation — separated for testability with injected clients.
+///
+/// # Errors
+///
+/// Returns `ServeError` on `gh` failures.
+pub fn tool_get_pr_impact_with_clients(
+    graph: &Graph,
+    args: &Value,
+    gh: &dyn GhClient,
+) -> Result<Value, ServeError> {
+    let pr_number = args
+        .get("pr_number")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ServeError::Io("'pr_number' argument is required".to_string()))?;
+    let repo = args.get("repo").and_then(Value::as_str);
+
+    let files = gh.pr_files(pr_number, repo);
+
+    // Build the file index from graph node data for impact computation.
+    let nodes: Vec<Value> = graph
+        .nodes()
+        .map(|(_, data)| {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in data {
+                obj.insert(k.clone(), v.clone());
+            }
+            Value::Object(obj)
+        })
+        .collect();
+    let index: FileIndex = build_file_index(&nodes);
+    let (communities, nodes_affected) = compute_pr_impact(&files, &index);
+
+    Ok(serde_json::json!({
+        "pr_number": pr_number,
+        "files_changed": files,
+        "affected_nodes": nodes_affected,
+        "communities_touched": communities,
+    }))
+}
+
+/// Return actionable open PRs sorted by review priority with graph impact data.
+///
+/// Mirrors Python `_tool_triage_prs`. Uses [`graphify_prs::triage::NoOpTriageBackend`]
+/// as the LLM backend (no actual AI ranking is performed; the raw structured
+/// data is returned for the caller to reason about).
+///
+/// # Errors
+///
+/// Returns `ServeError` when `gh` is unavailable or returns invalid data.
+pub fn tool_triage_prs(
+    args: &Value,
+    gh: &dyn GhClient,
+    git: &dyn GitClient,
+) -> Result<Value, ServeError> {
+    tool_triage_prs_with_clients(args, gh, git)
+}
+
+/// Inner implementation — separated for testability with injected clients.
+///
+/// # Errors
+///
+/// Returns `ServeError` on `gh` failures.
+pub fn tool_triage_prs_with_clients(
+    args: &Value,
+    gh: &dyn GhClient,
+    git: &dyn GitClient,
+) -> Result<Value, ServeError> {
+    let repo = args.get("repo").and_then(Value::as_str);
+    let base_arg = args.get("base").and_then(Value::as_str);
+    // cast_possible_truncation: limit is a small UI count; 32-bit truncation is safe.
+    #[allow(clippy::cast_possible_truncation)]
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map_or(usize::MAX, |n| n as usize);
+
+    let prs = graphify_prs::fetch_prs(gh, git, repo, base_arg, 50)
+        .map_err(|e| ServeError::Io(e.to_string()))?;
+
+    let base = base_arg.map_or_else(
+        || graphify_prs::detect_default_branch(gh, git, repo),
+        str::to_string,
+    );
+
+    // Keep only actionable PRs (right base, not stale, not wrong-base).
+    let actionable: Vec<&graphify_prs::PrInfo> = prs
+        .iter()
+        .filter(|p| {
+            let s = p.status();
+            p.base_branch == base && s != "WRONG-BASE" && s != "STALE"
+        })
+        .take(limit)
+        .collect();
+
+    // Sort by status priority order.
+    let mut sorted: Vec<&graphify_prs::PrInfo> = actionable;
+    sorted.sort_by_key(|p| {
+        graphify_prs::model::STATUS_ORDER
+            .iter()
+            .position(|&s| s == p.status().as_str())
+            .unwrap_or(99)
+    });
+
+    let items: Vec<Value> = sorted
+        .iter()
+        .map(|pr| {
+            serde_json::json!({
+                "number": pr.number,
+                "title": pr.title,
+                "branch": pr.branch,
+                "status": pr.status(),
+                "ci_status": pr.ci_status,
+                "review_decision": pr.review_decision,
+                "days_old": pr.days_old(),
+                "author": pr.author,
+                "nodes_affected": pr.nodes_affected,
+                "communities_touched": pr.communities_touched,
+                "blast_radius": pr.blast_radius(),
+            })
+        })
+        .collect();
+
+    Ok(Value::Array(items))
 }
 
 /// Render the `graphify://audit` resource.

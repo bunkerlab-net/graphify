@@ -18,10 +18,15 @@ const STMT_HEADERS: &[&str] = &[
     "module_statement",
 ];
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
+/// Run the C preprocessor on a Fortran file to expand macros and `#include` directives.
+///
+/// Used for free-form Fortran files with `.F` / `.F90` / etc. extensions that use the
+/// C preprocessor. Falls back to reading the raw bytes if `cpp` is unavailable or fails.
 fn cpp_preprocess(path: &Path) -> Vec<u8> {
     // Security: pass -nostdinc -I /dev/null to prevent file exfiltration
     let result = std::process::Command::new("cpp")
@@ -135,6 +140,9 @@ pub fn extract_fortran(path: &Path) -> FileResult {
     }
 }
 
+/// Extract the lowercased `name` or `identifier` child from a Fortran statement node.
+///
+/// Used to pull the declared name from `subroutine_statement`, `function_statement`, etc.
 fn fortran_name(stmt_node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     let mut cur = stmt_node.walk();
     if cur.goto_first_child() {
@@ -150,6 +158,9 @@ fn fortran_name(stmt_node: tree_sitter::Node<'_>, source: &[u8]) -> Option<Strin
     None
 }
 
+/// Recursively walk a Fortran AST emitting nodes for programs, modules, subroutines, and functions.
+///
+/// Records byte ranges of scope bodies for use by `walk_calls_fortran`. Mirrors Python `_walk_fortran`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_fortran(
     node: tree_sitter::Node<'_>,
@@ -494,6 +505,11 @@ fn walk_fortran(
     }
 }
 
+/// Collect `calls` edges within a Fortran scope's byte range.
+///
+/// Recurses through the AST, only visiting nodes that overlap the `[body_start, body_end)` range
+/// of the enclosing scope. Emits `calls` edges for `call_expression` nodes that match a known
+/// NID. Mirrors Python `_walk_calls_fortran`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_fortran(
     node: tree_sitter::Node<'_>,

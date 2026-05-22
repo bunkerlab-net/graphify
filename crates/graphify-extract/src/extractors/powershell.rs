@@ -17,6 +17,7 @@ static PS_SKIP: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     .collect()
 });
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -131,6 +132,10 @@ pub fn extract_powershell(path: &Path) -> FileResult {
     }
 }
 
+/// Locate the `script_block_body` (or `script_block`) inside a function's body node.
+///
+/// PowerShell function bodies are wrapped in a `script_block` container; this helper peels
+/// that wrapper so callers receive the actual statement list for call-graph walking.
 fn find_script_block_body(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
     let mut cur = node.walk();
     if !cur.goto_first_child() {
@@ -159,6 +164,10 @@ fn find_script_block_body(node: tree_sitter::Node<'_>) -> Option<tree_sitter::No
     None
 }
 
+/// Recursively walk a PowerShell AST emitting nodes for functions, classes, and methods.
+///
+/// Handles `function_definition`, `class_statement`, `method_statement`, and `using_statement`
+/// nodes. Mirrors Python `_walk_ps`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_ps(
     node: tree_sitter::Node<'_>,
@@ -450,6 +459,10 @@ fn walk_ps(
     }
 }
 
+/// Collect `calls` edges within a PowerShell function body.
+///
+/// Recurses through the body AST, emitting `calls` edges for `command` and `invocation_expression`
+/// nodes whose callee matches a known function NID. Mirrors Python `_walk_calls_ps`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_ps(
     node: tree_sitter::Node<'_>,

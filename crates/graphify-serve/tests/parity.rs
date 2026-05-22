@@ -8,13 +8,68 @@
 use std::collections::HashMap;
 
 use graphify_build::{Graph, build_from_json};
+use graphify_prs::error::PrsError;
+use graphify_prs::gh::GhClient;
+use graphify_prs::git::GitClient;
 use graphify_serve::graph::{
     bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, infer_context_filters,
     load_graph, pick_seeds, query_graph_text, resolve_context_filters, score_nodes,
     subgraph_to_text,
 };
+use graphify_serve::tools::{
+    tool_get_pr_impact_with_clients, tool_list_prs_with_clients, tool_triage_prs_with_clients,
+};
 use serde_json::json;
 use tempfile::tempdir;
+
+// ── Test doubles for PR tool tests ────────────────────────────────────────────
+
+/// One canned PR in the wire format that `gh pr list` returns.
+const CANNED_PR_JSON: &str = r#"[{
+    "number": 42,
+    "title": "Add feature X",
+    "headRefName": "feature/x",
+    "baseRefName": "main",
+    "author": {"login": "alice"},
+    "isDraft": false,
+    "reviewDecision": "APPROVED",
+    "statusCheckRollup": [{"conclusion": "SUCCESS", "status": "COMPLETED"}],
+    "updatedAt": "2025-01-01T00:00:00Z"
+}]"#;
+
+#[cfg(test)]
+struct FakeGhClient {
+    prs_json: &'static str,
+    files: Vec<String>,
+    default_branch: Option<String>,
+}
+
+impl GhClient for FakeGhClient {
+    fn pr_list(&self, _repo: Option<&str>, _limit: usize) -> Result<Vec<u8>, PrsError> {
+        Ok(self.prs_json.as_bytes().to_vec())
+    }
+
+    fn repo_default_branch(&self, _repo: Option<&str>) -> Option<String> {
+        self.default_branch.clone()
+    }
+
+    fn pr_files(&self, _number: u64, _repo: Option<&str>) -> Vec<String> {
+        self.files.clone()
+    }
+}
+
+#[cfg(test)]
+struct FakeGitClient;
+
+impl GitClient for FakeGitClient {
+    fn worktree_list_porcelain(&self) -> Option<String> {
+        None
+    }
+
+    fn symbolic_ref_origin_head(&self) -> Option<String> {
+        None
+    }
+}
 
 // ── Test graph factory ────────────────────────────────────────────────────────
 
@@ -565,5 +620,112 @@ fn test_query_seeds_from_identifier_not_noise() {
     assert!(
         text.contains("ServiceClient"),
         "ServiceClient should appear as neighbor"
+    );
+}
+
+// ── PR tool tests ─────────────────────────────────────────────────────────────
+
+fn make_fake_gh() -> FakeGhClient {
+    FakeGhClient {
+        prs_json: CANNED_PR_JSON,
+        files: vec!["src/feature_x.rs".to_string()],
+        default_branch: Some("main".to_string()),
+    }
+}
+
+#[test]
+fn test_tool_list_prs_returns_pr_descriptors() {
+    let gh = make_fake_gh();
+    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    let prs = result["prs"].as_array().unwrap();
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0]["number"], 42);
+    assert_eq!(prs[0]["title"], "Add feature X");
+    assert_eq!(prs[0]["author"], "alice");
+}
+
+#[test]
+fn test_tool_list_prs_includes_count() {
+    let gh = make_fake_gh();
+    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    assert_eq!(result["count"], 1);
+}
+
+#[test]
+fn test_tool_list_prs_handles_empty() {
+    let gh = FakeGhClient {
+        prs_json: "[]",
+        files: vec![],
+        default_branch: Some("main".to_string()),
+    };
+    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    let prs = result["prs"].as_array().unwrap();
+    assert!(prs.is_empty());
+    assert_eq!(result["count"], 0);
+}
+
+/// Minimal graph with one node whose `source_file` matches the PR's changed file.
+fn make_impact_graph() -> Graph {
+    build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "feature_x", "source_file": "src/feature_x.rs", "community": 0}
+            ],
+            "edges": []
+        }),
+        true,
+        None,
+    )
+    .expect("make_impact_graph")
+}
+
+#[test]
+fn test_tool_get_pr_impact_lists_affected_nodes() {
+    let gh = make_fake_gh();
+    let graph = make_impact_graph();
+    let args = json!({"pr_number": 42});
+    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).unwrap();
+    assert!(
+        result["affected_nodes"].as_u64().unwrap() > 0,
+        "must report affected nodes when file matches"
+    );
+}
+
+#[test]
+fn test_tool_get_pr_impact_empty_when_no_match() {
+    let gh = FakeGhClient {
+        prs_json: CANNED_PR_JSON,
+        files: vec!["other/unrelated.rs".to_string()],
+        default_branch: Some("main".to_string()),
+    };
+    let graph = make_impact_graph();
+    let args = json!({"pr_number": 42});
+    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).unwrap();
+    assert_eq!(
+        result["affected_nodes"].as_u64().unwrap(),
+        0,
+        "no overlap → zero affected nodes"
+    );
+}
+
+#[test]
+fn test_tool_triage_prs_returns_structured_output() {
+    let gh = make_fake_gh();
+    let result = tool_triage_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    assert!(result.is_array(), "triage output must be a JSON array");
+}
+
+#[test]
+fn test_tool_triage_prs_respects_limit() {
+    // Only 1 PR in canned data; limit=1 should not change anything, but the
+    // field must be respected (no more than `limit` items returned).
+    let gh = make_fake_gh();
+    let args = json!({"limit": 1});
+    let result = tool_triage_prs_with_clients(&args, &gh, &FakeGitClient).unwrap();
+    let items = result.as_array().unwrap();
+    assert!(
+        items.len() <= 1,
+        "limit=1 must cap the result length; got {}",
+        items.len()
     );
 }

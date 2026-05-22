@@ -40,9 +40,30 @@ use std::path::{Path, PathBuf};
 /// Manifest type: ordered map of file path string → `ManifestEntry`.
 pub type Manifest = IndexMap<String, ManifestEntry>;
 
+/// Structured return value from [`detect_incremental`].
+///
+/// Mirrors the richer shape Python callers expect after the PR that added
+/// per-type bucketing (`changed_files`, `unchanged_files`) and convenience
+/// fields (`new_total`, `incremental`).
+pub struct IncrementalDetectResult {
+    /// Files whose content hash has changed, keyed by file type (e.g. `"code"`).
+    pub changed_files: IndexMap<String, Vec<String>>,
+    /// Paths that existed in the previous manifest but are no longer on disk.
+    pub deleted_files: Vec<PathBuf>,
+    /// Updated manifest after the incremental scan.
+    pub manifest: Manifest,
+    /// Files that are present but unchanged, keyed by file type.
+    pub unchanged_files: IndexMap<String, Vec<String>>,
+    /// Total number of files seen in the current scan (changed + unchanged).
+    pub new_total: u64,
+    /// `true` when a manifest existed (i.e. this was a real incremental run, not a first scan).
+    pub incremental: bool,
+}
+
 /// Persist a manifest to disk.
 ///
-/// Writes to `<root>/graphify-out/manifest.json` by default.
+/// `kind` controls which hash fields are stamped: `"ast"`, `"semantic"`, or
+/// `"both"` (default). Forwarded to [`save_manifest_to_path`].
 ///
 /// # Errors
 ///
@@ -50,8 +71,9 @@ pub type Manifest = IndexMap<String, ManifestEntry>;
 pub fn save_manifest(
     files: &IndexMap<String, Vec<String>>,
     manifest_path: &Path,
+    kind: &str,
 ) -> Result<(), DetectError> {
-    save_manifest_to_path(files, manifest_path, "both")
+    save_manifest_to_path(files, manifest_path, kind)
 }
 
 /// Load a manifest from disk.
@@ -69,7 +91,8 @@ pub fn load_manifest(root: &Path) -> Result<Manifest, DetectError> {
 
 /// Run incremental detection given a previously-saved manifest.
 ///
-/// Returns `(changed_files, deleted_files, updated_manifest)`.
+/// Returns [`IncrementalDetectResult`] with changed/unchanged file buckets,
+/// deleted files, the updated manifest, and convenience flags.
 ///
 /// # Errors
 ///
@@ -77,14 +100,12 @@ pub fn load_manifest(root: &Path) -> Result<Manifest, DetectError> {
 pub fn detect_incremental(
     root: &Path,
     prev: &Manifest,
-) -> Result<(Vec<PathBuf>, Vec<PathBuf>, Manifest), DetectError> {
+) -> Result<IncrementalDetectResult, DetectError> {
     // Use the standard manifest path under root.
     let manifest_path = root.join(MANIFEST_PATH);
+    let had_manifest = manifest_path.exists() || !prev.is_empty();
 
-    // If caller passes an in-memory manifest (e.g. from a previous load), write
-    // it to a temp location so `detect_incremental_with_manifest` can read it.
-    // For the common case where the manifest is already on disk, just use the path.
-    let result = if manifest_path.exists() {
+    let (changed_paths, deleted_files, manifest) = if manifest_path.exists() {
         detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None)?
     } else if prev.is_empty() {
         // No previous run at all — everything is new.
@@ -106,5 +127,36 @@ pub fn detect_incremental(
         res
     };
 
-    Ok(result)
+    // Re-run detect() to get the full file list bucketed by type, then split
+    // into changed vs unchanged based on `changed_paths`.
+    let changed_set: std::collections::HashSet<PathBuf> = changed_paths.iter().cloned().collect();
+    let full = walk::detect(root, None, None);
+    let mut changed_files: IndexMap<String, Vec<String>> = IndexMap::new();
+    let mut unchanged_files: IndexMap<String, Vec<String>> = IndexMap::new();
+    let mut new_total: u64 = 0;
+    for (kind, paths) in &full.files {
+        for p in paths {
+            new_total += 1;
+            if changed_set.contains(&PathBuf::from(p)) {
+                changed_files
+                    .entry(kind.clone())
+                    .or_default()
+                    .push(p.clone());
+            } else {
+                unchanged_files
+                    .entry(kind.clone())
+                    .or_default()
+                    .push(p.clone());
+            }
+        }
+    }
+
+    Ok(IncrementalDetectResult {
+        changed_files,
+        deleted_files,
+        manifest,
+        unchanged_files,
+        new_total,
+        incremental: had_manifest,
+    })
 }

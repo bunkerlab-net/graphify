@@ -28,6 +28,9 @@ static MD_EXT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"(?i)\.(md|mdx|qmd|markdown)$").unwrap()
 });
 
+/// Sanitize a node label for use as an Obsidian Canvas node title.
+///
+/// Strips filesystem-unsafe characters and trailing Markdown extensions.
 fn safe_name(label: &str) -> String {
     let cleaned = label.replace("\r\n", " ").replace(['\r', '\n'], " ");
     let cleaned = UNSAFE_CHARS_RE.replace_all(&cleaned, "");

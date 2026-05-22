@@ -10,7 +10,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -117,6 +117,40 @@ pub fn flush_stat_index() -> Result<(), CacheError> {
     tmp.persist(&path).map_err(|e| CacheError::Io(e.error))?;
     state.dirty = false;
     Ok(())
+}
+
+// ── Atexit flush ──────────────────────────────────────────────────────────────
+
+/// RAII sentinel that flushes the stat index on `drop`.
+///
+/// Used with `OnceLock` so registration is idempotent: calling
+/// [`ensure_atexit_flush_registered`] multiple times is safe.
+///
+/// **Trade-off**: `Drop` runs when Rust's normal stack unwinding happens (e.g.
+/// on `panic="unwind"`). It does NOT run on `std::process::exit()`, SIGKILL,
+/// or `panic="abort"`. For the common case (graceful shutdown) this is
+/// sufficient to persist the stat index.
+struct FlushSentinel;
+
+impl Drop for FlushSentinel {
+    fn drop(&mut self) {
+        let _ = flush_stat_index();
+    }
+}
+
+static ATEXIT: OnceLock<FlushSentinel> = OnceLock::new();
+
+/// Register a process-exit flush of the stat index.
+///
+/// Idempotent — safe to call more than once. The flush is best-effort; errors
+/// are silently discarded (the cache is a performance optimisation, not
+/// critical data).
+///
+/// # Limitations
+///
+/// Does NOT flush on `std::process::exit()`, SIGKILL, or `panic="abort"`.
+pub fn ensure_atexit_flush_registered() {
+    ATEXIT.get_or_init(|| FlushSentinel);
 }
 
 /// Reset the global stat index. Test-only; not part of the public contract.

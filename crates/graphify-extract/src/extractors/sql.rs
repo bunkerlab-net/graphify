@@ -54,10 +54,15 @@ static SQL_END_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:^|\n)(?:CREATE|SET\s+TERM|ALTER)\s").expect("static sql end regex")
 });
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
+/// Extract the text of the first `object_reference` child of `n`.
+///
+/// Used to pull table/view names from SQL DDL statement nodes such as
+/// `create_table_statement`, `create_view_statement`, etc.
 fn obj_name<'a>(n: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a str> {
     let mut cur = n.walk();
     if cur.goto_first_child() {
@@ -238,6 +243,11 @@ pub fn extract_sql(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk a SQL AST emitting nodes for tables, views, and functions.
+///
+/// Handles `create_table_statement`, `create_view_statement`, `create_function_statement`,
+/// and `create_procedure_statement`. Also records `table_nids` for use by `walk_from_refs`.
+/// Mirrors Python `_walk_sql`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_sql(
     node: tree_sitter::Node<'_>,
@@ -686,6 +696,10 @@ fn walk_sql(
     }
 }
 
+/// Recursively walk a SQL AST finding `FROM` and `JOIN` clauses and emitting `references` edges.
+///
+/// Used to add query-time data-flow edges from functions/views to the tables they read.
+/// Mirrors Python `_walk_from_refs`.
 fn walk_from_refs(
     node: tree_sitter::Node<'_>,
     source: &[u8],

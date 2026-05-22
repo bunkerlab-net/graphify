@@ -57,6 +57,7 @@ static RUST_TRAIT_METHOD_BLOCKLIST: LazyLock<HashSet<&'static str>> = LazyLock::
     .collect()
 });
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -175,6 +176,10 @@ pub fn extract_rust(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk a Rust AST emitting nodes for functions, structs, enums, traits, and impls.
+///
+/// Records function body byte ranges for the subsequent call-graph pass. Handles `use_declaration`
+/// to produce import edges. Mirrors Python `_walk_rust`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_rust(
     node: tree_sitter::Node<'_>,
@@ -360,6 +365,10 @@ fn walk_rust(
     }
 }
 
+/// Collect `calls` edges within a Rust function body's byte range.
+///
+/// Recurses through the body AST, emitting `calls` edges for `call_expression` and
+/// `macro_invocation` nodes whose callee matches a known NID. Mirrors Python `_walk_calls_rust`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_rust(
     node: tree_sitter::Node<'_>,

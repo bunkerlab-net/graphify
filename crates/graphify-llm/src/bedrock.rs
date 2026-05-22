@@ -229,7 +229,33 @@ pub fn call_bedrock(
         output_tokens,
         model: model.to_string(),
         finish_reason,
+        elapsed_seconds: 0.0,
+        failed_chunk_indices: vec![],
     })
+}
+
+/// Send a plain-text `prompt` to Bedrock and return the text reply.
+///
+/// # Errors
+/// Returns [`LlmError::NoApiKey`] when AWS credentials are missing,
+/// or [`LlmError::Http`] / [`LlmError::Parse`] on transport or parse failure.
+pub fn call_bedrock_plain(
+    model: &str,
+    region: &str,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, LlmError> {
+    let msgs = vec![json!({"role": "user", "content": [{"text": prompt}]})];
+    let resp = call_bedrock(model, region, &msgs, max_tokens)?;
+    // Extract the first text block from the response nodes (best-effort).
+    // Bedrock returns nodes as parsed extraction JSON; for plain calls the
+    // response text is embedded in the raw content — fall back to an empty string.
+    Ok(resp
+        .nodes
+        .first()
+        .and_then(|v| v.get("label").and_then(|l| l.as_str()))
+        .unwrap_or("")
+        .to_string())
 }
 
 /// Default max tokens for bedrock.

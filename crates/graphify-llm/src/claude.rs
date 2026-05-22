@@ -160,6 +160,8 @@ pub fn call_claude(
         output_tokens,
         model: model.to_string(),
         finish_reason,
+        elapsed_seconds: 0.0,
+        failed_chunk_indices: vec![],
     })
 }
 

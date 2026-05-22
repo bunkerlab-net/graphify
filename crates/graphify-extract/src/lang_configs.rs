@@ -37,6 +37,9 @@ pub static PYTHON: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Python,
     import_handler: Some(import_python),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── JavaScript ────────────────────────────────────────────────────────────────
@@ -63,6 +66,9 @@ pub static JAVASCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::JavaScript,
     import_handler: Some(import_js),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── TypeScript ────────────────────────────────────────────────────────────────
@@ -94,6 +100,9 @@ pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::TypeScript,
     import_handler: Some(import_js),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── TypeScript (TSX) ──────────────────────────────────────────────────────────
@@ -125,6 +134,9 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::TypeScriptX,
     import_handler: Some(import_js),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── Java ──────────────────────────────────────────────────────────────────────
@@ -147,6 +159,9 @@ pub static JAVA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Java,
     import_handler: Some(import_java),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── Groovy ────────────────────────────────────────────────────────────────────
@@ -169,6 +184,9 @@ pub static GROOVY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Groovy,
     import_handler: Some(import_java),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── C ─────────────────────────────────────────────────────────────────────────
@@ -191,6 +209,9 @@ pub static C: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::C,
     import_handler: Some(import_c),
     resolve_function_name: Some(get_c_func_name),
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── C++ ───────────────────────────────────────────────────────────────────────
@@ -213,6 +234,9 @@ pub static CPP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Cpp,
     import_handler: Some(import_c),
     resolve_function_name: Some(get_cpp_func_name),
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── Ruby ──────────────────────────────────────────────────────────────────────
@@ -235,6 +259,9 @@ pub static RUBY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Other,
     import_handler: None,
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── C# ────────────────────────────────────────────────────────────────────────
@@ -257,6 +284,9 @@ pub static CSHARP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::CSharp,
     import_handler: Some(import_csharp),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── Kotlin ────────────────────────────────────────────────────────────────────
@@ -280,6 +310,9 @@ pub static KOTLIN: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Kotlin,
     import_handler: Some(import_kotlin),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── Scala ─────────────────────────────────────────────────────────────────────
@@ -302,6 +335,9 @@ pub static SCALA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Scala,
     import_handler: Some(import_scala),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── PHP ───────────────────────────────────────────────────────────────────────
@@ -329,6 +365,9 @@ pub static PHP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Php,
     import_handler: Some(import_php),
     resolve_function_name: None,
+    helper_fn_names: &["config", "view", "route"],
+    container_bind_methods: &["bind", "singleton", "scoped", "instance"],
+    event_listener_properties: &["listen", "subscribe"],
 });
 
 // ── Lua ───────────────────────────────────────────────────────────────────────
@@ -351,6 +390,9 @@ pub static LUA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Other,
     import_handler: Some(import_lua),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });
 
 // ── Swift ─────────────────────────────────────────────────────────────────────
@@ -388,4 +430,7 @@ pub static SWIFT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     lang_id: LangId::Swift,
     import_handler: Some(import_swift),
     resolve_function_name: None,
+    helper_fn_names: &[],
+    container_bind_methods: &[],
+    event_listener_properties: &[],
 });

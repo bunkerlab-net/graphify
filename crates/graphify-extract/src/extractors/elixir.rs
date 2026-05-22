@@ -37,6 +37,7 @@ static SKIP_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     .collect()
 });
 
+/// Return the source bytes covered by `node` as an owned `String` (lossy UTF-8).
 fn read_text(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()])
         .unwrap_or("")
@@ -153,6 +154,7 @@ pub fn extract_elixir(path: &Path) -> FileResult {
     }
 }
 
+/// Extract the text of the first `alias` child node, used to resolve Elixir `alias` expressions.
 fn get_alias_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     let mut cur = node.walk();
     if !cur.goto_first_child() {
@@ -169,6 +171,10 @@ fn get_alias_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> 
     None
 }
 
+/// Recursively walk an Elixir AST emitting nodes and edges for modules, functions, and imports.
+///
+/// Handles `defmodule`, `def`/`defp`, `alias`/`import`/`require`/`use` call expressions.
+/// Descends into nested modules. Mirrors Python `_walk_elixir`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_elixir(
     node: tree_sitter::Node<'_>,
@@ -410,6 +416,11 @@ fn walk_elixir(
     }
 }
 
+/// Collect `calls` edges within an Elixir function body.
+///
+/// Recurses through the body's AST, skipping nested `def`/`defp` definitions, and emits
+/// `calls` edges for `call_expression` nodes whose callee matches a known function NID.
+/// Elixir Kernel built-ins in `SKIP_KEYWORDS` are filtered out. Mirrors Python `_walk_calls_elixir`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_calls_elixir(
     node: tree_sitter::Node<'_>,

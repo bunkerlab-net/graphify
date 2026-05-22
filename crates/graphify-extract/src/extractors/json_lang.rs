@@ -21,6 +21,7 @@ static DEP_KEYS: std::sync::LazyLock<HashSet<&'static str>> = std::sync::LazyLoc
     .collect()
 });
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -139,6 +140,7 @@ pub fn extract_json(path: &Path) -> FileResult {
     }
 }
 
+/// Extract the string content of the key from a JSON `pair` node, stripping enclosing quotes.
 fn key_text<'a>(pair_node: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a str> {
     let key_node = pair_node.child_by_field_name("key")?;
     if key_node.kind() == "string" {
@@ -151,6 +153,11 @@ fn key_text<'a>(pair_node: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'
     Some(read_text(key_node, source))
 }
 
+/// Recursively walk a JSON object node, emitting graph nodes for nested structure.
+///
+/// Depth-limited to 6 levels to avoid over-expanding deeply nested configs. At each level,
+/// `object` pairs become child nodes with `contains` edges to `parent_nid`. Mirrors Python
+/// `_walk_json_object`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_json_object(
     obj_node: tree_sitter::Node<'_>,

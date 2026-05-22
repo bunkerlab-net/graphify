@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node, RawCall};
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -121,6 +122,10 @@ pub fn extract_zig(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk a Zig AST emitting nodes for functions, structs, enums, and unions.
+///
+/// Handles `function_declaration`, `struct_declaration`, `enum_declaration`, and
+/// `@import` builtin calls. Mirrors Python `_walk_zig`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_zig(
     node: tree_sitter::Node<'_>,
@@ -309,6 +314,9 @@ fn walk_zig(
     }
 }
 
+/// Emit an `imports_from` edge for a Zig `@import("...")` builtin call.
+///
+/// Only processes string-literal arguments; template or non-string arguments are silently skipped.
 fn extract_zig_import(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -396,6 +404,10 @@ fn extract_zig_import(
     }
 }
 
+/// Collect `calls` edges within a Zig function body's byte range.
+///
+/// Recurses through the body AST, emitting `calls` edges for `call_expression` nodes whose
+/// callee matches a known NID. Mirrors Python `_walk_calls_zig`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_zig(
     node: tree_sitter::Node<'_>,

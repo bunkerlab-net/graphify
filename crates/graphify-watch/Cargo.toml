@@ -10,7 +10,13 @@ description = "Filesystem watcher"
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+graphify-analyze = { workspace = true }
+graphify-build = { workspace = true }
+graphify-cluster = { workspace = true }
 graphify-detect = { workspace = true }
+graphify-export = { workspace = true }
+graphify-extract = { workspace = true }
+graphify-report = { workspace = true }
 indexmap = { workspace = true }
 notify = "6"
 notify-debouncer-full = "0.3"

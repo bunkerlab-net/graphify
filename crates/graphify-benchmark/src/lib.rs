@@ -325,6 +325,15 @@ pub fn format_benchmark(result: Option<&BenchmarkResult>) -> String {
     out
 }
 
+/// Print a benchmark result to stdout.
+///
+/// Python parity: `print_benchmark` calls `print()` on the formatted string.
+/// In Rust, `print!` is used so the caller is not forced to add a trailing
+/// newline (the `format_benchmark` string already ends with `\n`).
+pub fn print_benchmark(result: Option<&BenchmarkResult>) {
+    print!("{}", format_benchmark(result));
+}
+
 /// Format a number with comma thousands separators (e.g. `1_234_567` → `"1,234,567"`).
 #[must_use]
 fn format_with_commas(n: usize) -> String {

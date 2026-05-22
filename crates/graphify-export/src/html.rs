@@ -13,6 +13,7 @@ use crate::{COMMUNITY_COLORS, ExportError, node_community_map, obsidian_tag, viz
 
 // ── Static HTML / JS fragments ─────────────────────────────────────────────────
 
+/// Return the embedded CSS styles for the interactive vis.js HTML export.
 fn html_styles() -> &'static str {
     r#"<style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -54,6 +55,7 @@ fn html_styles() -> &'static str {
 </style>"#
 }
 
+/// Build the `<script>` block that renders hyperedges as shaded canvas regions.
 fn hyperedge_script(hyperedges_json: &str) -> String {
     format!(
         r"<script>
@@ -100,6 +102,7 @@ network.on('afterDrawing', function(ctx) {{
 }
 
 #[allow(clippy::too_many_lines)] // Inherent complexity of large inline JavaScript
+/// Build the main vis.js `<script>` block that wires up the interactive graph.
 fn html_script(nodes_json: &str, edges_json: &str, legend_json: &str) -> String {
     format!(
         r#"<script>
@@ -604,6 +607,9 @@ pub fn to_html(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Compute total degree (in + out) for every node in the graph.
+///
+/// Self-loops count only once. Used to scale node size in the vis.js visualization.
 fn compute_degree(graph: &Graph) -> IndexMap<String, usize> {
     let mut deg: IndexMap<String, usize> = IndexMap::new();
     for (id, _) in graph.nodes() {

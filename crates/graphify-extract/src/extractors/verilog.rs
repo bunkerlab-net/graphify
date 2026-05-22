@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -86,6 +87,10 @@ pub fn extract_verilog(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk a Verilog/SystemVerilog AST emitting nodes for modules, functions, and tasks.
+///
+/// Handles `module_declaration`, `function_declaration`, `task_declaration`, and
+/// `module_instantiation` (as `uses` edges). Mirrors Python `_walk_verilog`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_verilog(
     node: tree_sitter::Node<'_>,

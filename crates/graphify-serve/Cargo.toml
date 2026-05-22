@@ -11,6 +11,7 @@ description = "MCP stdio server"
 anyhow = { workspace = true }
 graphify-analyze = { workspace = true }
 graphify-build = { workspace = true }
+graphify-prs = { workspace = true }
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
@@ -26,6 +27,7 @@ tokio = { version = "1", features = [
 unicode-normalization = "0.1"
 
 [dev-dependencies]
+graphify-build = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

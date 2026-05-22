@@ -37,6 +37,11 @@ const PARALLEL_THRESHOLD: usize = 20;
 
 type ExtractFn = fn(&Path) -> FileResult;
 
+/// Return the per-language extractor function for a given file path, or `None` for unknown types.
+///
+/// Blade templates are identified by the `.blade.php` suffix before the extension is checked, so
+/// that `foo.blade.php` routes to `extract_blade` rather than `extract_php`. All other languages
+/// are dispatched solely on the file extension.
 fn get_extractor(path: &Path) -> Option<ExtractFn> {
     // Blade templates: checked by suffix before extension
     let name = path.file_name().map_or("", |n| n.to_str().unwrap_or(""));
@@ -86,6 +91,10 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
 
 // ── Cache helpers (thin wrappers around graphify-cache) ───────────────────────
 
+/// Serialise a `FileResult` to a `serde_json::Value` suitable for caching.
+///
+/// Converts nodes, edges, and `raw_calls` to JSON arrays. Used as the write side of the
+/// graphify-cache pair; see `value_to_file_result` for the read side.
 fn file_result_to_value(result: &FileResult) -> Value {
     let nodes: Vec<Value> = result
         .nodes
@@ -117,6 +126,11 @@ fn file_result_to_value(result: &FileResult) -> Value {
     })
 }
 
+/// Deserialise a cached `serde_json::Value` back into a `FileResult`.
+///
+/// Returns `None` only if the value is structurally broken (never in practice, but the `Option`
+/// is kept for forward compatibility). Missing or malformed sub-fields silently fall back to
+/// empty `Vec`s. Counterpart to `file_result_to_value`.
 #[allow(clippy::unnecessary_wraps)] // caller uses Option for future extensibility
 fn value_to_file_result(v: &Value) -> Option<FileResult> {
     let nodes = v
@@ -175,6 +189,11 @@ fn value_to_file_result(v: &Value) -> Option<FileResult> {
 
 // ── Extract a single file (with cache) ───────────────────────────────────────
 
+/// Extract a single file, returning a cached result when available.
+///
+/// Looks up the on-disk AST cache first; on a miss, dispatches to the language-specific
+/// extractor and writes the result back to the cache. Files with no matching extractor
+/// return an empty `FileResult` rather than an error.
 fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
     // Check cache
     let cached = graphify_cache::load_cached(path, effective_root, "ast");
@@ -204,6 +223,11 @@ fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
 
 // ── Cross-file Python import resolution helpers ───────────────────────────────
 
+/// Recursively walk a Python AST collecting `from X import Y` statements.
+///
+/// On finding an `import_from_statement`, resolves the source module to a known stem via
+/// `bare_to_qualified`, then emits `uses` edges from each local class to each imported symbol
+/// that is present in `stem_to_entities`. Mirrors Python `_walk_imports` from `extract.py`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // tree-walk helper; direct port
 fn walk_imports(
     node: tree_sitter::Node<'_>,
@@ -322,6 +346,12 @@ fn walk_imports(
     }
 }
 
+/// Recursively walk a Java AST collecting `import` declarations and resolving them to graph edges.
+///
+/// On finding an `import_declaration`, extracts the class name (or second-to-last component for
+/// static method imports), looks it up in `name_to_ids`, and emits `imports` edges from the
+/// current file node to any matching class nodes. Wildcard imports (`.*`) are silently skipped.
+/// Mirrors Python `_walk_java` from `extract.py`.
 fn walk_java(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -402,6 +432,11 @@ fn walk_java(
 
 // ── Cross-file Python import resolution ──────────────────────────────────────
 
+/// Emit `uses` edges connecting Python classes to the symbols they import from other files.
+///
+/// Two-pass: first builds a map of (file-qualified-stem → label → nid) and
+/// (bare stem → qualified stem); then re-parses each Python file to find
+/// `from X import Y` statements and emit edges. Mirrors Python `_resolve_cross_file_imports`.
 #[allow(clippy::too_many_lines)]
 fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf]) -> Vec<Edge> {
     use crate::ids::file_stem;
@@ -496,6 +531,11 @@ fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf])
 
 // ── Cross-file Java import resolution ────────────────────────────────────────
 
+/// Emit `imports` edges by resolving Java `import` statements across all extracted files.
+///
+/// Two-pass: first builds a map of (class-name → [nid]) from all capitalised node labels;
+/// then re-parses each `.java` file to find `import_declaration` nodes and emit edges.
+/// Mirrors Python `_resolve_cross_file_java_imports`.
 #[allow(clippy::too_many_lines)]
 fn resolve_cross_file_java_imports(per_file: &[FileResult], paths: &[PathBuf]) -> Vec<Edge> {
     let mut parser = tree_sitter::Parser::new();

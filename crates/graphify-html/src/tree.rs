@@ -29,6 +29,7 @@ struct ArenaTree {
 }
 
 impl ArenaTree {
+    /// Create a new empty arena tree with no nodes.
     fn new() -> Self {
         Self {
             names: Vec::new(),
@@ -37,6 +38,7 @@ impl ArenaTree {
         }
     }
 
+    /// Allocate a new node with the given name and return its index.
     fn add_node(&mut self, name: impl Into<String>) -> usize {
         let idx = self.names.len();
         self.names.push(name.into());
@@ -45,6 +47,7 @@ impl ArenaTree {
         idx
     }
 
+    /// Register `child` as a child of `parent` in the arena.
     fn add_child(&mut self, parent: usize, child: usize) {
         self.children[parent].push(child);
     }
@@ -55,6 +58,7 @@ impl ArenaTree {
     }
 }
 
+/// Recursively convert the arena node at `idx` into an owned `TreeNode`.
 fn build_from_arena(tree: &ArenaTree, idx: usize) -> TreeNode {
     let kids: Vec<TreeNode> = tree.children[idx]
         .iter()
@@ -77,6 +81,7 @@ struct TreeNode {
 }
 
 impl TreeNode {
+    /// Serialize this node and all its descendants to the `{name, total_count, children}` shape.
     fn to_json(&self) -> Value {
         serde_json::json!({
             "name": self.name,
@@ -88,6 +93,11 @@ impl TreeNode {
 
 // ── common-root helper ───────────────────────────────────────────────────────
 
+/// Compute the longest common path prefix shared by all `paths`.
+///
+/// Used to strip the project root from node `source_file` values so relative
+/// paths appear in the tree. Returns an empty string if paths is empty or has
+/// no common prefix.
 fn common_root(paths: &[String]) -> String {
     let non_empty: Vec<Vec<String>> = paths
         .iter()
@@ -163,7 +173,10 @@ fn ensure_dir(
 // ── sort and propagate ────────────────────────────────────────────────────────
 
 /// Sort children (dirs before files, then alphabetically) and propagate
-/// `total_count` from leaves to root. Returns the count at this node.
+/// `total_count` from leaves to root. Returns the total count at this node.
+///
+/// Directories sort before files so the tree renders with directory nodes
+/// at the top, matching Python's `sorted(…, key=lambda n: (…))` in `tree_html.py`.
 fn finalise(node: &mut TreeNode) -> usize {
     if node.children.is_empty() {
         let tc = if node.total_count == 0 {

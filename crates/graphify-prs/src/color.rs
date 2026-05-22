@@ -29,36 +29,43 @@ pub fn ansi(code: &str, text: &str) -> String {
     }
 }
 
+/// Wrap `t` in ANSI green (SGR 32).
 #[must_use]
 pub fn green(t: &str) -> String {
     ansi("32", t)
 }
 
+/// Wrap `t` in ANSI red (SGR 31).
 #[must_use]
 pub fn red(t: &str) -> String {
     ansi("31", t)
 }
 
+/// Wrap `t` in ANSI yellow (SGR 33).
 #[must_use]
 pub fn yellow(t: &str) -> String {
     ansi("33", t)
 }
 
+/// Wrap `t` in ANSI cyan (SGR 36).
 #[must_use]
 pub fn cyan(t: &str) -> String {
     ansi("36", t)
 }
 
+/// Wrap `t` in ANSI bold (SGR 1).
 #[must_use]
 pub fn bold(t: &str) -> String {
     ansi("1", t)
 }
 
+/// Wrap `t` in ANSI dim/faint (SGR 2).
 #[must_use]
 pub fn dim(t: &str) -> String {
     ansi("2", t)
 }
 
+/// Wrap `t` in ANSI magenta (SGR 35).
 #[must_use]
 pub fn magenta(t: &str) -> String {
     ansi("35", t)

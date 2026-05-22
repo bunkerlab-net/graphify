@@ -18,6 +18,7 @@ static BASH_SKIP: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     .collect()
 });
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -119,6 +120,11 @@ pub fn extract_bash(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk a Bash AST, emitting nodes and edges for functions and `source` imports.
+///
+/// Handles `function_definition` (named Bash functions), `command` nodes whose name is `source`
+/// or `.` (treated as file imports), and descends into all child nodes. Mirrors Python
+/// `_walk_bash`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_bash(
     node: tree_sitter::Node<'_>,
@@ -350,6 +356,11 @@ fn walk_bash(
     }
 }
 
+/// Collect `calls` edges from within a Bash function body.
+///
+/// Recursively descends the AST looking for `command` nodes. When the command name is a known
+/// function in this file (via `label_to_nid`), a `calls` edge is emitted. Bash built-ins and
+/// control-flow keywords are filtered via `BASH_SKIP`. Mirrors Python `_walk_calls_bash`.
 #[allow(clippy::too_many_arguments)]
 fn walk_calls_bash(
     node: tree_sitter::Node<'_>,

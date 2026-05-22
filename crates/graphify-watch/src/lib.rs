@@ -6,17 +6,16 @@
 //!
 //! The primary entry point for production use is [`watch`], which spawns a
 //! [`notify_debouncer_full`] watcher and batches events over a configurable
-//! debounce window.  Helper functions that are called from hook shell scripts
-//! ([`rebuild_code`], [`apply_resource_limits`]) are stubbed with
-//! [`unimplemented!`] until the upstream crates (`graphify-extract`,
-//! `graphify-build`, `graphify-cluster`) are fully ported — see
-//! `.claude/local/notes/module_watch.md` for status.
+//! debounce window.  The full rebuild pipeline lives in [`rebuild`].
 
+pub mod canonical;
 pub mod error;
 pub mod lock;
+pub mod rebuild;
 
 pub use error::WatchError;
 pub use lock::RebuildLock;
+pub use rebuild::{check_shrink, git_head, node_community_map, relativize_source_files};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -180,36 +179,36 @@ pub fn apply_resource_limits() {
 
 /// Re-run AST extraction + build + optional cluster + report for code files.
 ///
-/// **Currently unimplemented.** The full pipeline depends on
-/// `graphify-extract`, `graphify-build`, and `graphify-cluster`, which are
-/// not yet ported.  Hook shell scripts that call this function will receive a
-/// panic with a clear diagnostic message until the dependency crates are
-/// available.
+/// Acquires a per-repo advisory lock (unless `acquire_lock` is `false`).
+/// Returns `Ok(true)` when outputs were updated, `Ok(false)` when the rebuild
+/// was skipped (lock held, no tracked files changed, shrink guard refused).
 ///
 /// Ports `_rebuild_code` from Python.
 ///
-/// See `.claude/local/notes/module_watch.md` for wiring plan.
-///
 /// # Errors
 ///
-/// Returns `WatchError` on pipeline failure. Returns `Ok(false)` if the
-/// rebuild was skipped (lock held, no files changed).
+/// Returns `WatchError` on pipeline failure.
 #[allow(clippy::fn_params_excessive_bools)]
 // reason: mirrors Python's `_rebuild_code` signature byte-for-byte; each
 // bool controls a distinct pipeline flag and extracting enums would diverge
-// from the Python reference spec before the function is actually implemented.
+// from the Python reference spec.
 pub fn rebuild_code(
-    _watch_path: &Path,
-    _changed_paths: Option<&[PathBuf]>,
-    _follow_symlinks: bool,
-    _force: bool,
-    _no_cluster: bool,
-    _acquire_lock: bool,
-    _block_on_lock: bool,
+    watch_path: &Path,
+    changed_paths: Option<&[PathBuf]>,
+    follow_symlinks: bool,
+    force: bool,
+    no_cluster: bool,
+    acquire_lock: bool,
+    block_on_lock: bool,
 ) -> Result<bool, WatchError> {
-    unimplemented!(
-        "_rebuild_code: full pipeline (graphify-extract + graphify-build + \
-         graphify-cluster) not yet ported — see .claude/local/notes/module_watch.md"
+    rebuild::rebuild_code(
+        watch_path,
+        changed_paths,
+        follow_symlinks,
+        force,
+        no_cluster,
+        acquire_lock,
+        block_on_lock,
     )
 }
 
@@ -339,12 +338,13 @@ pub fn watch(watch_path: &Path, debounce: f64) -> Result<(), WatchError> {
         println!("\n[graphify watch] {} file(s) changed", changed.len());
 
         if has_code(&changed) {
-            // rebuild_code is currently unimplemented! — log and skip rather
-            // than panic in the watcher loop so the watcher stays alive.
-            eprintln!(
-                "[graphify watch] rebuild_code is not yet implemented; \
-                 graph will not be updated automatically."
-            );
+            match rebuild_code(watch_path, Some(&changed), false, false, false, true, false) {
+                Ok(true) => println!("[graphify watch] graph rebuilt successfully."),
+                Ok(false) => {
+                    println!("[graphify watch] rebuild skipped (lock held or no changes).");
+                }
+                Err(e) => eprintln!("[graphify watch] rebuild failed: {e}"),
+            }
         }
         if has_non_code(&changed)
             && let Err(e) = notify_only(watch_path)

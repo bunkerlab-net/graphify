@@ -44,6 +44,11 @@ static FRONTMATTER_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+/// Resolve a Svelte/Astro import specifier to a `(nid, stub_path)` pair.
+///
+/// Relative paths are joined to the importing file's directory and normalised; tsconfig path
+/// aliases are expanded; bare module names are reduced to their last path segment. The returned
+/// `stub_path` is used as the `source_file` for the import-target node.
 fn resolve_import_id(raw: &str, path: &Path) -> (String, String) {
     if raw.starts_with('.') {
         let dir = path.parent().unwrap_or(path);
@@ -157,6 +162,10 @@ fn fixup_static_relative(raw: &str, path: &Path) -> (String, String) {
     }
 }
 
+/// Append an import edge and, if needed, an import-target stub node to the result.
+///
+/// Deduplicates by `existing_ids`. Creates a stub file node for the target when it is not
+/// already present, allowing the graph to reference files not yet extracted.
 #[allow(clippy::too_many_arguments)]
 fn add_import_edge(
     result: &mut FileResult,

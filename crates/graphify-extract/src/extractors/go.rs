@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node, RawCall};
 
+/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
@@ -154,6 +155,10 @@ pub fn extract_go(path: &Path) -> FileResult {
     }
 }
 
+/// Recursively walk a Go AST emitting nodes and edges for functions, methods, and type declarations.
+///
+/// Handles `function_declaration`, `method_declaration`, `type_declaration`, and `import_declaration`
+/// nodes. Descends into all child nodes. Mirrors Python `_walk_go`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_go(
     node: tree_sitter::Node<'_>,
@@ -365,6 +370,7 @@ fn walk_go(
     }
 }
 
+/// Walk an `import_declaration` subtree, delegating each `import_spec` to `emit_go_import_spec`.
 fn walk_go_imports(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -422,6 +428,10 @@ fn walk_go_imports(
     }
 }
 
+/// Emit a single `imports_from` edge for one Go `import_spec` node.
+///
+/// The target NID is derived from the import path string (e.g. `"fmt"` → `go::pkg::fmt`).
+/// The package name is also recorded in `go_imported_pkgs` for use during call resolution.
 fn emit_go_import_spec(
     spec: tree_sitter::Node<'_>,
     source: &[u8],
@@ -459,6 +469,11 @@ fn emit_go_import_spec(
     }
 }
 
+/// Collect `calls` edges within a Go function or method body.
+///
+/// Recurses through the body AST, emitting `calls` edges for `call_expression` nodes whose
+/// callee matches a known function NID in this file. Selector expressions (package.Func) are
+/// resolved against `go_imported_pkgs`. Mirrors Python `_walk_calls_go`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn walk_calls_go(
     node: tree_sitter::Node<'_>,

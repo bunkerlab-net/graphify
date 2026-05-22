@@ -4,7 +4,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use graphify_detect::{
+    Manifest, detect_incremental,
     manifest::{detect_incremental_with_manifest, load_manifest_from_path, save_manifest_to_path},
+    save_manifest,
     walk::detect,
 };
 use indexmap::IndexMap;
@@ -193,5 +195,153 @@ fn detect_incremental_propagates_follow_symlinks() {
         changed_second.len(),
         0,
         "no changes after saving manifest, but got: {changed_second:?}"
+    );
+}
+
+// ── Group 2A: save_manifest kind variants ────────────────────────────────────
+
+#[test]
+fn save_manifest_kind_ast_stamps_ast_hash_only() {
+    let tmp = tempdir().unwrap();
+    let py = tmp.path().join("main.py");
+    std::fs::write(&py, "x = 1").unwrap();
+    let manifest_path = tmp.path().join("manifest.json");
+    let mut files: IndexMap<String, Vec<String>> = IndexMap::new();
+    files.insert("code".to_string(), vec![py.to_str().unwrap().to_string()]);
+    save_manifest(&files, &manifest_path, "ast").unwrap();
+
+    let manifest = load_manifest_from_path(&manifest_path).unwrap();
+    let entry = &manifest[py.to_str().unwrap()];
+    assert!(!entry.ast_hash.is_empty(), "ast_hash must be set");
+    assert!(
+        entry.semantic_hash.is_empty(),
+        "semantic_hash must be empty for kind=ast"
+    );
+}
+
+#[test]
+fn save_manifest_kind_semantic_stamps_semantic_hash_only() {
+    let tmp = tempdir().unwrap();
+    let py = tmp.path().join("main.py");
+    std::fs::write(&py, "x = 1").unwrap();
+    let manifest_path = tmp.path().join("manifest.json");
+    let mut files: IndexMap<String, Vec<String>> = IndexMap::new();
+    files.insert("code".to_string(), vec![py.to_str().unwrap().to_string()]);
+    save_manifest(&files, &manifest_path, "semantic").unwrap();
+
+    let manifest = load_manifest_from_path(&manifest_path).unwrap();
+    let entry = &manifest[py.to_str().unwrap()];
+    assert!(!entry.semantic_hash.is_empty(), "semantic_hash must be set");
+    assert!(
+        entry.ast_hash.is_empty(),
+        "ast_hash must be empty for kind=semantic"
+    );
+}
+
+#[test]
+fn save_manifest_kind_both_stamps_both_hashes() {
+    let tmp = tempdir().unwrap();
+    let py = tmp.path().join("main.py");
+    std::fs::write(&py, "x = 1").unwrap();
+    let manifest_path = tmp.path().join("manifest.json");
+    let mut files: IndexMap<String, Vec<String>> = IndexMap::new();
+    files.insert("code".to_string(), vec![py.to_str().unwrap().to_string()]);
+    save_manifest(&files, &manifest_path, "both").unwrap();
+
+    let manifest = load_manifest_from_path(&manifest_path).unwrap();
+    let entry = &manifest[py.to_str().unwrap()];
+    assert!(!entry.ast_hash.is_empty(), "ast_hash must be set");
+    assert!(!entry.semantic_hash.is_empty(), "semantic_hash must be set");
+}
+
+// ── Group 2B: IncrementalDetectResult struct tests ───────────────────────────
+
+#[test]
+fn detect_incremental_returns_struct_with_incremental_true() {
+    let tmp = tempdir().unwrap();
+    let py = tmp.path().join("a.py");
+    std::fs::write(&py, "x = 1").unwrap();
+    // First: save a manifest so the second call is truly incremental.
+    let gout = tmp.path().join("graphify-out");
+    std::fs::create_dir_all(&gout).unwrap();
+    let manifest_path = gout.join("manifest.json");
+    let full = detect(tmp.path(), None, None);
+    let files: IndexMap<String, Vec<String>> = full.files.into_iter().collect();
+    save_manifest_to_path(&files, &manifest_path, "both").unwrap();
+
+    let prev: Manifest = IndexMap::new();
+    let result = detect_incremental(tmp.path(), &prev).unwrap();
+    assert!(
+        result.incremental,
+        "should be incremental when manifest exists"
+    );
+}
+
+#[test]
+fn detect_incremental_struct_changed_files_keyed_by_type() {
+    let tmp = tempdir().unwrap();
+    let py = tmp.path().join("a.py");
+    std::fs::write(&py, "x = 1").unwrap();
+
+    // First run with empty manifest → everything is new.
+    let prev: Manifest = IndexMap::new();
+    let result = detect_incremental(tmp.path(), &prev).unwrap();
+    // changed_files should have a "code" key (or at least some key) with the file.
+    let all_changed: Vec<String> = result.changed_files.values().flatten().cloned().collect();
+    assert!(
+        all_changed.iter().any(|p| p.contains("a.py")),
+        "a.py must appear in changed_files; got {all_changed:?}"
+    );
+    // Keys are file type strings (e.g. "code"), not paths.
+    for k in result.changed_files.keys() {
+        assert!(
+            !k.contains('/') && !k.contains('.'),
+            "changed_files key should be a file type, not a path: {k}"
+        );
+    }
+}
+
+#[test]
+fn detect_incremental_struct_unchanged_files_keyed_by_type() {
+    let tmp = tempdir().unwrap();
+    let py = tmp.path().join("b.py");
+    std::fs::write(&py, "y = 2").unwrap();
+
+    // Save a manifest so the file is already known.
+    let gout = tmp.path().join("graphify-out");
+    std::fs::create_dir_all(&gout).unwrap();
+    let manifest_path = gout.join("manifest.json");
+    let full = detect(tmp.path(), None, None);
+    let files: IndexMap<String, Vec<String>> = full.files.into_iter().collect();
+    save_manifest_to_path(&files, &manifest_path, "both").unwrap();
+
+    // Now incremental: b.py is unchanged.
+    let prev: Manifest = IndexMap::new();
+    let result = detect_incremental(tmp.path(), &prev).unwrap();
+    let all_unchanged: Vec<String> = result.unchanged_files.values().flatten().cloned().collect();
+    assert!(
+        all_unchanged.iter().any(|p| p.contains("b.py")),
+        "b.py must appear in unchanged_files; got {all_unchanged:?}"
+    );
+}
+
+#[test]
+fn detect_incremental_struct_new_total_matches_changed_count() {
+    let tmp = tempdir().unwrap();
+    std::fs::write(tmp.path().join("c.py"), "z = 3").unwrap();
+    std::fs::write(tmp.path().join("d.py"), "w = 4").unwrap();
+
+    let prev: Manifest = IndexMap::new();
+    let result = detect_incremental(tmp.path(), &prev).unwrap();
+    let total_changed: u64 = result.changed_files.values().map(|v| v.len() as u64).sum();
+    let total_unchanged: u64 = result
+        .unchanged_files
+        .values()
+        .map(|v| v.len() as u64)
+        .sum();
+    assert_eq!(
+        result.new_total,
+        total_changed + total_unchanged,
+        "new_total must equal changed + unchanged file counts"
     );
 }
