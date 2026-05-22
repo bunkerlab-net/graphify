@@ -1,0 +1,4 @@
+[submodule "graphify-py"]
+	path = graphify-py
+	url = https://github.com/safishamsi/graphify.git
+	branch = v8
