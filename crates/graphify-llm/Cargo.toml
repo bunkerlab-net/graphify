@@ -1,0 +1,30 @@
+[package]
+name = "graphify-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LLM router (Kimi, Ollama, Bedrock, Gemini, OpenAI, Claude CLI)"
+
+[dependencies]
+anyhow = { workspace = true }
+graphify-security = { workspace = true }
+hex = { workspace = true }
+hmac = "0.13"
+indexmap = { workspace = true }
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tiktoken-rs = "0.6"
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+url = { workspace = true }
+
+[dev-dependencies]
+mockito = "1"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

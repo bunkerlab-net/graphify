@@ -1,0 +1,441 @@
+//! `.graphifyignore` / `.gitignore` loading and matching.
+//!
+//! Ports `_parse_gitignore_line`, `_find_vcs_root`, `_load_graphifyignore`,
+//! `_is_ignored`, `_load_graphifyinclude`, `_is_included`, and
+//! `_could_contain_included_path` from `graphify-py/graphify/detect.py`.
+
+use std::path::{Path, PathBuf};
+
+use regex::Regex;
+
+const VCS_MARKERS: &[&str] = &[".git", ".hg", ".svn", "_darcs", ".fossil"];
+
+/// A pattern read from a `.graphifyignore` or `.gitignore` file.
+/// `anchor` is the directory that contains the file; `pattern` is the raw pattern.
+pub type IgnorePatterns = Vec<(PathBuf, String)>;
+
+// ── Pattern parsing ──────────────────────────────────────────────────────────
+
+/// Inline comment stripper: whitespace + one-or-more # + rest.
+static INLINE_COMMENT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    // SAFETY: known-good literal.
+    #[allow(clippy::unwrap_used)]
+    Regex::new(r"\s+#+[^\\].*$").unwrap()
+});
+
+/// Parse one raw line from a `.graphifyignore` or `.gitignore` file.
+///
+/// Returns an empty string for blank lines and full-line comments.
+#[must_use]
+pub fn parse_gitignore_line(raw: &str) -> String {
+    let line = raw.trim_end_matches(['\n', '\r']);
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with('#') {
+        return String::new();
+    }
+    // Strip inline comments (whitespace + # suffix)
+    let line = INLINE_COMMENT_RE.replace(line, "");
+    // Unescape \# → literal #
+    let line = line.replace("\\#", "#");
+    // Remove unescaped trailing spaces (replace lookbehind with manual trim).
+    // Per gitignore spec: strip trailing spaces that aren't preceded by '\'.
+    trim_unescaped_trailing_spaces(&line)
+}
+
+/// Remove trailing space characters that are not escaped with `\`.
+fn trim_unescaped_trailing_spaces(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut end = bytes.len();
+    // Walk backwards eating spaces, but stop at first escaped space.
+    while end > 0 && bytes[end - 1] == b' ' {
+        // Check if this space is escaped
+        if end >= 2 && bytes[end - 2] == b'\\' {
+            break;
+        }
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
+// ── VCS root discovery ───────────────────────────────────────────────────────
+
+/// Walk upward from `start`; return the first directory containing a VCS marker.
+#[must_use]
+pub fn find_vcs_root(start: &Path) -> Option<PathBuf> {
+    let home = dirs_home();
+    let mut current = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    loop {
+        if VCS_MARKERS.iter().any(|m| current.join(m).exists()) {
+            return Some(current);
+        }
+        let parent = current.parent().map(Path::to_path_buf);
+        match parent {
+            None => return None,
+            Some(p) if p == current => return None,
+            Some(p) => {
+                if let Some(h) = &home
+                    && current == *h
+                {
+                    return None;
+                }
+                current = p;
+            }
+        }
+    }
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+// ── .graphifyignore / .gitignore loading ─────────────────────────────────────
+
+/// Read `.graphifyignore` (falling back to `.gitignore`) files from `root` upward
+/// to the VCS ceiling and return `(anchor_dir, pattern)` pairs.
+///
+/// Outer-first (ceiling first, scan root last) so inner rules win via
+/// last-match-wins semantics, matching gitignore behaviour exactly.
+#[must_use]
+pub fn load_graphifyignore(root: &Path) -> IgnorePatterns {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let ceiling = find_vcs_root(&root).unwrap_or_else(|| root.clone());
+    let dirs = build_dir_list(&root, &ceiling);
+
+    let mut patterns: IgnorePatterns = Vec::new();
+    for dir in &dirs {
+        // Prefer .graphifyignore; fall back to .gitignore.
+        let ignore_file = {
+            let gfi = dir.join(".graphifyignore");
+            if gfi.exists() {
+                gfi
+            } else {
+                dir.join(".gitignore")
+            }
+        };
+        if ignore_file.exists()
+            && let Ok(text) = std::fs::read_to_string(&ignore_file)
+        {
+            for raw in text.lines() {
+                let line = parse_gitignore_line(raw);
+                if !line.is_empty() {
+                    patterns.push((dir.clone(), line));
+                }
+            }
+        }
+    }
+    patterns
+}
+
+/// Read `.graphifyinclude` allowlist patterns from `root` and ancestors.
+#[must_use]
+pub fn load_graphifyinclude(root: &Path) -> IgnorePatterns {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let ceiling = find_vcs_root(&root).unwrap_or_else(|| root.clone());
+    let dirs = build_dir_list(&root, &ceiling);
+
+    let mut patterns: IgnorePatterns = Vec::new();
+    for dir in &dirs {
+        let include_file = dir.join(".graphifyinclude");
+        if include_file.exists()
+            && let Ok(text) = std::fs::read_to_string(&include_file)
+        {
+            for raw in text.lines() {
+                let line = parse_gitignore_line(raw);
+                if !line.is_empty() {
+                    patterns.push((dir.clone(), line));
+                }
+            }
+        }
+    }
+    patterns
+}
+
+/// Build the ancestor directory list from ceiling down to root (outer → inner).
+fn build_dir_list(root: &Path, ceiling: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut current = root.to_path_buf();
+    loop {
+        dirs.push(current.clone());
+        if current == ceiling {
+            break;
+        }
+        match current.parent() {
+            Some(p) => current = p.to_path_buf(),
+            None => break,
+        }
+    }
+    dirs.reverse(); // ceiling first, root last
+    dirs
+}
+
+// ── Matching helpers ─────────────────────────────────────────────────────────
+
+fn fnmatch(name: &str, pattern: &str) -> bool {
+    glob_match(name, pattern)
+}
+
+/// Minimal gitignore-compatible glob matcher.
+///
+/// Supports `*` (match any non-separator chars), `**` (match any path segment),
+/// and `?` (match single char). Case-sensitive.
+fn glob_match(text: &str, pat: &str) -> bool {
+    glob_match_inner(text.as_bytes(), pat.as_bytes())
+}
+
+fn glob_match_inner(text: &[u8], pat: &[u8]) -> bool {
+    match (text, pat) {
+        (_, []) => text.is_empty(),
+        ([], [b'*', rest @ ..]) => glob_match_inner(text, rest),
+        ([], _) => false,
+        (_, [b'*', b'*', rest @ ..]) => {
+            // ** matches zero or more path components
+            if glob_match_inner(text, rest) {
+                return true;
+            }
+            for i in 0..=text.len() {
+                if glob_match_inner(&text[i..], rest) {
+                    return true;
+                }
+                if i < text.len() && text[i] == b'/' && glob_match_inner(&text[i + 1..], rest) {
+                    return true;
+                }
+            }
+            false
+        }
+        (_, [b'*', rest @ ..]) => {
+            // * matches zero or more non-separator chars
+            let mut i = 0;
+            loop {
+                if glob_match_inner(&text[i..], rest) {
+                    return true;
+                }
+                if i >= text.len() || text[i] == b'/' {
+                    break;
+                }
+                i += 1;
+            }
+            false
+        }
+        ([tc, trest @ ..], [b'?', prest @ ..]) => *tc != b'/' && glob_match_inner(trest, prest),
+        ([tc, trest @ ..], [pc, prest @ ..]) => tc == pc && glob_match_inner(trest, prest),
+    }
+}
+
+fn path_to_forward_slash(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+/// Check whether `rel` matches pattern `p`, including partial path segment matching.
+fn rel_matches(rel: &str, target_name: &str, p: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    if fnmatch(rel, p) {
+        return true;
+    }
+    if fnmatch(target_name, p) {
+        return true;
+    }
+    for i in 0..parts.len() {
+        if fnmatch(parts[i], p) {
+            return true;
+        }
+        let prefix = parts[..=i].join("/");
+        if fnmatch(&prefix, p) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Apply last-match-wins to a single target path.
+fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
+    let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    let mut result = false;
+    for (anchor, pattern) in patterns {
+        let negated = pattern.starts_with('!');
+        let raw = if negated {
+            &pattern[1..]
+        } else {
+            pattern.as_str()
+        };
+        let anchored = raw.starts_with('/');
+        let p = raw.trim_matches('/');
+        if p.is_empty() {
+            continue;
+        }
+
+        let matched = if anchored {
+            target.strip_prefix(anchor).ok().is_some_and(|rel| {
+                let rel_str = path_to_forward_slash(rel);
+                rel_matches(&rel_str, target_name, p)
+            })
+        } else {
+            let root_matched = target.strip_prefix(root).ok().is_some_and(|rel| {
+                let rel_str = path_to_forward_slash(rel);
+                rel_matches(&rel_str, target_name, p)
+            });
+
+            let anchor_matched = !root_matched
+                && anchor != root
+                && target.strip_prefix(anchor).ok().is_some_and(|rel| {
+                    let rel_str = path_to_forward_slash(rel);
+                    rel_matches(&rel_str, target_name, p)
+                });
+
+            root_matched || anchor_matched
+        };
+
+        if matched {
+            result = !negated;
+        }
+    }
+    result
+}
+
+/// Return `true` if the path should be ignored per `.graphifyignore` patterns.
+///
+/// Uses gitignore last-match-wins semantics with parent-exclusion rule:
+/// a `!` re-include cannot rescue a file whose ancestor directory is excluded.
+#[must_use]
+pub fn is_ignored(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+
+    // Gitignore parent-exclusion rule: walk ancestors top-down; if any is
+    // excluded, the file is excluded regardless of later ! patterns.
+    let rel_parts: Vec<_> = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .collect();
+
+    let mut ancestor = root.to_path_buf();
+    for part in rel_parts.iter().take(rel_parts.len().saturating_sub(1)) {
+        ancestor = ancestor.join(part);
+        if eval_path(&ancestor, root, patterns) {
+            return true;
+        }
+    }
+    eval_path(path, root, patterns)
+}
+
+/// Return `true` if `path` matches any `.graphifyinclude` allowlist pattern.
+#[must_use]
+pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+
+    let target_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    for (anchor, pattern) in patterns {
+        let anchored = pattern.starts_with('/');
+        let p = pattern.trim_matches('/');
+        if p.is_empty() {
+            continue;
+        }
+        if anchored {
+            if path.strip_prefix(anchor).ok().is_some_and(|rel| {
+                let rel_str = path_to_forward_slash(rel);
+                rel_matches(&rel_str, target_name, p)
+            }) {
+                return true;
+            }
+        } else {
+            let root_matched = path.strip_prefix(root).ok().is_some_and(|rel| {
+                let rel_str = path_to_forward_slash(rel);
+                rel_matches(&rel_str, target_name, p)
+            });
+            if root_matched {
+                return true;
+            }
+            if anchor != root
+                && path.strip_prefix(anchor).ok().is_some_and(|rel| {
+                    let rel_str = path_to_forward_slash(rel);
+                    rel_matches(&rel_str, target_name, p)
+                })
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Return `true` if a directory may contain files matched by `.graphifyinclude`.
+#[must_use]
+pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+
+    let mut rels: Vec<String> = Vec::new();
+    if let Ok(rel) = path.strip_prefix(root) {
+        rels.push(path_to_forward_slash(rel));
+    }
+    for (anchor, _) in patterns {
+        if anchor != root
+            && let Ok(rel) = path.strip_prefix(anchor)
+        {
+            rels.push(path_to_forward_slash(rel));
+        }
+    }
+
+    for rel in &rels {
+        let rel = rel.trim_matches('/');
+        if rel.is_empty() {
+            return true;
+        }
+        for (_, pattern) in patterns {
+            let p = pattern.trim_matches('/');
+            if p.is_empty() {
+                continue;
+            }
+            if p == rel || p.starts_with(&format!("{rel}/")) {
+                return true;
+            }
+            if fnmatch(rel, p) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_comment_line() {
+        assert_eq!(parse_gitignore_line("# this is a comment"), "");
+    }
+
+    #[test]
+    fn parse_blank_line() {
+        assert_eq!(parse_gitignore_line(""), "");
+    }
+
+    #[test]
+    fn parse_normal_pattern() {
+        assert_eq!(parse_gitignore_line("vendor/"), "vendor/");
+    }
+
+    #[test]
+    fn parse_escaped_hash() {
+        assert_eq!(parse_gitignore_line("path\\#hash.py"), "path#hash.py");
+    }
+
+    #[test]
+    fn glob_match_star() {
+        assert!(glob_match("foo.py", "*.py"));
+        assert!(!glob_match("foo/bar.py", "*.py"));
+    }
+
+    #[test]
+    fn glob_match_double_star() {
+        assert!(glob_match("a/b/c.py", "**/*.py"));
+    }
+}

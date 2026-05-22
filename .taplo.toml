@@ -1,0 +1,7 @@
+# Taplo configuration for TOML formatting
+# https://taplo.tamasfe.dev/configuration/file.html
+
+exclude = ["graphify-py/**/*.toml"]
+
+[formatting]
+reorder_keys = false

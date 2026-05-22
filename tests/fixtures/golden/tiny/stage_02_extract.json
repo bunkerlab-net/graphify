@@ -1,0 +1,47 @@
+{
+  "nodes": [
+    {
+      "id": "hello_py",
+      "label": "hello.py",
+      "file_type": "code",
+      "source_file": "hello.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "tiny_hello_hello",
+      "label": "hello()",
+      "file_type": "code",
+      "source_file": "hello.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "tiny_hello_rationale_2",
+      "label": "Return a greeting string.",
+      "file_type": "rationale",
+      "source_file": "hello.py",
+      "source_location": "L2"
+    }
+  ],
+  "edges": [
+    {
+      "source": "hello_py",
+      "target": "tiny_hello_hello",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hello.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tiny_hello_rationale_2",
+      "target": "tiny_hello_hello",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "hello.py",
+      "source_location": "L2",
+      "weight": 1.0
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

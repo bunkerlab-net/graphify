@@ -1,0 +1,60 @@
+// https://hk.jdx.dev
+amends "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Builtins.pkl"
+
+exclude = List("graphify-py/**")
+
+local linters = new Mapping<String, Step> {
+  // https://hk.jdx.dev/builtins.html
+  // Lint Github Actions
+  ["action_lint"] = Builtins.actionlint
+  // Cargo clippy
+  ["cargo_clippy"] = Builtins.cargo_clippy
+  // Cargo format
+  ["cargo_format"] = Builtins.cargo_fmt
+  // Detect accidentally committed private keys
+  ["detect_private_key"] = Builtins.detect_private_key
+  // Format TOML files
+  ["taplo_format"] = Builtins.taplo_format
+  // Lint Markdown files
+  ["md_lint"] = Builtins.markdown_lint
+  // Check Mise files
+  ["mise"] = Builtins.mise
+  // Ensure all files end with LF (*nix) not CRLF (DOS)
+  ["mixed_line_ending"] = Builtins.mixed_line_ending
+  // Ensure all files end in a new line
+  ["newlines"] = Builtins.newlines
+  // No commit to protected branches
+  ["no_commit_protected_branch"] = Builtins.no_commit_to_branch
+  // Format Pickle files
+  ["pkl_format"] = Builtins.pkl_format
+  // Lint Pickle files
+  ["pkl_lint"] = Builtins.pkl
+  // Ensure `package.json` keys are sorted alphabetically
+  ["sort_package_json"] = Builtins.sort_package_json
+  // No trailing whitespace allowed
+  ["trailing_whitespace"] = Builtins.trailing_whitespace
+  // Zizmor
+  ["zizmor"] = Builtins.zizmor
+}
+
+hooks {
+  ["pre-commit"] {
+    steps = linters
+    stash = "git"
+  }
+
+  // ["pre-push"] {
+  //   steps = linters
+  // }
+
+  // "fix" and "check" are special steps for `hk fix` and `hk check` commands
+  ["fix"] {
+    fix = true
+    steps = linters
+  }
+
+  ["check"] {
+    steps = linters
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "graphify-build"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Graph assembly from extraction dicts"
+
+[dependencies]
+graphify-validate = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

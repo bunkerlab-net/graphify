@@ -1,0 +1,24 @@
+[package]
+name = "graphify-dedup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MinHash + fuzzy-string deduplication of similar nodes"
+
+[dependencies]
+indexmap = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strsim = "0.11"
+thiserror = { workspace = true }
+twox-hash = "1"
+
+[dev-dependencies]
+strsim = "0.11"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

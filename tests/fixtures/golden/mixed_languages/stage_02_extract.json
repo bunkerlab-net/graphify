@@ -1,0 +1,666 @@
+{
+  "nodes": [
+    {
+      "id": "server_py",
+      "label": "server.py",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "mixed_languages_server_requesthandler",
+      "label": "RequestHandler",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L8"
+    },
+    {
+      "id": "basehttprequesthandler",
+      "label": "BaseHTTPRequestHandler",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": ""
+    },
+    {
+      "id": "mixed_languages_server_requesthandler_do_get",
+      "label": ".do_GET()",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L11"
+    },
+    {
+      "id": "mixed_languages_server_requesthandler_do_post",
+      "label": ".do_POST()",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L19"
+    },
+    {
+      "id": "mixed_languages_server_requesthandler_send_json",
+      "label": "._send_json()",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L29"
+    },
+    {
+      "id": "mixed_languages_server_requesthandler_send_error",
+      "label": "._send_error()",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L37"
+    },
+    {
+      "id": "mixed_languages_server_requesthandler_log_message",
+      "label": ".log_message()",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L40"
+    },
+    {
+      "id": "mixed_languages_server_create_server",
+      "label": "create_server()",
+      "file_type": "code",
+      "source_file": "server.py",
+      "source_location": "L44"
+    },
+    {
+      "id": "mixed_languages_server_rationale_1",
+      "label": "Simple HTTP server in Python.",
+      "file_type": "rationale",
+      "source_file": "server.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "mixed_languages_server_rationale_9",
+      "label": "Handle incoming HTTP requests.",
+      "file_type": "rationale",
+      "source_file": "server.py",
+      "source_location": "L9"
+    },
+    {
+      "id": "proxy_go",
+      "label": "proxy.go",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L1"
+    },
+    {
+      "id": "mixed_languages_config",
+      "label": "Config",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L14"
+    },
+    {
+      "id": "mixed_languages_proxy_defaultconfig",
+      "label": "DefaultConfig()",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L21"
+    },
+    {
+      "id": "mixed_languages_proxy",
+      "label": "Proxy",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L30"
+    },
+    {
+      "id": "mixed_languages_proxy_new",
+      "label": "New()",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L37"
+    },
+    {
+      "id": "mixed_languages_proxy_servehttp",
+      "label": ".ServeHTTP()",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L50"
+    },
+    {
+      "id": "mixed_languages_proxy_writeerror",
+      "label": ".writeError()",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L82"
+    },
+    {
+      "id": "mixed_languages_proxy_listenandserve",
+      "label": ".ListenAndServe()",
+      "file_type": "code",
+      "source_file": "proxy.go",
+      "source_location": "L89"
+    },
+    {
+      "id": "client_ts",
+      "label": "client.ts",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L1"
+    },
+    {
+      "id": "mixed_languages_client_user",
+      "label": "User",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L2"
+    },
+    {
+      "id": "mixed_languages_client_apiresponse",
+      "label": "ApiResponse",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L8"
+    },
+    {
+      "id": "mixed_languages_client_apiclient",
+      "label": "ApiClient",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L13"
+    },
+    {
+      "id": "mixed_languages_client_apiclient_constructor",
+      "label": ".constructor()",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L16"
+    },
+    {
+      "id": "mixed_languages_client_apiclient_gethealth",
+      "label": ".getHealth()",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L20"
+    },
+    {
+      "id": "mixed_languages_client_apiclient_getusers",
+      "label": ".getUsers()",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L25"
+    },
+    {
+      "id": "mixed_languages_client_apiclient_createuser",
+      "label": ".createUser()",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L34"
+    },
+    {
+      "id": "mixed_languages_client_formatuser",
+      "label": "formatUser()",
+      "file_type": "code",
+      "source_file": "client.ts",
+      "source_location": "L47"
+    },
+    {
+      "id": "readme_md",
+      "label": "README.md",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "mixed_languages_readme_mixed_language_demo",
+      "label": "Mixed Language Demo",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "mixed_languages_readme_architecture",
+      "label": "Architecture",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": "L9"
+    },
+    {
+      "id": "mixed_languages_readme_codeblock_1",
+      "label": "code:block1 (Browser → TypeScript client)",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": "L11"
+    },
+    {
+      "id": "mixed_languages_readme_running",
+      "label": "Running",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": "L19"
+    },
+    {
+      "id": "mixed_languages_readme_codeblock_2",
+      "label": "code:bash (# Start the Python server)",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": "L21"
+    }
+  ],
+  "edges": [
+    {
+      "source": "server_py",
+      "target": "json",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "server_py",
+      "target": "http_server",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L4",
+      "weight": 1.0
+    },
+    {
+      "source": "server_py",
+      "target": "typing",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "server_py",
+      "target": "mixed_languages_server_requesthandler",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler",
+      "target": "basehttprequesthandler",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler",
+      "target": "mixed_languages_server_requesthandler_do_get",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L11",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler",
+      "target": "mixed_languages_server_requesthandler_do_post",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L19",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler",
+      "target": "mixed_languages_server_requesthandler_send_json",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L29",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler",
+      "target": "mixed_languages_server_requesthandler_send_error",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L37",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler",
+      "target": "mixed_languages_server_requesthandler_log_message",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L40",
+      "weight": 1.0
+    },
+    {
+      "source": "server_py",
+      "target": "mixed_languages_server_create_server",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L44",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler_do_get",
+      "target": "mixed_languages_server_requesthandler_send_json",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L13",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler_do_get",
+      "target": "mixed_languages_server_requesthandler_send_error",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L17",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler_do_post",
+      "target": "mixed_languages_server_requesthandler_send_error",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L25",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler_do_post",
+      "target": "mixed_languages_server_requesthandler_send_json",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L27",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_requesthandler_send_error",
+      "target": "mixed_languages_server_requesthandler_send_json",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L38",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_rationale_1",
+      "target": "server_py",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_server_rationale_9",
+      "target": "mixed_languages_server_requesthandler",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "server.py",
+      "source_location": "L9",
+      "weight": 1.0
+    },
+    {
+      "source": "proxy_go",
+      "target": "go_pkg_encoding_json",
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L5",
+      "weight": 1.0,
+      "context": "import"
+    },
+    {
+      "source": "proxy_go",
+      "target": "go_pkg_fmt",
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L6",
+      "weight": 1.0,
+      "context": "import"
+    },
+    {
+      "source": "proxy_go",
+      "target": "go_pkg_io",
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L7",
+      "weight": 1.0,
+      "context": "import"
+    },
+    {
+      "source": "proxy_go",
+      "target": "go_pkg_net_http",
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L8",
+      "weight": 1.0,
+      "context": "import"
+    },
+    {
+      "source": "proxy_go",
+      "target": "go_pkg_net_url",
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L9",
+      "weight": 1.0,
+      "context": "import"
+    },
+    {
+      "source": "proxy_go",
+      "target": "go_pkg_time",
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L10",
+      "weight": 1.0,
+      "context": "import"
+    },
+    {
+      "source": "proxy_go",
+      "target": "mixed_languages_config",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L14",
+      "weight": 1.0
+    },
+    {
+      "source": "proxy_go",
+      "target": "mixed_languages_proxy_defaultconfig",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L21",
+      "weight": 1.0
+    },
+    {
+      "source": "proxy_go",
+      "target": "mixed_languages_proxy",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L30",
+      "weight": 1.0
+    },
+    {
+      "source": "proxy_go",
+      "target": "mixed_languages_proxy_new",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L37",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_proxy",
+      "target": "mixed_languages_proxy_servehttp",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L50",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_proxy",
+      "target": "mixed_languages_proxy_writeerror",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L82",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_proxy",
+      "target": "mixed_languages_proxy_listenandserve",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L89",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_proxy_servehttp",
+      "target": "mixed_languages_proxy_writeerror",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "proxy.go",
+      "source_location": "L57",
+      "weight": 1.0
+    },
+    {
+      "source": "client_ts",
+      "target": "mixed_languages_client_user",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "client_ts",
+      "target": "mixed_languages_client_apiresponse",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "client_ts",
+      "target": "mixed_languages_client_apiclient",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L13",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_client_apiclient",
+      "target": "mixed_languages_client_apiclient_constructor",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_client_apiclient",
+      "target": "mixed_languages_client_apiclient_gethealth",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L20",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_client_apiclient",
+      "target": "mixed_languages_client_apiclient_getusers",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L25",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_client_apiclient",
+      "target": "mixed_languages_client_apiclient_createuser",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L34",
+      "weight": 1.0
+    },
+    {
+      "source": "client_ts",
+      "target": "mixed_languages_client_formatuser",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "client.ts",
+      "source_location": "L47",
+      "weight": 1.0
+    },
+    {
+      "source": "readme_md",
+      "target": "mixed_languages_readme_mixed_language_demo",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "README.md",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_readme_mixed_language_demo",
+      "target": "mixed_languages_readme_architecture",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "README.md",
+      "source_location": "L9",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_readme_architecture",
+      "target": "mixed_languages_readme_codeblock_1",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "README.md",
+      "source_location": "L11",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_readme_mixed_language_demo",
+      "target": "mixed_languages_readme_running",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "README.md",
+      "source_location": "L19",
+      "weight": 1.0
+    },
+    {
+      "source": "mixed_languages_readme_running",
+      "target": "mixed_languages_readme_codeblock_2",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "README.md",
+      "source_location": "L21",
+      "weight": 1.0
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

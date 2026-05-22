@@ -1,0 +1,18 @@
+{
+  "files": {
+    "code": [
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/tiny/hello.py"
+    ],
+    "document": [],
+    "paper": [],
+    "image": [],
+    "video": []
+  },
+  "total_files": 1,
+  "total_words": 17,
+  "needs_graph": false,
+  "warning": "Corpus is ~17 words - fits in a single context window. You may not need a graph.",
+  "skipped_sensitive": [],
+  "graphifyignore_patterns": 304,
+  "scan_root": "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/tiny"
+}

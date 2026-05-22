@@ -1,0 +1,25 @@
+[package]
+name = "graphify-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Semantic cache for extraction results"
+
+[dependencies]
+anyhow = { workspace = true }
+hex = { workspace = true }
+indexmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serial_test = "3"
+walkdir = { workspace = true }
+
+[lints]
+workspace = true

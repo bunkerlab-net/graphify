@@ -1,0 +1,26 @@
+[package]
+name = "graphify-html"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTML generators (tree view, call-flow Mermaid)"
+
+[dependencies]
+chrono = { workspace = true }
+graphify-build = { workspace = true }
+hex = { workspace = true }
+htmlescape = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

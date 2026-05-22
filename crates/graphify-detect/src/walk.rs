@@ -1,0 +1,329 @@
+//! Directory walking and file discovery.
+//!
+//! Ports `detect`, `collect_files`, and `_auto_follow_symlinks` from
+//! `graphify-py/graphify/detect.py`.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use crate::extensions::{FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
+use crate::ignore::{
+    IgnorePatterns, could_contain_included_path, is_ignored, load_graphifyignore,
+    load_graphifyinclude,
+};
+use crate::sensitive::{SKIP_FILES, is_noise_dir, is_sensitive};
+
+/// Corpus size warning thresholds (mirrors Python constants).
+pub const CORPUS_WARN_THRESHOLD: u64 = 50_000;
+pub const CORPUS_UPPER_THRESHOLD: u64 = 500_000;
+pub const FILE_COUNT_UPPER: usize = 500;
+
+/// Full output of a `detect()` run, analogous to the Python dict return.
+#[derive(Debug, Clone)]
+pub struct DetectResult {
+    /// Files grouped by type string ("code", "document", "paper", "image", "video").
+    pub files: HashMap<String, Vec<String>>,
+    pub total_files: usize,
+    pub total_words: u64,
+    pub needs_graph: bool,
+    pub warning: Option<String>,
+    pub skipped_sensitive: Vec<String>,
+    pub graphifyignore_patterns: usize,
+    pub scan_root: String,
+}
+
+/// Auto-detect symlink following: `true` when `root` has any direct symlinked child.
+#[must_use]
+pub fn auto_follow_symlinks(root: &Path) -> bool {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return false;
+    };
+    for entry in rd.flatten() {
+        if entry.path().is_symlink() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Count words in a file (for non-video types).
+fn count_words(path: &Path, ftype: FileType) -> u64 {
+    if ftype == FileType::Video {
+        return 0;
+    }
+    let Ok(text) = std::fs::read(path) else {
+        return 0;
+    };
+    String::from_utf8_lossy(&text).split_whitespace().count() as u64
+}
+
+// ── Walk context (bundles parameters to stay under clippy's 7-arg limit) ─────
+
+struct WalkCtx<'a> {
+    root: &'a Path,
+    follow_symlinks: bool,
+    ignore_patterns: &'a IgnorePatterns,
+    include_patterns: &'a IgnorePatterns,
+}
+
+fn walk_dir(
+    ctx: &WalkCtx<'_>,
+    dir: &Path,
+    in_memory_tree: bool,
+    seen: &mut HashSet<PathBuf>,
+    all_files: &mut Vec<PathBuf>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    let mut file_paths: Vec<PathBuf> = Vec::new();
+    let mut seen_in_dir: HashSet<PathBuf> = HashSet::new();
+
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let meta = if ctx.follow_symlinks {
+            std::fs::metadata(&path)
+        } else {
+            std::fs::symlink_metadata(&path)
+        };
+        let Ok(m) = meta else {
+            continue;
+        };
+
+        if m.is_dir() {
+            if ctx.follow_symlinks && path.is_symlink() {
+                // Circular symlink detection
+                if let (Ok(real), Ok(real_dir)) =
+                    (std::fs::canonicalize(&path), std::fs::canonicalize(dir))
+                    && (real_dir == real || real_dir.starts_with(&real))
+                {
+                    continue;
+                }
+            }
+            subdirs.push(path);
+        } else if m.is_file() {
+            seen_in_dir.insert(path.clone());
+            file_paths.push(path);
+        }
+    }
+
+    // When follow_symlinks=false, also pick up symlinks-to-files
+    // (Python's os.walk followlinks=False still lists symlink files).
+    if !ctx.follow_symlinks
+        && let Ok(rd2) = std::fs::read_dir(dir)
+    {
+        for entry in rd2.flatten() {
+            let path = entry.path();
+            if path.is_symlink()
+                && !seen_in_dir.contains(&path)
+                && std::fs::metadata(&path).is_ok_and(|m| m.is_file())
+            {
+                file_paths.push(path);
+            }
+        }
+    }
+
+    // Collect files
+    for p in file_paths {
+        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if SKIP_FILES.contains(fname) {
+            continue;
+        }
+        if !seen.contains(&p) {
+            seen.insert(p.clone());
+            all_files.push(p);
+        }
+    }
+
+    // Recurse into subdirs with noise-dir pruning
+    for subdir in subdirs {
+        let dir_name = subdir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        if !in_memory_tree {
+            if is_noise_dir(dir_name) {
+                continue;
+            }
+            let has_negation = ctx.ignore_patterns.iter().any(|(_, p)| p.starts_with('!'));
+            if !has_negation
+                && is_ignored(&subdir, ctx.root, ctx.ignore_patterns)
+                && !could_contain_included_path(&subdir, ctx.root, ctx.include_patterns)
+            {
+                continue;
+            }
+        }
+
+        walk_dir(ctx, &subdir, in_memory_tree, seen, all_files);
+    }
+}
+
+/// Format a number with thousands separators (matches Python `f"{n:,}"`).
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    let offset = s.len() % 3;
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (i % 3 == offset || (offset == 0 && i % 3 == 0)) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn build_warning(total_words: u64, total_files: usize) -> Option<String> {
+    let needs_graph = total_words >= CORPUS_WARN_THRESHOLD;
+    if !needs_graph {
+        Some(format!(
+            "Corpus is ~{} words - fits in a single context window. You may not need a graph.",
+            format_number(total_words)
+        ))
+    } else if total_words >= CORPUS_UPPER_THRESHOLD || total_files >= FILE_COUNT_UPPER {
+        Some(format!(
+            "Large corpus: {} files · ~{} words. Semantic extraction will be expensive (many Claude tokens). Consider running on a subfolder.",
+            total_files,
+            format_number(total_words)
+        ))
+    } else {
+        None
+    }
+}
+
+/// Discover all supported files under `root`, returning a rich result struct.
+///
+/// Mirrors Python's `detect()` function.
+#[must_use]
+pub fn detect(
+    root: &Path,
+    follow_symlinks: Option<bool>,
+    extra_excludes: Option<&[String]>,
+) -> DetectResult {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let follow_symlinks = follow_symlinks.unwrap_or_else(|| auto_follow_symlinks(&root));
+
+    let mut ignore_patterns = load_graphifyignore(&root);
+    if let Some(excludes) = extra_excludes {
+        for pat in excludes {
+            let line = crate::ignore::parse_gitignore_line(pat);
+            if !line.is_empty() {
+                ignore_patterns.push((root.clone(), line));
+            }
+        }
+    }
+    let include_patterns = load_graphifyinclude(&root);
+    let graphifyignore_patterns = ignore_patterns.len();
+
+    let memory_dir = root.join("graphify-out").join("memory");
+    let converted_dir = root.join("graphify-out").join("converted");
+
+    let scan_paths: Vec<(PathBuf, bool)> = {
+        let mut v = vec![(root.clone(), false)];
+        if memory_dir.exists() {
+            v.push((memory_dir.clone(), true));
+        }
+        v
+    };
+
+    let ctx = WalkCtx {
+        root: &root,
+        follow_symlinks,
+        ignore_patterns: &ignore_patterns,
+        include_patterns: &include_patterns,
+    };
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut all_files: Vec<PathBuf> = Vec::new();
+
+    for (scan_root, in_memory) in &scan_paths {
+        walk_dir(&ctx, scan_root, *in_memory, &mut seen, &mut all_files);
+    }
+
+    let mut files: HashMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
+        .iter()
+        .map(|k| ((*k).to_string(), Vec::new()))
+        .collect();
+
+    let mut total_words: u64 = 0;
+    let mut skipped_sensitive: Vec<String> = Vec::new();
+
+    for p in &all_files {
+        let in_memory = memory_dir.exists() && p.starts_with(&memory_dir);
+
+        if !in_memory && p.starts_with(&converted_dir) {
+            continue;
+        }
+
+        if is_ignored(p, &root, &ignore_patterns) {
+            continue;
+        }
+
+        if is_sensitive(p) {
+            skipped_sensitive.push(p.to_string_lossy().into_owned());
+            continue;
+        }
+
+        let Some(ftype) = classify_file(p) else {
+            continue;
+        };
+
+        // Google Workspace shortcuts: skip by default.
+        let ext_lower = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext_lower.as_str()) {
+            skipped_sensitive.push(format!(
+                "{} [Google Workspace shortcut skipped - pass --google-workspace or set GRAPHIFY_GOOGLE_WORKSPACE=1]",
+                p.to_string_lossy()
+            ));
+            continue;
+        }
+
+        // Office files: skip with note (conversion libs not yet ported).
+        if ext_lower == "docx" || ext_lower == "xlsx" {
+            skipped_sensitive.push(format!(
+                "{} [office conversion failed - pip install graphifyy[office]]",
+                p.to_string_lossy()
+            ));
+            continue;
+        }
+
+        let ftype_key = ftype.as_str().to_string();
+        total_words += count_words(p, ftype);
+        files
+            .entry(ftype_key)
+            .or_default()
+            .push(p.to_string_lossy().into_owned());
+    }
+
+    let total_files: usize = files.values().map(Vec::len).sum();
+    let needs_graph = total_words >= CORPUS_WARN_THRESHOLD;
+    let warning = build_warning(total_words, total_files);
+
+    DetectResult {
+        files,
+        total_files,
+        total_words,
+        needs_graph,
+        warning,
+        skipped_sensitive,
+        graphifyignore_patterns,
+        scan_root: root.to_string_lossy().into_owned(),
+    }
+}
+
+/// Collect all supported files under `root`, returning a flat `Vec<PathBuf>`.
+///
+/// Simplified wrapper over [`detect`] that concatenates all file lists.
+#[must_use]
+pub fn collect_files(root: &Path) -> Vec<PathBuf> {
+    let result = detect(root, None, None);
+    result
+        .files
+        .into_values()
+        .flatten()
+        .map(PathBuf::from)
+        .collect()
+}

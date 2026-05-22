@@ -1,0 +1,870 @@
+//! Multi-file extraction orchestrator.
+//!
+//! Mirrors Python `extract()` from `extract.py`:
+//! - Per-file dispatch via extension (or `.blade.php` suffix)
+//! - Cache integration (graphify-cache)
+//! - Parallel extraction via rayon for large batches
+//! - Cross-file Python import resolution
+//! - Cross-file Java import resolution
+//! - Cross-file `raw_call` resolution
+//! - ID relativisation (absolute → project-relative)
+//! - `source_file` field relativisation
+
+// Source file labels use lowercase extensions; case-insensitive comparison
+// would misidentify e.g. ".PY" which does not exist in practice.
+#![allow(clippy::case_sensitive_file_extension_comparisons)]
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use rayon::prelude::*;
+use serde_json::Value;
+
+use crate::extractors::{
+    extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
+    extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go, extract_groovy,
+    extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
+    extract_lazarus_package, extract_lua, extract_markdown, extract_objc, extract_pascal,
+    extract_php, extract_powershell, extract_python, extract_ruby, extract_rust, extract_scala,
+    extract_sql, extract_svelte, extract_swift, extract_verilog, extract_zig,
+};
+use crate::ids::make_id1;
+use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
+
+const PARALLEL_THRESHOLD: usize = 20;
+
+// ── Dispatch table ────────────────────────────────────────────────────────────
+
+type ExtractFn = fn(&Path) -> FileResult;
+
+fn get_extractor(path: &Path) -> Option<ExtractFn> {
+    // Blade templates: checked by suffix before extension
+    let name = path.file_name().map_or("", |n| n.to_str().unwrap_or(""));
+    if name.ends_with(".blade.php") {
+        return Some(extract_blade);
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext {
+        "py" => Some(extract_python),
+        "js" | "jsx" | "mjs" | "ts" | "tsx" | "vue" => Some(extract_js),
+        "go" => Some(extract_go),
+        "rs" => Some(extract_rust),
+        "java" => Some(extract_java),
+        "groovy" | "gradle" => Some(extract_groovy),
+        "c" | "h" => Some(extract_c),
+        "cpp" | "cc" | "cxx" | "hpp" => Some(extract_cpp),
+        "rb" => Some(extract_ruby),
+        "cs" => Some(extract_csharp),
+        "kt" | "kts" => Some(extract_kotlin),
+        "scala" => Some(extract_scala),
+        "php" => Some(extract_php),
+        "swift" => Some(extract_swift),
+        "lua" | "luau" | "toc" => Some(extract_lua),
+        "zig" => Some(extract_zig),
+        "ps1" => Some(extract_powershell),
+        "ex" | "exs" => Some(extract_elixir),
+        "m" | "mm" => Some(extract_objc),
+        "jl" => Some(extract_julia),
+        "f" | "F" | "f90" | "F90" | "f95" | "F95" | "f03" | "F03" | "f08" | "F08" => {
+            Some(extract_fortran)
+        }
+        "svelte" => Some(extract_svelte),
+        "astro" => Some(extract_astro),
+        "dart" => Some(extract_dart),
+        "v" | "sv" => Some(extract_verilog),
+        "sql" => Some(extract_sql),
+        "md" | "mdx" | "qmd" => Some(extract_markdown),
+        "pas" | "pp" | "dpr" | "dpk" | "lpr" | "inc" => Some(extract_pascal),
+        "dfm" => Some(extract_delphi_form),
+        "lfm" => Some(extract_lazarus_form),
+        "lpk" => Some(extract_lazarus_package),
+        "sh" | "bash" => Some(extract_bash),
+        "json" => Some(extract_json),
+        _ => None,
+    }
+}
+
+// ── Cache helpers (thin wrappers around graphify-cache) ───────────────────────
+
+fn file_result_to_value(result: &FileResult) -> Value {
+    let nodes: Vec<Value> = result
+        .nodes
+        .iter()
+        .map(|n| serde_json::to_value(n).unwrap_or(Value::Null))
+        .collect();
+    let edges: Vec<Value> = result
+        .edges
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
+        .collect();
+    let raw_calls: Vec<Value> = result
+        .raw_calls
+        .iter()
+        .map(|rc| {
+            serde_json::json!({
+                "caller_nid": rc.caller_nid,
+                "callee": rc.callee,
+                "is_member_call": rc.is_member_call,
+                "source_file": rc.source_file,
+                "source_location": rc.source_location,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "nodes": nodes,
+        "edges": edges,
+        "raw_calls": raw_calls,
+    })
+}
+
+#[allow(clippy::unnecessary_wraps)] // caller uses Option for future extensibility
+fn value_to_file_result(v: &Value) -> Option<FileResult> {
+    let nodes = v
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|n| serde_json::from_value::<Node>(n.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let edges = v
+        .get("edges")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| serde_json::from_value::<Edge>(e.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let raw_calls = v
+        .get("raw_calls")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|rc| {
+                    Some(RawCall {
+                        caller_nid: rc.get("caller_nid")?.as_str()?.to_string(),
+                        callee: rc.get("callee")?.as_str()?.to_string(),
+                        is_member_call: rc
+                            .get("is_member_call")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        source_file: rc
+                            .get("source_file")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        source_location: rc
+                            .get("source_location")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(FileResult {
+        nodes,
+        edges,
+        raw_calls,
+        error: None,
+    })
+}
+
+// ── Extract a single file (with cache) ───────────────────────────────────────
+
+fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
+    // Check cache
+    let cached = graphify_cache::load_cached(path, effective_root, "ast");
+    if let Some(v) = cached
+        && let Some(r) = value_to_file_result(&v)
+    {
+        return r;
+    }
+
+    let Some(extractor) = get_extractor(path) else {
+        return FileResult {
+            nodes: vec![],
+            edges: vec![],
+            raw_calls: vec![],
+            error: None,
+        };
+    };
+
+    let result = extractor(path);
+    if result.error.is_none() {
+        let v = file_result_to_value(&result);
+        // best-effort save; ignore failures
+        let _ = graphify_cache::save_cached(path, &v, effective_root, "ast");
+    }
+    result
+}
+
+// ── Cross-file Python import resolution helpers ───────────────────────────────
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // tree-walk helper; direct port
+fn walk_imports(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    path: &Path,
+    stem_to_entities: &HashMap<String, HashMap<String, String>>,
+    bare_to_qualified: &HashMap<String, String>,
+    local_classes: &[String],
+    str_path: &str,
+    new_edges: &mut Vec<Edge>,
+) {
+    if node.kind() == "import_from_statement" {
+        let mut target_fq: Option<String> = None;
+        let mut past_import_kw = false;
+        let mut imported_names: Vec<String> = Vec::new();
+        let mut cur = node.walk();
+        if cur.goto_first_child() {
+            loop {
+                let child = cur.node();
+                if child.kind() == "relative_import" {
+                    let mut rc = child.walk();
+                    if rc.goto_first_child() {
+                        loop {
+                            let sub = rc.node();
+                            if sub.kind() == "dotted_name" {
+                                let raw =
+                                    std::str::from_utf8(&source[sub.start_byte()..sub.end_byte()])
+                                        .unwrap_or("");
+                                let bare = raw.split('.').next_back().unwrap_or("").to_string();
+                                let candidate =
+                                    path.parent().unwrap_or(path).join(format!("{bare}.py"));
+                                target_fq = Some(crate::ids::file_stem(&candidate));
+                                break;
+                            }
+                            if !rc.goto_next_sibling() {
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
+                if child.kind() == "dotted_name" && target_fq.is_none() {
+                    let raw = std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
+                        .unwrap_or("");
+                    let bare = raw.split('.').next_back().unwrap_or("");
+                    target_fq = bare_to_qualified.get(bare).cloned();
+                }
+                if child.kind() == "import" {
+                    past_import_kw = true;
+                } else if past_import_kw {
+                    if child.kind() == "dotted_name" {
+                        imported_names.push(
+                            std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
+                                .unwrap_or("")
+                                .to_string(),
+                        );
+                    } else if child.kind() == "aliased_import"
+                        && let Some(name_node) = child.child_by_field_name("name")
+                    {
+                        imported_names.push(
+                            std::str::from_utf8(
+                                &source[name_node.start_byte()..name_node.end_byte()],
+                            )
+                            .unwrap_or("")
+                            .to_string(),
+                        );
+                    }
+                }
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+
+        let Some(fq) = target_fq else { return };
+        let Some(entities) = stem_to_entities.get(&fq) else {
+            return;
+        };
+        let line = node.start_position().row + 1;
+        for name in &imported_names {
+            if let Some(tgt_nid) = entities.get(name) {
+                for src_class_nid in local_classes {
+                    new_edges.push(Edge {
+                        source: src_class_nid.clone(),
+                        target: tgt_nid.clone(),
+                        relation: "uses".to_string(),
+                        confidence: "INFERRED".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        weight: 0.8,
+                        context: None,
+                        confidence_score: None,
+                    });
+                }
+            }
+        }
+        return;
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            walk_imports(
+                cur.node(),
+                source,
+                path,
+                stem_to_entities,
+                bare_to_qualified,
+                local_classes,
+                str_path,
+                new_edges,
+            );
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+fn walk_java(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    file_nid: &str,
+    path: &Path,
+    name_to_ids: &HashMap<String, Vec<String>>,
+    new_edges: &mut Vec<Edge>,
+    seen_pairs: &mut std::collections::HashSet<(String, String)>,
+) {
+    if node.kind() == "import_declaration" {
+        let raw = std::str::from_utf8(&source[node.start_byte()..node.end_byte()])
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let body = raw
+            .trim_start_matches("import")
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .trim_start_matches("static ")
+            .trim()
+            .to_string();
+        if body.ends_with(".*") {
+            return;
+        }
+        let parts: Vec<&str> = body.split('.').collect();
+        if parts.is_empty() {
+            return;
+        }
+        let last = parts.last().copied().unwrap_or("");
+        // If last part is lowercase, try second-to-last (method static import)
+        let class_name = if last.chars().next().is_some_and(char::is_lowercase) && parts.len() >= 2
+        {
+            parts[parts.len() - 2]
+        } else {
+            last
+        };
+        let at_line = node.start_position().row + 1;
+        for tgt_nid in name_to_ids.get(class_name).into_iter().flatten() {
+            if tgt_nid == file_nid {
+                continue;
+            }
+            let key = (file_nid.to_string(), tgt_nid.clone());
+            if seen_pairs.insert(key) {
+                new_edges.push(Edge {
+                    source: file_nid.to_string(),
+                    target: tgt_nid.clone(),
+                    relation: "imports".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: path.to_string_lossy().into_owned(),
+                    source_location: Some(format!("L{at_line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: Some(1.0),
+                });
+            }
+        }
+        return;
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            walk_java(
+                cur.node(),
+                source,
+                file_nid,
+                path,
+                name_to_ids,
+                new_edges,
+                seen_pairs,
+            );
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+// ── Cross-file Python import resolution ──────────────────────────────────────
+
+#[allow(clippy::too_many_lines)]
+fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf]) -> Vec<Edge> {
+    use crate::ids::file_stem;
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .is_err()
+    {
+        return vec![];
+    }
+
+    // Pass 1: file-qualified stem → {label: nid}
+    let mut stem_to_entities: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut bare_to_qualified: HashMap<String, String> = HashMap::new();
+
+    for result in per_file {
+        for node in &result.nodes {
+            if node.source_file.is_empty() {
+                continue;
+            }
+            let label = &node.label;
+            if label.is_empty()
+                || label.ends_with(')')
+                || label.to_lowercase().ends_with(".py")
+                || label.starts_with('_')
+                || node.file_type == "rationale"
+            {
+                continue;
+            }
+            let src_path = PathBuf::from(&node.source_file);
+            let fq_stem = file_stem(&src_path);
+            stem_to_entities
+                .entry(fq_stem.clone())
+                .or_default()
+                .insert(label.clone(), node.id.clone());
+            let bare = src_path
+                .file_stem()
+                .map_or(String::new(), |s| s.to_string_lossy().into_owned());
+            bare_to_qualified.entry(bare).or_insert(fq_stem);
+        }
+    }
+
+    // Pass 2: for each Python file, find from-imports and resolve
+    let mut new_edges: Vec<Edge> = Vec::new();
+
+    for (result, path) in per_file.iter().zip(paths.iter()) {
+        let str_path = path.to_string_lossy().into_owned();
+        let this_stem = file_stem(path);
+        let this_file_nid = make_id1(&str_path);
+
+        let local_classes: Vec<String> = result
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.source_file == str_path
+                    && !n.label.ends_with(')')
+                    && !n.label.to_lowercase().ends_with(".py")
+                    && n.id != this_file_nid
+                    && n.id != make_id1(&this_stem)
+                    && n.file_type != "rationale"
+            })
+            .map(|n| n.id.clone())
+            .collect();
+
+        if local_classes.is_empty() {
+            continue;
+        }
+
+        let Ok(source) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+
+        // Walk for import_from_statement nodes
+        walk_imports(
+            tree.root_node(),
+            &source,
+            path,
+            &stem_to_entities,
+            &bare_to_qualified,
+            &local_classes,
+            &str_path,
+            &mut new_edges,
+        );
+    }
+
+    new_edges
+}
+
+// ── Cross-file Java import resolution ────────────────────────────────────────
+
+#[allow(clippy::too_many_lines)]
+fn resolve_cross_file_java_imports(per_file: &[FileResult], paths: &[PathBuf]) -> Vec<Edge> {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_java::LANGUAGE.into())
+        .is_err()
+    {
+        return vec![];
+    }
+
+    // Pass 1: class-name → [node_id]
+    let mut name_to_ids: HashMap<String, Vec<String>> = HashMap::new();
+    for result in per_file {
+        for node in &result.nodes {
+            let label = &node.label;
+            if label.is_empty()
+                || node.source_file.is_empty()
+                || label.ends_with(')')
+                || label.to_lowercase().ends_with(".java")
+            {
+                continue;
+            }
+            if !label
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() && c.is_uppercase())
+            {
+                continue;
+            }
+            name_to_ids
+                .entry(label.clone())
+                .or_default()
+                .push(node.id.clone());
+        }
+    }
+
+    // Pass 2: resolve imports
+    let mut new_edges: Vec<Edge> = Vec::new();
+    let mut seen_pairs: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    for path in paths {
+        let file_nid = make_id1(&path.to_string_lossy());
+        let Ok(source) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+
+        walk_java(
+            tree.root_node(),
+            &source,
+            &file_nid,
+            path,
+            &name_to_ids,
+            &mut new_edges,
+            &mut seen_pairs,
+        );
+    }
+
+    new_edges
+}
+
+// ── Main extract() ────────────────────────────────────────────────────────────
+
+/// Extract AST nodes and edges from a list of code files.
+///
+/// Two-pass process:
+/// 1. Per-file structural extraction (classes, functions, imports) — parallel if ≥ 20 uncached
+/// 2. Cross-file import + call resolution
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
+    if paths.is_empty() {
+        return ExtractOutput {
+            nodes: vec![],
+            edges: vec![],
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+    }
+
+    // Infer common root for ID relativisation
+    let root: PathBuf = {
+        let r = if paths.len() == 1 {
+            paths[0]
+                .parent()
+                .map_or_else(|| PathBuf::from("."), PathBuf::from)
+        } else {
+            let min_parts = paths
+                .iter()
+                .map(|p| p.components().count())
+                .min()
+                .unwrap_or(0);
+            let mut common_len = 0usize;
+            'outer: for i in 0..min_parts {
+                let first = paths[0].components().nth(i);
+                for p in paths.iter().skip(1) {
+                    if p.components().nth(i) != first {
+                        break 'outer;
+                    }
+                }
+                common_len = i + 1;
+            }
+            if common_len == 0 {
+                PathBuf::from(".")
+            } else {
+                paths[0].components().take(common_len).collect()
+            }
+        };
+        r.canonicalize().unwrap_or(r)
+    };
+
+    let effective_root: &Path = cache_root.unwrap_or(&root);
+
+    // Phase 1: extract per file (cached or fresh)
+    let uncached_work: Vec<(usize, &PathBuf)> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| get_extractor(p).is_some())
+        .collect();
+
+    let mut per_file: Vec<FileResult> = paths.iter().map(|_| FileResult::default()).collect();
+
+    if uncached_work.len() >= PARALLEL_THRESHOLD {
+        // Parallel via rayon
+        let results: Vec<(usize, FileResult)> = uncached_work
+            .par_iter()
+            .map(|(idx, path)| (*idx, extract_single_file(path, effective_root)))
+            .collect();
+        for (idx, result) in results {
+            per_file[idx] = result;
+        }
+    } else {
+        // Sequential
+        for (idx, path) in &uncached_work {
+            per_file[*idx] = extract_single_file(path, effective_root);
+        }
+    }
+
+    let mut all_nodes: Vec<Node> = Vec::new();
+    let mut all_edges: Vec<Edge> = Vec::new();
+    let mut all_raw_calls: Vec<RawCall> = Vec::new();
+
+    for result in &mut per_file {
+        all_nodes.append(&mut result.nodes);
+        all_edges.append(&mut result.edges);
+        all_raw_calls.append(&mut result.raw_calls);
+    }
+
+    // Remap absolute file-node IDs to project-relative IDs (#502)
+    let mut id_remap: HashMap<String, String> = HashMap::new();
+    for path in paths {
+        let old_id = make_id1(&path.to_string_lossy());
+        if let Ok(rel) = path.strip_prefix(&root) {
+            let new_id = make_id1(&rel.to_string_lossy());
+            if old_id != new_id {
+                id_remap.insert(old_id, new_id);
+            }
+        }
+    }
+    if !id_remap.is_empty() {
+        for n in &mut all_nodes {
+            if let Some(new_id) = id_remap.get(&n.id) {
+                n.id = new_id.clone();
+            }
+        }
+        for e in &mut all_edges {
+            if let Some(new_id) = id_remap.get(&e.source) {
+                e.source = new_id.clone();
+            }
+            if let Some(new_id) = id_remap.get(&e.target) {
+                e.target = new_id.clone();
+            }
+        }
+    }
+
+    // Cross-file Python import resolution
+    let py_indices: Vec<usize> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.extension().is_some_and(|e| e == "py"))
+        .map(|(i, _)| i)
+        .collect();
+    if !py_indices.is_empty() {
+        let py_results: Vec<&FileResult> = py_indices.iter().map(|&i| &per_file[i]).collect();
+        let py_paths: Vec<PathBuf> = py_indices.iter().map(|&i| paths[i].clone()).collect();
+        let cross = resolve_cross_file_python_imports(
+            &py_results.into_iter().cloned().collect::<Vec<_>>(),
+            &py_paths,
+        );
+        all_edges.extend(cross);
+    }
+
+    // Cross-file Java import resolution
+    let java_indices: Vec<usize> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.extension().is_some_and(|e| e == "java"))
+        .map(|(i, _)| i)
+        .collect();
+    if !java_indices.is_empty() {
+        let java_results: Vec<FileResult> =
+            java_indices.iter().map(|&i| per_file[i].clone()).collect();
+        let java_paths: Vec<PathBuf> = java_indices.iter().map(|&i| paths[i].clone()).collect();
+        let cross = resolve_cross_file_java_imports(&java_results, &java_paths);
+        all_edges.extend(cross);
+    }
+
+    // Cross-file call resolution via raw_calls
+    // Build label → [nid] (skip rationale)
+    let mut global_label_to_nids: HashMap<String, Vec<String>> = HashMap::new();
+    for n in &all_nodes {
+        if n.file_type == "rationale" {
+            continue;
+        }
+        let normalised = n.label.trim_end_matches("()").trim_start_matches('.');
+        if !normalised.is_empty() {
+            global_label_to_nids
+                .entry(normalised.to_lowercase())
+                .or_default()
+                .push(n.id.clone());
+        }
+    }
+
+    // Import evidence indexes
+    let mut file_to_symbol_imports: HashMap<String, std::collections::HashSet<String>> =
+        HashMap::new();
+    let mut file_to_module_imports: HashMap<String, std::collections::HashSet<String>> =
+        HashMap::new();
+    for e in &all_edges {
+        if e.relation == "imports" {
+            file_to_symbol_imports
+                .entry(e.source.clone())
+                .or_default()
+                .insert(e.target.clone());
+        } else if e.relation == "imports_from" {
+            file_to_module_imports
+                .entry(e.source.clone())
+                .or_default()
+                .insert(e.target.clone());
+        }
+    }
+
+    // Map node → file_nid
+    let mut nid_to_file_nid: HashMap<String, String> = HashMap::new();
+    for n in &all_nodes {
+        if n.source_file.is_empty() {
+            continue;
+        }
+        let sf_path = PathBuf::from(&n.source_file);
+        let sf_rel = if sf_path.is_absolute() {
+            sf_path
+                .strip_prefix(&root)
+                .map(PathBuf::from)
+                .unwrap_or(sf_path)
+        } else {
+            sf_path
+        };
+        nid_to_file_nid.insert(n.id.clone(), make_id1(&sf_rel.to_string_lossy()));
+    }
+
+    let mut existing_pairs: std::collections::HashSet<(String, String)> = all_edges
+        .iter()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+
+    for rc in &all_raw_calls {
+        if rc.is_member_call {
+            continue;
+        }
+        let callee_key = rc.callee.to_lowercase();
+        let candidates: &[String] = global_label_to_nids
+            .get(&callee_key)
+            .map_or(&[], Vec::as_slice);
+        // Only resolve unambiguous matches
+        if candidates.len() != 1 {
+            continue;
+        }
+        let tgt = &candidates[0];
+        let caller = &rc.caller_nid;
+        if tgt == caller {
+            continue;
+        }
+        let pair = (caller.clone(), tgt.clone());
+        if existing_pairs.contains(&pair) {
+            continue;
+        }
+
+        let caller_file_nid = nid_to_file_nid.get(caller);
+        let tgt_file_nid = nid_to_file_nid.get(tgt);
+        let imported_symbols = caller_file_nid
+            .and_then(|f| file_to_symbol_imports.get(f))
+            .is_some_and(|s| s.contains(tgt));
+        let imported_module = caller_file_nid
+            .and_then(|f| file_to_module_imports.get(f))
+            .zip(tgt_file_nid)
+            .is_some_and(|(m, cfn)| m.contains(cfn));
+        let has_import_evidence = imported_symbols || imported_module;
+
+        let (confidence, confidence_score) = if has_import_evidence {
+            ("EXTRACTED".to_string(), 1.0f64)
+        } else {
+            ("INFERRED".to_string(), 0.8f64)
+        };
+
+        existing_pairs.insert(pair);
+        all_edges.push(Edge {
+            source: caller.clone(),
+            target: tgt.clone(),
+            relation: "calls".to_string(),
+            confidence,
+            source_file: rc.source_file.clone(),
+            source_location: Some(rc.source_location.clone()),
+            weight: 1.0,
+            context: Some("call".to_string()),
+            confidence_score: Some(confidence_score),
+        });
+    }
+
+    // Relativise source_file fields
+    for n in &mut all_nodes {
+        let sf_path = PathBuf::from(&n.source_file);
+        if sf_path.is_absolute()
+            && let Ok(rel) = sf_path.strip_prefix(&root)
+        {
+            n.source_file = rel.to_string_lossy().into_owned();
+        }
+    }
+    for e in &mut all_edges {
+        let sf_path = PathBuf::from(&e.source_file);
+        if sf_path.is_absolute()
+            && let Ok(rel) = sf_path.strip_prefix(&root)
+        {
+            e.source_file = rel.to_string_lossy().into_owned();
+        }
+    }
+
+    // Convert to IndexMap for ordered serialisation
+    let nodes_out: Vec<indexmap::IndexMap<String, Value>> = all_nodes
+        .into_iter()
+        .filter_map(|n| {
+            serde_json::to_value(n).ok().and_then(|v| {
+                if let Value::Object(m) = v {
+                    Some(m.into_iter().collect())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+    let edges_out: Vec<indexmap::IndexMap<String, Value>> = all_edges
+        .into_iter()
+        .filter_map(|e| {
+            serde_json::to_value(e).ok().and_then(|v| {
+                if let Value::Object(m) = v {
+                    Some(m.into_iter().collect())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    ExtractOutput {
+        nodes: nodes_out,
+        edges: edges_out,
+        input_tokens: 0,
+        output_tokens: 0,
+    }
+}

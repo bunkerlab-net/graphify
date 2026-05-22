@@ -1,0 +1,30 @@
+{
+  "files": {
+    "code": [
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/typescript_advanced.ts",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.kt",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.ts",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.java",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.rb",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/dynamic_import.ts",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.go",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.tsx",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.py",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample_calls.py",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/sample.rs",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/crate_a/src/lib.rs",
+      "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples/crate_b/src/lib.rs"
+    ],
+    "document": [],
+    "paper": [],
+    "image": [],
+    "video": []
+  },
+  "total_files": 13,
+  "total_words": 892,
+  "needs_graph": false,
+  "warning": "Corpus is ~892 words - fits in a single context window. You may not need a graph.",
+  "skipped_sensitive": [],
+  "graphifyignore_patterns": 304,
+  "scan_root": "/Users/robbie/Documents/projects/bunkerlab/graphify/tests/fixtures/inputs/per_language_samples"
+}

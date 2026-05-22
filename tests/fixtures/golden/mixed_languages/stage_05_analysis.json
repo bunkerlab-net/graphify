@@ -1,0 +1,67 @@
+{
+  "god_nodes": [
+    {
+      "id": "mixed_languages_server_requesthandler",
+      "label": "RequestHandler",
+      "degree": 8
+    },
+    {
+      "id": "mixed_languages_client_apiclient",
+      "label": "ApiClient",
+      "degree": 5
+    },
+    {
+      "id": "mixed_languages_proxy",
+      "label": "Proxy",
+      "degree": 4
+    },
+    {
+      "id": "mixed_languages_readme_mixed_language_demo",
+      "label": "Mixed Language Demo",
+      "degree": 3
+    },
+    {
+      "id": "mixed_languages_readme_architecture",
+      "label": "Architecture",
+      "degree": 2
+    },
+    {
+      "id": "mixed_languages_readme_running",
+      "label": "Running",
+      "degree": 2
+    },
+    {
+      "id": "mixed_languages_server_rationale_1",
+      "label": "Simple HTTP server in Python.",
+      "degree": 1
+    },
+    {
+      "id": "mixed_languages_server_rationale_9",
+      "label": "Handle incoming HTTP requests.",
+      "degree": 1
+    },
+    {
+      "id": "mixed_languages_config",
+      "label": "Config",
+      "degree": 1
+    },
+    {
+      "id": "mixed_languages_client_user",
+      "label": "User",
+      "degree": 1
+    }
+  ],
+  "surprising_connections": [],
+  "suggested_questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `RequestHandler` connect `Community 3` to `Community 4`, `Community 5`?",
+      "why": "High betweenness centrality (0.069) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `Simple HTTP server in Python.`, `Handle incoming HTTP requests.`, `Config` to the rest of the system?",
+      "why": "7 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

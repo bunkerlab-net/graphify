@@ -1,0 +1,577 @@
+//! Fortran extractor — custom walk over tree-sitter-fortran AST.
+
+// Tree-sitter row numbers are source line indices; no file has 2^32 lines.
+#![allow(clippy::cast_possible_truncation)]
+
+use std::collections::HashSet;
+use std::path::Path;
+
+use crate::ids::{file_stem, make_id, make_id1};
+use crate::types::{Edge, FileResult, Node};
+
+static FORTRAN_CPP_EXTS: &[&str] = &[".F", ".F90", ".F95", ".F03", ".F08"];
+
+const STMT_HEADERS: &[&str] = &[
+    "subroutine_statement",
+    "function_statement",
+    "program_statement",
+    "module_statement",
+];
+
+fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
+}
+
+fn cpp_preprocess(path: &Path) -> Vec<u8> {
+    // Security: pass -nostdinc -I /dev/null to prevent file exfiltration
+    let result = std::process::Command::new("cpp")
+        .args(["-w", "-P", "-nostdinc", "-I", "/dev/null"])
+        .arg(path)
+        .output();
+    match result {
+        Ok(out) if out.status.success() && !out.stdout.is_empty() => out.stdout,
+        _ => std::fs::read(path).unwrap_or_default(),
+    }
+}
+
+/// Extract programs, modules, subroutines, functions, use statements, and calls from Fortran files.
+#[must_use]
+pub fn extract_fortran(path: &Path) -> FileResult {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let dot_ext = format!(".{ext}");
+    let source = if FORTRAN_CPP_EXTS.contains(&dot_ext.as_str()) {
+        cpp_preprocess(path)
+    } else {
+        match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                return FileResult {
+                    nodes: vec![],
+                    edges: vec![],
+                    raw_calls: vec![],
+                    error: Some(e.to_string()),
+                };
+            }
+        }
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_fortran::LANGUAGE.into())
+        .is_err()
+    {
+        return FileResult {
+            nodes: vec![],
+            edges: vec![],
+            raw_calls: vec![],
+            error: Some("failed to set fortran language".to_string()),
+        };
+    }
+    let Some(tree) = parser.parse(&source, None) else {
+        return FileResult {
+            nodes: vec![],
+            edges: vec![],
+            raw_calls: vec![],
+            error: Some("parse failed".to_string()),
+        };
+    };
+
+    let stem = file_stem(path);
+    let str_path = path.to_string_lossy().into_owned();
+
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut edges: Vec<Edge> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut scope_bodies: Vec<(String, usize, usize)> = Vec::new();
+
+    let file_nid = make_id1(&str_path);
+    seen_ids.insert(file_nid.clone());
+    nodes.push(Node {
+        id: file_nid.clone(),
+        label: path
+            .file_name()
+            .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
+        file_type: "code".to_string(),
+        source_file: str_path.clone(),
+        source_location: Some("L1".to_string()),
+    });
+
+    let root = tree.root_node();
+    walk_fortran(
+        root,
+        &source,
+        &str_path,
+        &stem,
+        &file_nid,
+        &file_nid,
+        &mut nodes,
+        &mut edges,
+        &mut seen_ids,
+        &mut scope_bodies,
+    );
+
+    // Call pass
+
+    for (scope_nid, body_start, body_end) in &scope_bodies {
+        // Find the containing node and iterate children excluding headers
+        walk_calls_fortran(
+            tree.root_node(),
+            &source,
+            &str_path,
+            &stem,
+            scope_nid,
+            *body_start,
+            *body_end,
+            STMT_HEADERS,
+            &mut edges,
+        );
+    }
+
+    FileResult {
+        nodes,
+        edges,
+        raw_calls: vec![],
+        error: None,
+    }
+}
+
+fn fortran_name(stmt_node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut cur = stmt_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if matches!(cur.node().kind(), "name" | "identifier") {
+                return Some(read_text(cur.node(), source).to_lowercase());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn walk_fortran(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    str_path: &str,
+    stem: &str,
+    file_nid: &str,
+    scope_nid: &str,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    seen_ids: &mut HashSet<String>,
+    scope_bodies: &mut Vec<(String, usize, usize)>,
+) {
+    let t = node.kind();
+
+    match t {
+        "program" => {
+            let stmt = {
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    let mut f = None;
+                    loop {
+                        if cur.node().kind() == "program_statement" {
+                            f = Some(cur.node());
+                            break;
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                    f
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = stmt.and_then(|s| fortran_name(s, source)) {
+                let nid = make_id(&[stem, &name]);
+                let line = node.start_position().row + 1;
+                if seen_ids.insert(nid.clone()) {
+                    nodes.push(Node {
+                        id: nid.clone(),
+                        label: name,
+                        file_type: "code".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                    });
+                }
+                edges.push(Edge {
+                    source: file_nid.to_string(),
+                    target: nid.clone(),
+                    relation: "defines".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: None,
+                });
+                scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        walk_fortran(
+                            cur.node(),
+                            source,
+                            str_path,
+                            stem,
+                            file_nid,
+                            &nid,
+                            nodes,
+                            edges,
+                            seen_ids,
+                            scope_bodies,
+                        );
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        "module" => {
+            let stmt = {
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    let mut f = None;
+                    loop {
+                        if cur.node().kind() == "module_statement" {
+                            f = Some(cur.node());
+                            break;
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                    f
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = stmt.and_then(|s| fortran_name(s, source)) {
+                let nid = make_id(&[stem, &name]);
+                let line = node.start_position().row + 1;
+                if seen_ids.insert(nid.clone()) {
+                    nodes.push(Node {
+                        id: nid.clone(),
+                        label: name,
+                        file_type: "code".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                    });
+                }
+                edges.push(Edge {
+                    source: file_nid.to_string(),
+                    target: nid.clone(),
+                    relation: "defines".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: None,
+                });
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        walk_fortran(
+                            cur.node(),
+                            source,
+                            str_path,
+                            stem,
+                            file_nid,
+                            &nid,
+                            nodes,
+                            edges,
+                            seen_ids,
+                            scope_bodies,
+                        );
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        "subroutine" => {
+            let stmt = {
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    let mut f = None;
+                    loop {
+                        if cur.node().kind() == "subroutine_statement" {
+                            f = Some(cur.node());
+                            break;
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                    f
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = stmt.and_then(|s| fortran_name(s, source)) {
+                let nid = make_id(&[stem, &name]);
+                let line = node.start_position().row + 1;
+                if seen_ids.insert(nid.clone()) {
+                    nodes.push(Node {
+                        id: nid.clone(),
+                        label: format!("{name}()"),
+                        file_type: "code".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                    });
+                }
+                edges.push(Edge {
+                    source: scope_nid.to_string(),
+                    target: nid.clone(),
+                    relation: "defines".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: None,
+                });
+                scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        walk_fortran(
+                            cur.node(),
+                            source,
+                            str_path,
+                            stem,
+                            file_nid,
+                            &nid,
+                            nodes,
+                            edges,
+                            seen_ids,
+                            scope_bodies,
+                        );
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        "function" => {
+            let stmt = {
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    let mut f = None;
+                    loop {
+                        if cur.node().kind() == "function_statement" {
+                            f = Some(cur.node());
+                            break;
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                    f
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = stmt.and_then(|s| fortran_name(s, source)) {
+                let nid = make_id(&[stem, &name]);
+                let line = node.start_position().row + 1;
+                if seen_ids.insert(nid.clone()) {
+                    nodes.push(Node {
+                        id: nid.clone(),
+                        label: format!("{name}()"),
+                        file_type: "code".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                    });
+                }
+                edges.push(Edge {
+                    source: scope_nid.to_string(),
+                    target: nid.clone(),
+                    relation: "defines".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: None,
+                });
+                scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        walk_fortran(
+                            cur.node(),
+                            source,
+                            str_path,
+                            stem,
+                            file_nid,
+                            &nid,
+                            nodes,
+                            edges,
+                            seen_ids,
+                            scope_bodies,
+                        );
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        "use_statement" => {
+            let line = node.start_position().row + 1;
+            let name_node = {
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    let mut f = None;
+                    loop {
+                        if matches!(cur.node().kind(), "module_name" | "name" | "identifier") {
+                            f = Some(cur.node());
+                            break;
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                    f
+                } else {
+                    None
+                }
+            };
+            if let Some(nn) = name_node {
+                let mod_name = read_text(nn, source).to_lowercase();
+                let imp_nid = make_id1(&mod_name);
+                seen_ids.insert(imp_nid.clone());
+                nodes.push(Node {
+                    id: imp_nid.clone(),
+                    label: mod_name,
+                    file_type: "code".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                });
+                edges.push(Edge {
+                    source: scope_nid.to_string(),
+                    target: imp_nid,
+                    relation: "imports".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: Some("use".to_string()),
+                    confidence_score: None,
+                });
+            }
+        }
+        _ => {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    walk_fortran(
+                        cur.node(),
+                        source,
+                        str_path,
+                        stem,
+                        file_nid,
+                        scope_nid,
+                        nodes,
+                        edges,
+                        seen_ids,
+                        scope_bodies,
+                    );
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_calls_fortran(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    str_path: &str,
+    stem: &str,
+    scope_nid: &str,
+    body_start: usize,
+    body_end: usize,
+    stmt_headers: &[&str],
+    edges: &mut Vec<Edge>,
+) {
+    if node.start_byte() >= body_end || node.end_byte() <= body_start {
+        return;
+    }
+    if matches!(
+        node.kind(),
+        "subroutine" | "function" | "module" | "program" | "internal_procedures"
+    ) {
+        return;
+    }
+    if node.kind() == "subroutine_call" {
+        let name_node = {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                let mut f = None;
+                loop {
+                    if cur.node().kind() == "identifier" {
+                        f = Some(cur.node());
+                        break;
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+                f
+            } else {
+                None
+            }
+        };
+        if let Some(nn) = name_node {
+            let callee = read_text(nn, source).to_lowercase();
+            let target_nid = make_id(&[stem, &callee]);
+            let line = node.start_position().row + 1;
+            edges.push(Edge {
+                source: scope_nid.to_string(),
+                target: target_nid,
+                relation: "calls".to_string(),
+                confidence: "EXTRACTED".to_string(),
+                source_file: str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                weight: 1.0,
+                context: Some("call".to_string()),
+                confidence_score: None,
+            });
+        }
+        return;
+    }
+    if stmt_headers.contains(&node.kind()) {
+        return;
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            walk_calls_fortran(
+                cur.node(),
+                source,
+                str_path,
+                stem,
+                scope_nid,
+                body_start,
+                body_end,
+                stmt_headers,
+                edges,
+            );
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
