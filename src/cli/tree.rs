@@ -21,27 +21,15 @@ pub(crate) fn cmd_tree(
     let graph_path = graph.map_or_else(default_graph_path, std::path::Path::to_path_buf);
     eprintln!("loading {} ...", graph_path.display());
     let g = load_graph(&graph_path)?;
-    let default_root = std::env::current_dir()?;
-    let root_path = root.unwrap_or(default_root.as_path());
+    // Python uses the longest common directory of every node's `source_file`
+    // when `--root` is omitted (see `tree_html._common_root`). The Rust
+    // `build_tree` already derives that root internally when `root` is `None`,
+    // so forward `None` straight through instead of falling back to CWD.
     let default_output = graph_path.with_file_name("GRAPH_TREE.html");
     let out = output.unwrap_or(default_output.as_path());
-    eprintln!(
-        "rendering tree HTML for {} nodes rooted at {} ...",
-        g.node_count(),
-        root_path.display()
-    );
-    // `top_k_edges` is not yet exposed on the Rust tree API; warn the user so they
-    // are not silently misled, but continue so scripts do not break.
-    if top_k_edges != 12 {
-        eprintln!(
-            "warning: --top-k-edges={top_k_edges} accepted but is currently a no-op \
-             (graphify_html::tree does not yet expose a top-k parameter)"
-        );
-    }
-    // Use build_tree directly when flags deviate from defaults, so max_children
-    // and label are honoured.  emit_tree_html + write are equivalent to
-    // write_tree_html but allow us to pass the extra parameters.
-    let tree_data = graphify_html::tree::build_tree(&g, Some(root_path), max_children, label);
+    eprintln!("rendering tree HTML for {} nodes ...", g.node_count());
+    let _ = top_k_edges; // accepted for CLI compatibility; Python ignores it too.
+    let tree_data = graphify_html::tree::build_tree(&g, root, max_children, label);
     let title_name = tree_data
         .get("name")
         .and_then(serde_json::Value::as_str)
@@ -53,6 +41,17 @@ pub(crate) fn cmd_tree(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(out, html.as_bytes())?;
-    eprintln!("wrote {}", out.display());
+    // Match Python's stdout output: wrote line + "open with:" hint.
+    // `as f64` on a u64 file size is fine: 52-bit mantissa overflows only
+    // beyond ~4 PB which a tree HTML page will never hit.
+    #[allow(clippy::cast_precision_loss)]
+    let size_kb = out.metadata().map_or(0.0, |m| m.len() as f64 / 1024.0);
+    let abs = out.canonicalize().unwrap_or_else(|_| out.to_path_buf());
+    println!("wrote {} ({size_kb:.1} KB)", out.display());
+    println!(
+        "open with: xdg-open {}  (or file://{})",
+        out.display(),
+        abs.display()
+    );
     Ok(())
 }

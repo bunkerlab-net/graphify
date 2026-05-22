@@ -16,6 +16,6 @@ pub(crate) fn cmd_save_result(
     let source_nodes = if nodes.is_empty() { None } else { Some(nodes) };
     let path =
         graphify_ingest::save_query_result(question, answer, memory_dir, query_type, source_nodes)?;
-    println!("wrote {}", path.display());
+    println!("Saved to {}", path.display());
     Ok(())
 }

@@ -60,7 +60,7 @@ pub(crate) fn rebuild_code_inner(
 
     // We currently only use the `code_files` list; the full `DetectResult`
     // will be threaded into the report once analysis carries detection stats.
-    let (_detected, code_files) = detect_code_files(watch_path, false);
+    let (detected, code_files) = detect_code_files(watch_path, false);
 
     if code_files.is_empty() {
         println!("[graphify watch] No code files found - nothing to rebuild.");
@@ -455,6 +455,19 @@ pub(crate) fn rebuild_code_inner(
             json_text(&Value::Object(labels_json_val)).as_bytes(),
         )
         .map_err(WatchError::Io)?;
+
+        // Save the AST-stage manifest so subsequent `extract`/`update` runs
+        // can skip files that didn't change.  Mirrors Python's
+        // `save_manifest(detected["files"], kind="ast")` at `watch.py:554`.
+        let manifest_path = out.join("manifest.json");
+        let files_indexed: IndexMap<String, Vec<String>> = detected
+            .files
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if let Err(e) = graphify_detect::save_manifest(&files_indexed, &manifest_path, "ast") {
+            println!("[graphify watch] warning: could not write manifest: {e}");
+        }
     }
 
     // Clear stale needs_update flag.

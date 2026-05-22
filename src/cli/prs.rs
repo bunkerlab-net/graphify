@@ -1,6 +1,44 @@
 //! `prs` command — GitHub PR dashboard.
 
 use anyhow::Result;
+use graphify_prs::triage::TriageBackend;
+
+/// `TriageBackend` implementation that calls the configured LLM backend.
+///
+/// Mirrors Python's `triage_with_opus` at `graphify-py/graphify/prs.py:576`:
+/// builds the prompt via `graphify_prs::triage::build_triage_prompt`, calls
+/// the LLM with a 1024-token cap, and prints the response indented under
+/// the "Triage" header so it matches the Python output shape.
+struct LlmTriageBackend;
+
+impl TriageBackend for LlmTriageBackend {
+    fn triage(
+        &self,
+        candidates: &[&graphify_prs::model::PrInfo],
+        prompt: &str,
+    ) -> Result<(), String> {
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let backend = graphify_llm::detect_backend().ok_or_else(|| {
+            "no LLM API key found. Set GEMINI_API_KEY/MOONSHOT_API_KEY/\
+                 ANTHROPIC_API_KEY/OPENAI_API_KEY/DEEPSEEK_API_KEY, or run \
+                 `claude` once for claude-cli auth."
+                .to_string()
+        })?;
+        println!();
+        println!("  Triage ({backend})");
+        println!();
+        let response = graphify_llm::call_llm(prompt, &backend, 1024)
+            .map_err(|e| format!("LLM call failed: {e}"))?;
+        // Indent each line by two spaces to match Python's `print("  ", ...)` prefix.
+        for line in response.lines() {
+            println!("  {line}");
+        }
+        println!();
+        Ok(())
+    }
+}
 
 /// Run the GitHub PR dashboard, forwarding all CLI flags into [`graphify_prs::PrsArgs`].
 ///
@@ -21,6 +59,7 @@ pub(crate) fn cmd_prs(
     worktrees: bool,
     conflicts: bool,
     wrong_base: bool,
+    graph: Option<&std::path::Path>,
 ) -> Result<()> {
     eprintln!(
         "fetching PRs{} via gh CLI ...",
@@ -34,13 +73,27 @@ pub(crate) fn cmd_prs(
         do_worktrees: worktrees,
         do_conflicts: conflicts,
         show_wrong_base: wrong_base,
-        ..Default::default()
+        graph_path: graph
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| Some(std::path::PathBuf::from("graphify-out/graph.json"))),
     };
-    graphify_prs::run_cmd_prs(
-        &graphify_prs::gh::ProcessGhClient,
-        &graphify_prs::git::ProcessGitClient,
-        &graphify_prs::triage::NoOpTriageBackend,
-        &args,
-    )?;
+    // Only wire the LLM triage backend when the user actually requested triage.
+    // Otherwise stay with the no-op so a missing API key never breaks the
+    // standalone PR dashboard.
+    if triage {
+        graphify_prs::run_cmd_prs(
+            &graphify_prs::gh::ProcessGhClient,
+            &graphify_prs::git::ProcessGitClient,
+            &LlmTriageBackend,
+            &args,
+        )?;
+    } else {
+        graphify_prs::run_cmd_prs(
+            &graphify_prs::gh::ProcessGhClient,
+            &graphify_prs::git::ProcessGitClient,
+            &graphify_prs::triage::NoOpTriageBackend,
+            &args,
+        )?;
+    }
     Ok(())
 }

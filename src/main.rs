@@ -35,8 +35,14 @@ pub(crate) enum Command {
     Install {
         /// Target platform (claude, windows, codex, opencode, aider, claw, droid,
         /// trae, trae-cn, gemini, cursor, antigravity, hermes, kiro, pi).
-        #[arg(long, default_value = "claude")]
-        platform: String,
+        ///
+        /// Accepts either `graphify install --platform <name>` or the
+        /// positional shorthand `graphify install <name>` for parity with
+        /// Python's argv-parsing fallback (see `__main__.py:1358`).
+        #[arg(long)]
+        platform: Option<String>,
+        /// Optional positional platform (mutually exclusive with `--platform`).
+        platform_positional: Option<String>,
     },
 
     /// Remove graphify from all detected platforms in one shot.
@@ -180,6 +186,18 @@ pub(crate) enum Command {
         global: bool,
         #[arg(long = "as", value_name = "TAG")]
         as_tag: Option<String>,
+        /// Louvain resolution parameter (default 1.0; >1 = more, smaller communities).
+        #[arg(long, default_value_t = 1.0)]
+        resolution: f64,
+        /// Exclude hub nodes above this degree percentile (0.0–1.0) before clustering.
+        #[arg(long = "exclude-hubs")]
+        exclude_hubs: Option<f64>,
+        /// Extra path globs to exclude from detection (repeatable).
+        #[arg(long = "exclude")]
+        exclude: Vec<String>,
+        /// Run LLM-driven dedup tiebreak after clustering (deferred — currently a no-op).
+        #[arg(long = "dedup-llm")]
+        dedup_llm: bool,
     },
 
     /// Export graph to various formats.
@@ -245,12 +263,15 @@ pub(crate) enum Command {
 
     /// GitHub PR dashboard.
     Prs {
-        #[arg(long)]
-        number: Option<u64>,
+        /// Optional PR number to drill into. Accepts both `123` and `--number 123`
+        /// for parity with Python's positional/digit argv detection.
+        number: Option<String>,
         #[arg(long)]
         repo: Option<String>,
-        #[arg(long)]
+        /// Base branch to filter PRs by. Defaults to the repo's default branch.
+        #[arg(long, short = 'b')]
         base: Option<String>,
+        /// Cap the number of PRs fetched from GitHub. Defaults to 30.
         #[arg(long, default_value_t = 30)]
         limit: usize,
         #[arg(long)]
@@ -261,6 +282,9 @@ pub(crate) enum Command {
         conflicts: bool,
         #[arg(long = "wrong-base")]
         wrong_base: bool,
+        /// Path to graph.json for impact analysis (default `graphify-out/graph.json`).
+        #[arg(long)]
+        graph: Option<PathBuf>,
     },
 
     /// MCP stdio server.
@@ -338,6 +362,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    #[command(name = "trae-cn")]
+    TraeCn {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
+    Hermes {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -393,20 +426,38 @@ pub(crate) enum ExportCmd {
     Html {
         #[arg(long)]
         graph: Option<PathBuf>,
+        /// Path to community labels JSON (default: `<graph_dir>/.graphify_labels.json`).
+        #[arg(long)]
+        labels: Option<PathBuf>,
+        /// Skip graph.html and delete an existing one if present.
+        #[arg(long = "no-viz")]
+        no_viz: bool,
+        /// Suppress rendering when the graph has more than this many nodes.
+        #[arg(long = "node-limit", default_value_t = 5000)]
+        node_limit: usize,
     },
     Obsidian {
         #[arg(long)]
         graph: Option<PathBuf>,
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Path to community labels JSON (default: `<graph_dir>/.graphify_labels.json`).
+        #[arg(long)]
+        labels: Option<PathBuf>,
     },
     Wiki {
         #[arg(long)]
         graph: Option<PathBuf>,
+        /// Path to community labels JSON (default: `<graph_dir>/.graphify_labels.json`).
+        #[arg(long)]
+        labels: Option<PathBuf>,
     },
     Svg {
         #[arg(long)]
         graph: Option<PathBuf>,
+        /// Path to community labels JSON (default: `<graph_dir>/.graphify_labels.json`).
+        #[arg(long)]
+        labels: Option<PathBuf>,
     },
     Graphml {
         #[arg(long)]
@@ -415,6 +466,15 @@ pub(crate) enum ExportCmd {
     Neo4j {
         #[arg(long)]
         graph: Option<PathBuf>,
+        /// Push directly to a live Neo4j instance at this URI (e.g. `bolt://host:7687`).
+        #[arg(long)]
+        push: Option<String>,
+        /// Neo4j username for `--push` (default `neo4j`).
+        #[arg(long, default_value = "neo4j")]
+        user: String,
+        /// Neo4j password for `--push` (or set `NEO4J_PASSWORD`).
+        #[arg(long)]
+        password: Option<String>,
     },
 }
 
@@ -448,7 +508,26 @@ fn main() -> Result<()> {
 fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Validate { path } => cli::validate::cmd_validate(&path),
-        Command::Install { platform } => cli::install::cmd_install(&platform),
+        Command::Install {
+            platform,
+            platform_positional,
+        } => {
+            let resolved = match (platform.as_deref(), platform_positional.as_deref()) {
+                (Some(a), Some(b)) if a != b => {
+                    anyhow::bail!("error: specify install platform only once")
+                }
+                (Some(name), _) | (None, Some(name)) => name.to_string(),
+                (None, None) => {
+                    // Python defaults to "windows" on Windows, "claude" elsewhere.
+                    if cfg!(target_os = "windows") {
+                        "windows".to_string()
+                    } else {
+                        "claude".to_string()
+                    }
+                }
+            };
+            cli::install::cmd_install(&resolved)
+        }
         Command::Uninstall { purge } => cli::install::cmd_uninstall(purge),
         Command::Hook { cmd } => cli::hooks::cmd_hook(&cmd),
         Command::Global { cmd } => cli::global::cmd_global(cmd),
@@ -521,6 +600,10 @@ fn dispatch(cmd: Command) -> Result<()> {
             no_cluster,
             global,
             as_tag,
+            resolution,
+            exclude_hubs,
+            exclude,
+            dedup_llm,
         } => cli::extract::cmd_extract(
             &path,
             no_cluster,
@@ -534,6 +617,10 @@ fn dispatch(cmd: Command) -> Result<()> {
             google_workspace,
             global,
             as_tag.as_deref(),
+            resolution,
+            exclude_hubs,
+            &exclude,
+            dedup_llm,
         ),
         Command::Export { cmd } => cli::export::cmd_export(cmd),
         Command::Add {
@@ -566,16 +653,25 @@ fn dispatch(cmd: Command) -> Result<()> {
             worktrees,
             conflicts,
             wrong_base,
-        } => cli::prs::cmd_prs(
-            number,
-            repo.as_deref(),
-            base.as_deref(),
-            limit,
-            triage,
-            worktrees,
-            conflicts,
-            wrong_base,
-        ),
+            graph,
+        } => {
+            // Accept `123` or `#123`; mirrors Python's `arg.lstrip("#").isdigit()` branch.
+            let parsed_number = number
+                .as_deref()
+                .map(|s| s.trim_start_matches('#'))
+                .and_then(|s| s.parse::<u64>().ok());
+            cli::prs::cmd_prs(
+                parsed_number,
+                repo.as_deref(),
+                base.as_deref(),
+                limit,
+                triage,
+                worktrees,
+                conflicts,
+                wrong_base,
+                graph.as_deref(),
+            )
+        }
         Command::Serve { graph } => cli::serve::cmd_serve(graph.as_deref()),
         Command::CacheCheck { files_from, root } => {
             cli::cache_check::cmd_cache_check(&files_from, &root)
@@ -595,5 +691,7 @@ fn dispatch(cmd: Command) -> Result<()> {
         Command::Claw { cmd: c } => cli::install::cmd_platform("claw", &c),
         Command::Droid { cmd: c } => cli::install::cmd_platform("droid", &c),
         Command::Trae { cmd: c } => cli::install::cmd_platform("trae", &c),
+        Command::TraeCn { cmd: c } => cli::install::cmd_platform("trae-cn", &c),
+        Command::Hermes { cmd: c } => cli::install::cmd_platform("hermes", &c),
     }
 }

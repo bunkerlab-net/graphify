@@ -73,14 +73,67 @@ pub(crate) fn cmd_cluster_only(
     graphify_report::write_report(&g, &analysis, &report_path)?;
     eprintln!("      wrote {}", report_path.display());
 
+    // Persist the analysis sidecar for downstream exports (wiki, obsidian, etc.).
+    // Mirrors Python's `cluster-only` path which rewrites `.graphify_analysis.json`.
+    let analysis_path = graph_path.with_file_name(".graphify_analysis.json");
+    std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
+    eprintln!("      wrote {}", analysis_path.display());
+
+    // Refresh graph.json so node community attrs match the new partition.
+    // Mirrors Python `__main__.py:1831` (`to_json(G, communities, ...)`).
+    graphify_export::to_json(&g, &communities, &graph_path, true, None)?;
+    eprintln!("      wrote {}", graph_path.display());
+
+    // Persist (or refresh) `.graphify_labels.json` so the HTML viz and
+    // subsequent exports can find community labels.  Loads existing labels
+    // first to preserve user-edited names; falls back to `"Community <cid>"`.
+    let labels_path = graph_path.with_file_name(".graphify_labels.json");
+    let mut labels: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
+    if let Ok(text) = std::fs::read_to_string(&labels_path)
+        && let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+    {
+        for (k, v) in &map {
+            if let (Ok(cid), Some(s)) = (k.parse::<i64>(), v.as_str()) {
+                labels.insert(cid, s.to_string());
+            }
+        }
+    }
+    for cid in communities.keys() {
+        labels
+            .entry(*cid)
+            .or_insert_with(|| format!("Community {cid}"));
+    }
+    let labels_json: serde_json::Map<String, serde_json::Value> = labels
+        .iter()
+        .map(|(cid, name)| (cid.to_string(), serde_json::Value::String(name.clone())))
+        .collect();
+    std::fs::write(
+        &labels_path,
+        serde_json::to_string(&serde_json::Value::Object(labels_json))?,
+    )?;
+    eprintln!("      wrote {}", labels_path.display());
+
+    let html_path = graph_path.with_file_name("graph.html");
     if no_viz {
-        eprintln!("[4/4] HTML viz: skipped (--no-viz)");
+        if html_path.exists() {
+            let _ = std::fs::remove_file(&html_path);
+        }
+        eprintln!("[4/4] HTML viz: skipped (--no-viz; graph.html removed)");
     } else {
         eprintln!("[4/4] rendering HTML viz ...");
-        let html_path = graph_path.with_file_name("graph.html");
-        match graphify_export::to_html(&g, &communities, &html_path, None, None, None) {
+        let labels_opt = if labels.is_empty() {
+            None
+        } else {
+            Some(&labels)
+        };
+        match graphify_export::to_html(&g, &communities, &html_path, labels_opt, None, None) {
             Ok(()) => eprintln!("      wrote {}", html_path.display()),
-            Err(e) => eprintln!("      skipped ({e})"),
+            Err(e) => {
+                if html_path.exists() {
+                    let _ = std::fs::remove_file(&html_path);
+                }
+                eprintln!("      skipped ({e})");
+            }
         }
     }
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());

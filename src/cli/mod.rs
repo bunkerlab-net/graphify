@@ -52,8 +52,13 @@ pub(crate) fn load_graph(path: &std::path::Path) -> anyhow::Result<graphify_buil
 
 /// Build the analysis JSON consumed by `graphify_report::write_report`.
 ///
-/// Mirrors the shape produced by Python's `analyze.generate(...)` for the
-/// minimum set of fields the report renderer reads.
+/// Writes both the Python-compatible keys (`cohesion`, `gods`, `surprises`,
+/// `tokens`) and the Rust report consumer's preferred aliases
+/// (`cohesion_scores`, `god_nodes`, `surprising_connections`,
+/// `suggested_questions`).  `graphify_report` reads the alias forms, and
+/// `graphify export wiki/obsidian/svg/html` plus the Python pipeline read
+/// the Python forms — emitting both keeps cross-version sidecars
+/// interchangeable.
 pub(crate) fn build_analysis(
     graph: &graphify_build::Graph,
     communities: &indexmap::IndexMap<i64, Vec<String>>,
@@ -71,6 +76,15 @@ pub(crate) fn build_analysis(
             ),
         );
     }
+    let cohesion = graphify_cluster::score_all(graph, communities);
+    let mut cohesion_json = serde_json::Map::new();
+    for (cid, score) in &cohesion {
+        cohesion_json.insert(
+            cid.to_string(),
+            serde_json::Number::from_f64(*score)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        );
+    }
     let god_nodes = graphify_analyze::god_nodes(graph, 12);
     let surprising = graphify_analyze::surprising_connections(graph, communities, 12);
     let empty_labels: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
@@ -78,6 +92,13 @@ pub(crate) fn build_analysis(
     serde_json::json!({
         "root": root.display().to_string(),
         "communities": serde_json::Value::Object(communities_json),
+        // Python-compatible keys (read by export wiki/obsidian and Python's report).
+        "cohesion": serde_json::Value::Object(cohesion_json.clone()),
+        "gods": god_nodes.clone(),
+        "surprises": surprising.clone(),
+        "tokens": serde_json::json!({"input": 0u64, "output": 0u64}),
+        // Rust report aliases (read by graphify_report::render_report).
+        "cohesion_scores": serde_json::Value::Object(cohesion_json),
         "god_nodes": god_nodes,
         "surprising_connections": surprising,
         "suggested_questions": suggested,

@@ -34,9 +34,13 @@ pub(crate) fn report_root_label(watch_path: &Path) -> String {
 
 // ── build_analysis ────────────────────────────────────────────────────────────
 
-/// Assemble the analysis JSON consumed by `graphify_report::write_report`.
+/// Assemble the analysis JSON consumed by `graphify_report::render_report`.
 ///
-/// Mirrors `build_analysis` from `src/main.rs`.
+/// Emits both the Python-compatible keys (`cohesion`, `gods`, `surprises`,
+/// `tokens`) and the Rust report consumer's preferred aliases
+/// (`cohesion_scores`, `god_nodes`, `surprising_connections`,
+/// `suggested_questions`).  See `src/cli/mod.rs::build_analysis` for the
+/// canonical shape — this watch-local copy must stay in sync.
 pub(crate) fn build_analysis(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
@@ -49,6 +53,14 @@ pub(crate) fn build_analysis(
             Value::Array(members.iter().map(|m| Value::String(m.clone())).collect()),
         );
     }
+    let cohesion = graphify_cluster::score_all(graph, communities);
+    let mut cohesion_json = serde_json::Map::new();
+    for (cid, score) in &cohesion {
+        cohesion_json.insert(
+            cid.to_string(),
+            serde_json::Number::from_f64(*score).map_or(Value::Null, Value::Number),
+        );
+    }
     let gods = god_nodes(graph, 12);
     let surprising = surprising_connections(graph, communities, 12);
     let empty_labels: IndexMap<i64, String> = IndexMap::new();
@@ -56,6 +68,11 @@ pub(crate) fn build_analysis(
     json!({
         "root": root.display().to_string(),
         "communities": Value::Object(communities_json),
+        "cohesion": Value::Object(cohesion_json.clone()),
+        "gods": gods.clone(),
+        "surprises": surprising.clone(),
+        "tokens": json!({"input": 0u64, "output": 0u64}),
+        "cohesion_scores": Value::Object(cohesion_json),
         "god_nodes": gods,
         "surprising_connections": surprising,
         "suggested_questions": suggested,

@@ -111,9 +111,69 @@ pub(crate) fn cmd_merge_driver(
     Ok(())
 }
 
+/// Derive a repo tag from a graph JSON path the same way Python does.
+///
+/// Python uses `gp.parent.parent.name`: for `<repo>/graphify-out/graph.json`
+/// this yields `<repo>`. Files outside that convention fall back to the
+/// file stem so callers still get *some* prefix.
+fn repo_tag_from_path(graph_path: &std::path::Path) -> String {
+    graph_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::file_name)
+        .and_then(|n| n.to_str())
+        .map_or_else(
+            || {
+                graph_path
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("repo")
+                    .to_string()
+            },
+            str::to_string,
+        )
+}
+
+/// Prefix every node id (and matching edge endpoints) with `{tag}::` so that
+/// cross-repo merges do not collide on shared names like `main` or `init`.
+/// Mirrors `graphify_build::prefix_graph_for_global` but operates on the raw
+/// JSON value to avoid an extra round-trip through the typed `Graph`.
+fn prefix_node_ids(graph_value: &mut serde_json::Value, tag: &str) {
+    use serde_json::Value;
+    let Some(obj) = graph_value.as_object_mut() else {
+        return;
+    };
+    let prefix = format!("{tag}::");
+    if let Some(Value::Array(nodes)) = obj.get_mut("nodes") {
+        for node in nodes {
+            if let Some(node_obj) = node.as_object_mut()
+                && let Some(Value::String(id)) = node_obj.get_mut("id")
+            {
+                *id = format!("{prefix}{id}");
+            }
+        }
+    }
+    for key in ["edges", "links"] {
+        if let Some(Value::Array(edges)) = obj.get_mut(key) {
+            for edge in edges {
+                if let Some(edge_obj) = edge.as_object_mut() {
+                    if let Some(Value::String(s)) = edge_obj.get_mut("source") {
+                        *s = format!("{prefix}{s}");
+                    }
+                    if let Some(Value::String(t)) = edge_obj.get_mut("target") {
+                        *t = format!("{prefix}{t}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Merge two or more graph JSON files into a single cross-repo graph.
 ///
-/// Reads each file in order, union-merging them pairwise. Writes the combined
+/// Each graph's node ids are prefixed with `<repo>::` (derived from the
+/// graph's `parent.parent.name`, matching Python's convention) before the
+/// union-merge so cross-repo merges do not collide. Writes the combined
 /// result to `out` (defaulting to `graphify-out/merged-graph.json`).
 pub(crate) fn cmd_merge_graphs(
     graphs: &[std::path::PathBuf],
@@ -123,8 +183,12 @@ pub(crate) fn cmd_merge_graphs(
         anyhow::bail!("merge-graphs requires at least 2 graph files");
     }
     let mut merged = read_graph_capped(&graphs[0])?;
+    let first_tag = repo_tag_from_path(&graphs[0]);
+    prefix_node_ids(&mut merged, &first_tag);
     for g in &graphs[1..] {
-        let next = read_graph_capped(g)?;
+        let mut next = read_graph_capped(g)?;
+        let tag = repo_tag_from_path(g);
+        prefix_node_ids(&mut next, &tag);
         merged = merge_two_graphs(merged, next)?;
     }
     let default_out = graphify_out_dir().join("merged-graph.json");
@@ -134,6 +198,15 @@ pub(crate) fn cmd_merge_graphs(
     }
     let body = serde_json::to_string_pretty(&merged)?;
     std::fs::write(out_path, body)?;
-    println!("wrote {}", out_path.display());
+    let n_nodes = count_nodes(&merged);
+    let n_edges = merged
+        .get("edges")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    println!(
+        "Merged {} graphs → {n_nodes} nodes, {n_edges} edges",
+        graphs.len()
+    );
+    println!("Written to: {}", out_path.display());
     Ok(())
 }

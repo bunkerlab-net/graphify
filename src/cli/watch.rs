@@ -7,11 +7,15 @@ use anyhow::Result;
 /// Runs `graphify_watch::watch` with a 1-second debounce until Ctrl-C.
 /// Mirrors Python's `watch` command at `__main__.py`.
 pub(crate) fn cmd_watch(path: &std::path::Path) -> Result<()> {
+    // Match Python's `watch()` default debounce of 3.0 s. The window swallows
+    // rapid bursts of editor save events so a single multi-file save does not
+    // trigger N rebuilds.
+    let debounce_secs = 3.0;
     eprintln!(
-        "watching {} (debounce=1s, Ctrl-C to stop) ...",
+        "watching {} (debounce={debounce_secs}s, Ctrl-C to stop) ...",
         path.display()
     );
-    graphify_watch::watch(path, 1.0)?;
+    graphify_watch::watch(path, debounce_secs)?;
     Ok(())
 }
 
