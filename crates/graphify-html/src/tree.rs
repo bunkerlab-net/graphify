@@ -13,6 +13,9 @@ use crate::HtmlError;
 /// Default cap on children rendered under a single node.
 pub const DEFAULT_MAX_CHILDREN: usize = 200;
 
+/// Per-file grouping entry: `(node id, optional label, optional file_type)`.
+type NodeGroupEntry = (String, Option<String>, Option<String>);
+
 // ── embedded template ────────────────────────────────────────────────────────
 
 static HTML_TEMPLATE: &str = include_str!("tree_template.html");
@@ -140,10 +143,8 @@ fn common_root(paths: &[String]) -> String {
 
 /// Ensure a directory node exists in `tree`, creating parent nodes recursively.
 /// Returns the index of the node for `abs_path`.
-#[allow(clippy::only_used_in_recursion)] // root_path is only used in the recursive call, which is intentional.
 fn ensure_dir(
     abs_path: &Path,
-    root_path: &Path,
     root_idx: usize,
     tree: &mut ArenaTree,
     dir_map: &mut HashMap<String, usize>,
@@ -159,7 +160,7 @@ fn ensure_dir(
         _ => return root_idx,
     };
 
-    let parent_idx = ensure_dir(parent_path, root_path, root_idx, tree, dir_map);
+    let parent_idx = ensure_dir(parent_path, root_idx, tree, dir_map);
     let name = abs_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -211,15 +212,61 @@ fn finalise(node: &mut TreeNode) -> usize {
 ///
 /// Mirrors Python `build_tree(graph, *, root, max_children, project_label)`.
 #[must_use]
-#[allow(clippy::too_many_lines)] // Monolithic tree-building function; linear logic is clearer than split helpers.
 pub fn build_tree(
     graph: &Graph,
     root: Option<&Path>,
     max_children: usize,
     project_label: Option<&str>,
 ) -> Value {
-    // Collect nodes that have a non-empty `source_file`.
-    let file_nodes: Vec<(String, String, Option<String>, Option<String>)> = graph
+    let file_nodes = collect_file_nodes(graph);
+    if file_nodes.is_empty() {
+        return serde_json::json!({
+            "name": "(empty graph)",
+            "total_count": 0,
+            "children": [],
+        });
+    }
+
+    let source_files: Vec<String> = file_nodes.iter().map(|(_, sf, _, _)| sf.clone()).collect();
+    let root_str = root.map_or_else(
+        || common_root(&source_files),
+        |p| p.to_string_lossy().into_owned(),
+    );
+    let root_path = PathBuf::from(&root_str);
+    let label_root = resolve_root_label(project_label, &root_path, &root_str);
+
+    let by_file = group_file_nodes_by_source(&file_nodes);
+    let mut tree = ArenaTree::new();
+    let root_idx = tree.add_node(label_root);
+    let mut dir_map: HashMap<String, usize> = HashMap::new();
+    dir_map.insert(root_path.to_string_lossy().into_owned(), root_idx);
+
+    let mut sorted_files: Vec<String> = by_file.keys().cloned().collect();
+    sorted_files.sort();
+    let mut build_ctx = TreeBuildCtx {
+        tree: &mut tree,
+        dir_map: &mut dir_map,
+    };
+    for src_file in &sorted_files {
+        add_file_subtree(
+            &mut build_ctx,
+            src_file,
+            &by_file[src_file],
+            &root_path,
+            root_idx,
+            max_children,
+        );
+    }
+
+    let mut root_node = tree.into_tree(root_idx);
+    finalise(&mut root_node);
+    root_node.to_json()
+}
+
+/// Collect `(id, source_file, label, file_type)` for nodes that have a non-empty
+/// `source_file` attribute.
+fn collect_file_nodes(graph: &Graph) -> Vec<(String, String, Option<String>, Option<String>)> {
+    graph
         .nodes()
         .filter_map(|(id, attrs)| {
             let sf = attrs.get("source_file")?.as_str()?;
@@ -236,26 +283,13 @@ pub fn build_tree(
                 .map(str::to_owned);
             Some((id.clone(), sf.to_owned(), label, file_type))
         })
-        .collect();
+        .collect()
+}
 
-    if file_nodes.is_empty() {
-        return serde_json::json!({
-            "name": "(empty graph)",
-            "total_count": 0,
-            "children": [],
-        });
-    }
-
-    // Determine root path.
-    let source_files: Vec<String> = file_nodes.iter().map(|(_, sf, _, _)| sf.clone()).collect();
-    let root_str = root.map_or_else(
-        || common_root(&source_files),
-        |p| p.to_string_lossy().into_owned(),
-    );
-    let root_path = PathBuf::from(&root_str);
-
-    // Derive the root label.
-    let label_root: String = project_label
+/// Resolve the label used for the root node — explicit `project_label` wins,
+/// otherwise the final path component of `root_path` or `root_str`.
+fn resolve_root_label(project_label: Option<&str>, root_path: &Path, root_str: &str) -> String {
+    project_label
         .map(str::to_owned)
         .or_else(|| {
             root_path.file_name().and_then(|n| {
@@ -267,104 +301,101 @@ pub fn build_tree(
             if root_str.is_empty() {
                 None
             } else {
-                Some(root_str.clone())
+                Some(root_str.to_owned())
             }
         })
-        .unwrap_or_else(|| "/".to_owned());
+        .unwrap_or_else(|| "/".to_owned())
+}
 
-    // Group nodes by source file.
-    #[allow(clippy::type_complexity)]
-    // Inline tuple is clear enough for a local grouping structure.
-    let mut by_file: HashMap<String, Vec<(String, Option<String>, Option<String>)>> =
-        HashMap::new();
-    for (id, sf, label, file_type) in &file_nodes {
+/// Bucket file-nodes by their source file path.
+fn group_file_nodes_by_source(
+    file_nodes: &[(String, String, Option<String>, Option<String>)],
+) -> HashMap<String, Vec<NodeGroupEntry>> {
+    let mut by_file: HashMap<String, Vec<NodeGroupEntry>> = HashMap::new();
+    for (id, sf, label, file_type) in file_nodes {
         by_file
             .entry(sf.clone())
             .or_default()
             .push((id.clone(), label.clone(), file_type.clone()));
     }
+    by_file
+}
 
-    // Build arena tree.
-    let mut tree = ArenaTree::new();
-    let root_idx = tree.add_node(label_root);
-    let mut dir_map: HashMap<String, usize> = HashMap::new();
-    dir_map.insert(root_path.to_string_lossy().into_owned(), root_idx);
+/// Mutable arena state passed through the tree builder.
+struct TreeBuildCtx<'a> {
+    tree: &'a mut ArenaTree,
+    dir_map: &'a mut HashMap<String, usize>,
+}
 
-    // Process each source file in sorted order.
-    let mut sorted_files: Vec<String> = by_file.keys().cloned().collect();
-    sorted_files.sort();
+/// Add a single file (and its symbol children) to the arena tree.
+fn add_file_subtree(
+    ctx: &mut TreeBuildCtx<'_>,
+    src_file: &str,
+    syms: &[NodeGroupEntry],
+    root_path: &Path,
+    root_idx: usize,
+    max_children: usize,
+) {
+    let TreeBuildCtx { tree, dir_map } = ctx;
+    let src_path = Path::new(src_file);
+    let src_name = src_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
-    for src_file in &sorted_files {
-        let syms = &by_file[src_file];
-        let src_path = Path::new(src_file.as_str());
-        let src_name = src_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    let parent_path: PathBuf = if let Ok(rel) = src_path.strip_prefix(root_path) {
+        root_path
+            .join(rel)
+            .parent()
+            .map_or_else(|| root_path.to_path_buf(), Path::to_path_buf)
+    } else {
+        root_path.to_path_buf()
+    };
+    let parent_idx = ensure_dir(&parent_path, root_idx, tree, dir_map);
 
-        // Determine parent dir, clipping to root.
-        let parent_path: PathBuf = if let Ok(rel) = src_path.strip_prefix(&root_path) {
-            root_path
-                .join(rel)
-                .parent()
-                .map_or_else(|| root_path.clone(), Path::to_path_buf)
-        } else {
-            root_path.clone()
-        };
+    let sym_list = sorted_symbol_list(syms, &src_name);
+    let sym_count = sym_list.len();
+    let (used, extra) = if sym_count > max_children {
+        (&sym_list[..max_children], sym_count - max_children)
+    } else {
+        (&sym_list[..], 0)
+    };
 
-        let parent_idx = ensure_dir(&parent_path, &root_path, root_idx, &mut tree, &mut dir_map);
-
-        // Build symbol list for this file.
-        let mut sym_list: Vec<(String, bool)> = syms
-            .iter()
-            .filter_map(|(id, label, file_type)| {
-                let lbl = label.as_deref().unwrap_or(id.as_str());
-                // Skip redundant file-name node emitted by graphify.
-                if lbl == src_name && file_type.as_deref() == Some("code") {
-                    return None;
-                }
-                Some((lbl.to_owned(), lbl.starts_with('_')))
-            })
-            .collect();
-
-        // Sort: non-underscore first, then alphabetically by lowercase name.
-        sym_list.sort_by(|(a_name, a_under), (b_name, b_under)| {
-            a_under
-                .cmp(b_under)
-                .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
-        });
-
-        let sym_count = sym_list.len();
-        let (used, extra) = if sym_count > max_children {
-            (&sym_list[..max_children], sym_count - max_children)
-        } else {
-            (&sym_list[..], 0)
-        };
-
-        // File node.
-        let file_idx = tree.add_node(src_name.clone());
-
-        for (name, _) in used {
-            let sym_idx = tree.add_node(name.clone());
-            tree.counts[sym_idx] = 1;
-            tree.add_child(file_idx, sym_idx);
-        }
-        if extra > 0 {
-            let trunc_idx = tree.add_node(format!("(+{extra} more)"));
-            tree.counts[trunc_idx] = extra;
-            tree.add_child(file_idx, trunc_idx);
-        }
-        // File total_count: number of symbols (or 1 if empty).
-        tree.counts[file_idx] = if sym_count == 0 { 1 } else { sym_count };
-
-        tree.add_child(parent_idx, file_idx);
+    let file_idx = tree.add_node(src_name);
+    for (name, _) in used {
+        let sym_idx = tree.add_node(name.clone());
+        tree.counts[sym_idx] = 1;
+        tree.add_child(file_idx, sym_idx);
     }
+    if extra > 0 {
+        let trunc_idx = tree.add_node(format!("(+{extra} more)"));
+        tree.counts[trunc_idx] = extra;
+        tree.add_child(file_idx, trunc_idx);
+    }
+    tree.counts[file_idx] = if sym_count == 0 { 1 } else { sym_count };
+    tree.add_child(parent_idx, file_idx);
+}
 
-    // Build owned tree and finalise.
-    let mut root_node = tree.into_tree(root_idx);
-    finalise(&mut root_node);
-
-    root_node.to_json()
+/// Build a sorted `(name, is_underscore)` list for a single file's symbols.
+/// Non-underscore names sort first, then alphabetically (case-insensitive).
+fn sorted_symbol_list(syms: &[NodeGroupEntry], src_name: &str) -> Vec<(String, bool)> {
+    let mut sym_list: Vec<(String, bool)> = syms
+        .iter()
+        .filter_map(|(id, label, file_type)| {
+            let lbl = label.as_deref().unwrap_or(id.as_str());
+            // Skip redundant file-name node emitted by graphify.
+            if lbl == src_name && file_type.as_deref() == Some("code") {
+                return None;
+            }
+            Some((lbl.to_owned(), lbl.starts_with('_')))
+        })
+        .collect();
+    sym_list.sort_by(|(a_name, a_under), (b_name, b_under)| {
+        a_under
+            .cmp(b_under)
+            .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
+    });
+    sym_list
 }
 
 // ── HTML emitter ─────────────────────────────────────────────────────────────

@@ -303,7 +303,8 @@ fn test_dfs_full_chain() {
 #[test]
 fn test_subgraph_to_text_contains_labels() {
     let g = make_graph();
-    let nodes = ["n1".to_string(), "n2".to_string()].into_iter().collect();
+    let nodes: std::collections::HashSet<String> =
+        ["n1".to_string(), "n2".to_string()].into_iter().collect();
     let text = subgraph_to_text(
         &g,
         &nodes,
@@ -318,7 +319,7 @@ fn test_subgraph_to_text_contains_labels() {
 #[test]
 fn test_subgraph_to_text_truncates() {
     let g = make_graph();
-    let nodes = ["n1", "n2", "n3", "n4"]
+    let nodes: std::collections::HashSet<String> = ["n1", "n2", "n3", "n4"]
         .iter()
         .map(|&s| s.to_string())
         .collect();
@@ -330,7 +331,8 @@ fn test_subgraph_to_text_truncates() {
 #[test]
 fn test_subgraph_to_text_edge_included() {
     let g = make_graph();
-    let nodes = ["n1".to_string(), "n2".to_string()].into_iter().collect();
+    let nodes: std::collections::HashSet<String> =
+        ["n1".to_string(), "n2".to_string()].into_iter().collect();
     let text = subgraph_to_text(
         &g,
         &nodes,
@@ -345,7 +347,8 @@ fn test_subgraph_to_text_edge_included() {
 #[test]
 fn test_subgraph_to_text_includes_edge_context() {
     let g = make_graph();
-    let nodes = ["n1".to_string(), "n2".to_string()].into_iter().collect();
+    let nodes: std::collections::HashSet<String> =
+        ["n1".to_string(), "n2".to_string()].into_iter().collect();
     let text = subgraph_to_text(
         &g,
         &nodes,
@@ -586,7 +589,7 @@ fn test_pick_seeds_respects_max_k() {
 #[test]
 fn test_subgraph_to_text_truncation_hint_is_actionable() {
     let g = make_graph();
-    let nodes = ["n1", "n2", "n3", "n4"]
+    let nodes: std::collections::HashSet<String> = ["n1", "n2", "n3", "n4"]
         .iter()
         .map(|&s| s.to_string())
         .collect();

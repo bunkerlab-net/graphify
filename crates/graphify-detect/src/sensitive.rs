@@ -47,9 +47,12 @@ static SIMPLE_PATTERNS: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::n
         // Cloud credential files
         r"(?i)(aws_credentials|gcloud_credentials|service\.account)",
     ];
-    // SAFETY: all patterns above are known-good literals.
-    #[allow(clippy::unwrap_used)]
-    patterns.iter().map(|p| Regex::new(p).unwrap()).collect()
+    #[allow(clippy::expect_used)]
+    let compiled = patterns
+        .iter()
+        .map(|p| Regex::new(p).expect("literal patterns are valid"))
+        .collect();
+    compiled
 });
 
 // ── Word-boundary keyword patterns ───────────────────────────────────────────

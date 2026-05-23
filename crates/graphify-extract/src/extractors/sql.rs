@@ -141,23 +141,22 @@ pub fn extract_sql(path: &Path) -> FileResult {
     // Walk top-level statements
     let mut cur = root.walk();
     if cur.goto_first_child() {
+        let mut walk_ctx = SqlWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            table_nids: &mut table_nids,
+        };
         loop {
             let stmt = cur.node();
             if stmt.kind() == "statement" {
                 let mut sc = stmt.walk();
                 if sc.goto_first_child() {
                     loop {
-                        walk_sql(
-                            sc.node(),
-                            &source,
-                            &str_path,
-                            &stem,
-                            &file_nid,
-                            &mut nodes,
-                            &mut edges,
-                            &mut seen_ids,
-                            &mut table_nids,
-                        );
+                        walk_sql(&mut walk_ctx, sc.node(), &source);
                         if !sc.goto_next_sibling() {
                             break;
                         }
@@ -167,17 +166,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
                 stmt.kind(),
                 "fb_proc_or_trigger" | "set_term" | "declare_external_function"
             ) {
-                walk_sql(
-                    stmt,
-                    &source,
-                    &str_path,
-                    &stem,
-                    &file_nid,
-                    &mut nodes,
-                    &mut edges,
-                    &mut seen_ids,
-                    &mut table_nids,
-                );
+                walk_sql(&mut walk_ctx, stmt, &source);
             }
             if !cur.goto_next_sibling() {
                 break;
@@ -248,21 +237,26 @@ pub fn extract_sql(path: &Path) -> FileResult {
 /// Handles `create_table_statement`, `create_view_statement`, `create_function_statement`,
 /// and `create_procedure_statement`. Also records `table_nids` for use by `walk_from_refs`.
 /// Mirrors Python `_walk_sql`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn walk_sql(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    table_nids: &mut std::collections::HashMap<String, String>,
-) {
+/// Shared state threaded through every [`walk_sql`] recursion.
+struct SqlWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    table_nids: &'a mut std::collections::HashMap<String, String>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over SQL's AST node kinds
+fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) {
     let t = node.kind();
     let line = node.start_position().row + 1;
 
+    // Capture the immutable fields for the closure; the closure receives the
+    // mutable accumulators by reference so it does not borrow ctx.
+    let str_path = ctx.str_path;
+    let file_nid = ctx.file_nid;
     let add_node = |nid: &str,
                     label: &str,
                     ln: usize,
@@ -294,9 +288,9 @@ fn walk_sql(
     match t {
         "create_table" => {
             if let Some(name) = obj_name(node, source) {
-                let nid = make_id(&[stem, name]);
-                add_node(&nid, name, line, nodes, edges, seen_ids);
-                table_nids.insert(name.to_lowercase(), nid.clone());
+                let nid = make_id(&[ctx.stem, name]);
+                add_node(&nid, name, line, ctx.nodes, ctx.edges, ctx.seen_ids);
+                ctx.table_nids.insert(name.to_lowercase(), nid.clone());
                 // Foreign key references
                 for col in node.children_by_field_name("column", &mut node.walk()) {
                     let _ = col; // handled below
@@ -347,16 +341,17 @@ fn walk_sql(
                                             }
                                         }
                                         if let Some(rn) = ref_name {
-                                            let ref_nid = table_nids
+                                            let ref_nid = ctx
+                                                .table_nids
                                                 .get(&rn.to_lowercase())
                                                 .cloned()
-                                                .unwrap_or_else(|| make_id(&[stem, rn]));
-                                            edges.push(Edge {
+                                                .unwrap_or_else(|| make_id(&[ctx.stem, rn]));
+                                            ctx.edges.push(Edge {
                                                 source: nid.clone(),
                                                 target: ref_nid,
                                                 relation: "references".to_string(),
                                                 confidence: "EXTRACTED".to_string(),
-                                                source_file: str_path.to_string(),
+                                                source_file: ctx.str_path.to_string(),
                                                 source_location: Some(format!("L{line}")),
                                                 weight: 1.0,
                                                 context: None,
@@ -394,18 +389,19 @@ fn walk_sql(
                                                         }
                                                     }
                                                     if let Some(rn) = ref_name {
-                                                        let ref_nid = table_nids
+                                                        let ref_nid = ctx
+                                                            .table_nids
                                                             .get(&rn.to_lowercase())
                                                             .cloned()
                                                             .unwrap_or_else(|| {
-                                                                make_id(&[stem, rn])
+                                                                make_id(&[ctx.stem, rn])
                                                             });
-                                                        edges.push(Edge {
+                                                        ctx.edges.push(Edge {
                                                             source: nid.clone(),
                                                             target: ref_nid,
                                                             relation: "references".to_string(),
                                                             confidence: "EXTRACTED".to_string(),
-                                                            source_file: str_path.to_string(),
+                                                            source_file: ctx.str_path.to_string(),
                                                             source_location: Some(format!(
                                                                 "L{line}"
                                                             )),
@@ -433,16 +429,17 @@ fn walk_sql(
                                 for rm in SQL_REF_RE.captures_iter(col_text) {
                                     let rn = &rm[1];
                                     if !seen_refs.contains(&rn.to_lowercase()) {
-                                        let ref_nid = table_nids
+                                        let ref_nid = ctx
+                                            .table_nids
                                             .get(&rn.to_lowercase())
                                             .cloned()
-                                            .unwrap_or_else(|| make_id(&[stem, rn]));
-                                        edges.push(Edge {
+                                            .unwrap_or_else(|| make_id(&[ctx.stem, rn]));
+                                        ctx.edges.push(Edge {
                                             source: nid.clone(),
                                             target: ref_nid,
                                             relation: "references".to_string(),
                                             confidence: "EXTRACTED".to_string(),
-                                            source_file: str_path.to_string(),
+                                            source_file: ctx.str_path.to_string(),
                                             source_location: Some(format!("L{line}")),
                                             weight: 1.0,
                                             context: None,
@@ -462,28 +459,52 @@ fn walk_sql(
         }
         "create_view" => {
             if let Some(name) = obj_name(node, source) {
-                let nid = make_id(&[stem, name]);
-                add_node(&nid, name, line, nodes, edges, seen_ids);
-                table_nids.insert(name.to_lowercase(), nid.clone());
-                walk_from_refs(node, source, str_path, stem, &nid, edges, table_nids);
+                let nid = make_id(&[ctx.stem, name]);
+                add_node(&nid, name, line, ctx.nodes, ctx.edges, ctx.seen_ids);
+                ctx.table_nids.insert(name.to_lowercase(), nid.clone());
+                walk_from_refs(
+                    node,
+                    source,
+                    ctx.str_path,
+                    ctx.stem,
+                    &nid,
+                    ctx.edges,
+                    ctx.table_nids,
+                );
             }
         }
         "create_function" | "create_procedure" => {
             if let Some(name) = obj_name(node, source) {
-                let nid = make_id(&[stem, name]);
-                add_node(&nid, &format!("{name}()"), line, nodes, edges, seen_ids);
-                walk_from_refs(node, source, str_path, stem, &nid, edges, table_nids);
+                let nid = make_id(&[ctx.stem, name]);
+                add_node(
+                    &nid,
+                    &format!("{name}()"),
+                    line,
+                    ctx.nodes,
+                    ctx.edges,
+                    ctx.seen_ids,
+                );
+                walk_from_refs(
+                    node,
+                    source,
+                    ctx.str_path,
+                    ctx.stem,
+                    &nid,
+                    ctx.edges,
+                    ctx.table_nids,
+                );
             }
         }
         "alter_table" => {
             if let Some(name) = obj_name(node, source) {
-                let src_nid = table_nids
+                let src_nid = ctx
+                    .table_nids
                     .get(&name.to_lowercase())
                     .cloned()
                     .unwrap_or_else(|| {
-                        let n = make_id(&[stem, name]);
-                        add_node(&n, name, line, nodes, edges, seen_ids);
-                        table_nids.insert(name.to_lowercase(), n.clone());
+                        let n = make_id(&[ctx.stem, name]);
+                        add_node(&n, name, line, ctx.nodes, ctx.edges, ctx.seen_ids);
+                        ctx.table_nids.insert(name.to_lowercase(), n.clone());
                         n
                     });
                 let mut cur = node.walk();
@@ -515,16 +536,17 @@ fn walk_sql(
                                             }
                                         }
                                         if let Some(rn) = ref_name {
-                                            let ref_nid = table_nids
+                                            let ref_nid = ctx
+                                                .table_nids
                                                 .get(&rn.to_lowercase())
                                                 .cloned()
-                                                .unwrap_or_else(|| make_id(&[stem, &rn]));
-                                            edges.push(Edge {
+                                                .unwrap_or_else(|| make_id(&[ctx.stem, &rn]));
+                                            ctx.edges.push(Edge {
                                                 source: src_nid.clone(),
                                                 target: ref_nid,
                                                 relation: "references".to_string(),
                                                 confidence: "EXTRACTED".to_string(),
-                                                source_file: str_path.to_string(),
+                                                source_file: ctx.str_path.to_string(),
                                                 source_location: Some(format!("L{line}")),
                                                 weight: 1.0,
                                                 context: None,
@@ -570,19 +592,20 @@ fn walk_sql(
                 }
             }
             if let Some(tn) = trig_name {
-                let trig_nid = make_id(&[stem, &tn]);
-                add_node(&trig_nid, &tn, line, nodes, edges, seen_ids);
+                let trig_nid = make_id(&[ctx.stem, &tn]);
+                add_node(&trig_nid, &tn, line, ctx.nodes, ctx.edges, ctx.seen_ids);
                 if let Some(tbl) = tbl_name {
-                    let tbl_nid = table_nids
+                    let tbl_nid = ctx
+                        .table_nids
                         .get(&tbl.to_lowercase())
                         .cloned()
-                        .unwrap_or_else(|| make_id(&[stem, &tbl]));
-                    edges.push(Edge {
+                        .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
+                    ctx.edges.push(Edge {
                         source: trig_nid,
                         target: tbl_nid,
                         relation: "triggers".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: None,
@@ -596,27 +619,28 @@ fn walk_sql(
             if let Some(cap) = SQL_FB_HDR_RE.captures(text) {
                 let obj_type = cap[1].to_uppercase();
                 let obj_name = cap[2].to_string();
-                let obj_nid = make_id(&[stem, &obj_name]);
+                let obj_nid = make_id(&[ctx.stem, &obj_name]);
                 let label = if obj_type == "TRIGGER" {
                     obj_name.clone()
                 } else {
                     format!("{obj_name}()")
                 };
-                add_node(&obj_nid, &label, line, nodes, edges, seen_ids);
+                add_node(&obj_nid, &label, line, ctx.nodes, ctx.edges, ctx.seen_ids);
                 if obj_type == "TRIGGER"
                     && let Some(fm) = SQL_FOR_RE.captures(text)
                 {
                     let tbl = fm[1].to_string();
-                    let tbl_nid = table_nids
+                    let tbl_nid = ctx
+                        .table_nids
                         .get(&tbl.to_lowercase())
                         .cloned()
-                        .unwrap_or_else(|| make_id(&[stem, &tbl]));
-                    edges.push(Edge {
+                        .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
+                    ctx.edges.push(Edge {
                         source: obj_nid.clone(),
                         target: tbl_nid,
                         relation: "triggers".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: None,
@@ -630,16 +654,17 @@ fn walk_sql(
                         && !seen_tbls.contains(&tbl.to_lowercase())
                     {
                         seen_tbls.insert(tbl.to_lowercase());
-                        let tbl_nid = table_nids
+                        let tbl_nid = ctx
+                            .table_nids
                             .get(&tbl.to_lowercase())
                             .cloned()
-                            .unwrap_or_else(|| make_id(&[stem, &tbl]));
-                        edges.push(Edge {
+                            .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
+                        ctx.edges.push(Edge {
                             source: obj_nid.clone(),
                             target: tbl_nid,
                             relation: "reads_from".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: None,
@@ -653,16 +678,17 @@ fn walk_sql(
                         && !seen_tbls.contains(&tbl.to_lowercase())
                     {
                         seen_tbls.insert(tbl.to_lowercase());
-                        let tbl_nid = table_nids
+                        let tbl_nid = ctx
+                            .table_nids
                             .get(&tbl.to_lowercase())
                             .cloned()
-                            .unwrap_or_else(|| make_id(&[stem, &tbl]));
-                        edges.push(Edge {
+                            .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
+                        ctx.edges.push(Edge {
                             source: obj_nid.clone(),
                             target: tbl_nid,
                             relation: "reads_from".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: None,
@@ -676,17 +702,7 @@ fn walk_sql(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_sql(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        table_nids,
-                    );
+                    walk_sql(ctx, cur.node(), source);
                     if !cur.goto_next_sibling() {
                         break;
                     }

@@ -108,6 +108,18 @@ pub fn default_max_tokens() -> u32 {
     resolve_max_tokens(16_384)
 }
 
+/// Arguments for [`call_plain_openai_compat`].
+pub(crate) struct PlainOpenAiRequest<'a> {
+    pub base_url: &'a str,
+    pub api_key: &'a str,
+    pub model: &'a str,
+    pub prompt: &'a str,
+    pub temperature: Option<f64>,
+    pub reasoning_effort: Option<&'a str>,
+    pub disable_thinking: bool,
+    pub max_tokens: u32,
+}
+
 /// Low-level plain-text `OpenAI`-compat call (returns raw content string).
 ///
 /// Used by other backends (Gemini, `OpenAI`, `DeepSeek`, Ollama) that share the
@@ -116,36 +128,26 @@ pub fn default_max_tokens() -> u32 {
 /// # Errors
 /// Returns [`LlmError::Security`] if the URL fails SSRF validation, or
 /// [`LlmError::Http`] / [`LlmError::Parse`] on transport errors.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn call_plain_openai_compat(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    prompt: &str,
-    temperature: Option<f64>,
-    reasoning_effort: Option<&str>,
-    disable_thinking: bool,
-    max_tokens: u32,
-) -> Result<String, LlmError> {
-    graphify_security::validate_url(base_url)?;
+pub(crate) fn call_plain_openai_compat(req: &PlainOpenAiRequest<'_>) -> Result<String, LlmError> {
+    graphify_security::validate_url(req.base_url)?;
 
-    let messages = plain_messages(prompt);
+    let messages = plain_messages(req.prompt);
     let mut body = json!({
-        "model": model,
+        "model": req.model,
         "messages": messages,
-        "max_completion_tokens": max_tokens,
+        "max_completion_tokens": req.max_tokens,
     });
-    if let Some(t) = temperature {
+    if let Some(t) = req.temperature {
         body["temperature"] = json!(t);
     }
-    if let Some(re) = reasoning_effort {
+    if let Some(re) = req.reasoning_effort {
         body["reasoning_effort"] = json!(re);
     }
-    if disable_thinking {
+    if req.disable_thinking {
         body["extra_body"] = json!({"thinking": {"type": "disabled"}});
     }
 
-    let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let endpoint = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(api_timeout()))
         .build()
@@ -153,7 +155,7 @@ pub(crate) fn call_plain_openai_compat(
 
     let resp: PlainResp = agent
         .post(&endpoint)
-        .header("Authorization", &format!("Bearer {api_key}"))
+        .header("Authorization", &format!("Bearer {}", req.api_key))
         .header("Content-Type", "application/json")
         .send_json(&body)
         .map_err(|e| LlmError::Http(e.to_string()))?

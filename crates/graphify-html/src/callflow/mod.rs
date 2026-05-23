@@ -52,10 +52,8 @@ use crate::HtmlError;
 /// file cannot be written.
 /// Returns [`HtmlError::EmptyGraph`] if the graph contains zero nodes.
 /// Returns [`HtmlError::NoSections`] if no sections could be derived.
-#[allow(clippy::too_many_lines)] // This is a monolithic HTML assembly function; splitting it would hurt readability.
 pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError> {
     let paths = loader::resolve_graphify_paths(opts);
-
     if !paths.graph.exists() {
         return Err(HtmlError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -70,65 +68,7 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
     let labels = loader::load_labels(Some(&paths.labels));
     let lang = loader::detect_lang(&opts.lang, &nodes, &labels);
 
-    let sections: Vec<Section> = if let Some(ref sp) = paths.sections {
-        // Load sections from JSON.
-        let text = std::fs::read_to_string(sp)?;
-        let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-            HtmlError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e.to_string(),
-            ))
-        })?;
-        let arr = match &data {
-            serde_json::Value::Array(a) => a.as_slice(),
-            serde_json::Value::Object(m) => m
-                .get("sections")
-                .and_then(|v| v.as_array())
-                .map(std::vec::Vec::as_slice)
-                .unwrap_or_default(),
-            _ => &[],
-        };
-        arr.iter()
-            .filter_map(|v| v.as_object())
-            .map(|m| {
-                let id = m
-                    .get("id")
-                    .or_else(|| m.get("key"))
-                    .or_else(|| m.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned();
-                let name = m
-                    .get("name")
-                    .or_else(|| m.get("label"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&id)
-                    .to_owned();
-                let communities = m
-                    .get("communities")
-                    .or_else(|| m.get("community"))
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|c| {
-                                c.as_str()
-                                    .map(str::to_owned)
-                                    .or_else(|| Some(c.to_string()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Section {
-                    id,
-                    name,
-                    communities,
-                }
-            })
-            .collect()
-    } else {
-        archetypes::derive_sections_from_communities(&nodes, &labels, &lang, opts.max_sections)
-    };
-
+    let sections = resolve_sections(&paths, &nodes, &labels, &lang, opts.max_sections)?;
     let sections = builder::normalize_sections(&sections, &lang);
     let report_text = loader::load_report(Some(&paths.report));
 
@@ -139,41 +79,15 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
         return Err(HtmlError::NoSections);
     }
 
-    meta.insert(
-        "project_name".to_owned(),
-        serde_json::Value::String(loader::infer_project_name(&paths.graph, &meta)),
-    );
-    meta.insert(
-        "node_count".to_owned(),
-        serde_json::Value::Number(nodes.len().into()),
-    );
-    meta.insert(
-        "edge_count".to_owned(),
-        serde_json::Value::Number(edges.len().into()),
-    );
-    meta.insert(
-        "hyperedge_count".to_owned(),
-        serde_json::Value::Number(hyperedges.len().into()),
+    populate_meta(
+        &mut meta,
+        &paths.graph,
+        nodes.len(),
+        edges.len(),
+        hyperedges.len(),
     );
 
-    let output_path = if let Some(ref out) = opts.output {
-        let p = PathBuf::from(out);
-        if p.is_absolute() {
-            p
-        } else {
-            paths.base.join(p)
-        }
-    } else {
-        let project_name = meta
-            .get("project_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("project");
-        paths.graphify_out.join(format!(
-            "{}-callflow.html",
-            loader::safe_filename(project_name)
-        ))
-    };
-
+    let output_path = resolve_output_path(opts, &paths, &meta);
     let comm_idx = builder::build_community_index(&nodes);
     meta.insert(
         "community_count".to_owned(),
@@ -195,19 +109,197 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
     };
 
     let mut html = String::new();
+    write_doc_head(&mut html, lang_str, &doc_title);
+    html.push_str(&render::generate_header(&sections, &meta, lang_str));
+    let render_ctx = CallflowRenderCtx {
+        sections: &sections,
+        nodes: &nodes,
+        edges: &edges,
+        section_nodes_map: &section_nodes_map,
+        classified: &classified,
+        meta: &meta,
+        report_text: &report_text,
+        lang_str,
+    };
+    write_overview_section(&mut html, &render_ctx, opts.diagram_scale);
+    write_per_section_html(&mut html, &render_ctx, opts);
+    write_hyperedges_section(&mut html, &hyperedges);
+    write_stats_section(
+        &mut html,
+        &sections,
+        &nodes,
+        &edges,
+        &hyperedges,
+        comm_idx.len(),
+    );
+    write_footer(&mut html, project_name);
 
-    // Doctype and head.
+    html.push_str("</div><!-- .container -->\n\n");
+    html.push_str(template::JS_FOOTER);
+    html.push_str("\n\n</body>\n</html>");
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output_path, html.as_bytes())?;
+    Ok(output_path)
+}
+
+/// Either load sections from JSON or derive them from community labels.
+fn resolve_sections(
+    paths: &loader::ResolvedPaths,
+    nodes: &[Node],
+    labels: &std::collections::HashMap<String, String>,
+    lang: &str,
+    max_sections: usize,
+) -> Result<Vec<Section>, HtmlError> {
+    let Some(sp) = &paths.sections else {
+        return Ok(archetypes::derive_sections_from_communities(
+            nodes,
+            labels,
+            lang,
+            max_sections,
+        ));
+    };
+    let text = std::fs::read_to_string(sp)?;
+    let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        HtmlError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            e.to_string(),
+        ))
+    })?;
+    let arr = match &data {
+        serde_json::Value::Array(a) => a.as_slice(),
+        serde_json::Value::Object(m) => m
+            .get("sections")
+            .and_then(|v| v.as_array())
+            .map(std::vec::Vec::as_slice)
+            .unwrap_or_default(),
+        _ => &[],
+    };
+    Ok(arr
+        .iter()
+        .filter_map(|v| v.as_object())
+        .map(|m| {
+            let id = m
+                .get("id")
+                .or_else(|| m.get("key"))
+                .or_else(|| m.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned();
+            let name = m
+                .get("name")
+                .or_else(|| m.get("label"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&id)
+                .to_owned();
+            let communities = m
+                .get("communities")
+                .or_else(|| m.get("community"))
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| {
+                            c.as_str()
+                                .map(str::to_owned)
+                                .or_else(|| Some(c.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Section {
+                id,
+                name,
+                communities,
+            }
+        })
+        .collect())
+}
+
+/// Stamp graph-level counts (`project_name`, `node_count`, ...) into `meta`.
+fn populate_meta(
+    meta: &mut indexmap::IndexMap<String, serde_json::Value>,
+    graph_path: &std::path::Path,
+    n_nodes: usize,
+    n_edges: usize,
+    n_hyperedges: usize,
+) {
+    meta.insert(
+        "project_name".to_owned(),
+        serde_json::Value::String(loader::infer_project_name(graph_path, meta)),
+    );
+    meta.insert(
+        "node_count".to_owned(),
+        serde_json::Value::Number(n_nodes.into()),
+    );
+    meta.insert(
+        "edge_count".to_owned(),
+        serde_json::Value::Number(n_edges.into()),
+    );
+    meta.insert(
+        "hyperedge_count".to_owned(),
+        serde_json::Value::Number(n_hyperedges.into()),
+    );
+}
+
+/// Compute the absolute output path (resolving relative paths against `paths.base`).
+fn resolve_output_path(
+    opts: &CallflowOptions,
+    paths: &loader::ResolvedPaths,
+    meta: &indexmap::IndexMap<String, serde_json::Value>,
+) -> PathBuf {
+    if let Some(out) = &opts.output {
+        let p = PathBuf::from(out);
+        return if p.is_absolute() {
+            p
+        } else {
+            paths.base.join(p)
+        };
+    }
+    let project_name = meta
+        .get("project_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("project");
+    paths.graphify_out.join(format!(
+        "{}-callflow.html",
+        loader::safe_filename(project_name)
+    ))
+}
+
+fn write_doc_head(html: &mut String, lang_str: &str, doc_title: &str) {
     let _ = write!(
         html,
         "<!DOCTYPE html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<title>{}</title>\n<script src=\"https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js\"></script>\n<style>\n{}\n</style>\n</head>\n<body>\n<div class=\"container\">\n",
         htmlescape::encode_attribute(lang_str),
-        htmlescape::encode_minimal(&doc_title),
+        htmlescape::encode_minimal(doc_title),
         template::CSS,
     );
+}
 
-    html.push_str(&render::generate_header(&sections, &meta, lang_str));
+/// Read-only context shared across callflow rendering helpers.
+struct CallflowRenderCtx<'a> {
+    sections: &'a [Section],
+    nodes: &'a [Node],
+    edges: &'a [CfEdge],
+    section_nodes_map: &'a indexmap::IndexMap<String, Vec<usize>>,
+    classified: &'a builder::ClassifiedEdges,
+    meta: &'a indexmap::IndexMap<String, serde_json::Value>,
+    report_text: &'a str,
+    lang_str: &'a str,
+}
 
-    // Architecture Overview.
+fn write_overview_section(html: &mut String, ctx: &CallflowRenderCtx<'_>, diagram_scale: f64) {
+    let CallflowRenderCtx {
+        sections,
+        edges,
+        section_nodes_map,
+        classified,
+        meta,
+        report_text,
+        lang_str,
+        ..
+    } = *ctx;
     let overview_name = sections
         .first()
         .map_or("Architecture Overview", |s| s.name.as_str());
@@ -217,38 +309,47 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
         htmlescape::encode_minimal(overview_name)
     );
     html.push_str(&diagram::generate_overview_graph(
-        &sections,
-        &section_nodes_map,
-        &classified,
-        &edges,
+        sections,
+        section_nodes_map,
+        classified,
+        edges,
         lang_str,
-        opts.diagram_scale,
+        diagram_scale,
     ));
     html.push_str("\n</div>\n");
     html.push_str(&render::generate_overview_cards(
-        &meta,
-        &report_text,
-        &sections,
-        &section_nodes_map,
-        &classified,
-        &edges,
+        meta,
+        report_text,
+        sections,
+        section_nodes_map,
+        classified,
+        edges,
         lang_str,
     ));
-    let report_card = render::report_highlights(&report_text, lang_str);
+    let report_card = render::report_highlights(report_text, lang_str);
     if !report_card.is_empty() {
         let _ = write!(html, "\n<div class=\"grid\">\n  {report_card}\n</div>");
     }
     html.push_str("\n<hr>\n");
+}
 
-    // Per-section content.
+fn write_per_section_html(html: &mut String, ctx: &CallflowRenderCtx<'_>, opts: &CallflowOptions) {
+    let CallflowRenderCtx {
+        sections,
+        nodes,
+        edges,
+        section_nodes_map,
+        classified,
+        lang_str,
+        ..
+    } = *ctx;
     let mut section_num = 1usize;
-    for sec in &sections {
+    for sec in sections {
         if sec.id == "overview" {
             continue;
         }
         section_num += 1;
         let sid = &sec.id;
-
         let sec_node_indices = section_nodes_map
             .get(sid.as_str())
             .map(Vec::as_slice)
@@ -260,57 +361,68 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
             .map(Vec::as_slice)
             .unwrap_or_default();
         let sec_edges: Vec<CfEdge> = sec_edge_indices.iter().map(|&i| edges[i].clone()).collect();
-
         render::emit_section_html(
-            &mut html,
-            sec,
-            section_num,
-            &sec_nodes,
-            &sec_edges,
-            lang_str,
-            opts.diagram_scale,
-            opts.max_diagram_nodes,
-            opts.max_diagram_edges,
+            html,
+            &render::SectionEmit {
+                sec,
+                section_num,
+                sec_nodes: &sec_nodes,
+                sec_edges: &sec_edges,
+                lang: lang_str,
+                diagram_scale: opts.diagram_scale,
+                max_diagram_nodes: opts.max_diagram_nodes,
+                max_diagram_edges: opts.max_diagram_edges,
+            },
         );
     }
+}
 
-    // Hyperedges section.
-    if !hyperedges.is_empty() {
-        html.push_str(
-            "<h2 id=\"hyperedges\">Group Relationships (Hyperedges)</h2>\n<div class=\"grid\">\n",
+fn write_hyperedges_section(html: &mut String, hyperedges: &[serde_json::Value]) {
+    if hyperedges.is_empty() {
+        return;
+    }
+    html.push_str(
+        "<h2 id=\"hyperedges\">Group Relationships (Hyperedges)</h2>\n<div class=\"grid\">\n",
+    );
+    for he in hyperedges.iter().take(9) {
+        let hid = he.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let hlabel = he.get("label").and_then(|v| v.as_str()).unwrap_or(hid);
+        let hnodes: Vec<&serde_json::Value> = he
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().collect())
+            .unwrap_or_default();
+        let hrel = he.get("relation").and_then(|v| v.as_str()).unwrap_or("");
+        let _ = write!(
+            html,
+            "  <div class=\"card\">\n    <h4>{}</h4>\n    <p><code>{}</code> — {} participants</p>\n    <ul>",
+            htmlescape::encode_minimal(hlabel),
+            htmlescape::encode_minimal(hrel),
+            hnodes.len()
         );
-        for he in hyperedges.iter().take(9) {
-            let hid = he.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-            let hlabel = he.get("label").and_then(|v| v.as_str()).unwrap_or(hid);
-            let hnodes: Vec<&serde_json::Value> = he
-                .get("nodes")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().collect())
-                .unwrap_or_default();
-            let hrel = he.get("relation").and_then(|v| v.as_str()).unwrap_or("");
+        for hn in hnodes.iter().take(5) {
             let _ = write!(
                 html,
-                "  <div class=\"card\">\n    <h4>{}</h4>\n    <p><code>{}</code> — {} participants</p>\n    <ul>",
-                htmlescape::encode_minimal(hlabel),
-                htmlescape::encode_minimal(hrel),
-                hnodes.len()
+                "\n      <li><code>{}</code></li>",
+                htmlescape::encode_minimal(&hn.to_string())
             );
-            for hn in hnodes.iter().take(5) {
-                let _ = write!(
-                    html,
-                    "\n      <li><code>{}</code></li>",
-                    htmlescape::encode_minimal(&hn.to_string())
-                );
-            }
-            if hnodes.len() > 5 {
-                let _ = write!(html, "\n      <li>... and {} more</li>", hnodes.len() - 5);
-            }
-            html.push_str("\n    </ul>\n  </div>");
         }
-        html.push_str("\n</div>\n<hr>\n");
+        if hnodes.len() > 5 {
+            let _ = write!(html, "\n      <li>... and {} more</li>", hnodes.len() - 5);
+        }
+        html.push_str("\n    </ul>\n  </div>");
     }
+    html.push_str("\n</div>\n<hr>\n");
+}
 
-    // Statistics section.
+fn write_stats_section(
+    html: &mut String,
+    sections: &[Section],
+    nodes: &[Node],
+    edges: &[CfEdge],
+    hyperedges: &[serde_json::Value],
+    n_communities: usize,
+) {
     let total_sections = sections.iter().filter(|s| s.id != "overview").count();
     let extracted_count = edges.iter().filter(|e| e.confidence == "EXTRACTED").count();
     let inferred_count = edges.iter().filter(|e| e.confidence == "INFERRED").count();
@@ -326,7 +438,7 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
       <tr><td>Nodes</td><td>{}</td></tr>
       <tr><td>Edges</td><td>{}</td></tr>
       <tr><td>Hyperedges</td><td>{}</td></tr>
-      <tr><td>Communities</td><td>{}</td></tr>
+      <tr><td>Communities</td><td>{n_communities}</td></tr>
       <tr><td>Documented Sections</td><td>{total_sections}</td></tr>
     </table>
   </div>
@@ -343,10 +455,10 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
         nodes.len(),
         edges.len(),
         hyperedges.len(),
-        comm_idx.len(),
     );
+}
 
-    // Footer.
+fn write_footer(html: &mut String, project_name: &str) {
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
     let _ = write!(
         html,
@@ -354,15 +466,4 @@ pub fn write_callflow_html(opts: &CallflowOptions) -> Result<PathBuf, HtmlError>
         htmlescape::encode_minimal(project_name),
         now,
     );
-
-    // Close.
-    html.push_str("</div><!-- .container -->\n\n");
-    html.push_str(template::JS_FOOTER);
-    html.push_str("\n\n</body>\n</html>");
-
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&output_path, html.as_bytes())?;
-    Ok(output_path)
 }

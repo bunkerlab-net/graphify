@@ -14,7 +14,7 @@ use crate::rebuild;
 /// Re-run AST extraction + build + optional cluster + report for code
 /// files.
 ///
-/// Acquires a per-repo advisory lock (unless `acquire_lock` is `false`).
+/// Acquires a per-repo advisory lock (unless `opts.acquire_lock` is `false`).
 /// Returns `Ok(true)` when outputs were updated, `Ok(false)` when the
 /// rebuild was skipped (lock held, no tracked files changed, shrink
 /// guard refused).
@@ -24,28 +24,12 @@ use crate::rebuild;
 /// # Errors
 ///
 /// Returns [`WatchError`] on pipeline failure.
-#[allow(clippy::fn_params_excessive_bools)]
-// reason: mirrors Python's `_rebuild_code` signature byte-for-byte; each
-// bool controls a distinct pipeline flag and extracting enums would diverge
-// from the Python reference spec.
 pub fn rebuild_code(
     watch_path: &Path,
     changed_paths: Option<&[PathBuf]>,
-    follow_symlinks: bool,
-    force: bool,
-    no_cluster: bool,
-    acquire_lock: bool,
-    block_on_lock: bool,
+    opts: rebuild::RebuildOptions,
 ) -> Result<bool, WatchError> {
-    rebuild::rebuild_code(
-        watch_path,
-        changed_paths,
-        follow_symlinks,
-        force,
-        no_cluster,
-        acquire_lock,
-        block_on_lock,
-    )
+    rebuild::rebuild_code(watch_path, changed_paths, opts)
 }
 
 /// Return `true` if any of the paths has an extension that is **not**
@@ -165,7 +149,11 @@ pub fn watch(watch_path: &Path, debounce: f64) -> Result<(), WatchError> {
         println!("\n[graphify watch] {} file(s) changed", changed.len());
 
         if has_code(&changed) {
-            match rebuild_code(watch_path, Some(&changed), false, false, false, true, false) {
+            let opts = rebuild::RebuildOptions {
+                lock: rebuild::LockPolicy::TryAcquire,
+                ..rebuild::RebuildOptions::default()
+            };
+            match rebuild_code(watch_path, Some(&changed), opts) {
                 Ok(true) => println!("[graphify watch] graph rebuilt successfully."),
                 Ok(false) => {
                     println!("[graphify watch] rebuild skipped (lock held or no changes).");

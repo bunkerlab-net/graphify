@@ -27,126 +27,164 @@ use crate::{ReloadState, ServeError};
 
 // ── Tool schema ───────────────────────────────────────────────────────────────
 
-// too_many_lines: the PR tool schemas are large JSON objects; splitting would harm readability.
 /// Returns the static list of MCP tool descriptors broadcast on the `tools/list` request.
-#[allow(clippy::too_many_lines)]
 fn tools_list() -> Vec<Value> {
     vec![
-        json!({
-            "name": "query_graph",
-            "description": "Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string", "description": "Natural language question or keyword search"},
-                    "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs",
-                             "description": "bfs=broad context, dfs=trace a specific path"},
-                    "depth": {"type": "integer", "default": 3, "description": "Traversal depth (1-6)"},
-                    "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
-                    "context_filter": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional explicit edge-context filter, e.g. ['call', 'field']"
-                    }
-                },
-                "required": ["question"]
-            }
-        }),
-        json!({
-            "name": "get_node",
-            "description": "Get full details for a specific node by label or ID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"label": {"type": "string", "description": "Node label or ID to look up"}},
-                "required": ["label"]
-            }
-        }),
-        json!({
-            "name": "get_neighbors",
-            "description": "Get all direct neighbors of a node with edge details.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string"},
-                    "relation_filter": {"type": "string", "description": "Optional: filter by relation type"}
-                },
-                "required": ["label"]
-            }
-        }),
-        json!({
-            "name": "get_community",
-            "description": "Get all nodes in a community by community ID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"community_id": {"type": "integer", "description": "Community ID (0-indexed by size)"}},
-                "required": ["community_id"]
-            }
-        }),
-        json!({
-            "name": "god_nodes",
-            "description": "Return the most connected nodes - the core abstractions of the knowledge graph.",
-            "inputSchema": {"type": "object", "properties": {"top_n": {"type": "integer", "default": 10}}}
-        }),
-        json!({
-            "name": "graph_stats",
-            "description": "Return summary statistics: node count, edge count, communities, confidence breakdown.",
-            "inputSchema": {"type": "object", "properties": {}}
-        }),
-        json!({
-            "name": "shortest_path",
-            "description": "Find the shortest path between two concepts in the knowledge graph.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "description": "Source concept label or keyword"},
-                    "target": {"type": "string", "description": "Target concept label or keyword"},
-                    "max_hops": {"type": "integer", "default": 8, "description": "Maximum hops to consider"}
-                },
-                "required": ["source", "target"]
-            }
-        }),
-        json!({
-            "name": "list_prs",
-            "description": "List open GitHub PRs with CI status, review state, and graph impact \
-        (which communities each PR touches, blast radius). Use this before starting \
-        work to check if a PR already covers the area you're about to change.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
-                    "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
-                    "limit": {"type": "integer", "description": "Maximum number of PRs to return (default 50)"}
-                }
-            }
-        }),
-        json!({
-            "name": "get_pr_impact",
-            "description": "Get detailed graph impact for a specific PR: which files it changes, \
-        which knowledge-graph communities are affected, and how many nodes are touched. \
-        Use this to assess merge risk or check for overlap with your current work.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "pr_number": {"type": "integer", "description": "PR number to analyse"},
-                    "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."}
-                },
-                "required": ["pr_number"]
-            }
-        }),
-        json!({
-            "name": "triage_prs",
-            "description": "Return all actionable open PRs (correct base, not stale) with full graph impact data \
-        so you can reason about review priority, merge order, and conflict risk. \
-        Call this when the user asks 'what PRs should I review?' or 'what\\'s ready to merge?'",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
-                    "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."}
-                }
-            }
-        }),
+        tool_query_graph_schema(),
+        tool_get_node_schema(),
+        tool_get_neighbors_schema(),
+        tool_get_community_schema(),
+        tool_god_nodes_schema(),
+        tool_graph_stats_schema(),
+        tool_shortest_path_schema(),
+        tool_list_prs_schema(),
+        tool_get_pr_impact_schema(),
+        tool_triage_prs_schema(),
     ]
+}
+
+fn tool_query_graph_schema() -> Value {
+    json!({
+        "name": "query_graph",
+        "description": "Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "Natural language question or keyword search"},
+                "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs",
+                         "description": "bfs=broad context, dfs=trace a specific path"},
+                "depth": {"type": "integer", "default": 3, "description": "Traversal depth (1-6)"},
+                "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
+                "context_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional explicit edge-context filter, e.g. ['call', 'field']"
+                }
+            },
+            "required": ["question"]
+        }
+    })
+}
+
+fn tool_get_node_schema() -> Value {
+    json!({
+        "name": "get_node",
+        "description": "Get full details for a specific node by label or ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"label": {"type": "string", "description": "Node label or ID to look up"}},
+            "required": ["label"]
+        }
+    })
+}
+
+fn tool_get_neighbors_schema() -> Value {
+    json!({
+        "name": "get_neighbors",
+        "description": "Get all direct neighbors of a node with edge details.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string"},
+                "relation_filter": {"type": "string", "description": "Optional: filter by relation type"}
+            },
+            "required": ["label"]
+        }
+    })
+}
+
+fn tool_get_community_schema() -> Value {
+    json!({
+        "name": "get_community",
+        "description": "Get all nodes in a community by community ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"community_id": {"type": "integer", "description": "Community ID (0-indexed by size)"}},
+            "required": ["community_id"]
+        }
+    })
+}
+
+fn tool_god_nodes_schema() -> Value {
+    json!({
+        "name": "god_nodes",
+        "description": "Return the most connected nodes - the core abstractions of the knowledge graph.",
+        "inputSchema": {"type": "object", "properties": {"top_n": {"type": "integer", "default": 10}}}
+    })
+}
+
+fn tool_graph_stats_schema() -> Value {
+    json!({
+        "name": "graph_stats",
+        "description": "Return summary statistics: node count, edge count, communities, confidence breakdown.",
+        "inputSchema": {"type": "object", "properties": {}}
+    })
+}
+
+fn tool_shortest_path_schema() -> Value {
+    json!({
+        "name": "shortest_path",
+        "description": "Find the shortest path between two concepts in the knowledge graph.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Source concept label or keyword"},
+                "target": {"type": "string", "description": "Target concept label or keyword"},
+                "max_hops": {"type": "integer", "default": 8, "description": "Maximum hops to consider"}
+            },
+            "required": ["source", "target"]
+        }
+    })
+}
+
+fn tool_list_prs_schema() -> Value {
+    json!({
+        "name": "list_prs",
+        "description": "List open GitHub PRs with CI status, review state, and graph impact \
+    (which communities each PR touches, blast radius). Use this before starting \
+    work to check if a PR already covers the area you're about to change.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
+                "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                "limit": {"type": "integer", "description": "Maximum number of PRs to return (default 50)"}
+            }
+        }
+    })
+}
+
+fn tool_get_pr_impact_schema() -> Value {
+    json!({
+        "name": "get_pr_impact",
+        "description": "Get detailed graph impact for a specific PR: which files it changes, \
+    which knowledge-graph communities are affected, and how many nodes are touched. \
+    Use this to assess merge risk or check for overlap with your current work.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {"type": "integer", "description": "PR number to analyse"},
+                "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."}
+            },
+            "required": ["pr_number"]
+        }
+    })
+}
+
+fn tool_triage_prs_schema() -> Value {
+    json!({
+        "name": "triage_prs",
+        "description": "Return all actionable open PRs (correct base, not stale) with full graph impact data \
+    so you can reason about review priority, merge order, and conflict risk. \
+    Call this when the user asks 'what PRs should I review?' or 'what\\'s ready to merge?'",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
+                "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."}
+            }
+        }
+    })
 }
 
 /// Static list of MCP resource descriptors returned on a `resources/list` request.

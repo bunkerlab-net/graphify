@@ -367,7 +367,6 @@ fn build_warning(total_words: u64, total_files: usize) -> Option<String> {
 ///
 /// Mirrors Python's `detect()` function.
 #[must_use]
-#[allow(clippy::too_many_lines)] // single-pass walk + classify; splitting would obscure flow.
 pub fn detect(
     root: &Path,
     follow_symlinks: Option<bool>,
@@ -392,144 +391,28 @@ pub fn detect(
     let converted_dir = root.join("graphify-out").join("converted");
     let google_workspace = graphify_google::google_workspace_enabled(None);
 
-    let scan_paths: Vec<(PathBuf, bool)> = {
-        let mut v = vec![(root.clone(), false)];
-        if memory_dir.exists() {
-            v.push((memory_dir.clone(), true));
-        }
-        v
-    };
-
     let ctx = WalkCtx {
         root: &root,
         follow_symlinks,
         ignore_patterns: &ignore_patterns,
         include_patterns: &include_patterns,
     };
+    let all_files = run_walk_phase(&ctx, &root, &memory_dir);
 
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    let mut all_files: Vec<PathBuf> = Vec::new();
+    let ClassifyOutput {
+        files,
+        to_count,
+        skipped_sensitive,
+    } = run_classify_phase(
+        &all_files,
+        &root,
+        &memory_dir,
+        &converted_dir,
+        &ignore_patterns,
+        google_workspace,
+    );
 
-    let t_walk = std::time::Instant::now();
-    for (scan_root, in_memory) in &scan_paths {
-        if *in_memory {
-            // The in-memory sidecar tree disables noise-dir and ignore filtering;
-            // the existing sequential walker carries those rules.
-            walk_dir(&ctx, scan_root, *in_memory, &mut seen, &mut all_files);
-        } else {
-            // Main project tree: dispatch to the parallel walker. Deduplication
-            // against `seen` runs once after the parallel scan to keep the
-            // critical section cheap inside the workers.
-            let found = walk_dir_parallel(&ctx, scan_root);
-            for p in found {
-                if seen.insert(p.clone()) {
-                    all_files.push(p);
-                }
-            }
-        }
-    }
-    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
-        eprintln!(
-            "[perf]   walk_dir: {:.2}s ({} files)",
-            t_walk.elapsed().as_secs_f64(),
-            all_files.len()
-        );
-    }
-
-    let mut files: HashMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
-        .iter()
-        .map(|k| ((*k).to_string(), Vec::new()))
-        .collect();
-
-    let mut total_words: u64 = 0;
-    let mut skipped_sensitive: Vec<String> = Vec::new();
-
-    let t_phase1 = std::time::Instant::now();
-    // Phase 1a (parallel): classify + filter each file. This is the hot path
-    // because gitignore matching runs against potentially hundreds of
-    // patterns per file, and on a large corpus the walk surfaces 100k+ files.
-    // The classification produces an owned `FileDecision` enum with no
-    // shared mutable state, so it fans out cleanly across Rayon.
-    let decisions: Vec<FileDecision> = if all_files.len() >= PARALLEL_COUNT_THRESHOLD {
-        all_files
-            .par_iter()
-            .map(|p| classify_one(p, &root, &memory_dir, &converted_dir, &ignore_patterns))
-            .collect()
-    } else {
-        all_files
-            .iter()
-            .map(|p| classify_one(p, &root, &memory_dir, &converted_dir, &ignore_patterns))
-            .collect()
-    };
-
-    // Phase 1b (sequential): consume decisions in order, dispatch sidecar
-    // conversions, and assemble the per-type file map. Sidecar writes are
-    // kept serial to avoid races on shared output directories.
-    let mut to_count: Vec<(PathBuf, FileType)> = Vec::new();
-    for (p, decision) in all_files.iter().zip(decisions) {
-        match decision {
-            FileDecision::Skip => {}
-            FileDecision::Sensitive(rendered) => skipped_sensitive.push(rendered),
-            FileDecision::Direct(ftype) => {
-                files
-                    .entry(ftype.as_str().to_string())
-                    .or_default()
-                    .push(p.to_string_lossy().into_owned());
-                to_count.push((p.clone(), ftype));
-            }
-            FileDecision::GoogleWorkspace(ext_lower, ftype) => {
-                let mut convert_ctx = ConvertCtx {
-                    root: &root,
-                    converted_dir: &converted_dir,
-                    ignore_patterns: &ignore_patterns,
-                    files: &mut files,
-                    to_count: &mut to_count,
-                    skipped_sensitive: &mut skipped_sensitive,
-                };
-                convert_google_workspace(&mut convert_ctx, p, &ext_lower, ftype, google_workspace);
-            }
-            FileDecision::Office(ftype) => {
-                let mut convert_ctx = ConvertCtx {
-                    root: &root,
-                    converted_dir: &converted_dir,
-                    ignore_patterns: &ignore_patterns,
-                    files: &mut files,
-                    to_count: &mut to_count,
-                    skipped_sensitive: &mut skipped_sensitive,
-                };
-                convert_office(&mut convert_ctx, p, ftype);
-            }
-        }
-    }
-
-    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
-        eprintln!(
-            "[perf]   walk Phase 1 (classify+convert): {:.2}s ({} to_count)",
-            t_phase1.elapsed().as_secs_f64(),
-            to_count.len()
-        );
-    }
-    let t_phase2 = std::time::Instant::now();
-    // Phase 2 (parallel): word counting is pure I/O + UTF-8 split. Order of
-    // accumulation doesn't matter — we only sum the result.
-    total_words += if to_count.len() >= PARALLEL_COUNT_THRESHOLD {
-        to_count
-            .par_iter()
-            .map(|(p, ftype)| count_words(p, *ftype))
-            .sum::<u64>()
-    } else {
-        to_count
-            .iter()
-            .map(|(p, ftype)| count_words(p, *ftype))
-            .sum::<u64>()
-    };
-
-    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
-        eprintln!(
-            "[perf]   walk Phase 2 (word counts): {:.2}s",
-            t_phase2.elapsed().as_secs_f64()
-        );
-    }
+    let total_words = run_word_count_phase(&to_count);
     let total_files: usize = files.values().map(Vec::len).sum();
     let needs_graph = total_words >= CORPUS_WARN_THRESHOLD;
     let warning = build_warning(total_words, total_files);
@@ -544,6 +427,157 @@ pub fn detect(
         graphifyignore_patterns,
         scan_root: root.to_string_lossy().into_owned(),
     }
+}
+
+/// Walk the project + sidecar memory tree, deduplicating against `seen`.
+fn run_walk_phase(ctx: &WalkCtx<'_>, root: &Path, memory_dir: &Path) -> Vec<PathBuf> {
+    let scan_paths: Vec<(PathBuf, bool)> = {
+        let mut v = vec![(root.to_path_buf(), false)];
+        if memory_dir.exists() {
+            v.push((memory_dir.to_path_buf(), true));
+        }
+        v
+    };
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut all_files: Vec<PathBuf> = Vec::new();
+    let t_walk = std::time::Instant::now();
+    for (scan_root, in_memory) in &scan_paths {
+        if *in_memory {
+            // The in-memory sidecar tree disables noise-dir and ignore filtering;
+            // the existing sequential walker carries those rules.
+            walk_dir(ctx, scan_root, *in_memory, &mut seen, &mut all_files);
+        } else {
+            // Main project tree: dispatch to the parallel walker.
+            let found = walk_dir_parallel(ctx, scan_root);
+            for p in found {
+                if seen.insert(p.clone()) {
+                    all_files.push(p);
+                }
+            }
+        }
+    }
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf]   walk_dir: {:.2}s ({} files)",
+            t_walk.elapsed().as_secs_f64(),
+            all_files.len()
+        );
+    }
+    all_files
+}
+
+/// Output of [`run_classify_phase`].
+struct ClassifyOutput {
+    files: HashMap<String, Vec<String>>,
+    to_count: Vec<(PathBuf, FileType)>,
+    skipped_sensitive: Vec<String>,
+}
+
+/// Classify each file, dispatch sidecar conversions, and return the per-kind file
+/// map, word-count work list, and skipped-sensitive list.
+fn run_classify_phase(
+    all_files: &[PathBuf],
+    root: &Path,
+    memory_dir: &Path,
+    converted_dir: &Path,
+    ignore_patterns: &crate::ignore::IgnorePatterns,
+    google_workspace: bool,
+) -> ClassifyOutput {
+    let mut files: HashMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
+        .iter()
+        .map(|k| ((*k).to_string(), Vec::new()))
+        .collect();
+    let mut to_count: Vec<(PathBuf, FileType)> = Vec::new();
+    let mut skipped_sensitive: Vec<String> = Vec::new();
+
+    let t_phase1 = std::time::Instant::now();
+    // Phase 1a (parallel): classify each file independently.
+    let decisions: Vec<FileDecision> = if all_files.len() >= PARALLEL_COUNT_THRESHOLD {
+        all_files
+            .par_iter()
+            .map(|p| classify_one(p, root, memory_dir, converted_dir, ignore_patterns))
+            .collect()
+    } else {
+        all_files
+            .iter()
+            .map(|p| classify_one(p, root, memory_dir, converted_dir, ignore_patterns))
+            .collect()
+    };
+
+    // Phase 1b (sequential): apply decisions and run sidecar conversions.
+    let mut convert_ctx = ConvertCtx {
+        root,
+        converted_dir,
+        ignore_patterns,
+        files: &mut files,
+        to_count: &mut to_count,
+        skipped_sensitive: &mut skipped_sensitive,
+    };
+    for (p, decision) in all_files.iter().zip(decisions) {
+        apply_file_decision(&mut convert_ctx, p, decision, google_workspace);
+    }
+
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf]   walk Phase 1 (classify+convert): {:.2}s ({} to_count)",
+            t_phase1.elapsed().as_secs_f64(),
+            to_count.len()
+        );
+    }
+    ClassifyOutput {
+        files,
+        to_count,
+        skipped_sensitive,
+    }
+}
+
+/// Apply one classification decision to the shared accumulators.
+fn apply_file_decision(
+    ctx: &mut ConvertCtx<'_>,
+    p: &Path,
+    decision: FileDecision,
+    google_workspace: bool,
+) {
+    match decision {
+        FileDecision::Skip => {}
+        FileDecision::Sensitive(rendered) => ctx.skipped_sensitive.push(rendered),
+        FileDecision::Direct(ftype) => {
+            ctx.files
+                .entry(ftype.as_str().to_string())
+                .or_default()
+                .push(p.to_string_lossy().into_owned());
+            ctx.to_count.push((p.to_path_buf(), ftype));
+        }
+        FileDecision::GoogleWorkspace(ext_lower, ftype) => {
+            convert_google_workspace(ctx, p, &ext_lower, ftype, google_workspace);
+        }
+        FileDecision::Office(ftype) => {
+            convert_office(ctx, p, ftype);
+        }
+    }
+}
+
+/// Sum word counts across `to_count`, dispatching to Rayon for large lists.
+fn run_word_count_phase(to_count: &[(PathBuf, FileType)]) -> u64 {
+    let t_phase2 = std::time::Instant::now();
+    let total = if to_count.len() >= PARALLEL_COUNT_THRESHOLD {
+        to_count
+            .par_iter()
+            .map(|(p, ftype)| count_words(p, *ftype))
+            .sum::<u64>()
+    } else {
+        to_count
+            .iter()
+            .map(|(p, ftype)| count_words(p, *ftype))
+            .sum::<u64>()
+    };
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf]   walk Phase 2 (word counts): {:.2}s",
+            t_phase2.elapsed().as_secs_f64()
+        );
+    }
+    total
 }
 
 /// Collect all supported files under `root`, returning a flat `Vec<PathBuf>`.

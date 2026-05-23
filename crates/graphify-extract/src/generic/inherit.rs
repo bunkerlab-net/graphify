@@ -52,18 +52,18 @@ pub(super) fn emit_base_node(
 /// Swift uses `inheritance_specifier` children inside the class/protocol body
 /// to list both superclasses and protocol conformances; this function treats
 /// all of them uniformly as `inherits` edges, matching Python `_extract_swift`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_swift_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
     node: Node<'_>,
     source: &[u8],
     class_nid: &str,
     line: u32,
-    stem: &str,
-    str_path: &str,
-    nodes: &mut Vec<GNode>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
 ) {
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
     let mut cur = node.walk();
     if !cur.goto_first_child() {
         return;
@@ -101,18 +101,18 @@ pub(super) fn emit_swift_inheritance(
 /// Both base classes and implemented interfaces appear in the `base_list`,
 /// so all entries produce `inherits` edges — the graph does not currently
 /// distinguish between extension and implementation for C#.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_csharp_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
     node: Node<'_>,
     source: &[u8],
     class_nid: &str,
     line: u32,
-    stem: &str,
-    str_path: &str,
-    nodes: &mut Vec<GNode>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
 ) {
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
     let mut cur = node.walk();
     if !cur.goto_first_child() {
         return;
@@ -171,19 +171,20 @@ pub(super) fn emit_csharp_inheritance(
 /// (interface implementation), and `interface_declaration` nodes use
 /// `extends_interfaces` for their own inheritance. All three cases are handled
 /// here to match Python `_extract_java`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // sequential dispatch over Java's three inheritance shapes
 pub(super) fn emit_java_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
     node: Node<'_>,
     source: &[u8],
     class_nid: &str,
     node_type: &str,
     line: u32,
-    stem: &str,
-    str_path: &str,
-    nodes: &mut Vec<GNode>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
 ) {
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
     let emit = |base_name: &str,
                 rel: &str,
                 nodes: &mut Vec<GNode>,
@@ -301,18 +302,18 @@ pub(super) fn emit_java_inheritance(
 /// C++ allows multiple inheritance; all entries in the clause produce
 /// `inherits` edges regardless of access specifier (`public`, `protected`,
 /// `private`), matching Python `_extract_cpp`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_cpp_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
     node: Node<'_>,
     source: &[u8],
     class_nid: &str,
     line: u32,
-    stem: &str,
-    str_path: &str,
-    nodes: &mut Vec<GNode>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
 ) {
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
     let mut cur = node.walk();
     if !cur.goto_first_child() {
         return;

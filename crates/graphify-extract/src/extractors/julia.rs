@@ -69,47 +69,48 @@ pub fn extract_julia(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_julia(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        &file_nid,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-    );
+    {
+        let mut walk_ctx = JuliaWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+        };
+        walk_julia(&mut walk_ctx, root, &source, &file_nid);
+    }
 
     // Second pass: call edges
-    for (func_nid, node_start, node_end, is_func_def) in &function_bodies {
-        let tree_root = tree.root_node();
-        if *is_func_def {
-            // Walk children, skip signature child
-            walk_calls_julia_children(
-                tree_root,
-                &source,
-                &str_path,
-                &stem,
-                func_nid,
-                *node_start,
-                *node_end,
-                &mut edges,
-                &seen_ids,
-            );
-        } else {
-            walk_calls_julia(
-                tree_root,
-                &source,
-                &str_path,
-                &stem,
-                func_nid,
-                *node_start,
-                *node_end,
-                &mut edges,
-                &seen_ids,
-            );
+    {
+        let mut call_ctx = JuliaCallCtx {
+            str_path: &str_path,
+            stem: &stem,
+            edges: &mut edges,
+            seen_ids: &seen_ids,
+        };
+        for (func_nid, node_start, node_end, is_func_def) in &function_bodies {
+            let tree_root = tree.root_node();
+            if *is_func_def {
+                walk_calls_julia_children(
+                    &mut call_ctx,
+                    tree_root,
+                    &source,
+                    func_nid,
+                    *node_start,
+                    *node_end,
+                );
+            } else {
+                walk_calls_julia(
+                    &mut call_ctx,
+                    tree_root,
+                    &source,
+                    func_nid,
+                    *node_start,
+                    *node_end,
+                );
+            }
         }
     }
 
@@ -166,18 +167,23 @@ fn func_name_from_signature(sig_node: tree_sitter::Node<'_>, source: &[u8]) -> O
 ///
 /// Handles `module_definition`, `struct_definition`, `function_definition`, `macro_definition`,
 /// and `import_statement`/`using_statement`. Mirrors Python `_walk_julia`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_julia`] recursion.
+struct JuliaWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize, bool)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Julia's AST node kinds
 fn walk_julia(
+    ctx: &mut JuliaWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     scope_nid: &str,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize, bool)>,
 ) {
     let t = node.kind();
 
@@ -203,23 +209,23 @@ fn walk_julia(
             };
             if let Some(nn) = name_node {
                 let mod_name = read_text(nn, source);
-                let mod_nid = make_id(&[stem, mod_name]);
+                let mod_nid = make_id(&[ctx.stem, mod_name]);
                 let line = node.start_position().row + 1;
-                if seen_ids.insert(mod_nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(mod_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: mod_nid.clone(),
                         label: mod_name.to_string(),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
-                    source: file_nid.to_string(),
+                ctx.edges.push(Edge {
+                    source: ctx.file_nid.to_string(),
                     target: mod_nid.clone(),
                     relation: "defines".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
@@ -228,18 +234,7 @@ fn walk_julia(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_julia(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            &mod_nid,
-                            nodes,
-                            edges,
-                            seen_ids,
-                            function_bodies,
-                        );
+                        walk_julia(ctx, cur.node(), source, &mod_nid);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -299,22 +294,22 @@ fn walk_julia(
                     };
                     if let Some(first) = identifiers.first() {
                         let struct_name = read_text(*first, source);
-                        let struct_nid = make_id(&[stem, struct_name]);
-                        if seen_ids.insert(struct_nid.clone()) {
-                            nodes.push(Node {
+                        let struct_nid = make_id(&[ctx.stem, struct_name]);
+                        if ctx.seen_ids.insert(struct_nid.clone()) {
+                            ctx.nodes.push(Node {
                                 id: struct_nid.clone(),
                                 label: struct_name.to_string(),
                                 file_type: "code".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                             });
                         }
-                        edges.push(Edge {
+                        ctx.edges.push(Edge {
                             source: scope_nid.to_string(),
                             target: struct_nid.clone(),
                             relation: "defines".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: None,
@@ -322,13 +317,13 @@ fn walk_julia(
                         });
                         if identifiers.len() >= 2 {
                             let super_name = read_text(identifiers[identifiers.len() - 1], source);
-                            let super_nid = make_id(&[stem, super_name]);
-                            edges.push(Edge {
+                            let super_nid = make_id(&[ctx.stem, super_name]);
+                            ctx.edges.push(Edge {
                                 source: struct_nid,
                                 target: super_nid,
                                 relation: "inherits".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: None,
@@ -357,22 +352,22 @@ fn walk_julia(
                     };
                     if let Some(nn) = name_node {
                         let struct_name = read_text(nn, source);
-                        let struct_nid = make_id(&[stem, struct_name]);
-                        if seen_ids.insert(struct_nid.clone()) {
-                            nodes.push(Node {
+                        let struct_nid = make_id(&[ctx.stem, struct_name]);
+                        if ctx.seen_ids.insert(struct_nid.clone()) {
+                            ctx.nodes.push(Node {
                                 id: struct_nid.clone(),
                                 label: struct_name.to_string(),
                                 file_type: "code".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                             });
                         }
-                        edges.push(Edge {
+                        ctx.edges.push(Edge {
                             source: scope_nid.to_string(),
                             target: struct_nid,
                             relation: "defines".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: None,
@@ -422,23 +417,23 @@ fn walk_julia(
                 };
                 if let Some(nn) = name_node {
                     let abs_name = read_text(nn, source);
-                    let abs_nid = make_id(&[stem, abs_name]);
+                    let abs_nid = make_id(&[ctx.stem, abs_name]);
                     let line = node.start_position().row + 1;
-                    if seen_ids.insert(abs_nid.clone()) {
-                        nodes.push(Node {
+                    if ctx.seen_ids.insert(abs_nid.clone()) {
+                        ctx.nodes.push(Node {
                             id: abs_nid.clone(),
                             label: abs_name.to_string(),
                             file_type: "code".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                         });
                     }
-                    edges.push(Edge {
+                    ctx.edges.push(Edge {
                         source: scope_nid.to_string(),
                         target: abs_nid,
                         relation: "defines".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: None,
@@ -469,29 +464,30 @@ fn walk_julia(
             if let Some(sn) = sig_node
                 && let Some(func_name) = func_name_from_signature(sn, source)
             {
-                let func_nid = make_id(&[stem, &func_name]);
+                let func_nid = make_id(&[ctx.stem, &func_name]);
                 let line = node.start_position().row + 1;
-                if seen_ids.insert(func_nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(func_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: func_nid.clone(),
                         label: format!("{func_name}()"),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
+                ctx.edges.push(Edge {
                     source: scope_nid.to_string(),
                     target: func_nid.clone(),
                     relation: "defines".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
                 });
-                function_bodies.push((func_nid, node.start_byte(), node.end_byte(), true));
+                ctx.function_bodies
+                    .push((func_nid, node.start_byte(), node.end_byte(), true));
             }
         }
         "assignment" => {
@@ -520,23 +516,23 @@ fn walk_julia(
                     && callee_node.kind() == "identifier"
                 {
                     let func_name = read_text(callee_node, source);
-                    let func_nid = make_id(&[stem, func_name]);
+                    let func_nid = make_id(&[ctx.stem, func_name]);
                     let line = node.start_position().row + 1;
-                    if seen_ids.insert(func_nid.clone()) {
-                        nodes.push(Node {
+                    if ctx.seen_ids.insert(func_nid.clone()) {
+                        ctx.nodes.push(Node {
                             id: func_nid.clone(),
                             label: format!("{func_name}()"),
                             file_type: "code".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                         });
                     }
-                    edges.push(Edge {
+                    ctx.edges.push(Edge {
                         source: scope_nid.to_string(),
                         target: func_nid.clone(),
                         relation: "defines".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: None,
@@ -548,7 +544,12 @@ fn walk_julia(
                     if count >= 3
                         && let Some(rhs) = node.child(count - 1)
                     {
-                        function_bodies.push((func_nid, rhs.start_byte(), rhs.end_byte(), false));
+                        ctx.function_bodies.push((
+                            func_nid,
+                            rhs.start_byte(),
+                            rhs.end_byte(),
+                            false,
+                        ));
                     }
                 }
             }
@@ -562,20 +563,20 @@ fn walk_julia(
                     if child.kind() == "identifier" {
                         let mod_name = read_text(child, source);
                         let imp_nid = make_id1(mod_name);
-                        seen_ids.insert(imp_nid.clone());
-                        nodes.push(Node {
+                        ctx.seen_ids.insert(imp_nid.clone());
+                        ctx.nodes.push(Node {
                             id: imp_nid.clone(),
                             label: mod_name.to_string(),
                             file_type: "code".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                         });
-                        edges.push(Edge {
+                        ctx.edges.push(Edge {
                             source: scope_nid.to_string(),
                             target: imp_nid,
                             relation: "imports".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: Some("import".to_string()),
@@ -600,20 +601,20 @@ fn walk_julia(
                         if let Some(first) = idents.first() {
                             let pkg_name = read_text(*first, source);
                             let pkg_nid = make_id1(pkg_name);
-                            seen_ids.insert(pkg_nid.clone());
-                            nodes.push(Node {
+                            ctx.seen_ids.insert(pkg_nid.clone());
+                            ctx.nodes.push(Node {
                                 id: pkg_nid.clone(),
                                 label: pkg_name.to_string(),
                                 file_type: "code".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                             });
-                            edges.push(Edge {
+                            ctx.edges.push(Edge {
                                 source: scope_nid.to_string(),
                                 target: pkg_nid,
                                 relation: "imports".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: Some("import".to_string()),
@@ -631,18 +632,7 @@ fn walk_julia(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_julia(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        scope_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                    );
+                    walk_julia(ctx, cur.node(), source, scope_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -656,17 +646,21 @@ fn walk_julia(
 ///
 /// Skips nested `function_definition` nodes. Emits `calls` edges for `call_expression` nodes
 /// whose callee matches a known NID. Mirrors Python `_walk_calls_julia`.
-#[allow(clippy::too_many_arguments)]
+/// Shared state threaded through every [`walk_calls_julia`] recursion.
+struct JuliaCallCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a HashSet<String>,
+}
+
 fn walk_calls_julia(
+    ctx: &mut JuliaCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
     func_nid: &str,
     body_start: usize,
     body_end: usize,
-    edges: &mut Vec<Edge>,
-    seen_ids: &HashSet<String>,
 ) {
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
@@ -689,14 +683,14 @@ fn walk_calls_julia(
         if let Some(callee_node) = callee {
             if callee_node.kind() == "identifier" {
                 let callee_name = read_text(callee_node, source);
-                let target_nid = make_id(&[stem, callee_name]);
-                if seen_ids.contains(&target_nid) && target_nid != func_nid {
-                    edges.push(Edge {
+                let target_nid = make_id(&[ctx.stem, callee_name]);
+                if ctx.seen_ids.contains(&target_nid) && target_nid != func_nid {
+                    ctx.edges.push(Edge {
                         source: func_nid.to_string(),
                         target: target_nid,
                         relation: "calls".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{}", node.start_position().row + 1)),
                         weight: 1.0,
                         context: Some("call".to_string()),
@@ -708,14 +702,14 @@ fn walk_calls_julia(
                 let method_node = callee_node.child(count - 1);
                 if let Some(mn) = method_node {
                     let method_name = read_text(mn, source);
-                    let target_nid = make_id(&[stem, method_name]);
-                    if seen_ids.contains(&target_nid) && target_nid != func_nid {
-                        edges.push(Edge {
+                    let target_nid = make_id(&[ctx.stem, method_name]);
+                    if ctx.seen_ids.contains(&target_nid) && target_nid != func_nid {
+                        ctx.edges.push(Edge {
                             source: func_nid.to_string(),
                             target: target_nid,
                             relation: "calls".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{}", node.start_position().row + 1)),
                             weight: 1.0,
                             context: Some("call".to_string()),
@@ -729,17 +723,7 @@ fn walk_calls_julia(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_julia(
-                cur.node(),
-                source,
-                str_path,
-                stem,
-                func_nid,
-                body_start,
-                body_end,
-                edges,
-                seen_ids,
-            );
+            walk_calls_julia(ctx, cur.node(), source, func_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }
@@ -752,17 +736,13 @@ fn walk_calls_julia(
 /// Finds the `function_definition` node by byte range, then iterates its children starting
 /// after the signature, so nested function bodies are attributed to the right caller.
 // Walk children of a function_definition node (skipping signature)
-#[allow(clippy::too_many_arguments)]
 fn walk_calls_julia_children(
+    ctx: &mut JuliaCallCtx<'_>,
     tree_root: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
     func_nid: &str,
     node_start: usize,
     node_end: usize,
-    edges: &mut Vec<Edge>,
-    seen_ids: &HashSet<String>,
 ) {
     // Find the function_definition node by byte range
     /// Search the subtree rooted at `n` for a `function_definition` node matching `start`/`end` byte offsets.
@@ -796,9 +776,7 @@ fn walk_calls_julia_children(
         loop {
             let child = cur.node();
             if child.kind() != "signature" {
-                walk_calls_julia(
-                    child, source, str_path, stem, func_nid, node_start, node_end, edges, seen_ids,
-                );
+                walk_calls_julia(ctx, child, source, func_nid, node_start, node_end);
             }
             if !cur.goto_next_sibling() {
                 break;

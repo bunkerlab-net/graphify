@@ -68,18 +68,18 @@ pub fn extract_objc(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_objc(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        None,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut method_bodies,
-    );
+    {
+        let mut walk_ctx = ObjcWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            method_bodies: &mut method_bodies,
+        };
+        walk_objc(&mut walk_ctx, root, &source, None);
+    }
 
     // Second pass: calls inside method bodies
     let all_method_nids: HashSet<String> = nodes
@@ -88,19 +88,23 @@ pub fn extract_objc(path: &Path) -> FileResult {
         .map(|n| n.id.clone())
         .collect();
     let mut seen_calls: HashSet<(String, String)> = HashSet::new();
-
-    for (caller_nid, body_start, body_end) in &method_bodies {
-        walk_calls_objc(
-            tree.root_node(),
-            &source,
-            &str_path,
-            caller_nid,
-            *body_start,
-            *body_end,
-            &all_method_nids,
-            &mut edges,
-            &mut seen_calls,
-        );
+    {
+        let mut call_ctx = ObjcCallCtx {
+            str_path: &str_path,
+            all_method_nids: &all_method_nids,
+            edges: &mut edges,
+            seen_calls: &mut seen_calls,
+        };
+        for (caller_nid, body_start, body_end) in &method_bodies {
+            walk_calls_objc(
+                &mut call_ctx,
+                tree.root_node(),
+                &source,
+                caller_nid,
+                *body_start,
+                *body_end,
+            );
+        }
     }
 
     FileResult {
@@ -115,18 +119,23 @@ pub fn extract_objc(path: &Path) -> FileResult {
 ///
 /// Handles `@interface`, `@implementation`, `@protocol`, instance/class method declarations
 /// and definitions, and `#import` / `@import` directives. Mirrors Python `_walk_objc`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_objc`] recursion.
+struct ObjcWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    method_bodies: &'a mut Vec<(String, usize, usize)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Objective-C's AST node kinds
 fn walk_objc(
+    ctx: &mut ObjcWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     parent_nid: Option<&str>,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    method_bodies: &mut Vec<(String, usize, usize)>,
 ) {
     let t = node.kind();
     let line = node.start_position().row + 1;
@@ -142,12 +151,12 @@ fn walk_objc(
                         let module = raw.split('/').next_back().unwrap_or("").replace(".h", "");
                         if !module.is_empty() {
                             let tgt_nid = make_id1(&module);
-                            edges.push(Edge {
-                                source: file_nid.to_string(),
+                            ctx.edges.push(Edge {
+                                source: ctx.file_nid.to_string(),
                                 target: tgt_nid,
                                 relation: "imports".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: Some("import".to_string()),
@@ -164,12 +173,12 @@ fn walk_objc(
                                         raw.split('/').next_back().unwrap_or("").replace(".h", "");
                                     if !module.is_empty() {
                                         let tgt_nid = make_id1(&module);
-                                        edges.push(Edge {
-                                            source: file_nid.to_string(),
+                                        ctx.edges.push(Edge {
+                                            source: ctx.file_nid.to_string(),
                                             target: tgt_nid,
                                             relation: "imports".to_string(),
                                             confidence: "EXTRACTED".to_string(),
-                                            source_file: str_path.to_string(),
+                                            source_file: ctx.str_path.to_string(),
                                             source_location: Some(format!("L{line}")),
                                             weight: 1.0,
                                             context: Some("import".to_string()),
@@ -209,18 +218,7 @@ fn walk_objc(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_objc(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            parent_nid,
-                            nodes,
-                            edges,
-                            seen_ids,
-                            method_bodies,
-                        );
+                        walk_objc(ctx, cur.node(), source, parent_nid);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -229,22 +227,22 @@ fn walk_objc(
                 return;
             }
             let name = read_text(identifiers[0], source);
-            let cls_nid = make_id(&[stem, name]);
-            if seen_ids.insert(cls_nid.clone()) {
-                nodes.push(Node {
+            let cls_nid = make_id(&[ctx.stem, name]);
+            if ctx.seen_ids.insert(cls_nid.clone()) {
+                ctx.nodes.push(Node {
                     id: cls_nid.clone(),
                     label: name.to_string(),
                     file_type: "code".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                 });
             }
-            edges.push(Edge {
-                source: file_nid.to_string(),
+            ctx.edges.push(Edge {
+                source: ctx.file_nid.to_string(),
                 target: cls_nid.clone(),
                 relation: "contains".to_string(),
                 confidence: "EXTRACTED".to_string(),
-                source_file: str_path.to_string(),
+                source_file: ctx.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 weight: 1.0,
                 context: None,
@@ -260,12 +258,12 @@ fn walk_objc(
                         colon_seen = true;
                     } else if colon_seen && child.kind() == "identifier" {
                         let super_nid = make_id1(read_text(child, source));
-                        edges.push(Edge {
+                        ctx.edges.push(Edge {
                             source: cls_nid.clone(),
                             target: super_nid,
                             relation: "inherits".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: None,
@@ -283,12 +281,12 @@ fn walk_objc(
                                             if tc.node().kind() == "type_identifier" {
                                                 let proto_nid =
                                                     make_id1(read_text(tc.node(), source));
-                                                edges.push(Edge {
+                                                ctx.edges.push(Edge {
                                                     source: cls_nid.clone(),
                                                     target: proto_nid,
                                                     relation: "imports".to_string(),
                                                     confidence: "EXTRACTED".to_string(),
-                                                    source_file: str_path.to_string(),
+                                                    source_file: ctx.str_path.to_string(),
                                                     source_location: Some(format!("L{line}")),
                                                     weight: 1.0,
                                                     context: Some("import".to_string()),
@@ -307,18 +305,7 @@ fn walk_objc(
                             }
                         }
                     } else if child.kind() == "method_declaration" {
-                        walk_objc(
-                            child,
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            Some(&cls_nid),
-                            nodes,
-                            edges,
-                            seen_ids,
-                            method_bodies,
-                        );
+                        walk_objc(ctx, child, source, Some(&cls_nid));
                     }
                     if !cur.goto_next_sibling() {
                         break;
@@ -346,21 +333,21 @@ fn walk_objc(
                 }
             };
             if let Some(n) = name {
-                let impl_nid = make_id(&[stem, &n]);
-                if seen_ids.insert(impl_nid.clone()) {
-                    nodes.push(Node {
+                let impl_nid = make_id(&[ctx.stem, &n]);
+                if ctx.seen_ids.insert(impl_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: impl_nid.clone(),
                         label: n,
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
-                    edges.push(Edge {
-                        source: file_nid.to_string(),
+                    ctx.edges.push(Edge {
+                        source: ctx.file_nid.to_string(),
                         target: impl_nid.clone(),
                         relation: "contains".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: None,
@@ -374,18 +361,7 @@ fn walk_objc(
                             let mut c2 = cur.node().walk();
                             if c2.goto_first_child() {
                                 loop {
-                                    walk_objc(
-                                        c2.node(),
-                                        source,
-                                        str_path,
-                                        stem,
-                                        file_nid,
-                                        Some(&impl_nid),
-                                        nodes,
-                                        edges,
-                                        seen_ids,
-                                        method_bodies,
-                                    );
+                                    walk_objc(ctx, c2.node(), source, Some(&impl_nid));
                                     if !c2.goto_next_sibling() {
                                         break;
                                     }
@@ -419,22 +395,22 @@ fn walk_objc(
                 }
             };
             if let Some(n) = name {
-                let proto_nid = make_id(&[stem, &n]);
-                if seen_ids.insert(proto_nid.clone()) {
-                    nodes.push(Node {
+                let proto_nid = make_id(&[ctx.stem, &n]);
+                if ctx.seen_ids.insert(proto_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: proto_nid.clone(),
                         label: format!("<{n}>"),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
-                    source: file_nid.to_string(),
+                ctx.edges.push(Edge {
+                    source: ctx.file_nid.to_string(),
                     target: proto_nid.clone(),
                     relation: "contains".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
@@ -443,18 +419,7 @@ fn walk_objc(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_objc(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            Some(&proto_nid),
-                            nodes,
-                            edges,
-                            seen_ids,
-                            method_bodies,
-                        );
+                        walk_objc(ctx, cur.node(), source, Some(&proto_nid));
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -463,7 +428,7 @@ fn walk_objc(
             }
         }
         "method_declaration" | "method_definition" => {
-            let container = parent_nid.unwrap_or(file_nid);
+            let container = parent_nid.unwrap_or(ctx.file_nid);
             let mut parts: Vec<&str> = Vec::new();
             let mut cur = node.walk();
             if cur.goto_first_child() {
@@ -478,28 +443,29 @@ fn walk_objc(
             }
             if let Some(method_name) = parts.first().copied() {
                 let method_nid = make_id(&[container, method_name]);
-                if seen_ids.insert(method_nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(method_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: method_nid.clone(),
                         label: format!("-{method_name}"),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
+                ctx.edges.push(Edge {
                     source: container.to_string(),
                     target: method_nid.clone(),
                     relation: "method".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
                 });
                 if t == "method_definition" {
-                    method_bodies.push((method_nid, node.start_byte(), node.end_byte()));
+                    ctx.method_bodies
+                        .push((method_nid, node.start_byte(), node.end_byte()));
                 }
             }
         }
@@ -507,18 +473,7 @@ fn walk_objc(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_objc(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        parent_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        method_bodies,
-                    );
+                    walk_objc(ctx, cur.node(), source, parent_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -532,18 +487,26 @@ fn walk_objc(
 ///
 /// Recurses through the body AST, emitting `calls` edges for `message_expression` nodes whose
 /// selector matches a known method NID. Mirrors Python `_walk_calls_objc`.
-#[allow(clippy::too_many_arguments)]
+/// Shared state threaded through every [`walk_calls_objc`] recursion.
+struct ObjcCallCtx<'a> {
+    str_path: &'a str,
+    all_method_nids: &'a HashSet<String>,
+    edges: &'a mut Vec<Edge>,
+    seen_calls: &'a mut HashSet<(String, String)>,
+}
+
 fn walk_calls_objc(
+    ctx: &mut ObjcCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
     caller_nid: &str,
     body_start: usize,
     body_end: usize,
-    all_method_nids: &HashSet<String>,
-    edges: &mut Vec<Edge>,
-    seen_calls: &mut HashSet<(String, String)>,
 ) {
+    let str_path = ctx.str_path;
+    let all_method_nids = ctx.all_method_nids;
+    let edges = &mut *ctx.edges;
+    let seen_calls = &mut *ctx.seen_calls;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
@@ -612,17 +575,7 @@ fn walk_calls_objc(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_objc(
-                cur.node(),
-                source,
-                str_path,
-                caller_nid,
-                body_start,
-                body_end,
-                all_method_nids,
-                edges,
-                seen_calls,
-            );
+            walk_calls_objc(ctx, cur.node(), source, caller_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }

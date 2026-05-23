@@ -18,15 +18,14 @@ use crate::{COMMUNITY_COLORS, ExportError, node_community_map, obsidian_tag, yam
 
 // ── Filename sanitisation ─────────────────────────────────────────────────────
 
+#[allow(clippy::expect_used)]
 static UNSAFE_CHARS_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    // Known-good literal pattern — panic here would be a programmer error.
-    #[allow(clippy::unwrap_used)]
-    Regex::new(r#"[\\/*?:"<>|#^\[\]]"#).unwrap()
+    Regex::new(r#"[\\/*?:"<>|#^\[\]]"#).expect("literal pattern is valid")
 });
 
+#[allow(clippy::expect_used)]
 static MD_EXT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    #[allow(clippy::unwrap_used)]
-    Regex::new(r"(?i)\.(md|mdx|qmd|markdown)$").unwrap()
+    Regex::new(r"(?i)\.(md|mdx|qmd|markdown)$").expect("literal pattern is valid")
 });
 
 /// Sanitize a node label for use as an Obsidian filename.
@@ -222,19 +221,33 @@ fn write_node_note(
     Ok(())
 }
 
+/// Shared graph + per-vault context for community-note writes.
+struct CommunityNoteCtx<'a> {
+    graph: &'a Graph,
+    node_community: &'a IndexMap<String, i64>,
+    node_filename: &'a IndexMap<String, String>,
+    community_labels: Option<&'a IndexMap<i64, String>>,
+    cohesion: Option<&'a IndexMap<i64, f64>>,
+    inter_community: &'a IndexMap<i64, IndexMap<i64, usize>>,
+    output_dir: &'a Path,
+}
+
 /// Write a single community overview note.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // long sequential markdown emission; phases share locals.
 fn write_community_note(
+    ctx: &CommunityNoteCtx<'_>,
     cid: i64,
     members: &[String],
-    graph: &Graph,
-    node_community: &IndexMap<String, i64>,
-    node_filename: &IndexMap<String, String>,
-    community_labels: Option<&IndexMap<i64, String>>,
-    cohesion: Option<&IndexMap<i64, f64>>,
-    inter_community: &IndexMap<i64, IndexMap<i64, usize>>,
-    output_dir: &Path,
 ) -> Result<(), ExportError> {
+    let CommunityNoteCtx {
+        graph,
+        node_community,
+        node_filename,
+        community_labels,
+        cohesion,
+        inter_community,
+        output_dir,
+    } = *ctx;
     let community_name = community_labels
         .and_then(|cl| cl.get(&cid))
         .cloned()
@@ -478,20 +491,19 @@ pub fn to_obsidian(
     // independent files, safe to fan out across Rayon.
     let community_pairs: Vec<(&i64, &Vec<String>)> = communities.iter().collect();
     let community_notes_written = community_pairs.len();
+    let note_ctx = CommunityNoteCtx {
+        graph,
+        node_community: &node_community,
+        node_filename: &node_filename,
+        community_labels,
+        cohesion,
+        inter_community: &inter_community,
+        output_dir,
+    };
     community_pairs
         .par_iter()
         .try_for_each(|(cid, members)| -> Result<(), ExportError> {
-            write_community_note(
-                **cid,
-                members,
-                graph,
-                &node_community,
-                &node_filename,
-                community_labels,
-                cohesion,
-                &inter_community,
-                output_dir,
-            )
+            write_community_note(&note_ctx, **cid, members)
         })?;
 
     // Write .obsidian/graph.json for community colour groups
@@ -507,10 +519,9 @@ pub fn to_obsidian(
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                 let color_hex =
                     COMMUNITY_COLORS[(cid.unsigned_abs() as usize) % COMMUNITY_COLORS.len()];
-                // Parse hex color (#RRGGBB) into an integer. The pattern is a
-                // compile-time literal so parse failure is a programmer error.
-                #[allow(clippy::unwrap_used)]
-                let rgb_int = u32::from_str_radix(color_hex.trim_start_matches('#'), 16).unwrap();
+                #[allow(clippy::expect_used)]
+                let rgb_int = u32::from_str_radix(color_hex.trim_start_matches('#'), 16)
+                    .expect("COMMUNITY_COLORS entries are valid hex");
                 serde_json::json!({
                     "query": format!("tag:#community/{}", label.replace(' ', "_")),
                     "color": {"a": 1, "rgb": rgb_int}

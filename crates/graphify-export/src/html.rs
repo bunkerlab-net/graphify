@@ -106,11 +106,19 @@ network.on('afterDrawing', function(ctx) {{
     )
 }
 
-#[allow(clippy::too_many_lines)] // Inherent complexity of large inline JavaScript
 /// Build the main vis.js `<script>` block that wires up the interactive graph.
 fn html_script(nodes_json: &str, edges_json: &str, legend_json: &str) -> String {
+    let header = html_script_header(nodes_json, edges_json, legend_json);
+    let info = html_script_info_panel();
+    let search = html_script_search_box();
+    let legend = html_script_legend();
+    format!("<script>\n{header}\n{info}\n{search}\n{legend}\n</script>")
+}
+
+/// vis.js dataset wiring + network construction.
+fn html_script_header(nodes_json: &str, edges_json: &str, legend_json: &str) -> String {
     format!(
-        r#"<script>
+        r#"
 const RAW_NODES = {nodes_json};
 const RAW_EDGES = {edges_json};
 const LEGEND = {legend_json};
@@ -167,148 +175,162 @@ const network = new vis.Network(container, {{ nodes: nodesDS, edges: edgesDS }},
 network.once('stabilizationIterationsDone', () => {{
   network.setOptions({{ physics: {{ enabled: false }} }});
 }});
+"#
+    )
+}
 
-function showInfo(nodeId) {{
+/// Info-panel + node-focus + hover/click event wiring.
+fn html_script_info_panel() -> &'static str {
+    r#"
+function showInfo(nodeId) {
   const n = nodesDS.get(nodeId);
   if (!n) return;
   const neighborIds = network.getConnectedNodes(nodeId);
-  const neighborItems = neighborIds.map(nid => {{
+  const neighborItems = neighborIds.map(nid => {
     const nb = nodesDS.get(nid);
     const color = nb ? nb.color.background : '#555';
-    return `<span class="neighbor-link" style="border-left-color:${{esc(color)}}" onclick="focusNode(${{JSON.stringify(nid)}})">${{esc(nb ? nb.label : nid)}}</span>`;
-  }}).join('');
+    return `<span class="neighbor-link" style="border-left-color:${esc(color)}" onclick="focusNode(${JSON.stringify(nid)})">${esc(nb ? nb.label : nid)}</span>`;
+  }).join('');
   document.getElementById('info-content').innerHTML = `
-    <div class="field"><b>${{esc(n.label)}}</b></div>
-    <div class="field">Type: ${{esc(n._file_type || 'unknown')}}</div>
-    <div class="field">Community: ${{esc(n._community_name)}}</div>
-    <div class="field">Source: ${{esc(n._source_file || '-')}}</div>
-    <div class="field">Degree: ${{n._degree}}</div>
-    ${{neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${{neighborIds.length}})</div><div id="neighbors-list">${{neighborItems}}</div>` : ''}}
+    <div class="field"><b>${esc(n.label)}</b></div>
+    <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
+    <div class="field">Community: ${esc(n._community_name)}</div>
+    <div class="field">Source: ${esc(n._source_file || '-')}</div>
+    <div class="field">Degree: ${n._degree}</div>
+    ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
   `;
-}}
+}
 
-function focusNode(nodeId) {{
-  network.focus(nodeId, {{ scale: 1.4, animation: true }});
+function focusNode(nodeId) {
+  network.focus(nodeId, { scale: 1.4, animation: true });
   network.selectNodes([nodeId]);
   showInfo(nodeId);
-}}
+}
 
 // Track hovered node — hover detection is more reliable than click params
 let hoveredNodeId = null;
-network.on('hoverNode', params => {{
+network.on('hoverNode', params => {
   hoveredNodeId = params.node;
   container.style.cursor = 'pointer';
-}});
-network.on('blurNode', () => {{
+});
+network.on('blurNode', () => {
   hoveredNodeId = null;
   container.style.cursor = 'default';
-}});
-container.addEventListener('click', () => {{
-  if (hoveredNodeId !== null) {{
+});
+container.addEventListener('click', () => {
+  if (hoveredNodeId !== null) {
     showInfo(hoveredNodeId);
     network.selectNodes([hoveredNodeId]);
-  }}
-}});
-network.on('click', params => {{
-  if (params.nodes.length > 0) {{
+  }
+});
+network.on('click', params => {
+  if (params.nodes.length > 0) {
     showInfo(params.nodes[0]);
-  }} else if (hoveredNodeId === null) {{
+  } else if (hoveredNodeId === null) {
     document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
-  }}
-}});
+  }
+});
+"#
+}
 
+/// Search-box input handling + suggestions popdown.
+fn html_script_search_box() -> &'static str {
+    r"
 const searchInput = document.getElementById('search');
 const searchResults = document.getElementById('search-results');
-searchInput.addEventListener('input', () => {{
+searchInput.addEventListener('input', () => {
   const q = searchInput.value.toLowerCase().trim();
   searchResults.innerHTML = '';
-  if (!q) {{ searchResults.style.display = 'none'; return; }}
+  if (!q) { searchResults.style.display = 'none'; return; }
   const matches = RAW_NODES.filter(n => n.label.toLowerCase().includes(q)).slice(0, 20);
-  if (!matches.length) {{ searchResults.style.display = 'none'; return; }}
+  if (!matches.length) { searchResults.style.display = 'none'; return; }
   searchResults.style.display = 'block';
-  matches.forEach(n => {{
+  matches.forEach(n => {
     const el = document.createElement('div');
     el.className = 'search-item';
     el.textContent = n.label;
-    el.style.borderLeft = `3px solid ${{n.color.background}}`;
+    el.style.borderLeft = `3px solid ${n.color.background}`;
     el.style.paddingLeft = '8px';
-    el.onclick = () => {{
-      network.focus(n.id, {{ scale: 1.5, animation: true }});
+    el.onclick = () => {
+      network.focus(n.id, { scale: 1.5, animation: true });
       network.selectNodes([n.id]);
       showInfo(n.id);
       searchResults.style.display = 'none';
       searchInput.value = '';
-    }};
+    };
     searchResults.appendChild(el);
-  }});
-}});
-document.addEventListener('click', e => {{
+  });
+});
+document.addEventListener('click', e => {
   if (!searchResults.contains(e.target) && e.target !== searchInput)
     searchResults.style.display = 'none';
-}});
+});
+"
+}
 
+/// Community legend / per-community checkbox wiring.
+fn html_script_legend() -> &'static str {
+    r#"
 const hiddenCommunities = new Set();
-
 const selectAllCb = document.getElementById('select-all-cb');
 
-function updateSelectAllState() {{
+function updateSelectAllState() {
   const total = LEGEND.length;
   const hidden = hiddenCommunities.size;
   selectAllCb.checked = hidden === 0;
   selectAllCb.indeterminate = hidden > 0 && hidden < total;
-}}
+}
 
-function toggleAllCommunities(hide) {{
-  document.querySelectorAll('.legend-item').forEach(item => {{
+function toggleAllCommunities(hide) {
+  document.querySelectorAll('.legend-item').forEach(item => {
     hide ? item.classList.add('dimmed') : item.classList.remove('dimmed');
-  }});
-  document.querySelectorAll('.legend-cb').forEach(cb => {{
+  });
+  document.querySelectorAll('.legend-cb').forEach(cb => {
     cb.checked = !hide;
-  }});
-  LEGEND.forEach(c => {{
+  });
+  LEGEND.forEach(c => {
     if (hide) hiddenCommunities.add(c.cid); else hiddenCommunities.delete(c.cid);
-  }});
-  const updates = RAW_NODES.map(n => ({{ id: n.id, hidden: hide }}));
+  });
+  const updates = RAW_NODES.map(n => ({ id: n.id, hidden: hide }));
   nodesDS.update(updates);
   updateSelectAllState();
-}}
+}
 
 const legendEl = document.getElementById('legend');
-LEGEND.forEach(c => {{
+LEGEND.forEach(c => {
   const item = document.createElement('div');
   item.className = 'legend-item';
   const cb = document.createElement('input');
   cb.type = 'checkbox';
   cb.className = 'legend-cb';
   cb.checked = true;
-  cb.addEventListener('change', (e) => {{
+  cb.addEventListener('change', (e) => {
     e.stopPropagation();
-    if (cb.checked) {{
+    if (cb.checked) {
       hiddenCommunities.delete(c.cid);
       item.classList.remove('dimmed');
-    }} else {{
+    } else {
       hiddenCommunities.add(c.cid);
       item.classList.add('dimmed');
-    }}
+    }
     const updates = RAW_NODES
       .filter(n => n.community === c.cid)
-      .map(n => ({{ id: n.id, hidden: !cb.checked }}));
+      .map(n => ({ id: n.id, hidden: !cb.checked }));
     nodesDS.update(updates);
     updateSelectAllState();
-  }});
-  item.innerHTML = `<div class="legend-dot" style="background:${{c.color}}"></div>
-    <span class="legend-label">${{c.label}}</span>
-    <span class="legend-count">${{c.count}}</span>`;
+  });
+  item.innerHTML = `<div class="legend-dot" style="background:${c.color}"></div>
+    <span class="legend-label">${c.label}</span>
+    <span class="legend-count">${c.count}</span>`;
   item.prepend(cb);
-  item.onclick = (e) => {{
+  item.onclick = (e) => {
     if (e.target === cb) return;
     cb.checked = !cb.checked;
     cb.dispatchEvent(new Event('change'));
-  }};
+  };
   legendEl.appendChild(item);
-}});
-</script>"#
-    )
+});
+"#
 }
 
 // ── Main export function ──────────────────────────────────────────────────────
@@ -326,7 +348,6 @@ LEGEND.forEach(c => {{
 /// Returns [`ExportError::Io`] on file-write failure, or
 /// [`ExportError::TooLargeForViz`] when the graph is too large and no
 /// aggregation limit is provided.
-#[allow(clippy::too_many_lines)] // Inherent complexity of full HTML graph generation
 pub fn to_html(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
@@ -336,82 +357,15 @@ pub fn to_html(
     node_limit: Option<usize>,
 ) -> Result<(), ExportError> {
     let limit = node_limit.unwrap_or_else(viz_node_limit);
-
     if graph.node_count() > limit {
-        if node_limit.is_some() {
-            // Build aggregated community meta-graph
-            println!(
-                "Graph has {} nodes (above {limit} limit). Building aggregated community view...",
-                graph.node_count()
-            );
-            let node_to_community = node_community_map(communities);
-            let mut meta = Graph::new(graphify_build::GraphKind::Graph);
-            for (cid, _members) in communities {
-                let mut attrs = indexmap::IndexMap::new();
-                let label = community_labels
-                    .and_then(|cl| cl.get(cid))
-                    .cloned()
-                    .unwrap_or_else(|| format!("Community {cid}"));
-                attrs.insert("label".to_string(), Value::String(label));
-                meta.add_node(&cid.to_string(), attrs);
-            }
-
-            // Count cross-community edges
-            let mut edge_counts: IndexMap<(i64, i64), usize> = IndexMap::new();
-            for edge in graph.edges() {
-                let cu = node_to_community.get(&edge.source).copied();
-                let cv = node_to_community.get(&edge.target).copied();
-                if let (Some(cu), Some(cv)) = (cu, cv)
-                    && cu != cv
-                {
-                    let key = (cu.min(cv), cu.max(cv));
-                    *edge_counts.entry(key).or_insert(0) += 1;
-                }
-            }
-            for ((cu, cv), w) in &edge_counts {
-                let mut attrs = indexmap::IndexMap::new();
-                attrs.insert("weight".to_string(), json!(*w));
-                attrs.insert(
-                    "relation".to_string(),
-                    Value::String(format!("{w} cross-community edges")),
-                );
-                attrs.insert("confidence".to_string(), Value::String("AGGREGATED".into()));
-                meta.add_edge(&cu.to_string(), &cv.to_string(), attrs);
-            }
-
-            if meta.node_count() <= 1 {
-                println!("Single community - aggregated view not useful. Skipping graph.html.");
-                return Ok(());
-            }
-
-            let meta_communities: IndexMap<i64, Vec<String>> = communities
-                .keys()
-                .map(|&cid| (cid, vec![cid.to_string()]))
-                .collect();
-            let mc: IndexMap<i64, usize> = communities
-                .iter()
-                .map(|(&cid, members)| (cid, members.len()))
-                .collect();
-            to_html(
-                &meta,
-                &meta_communities,
-                output_path,
-                community_labels,
-                Some(&mc),
-                None,
-            )?;
-            println!(
-                "graph.html written (aggregated: {} community nodes, {} cross-community edges)",
-                meta.node_count(),
-                meta.edge_count()
-            );
-            println!("Tip: run with --obsidian for full node-level detail.");
-            return Ok(());
-        }
-        return Err(ExportError::TooLargeForViz {
-            nodes: graph.node_count(),
+        return handle_oversized_graph(
+            graph,
+            communities,
+            output_path,
+            community_labels,
             limit,
-        });
+            node_limit.is_some(),
+        );
     }
 
     let node_community = node_community_map(communities);
@@ -419,13 +373,147 @@ pub fn to_html(
     let max_deg = degree.values().copied().max().unwrap_or(1).max(1);
     let max_mc = member_counts.map_or(1, |mc| mc.values().copied().max().unwrap_or(1).max(1));
 
-    // Build vis.js nodes list. Per-node JSON construction is independent and
-    // O(n) — fan out across Rayon for large graphs. Insertion order is
-    // preserved because both the sequential and parallel paths consume the
-    // same input ordering via a single collected slice.
-    let node_refs: Vec<(&String, &IndexMap<String, Value>)> = graph.nodes().collect();
-    let build_vis_node = |&(node_id, attrs): &(&String, &IndexMap<String, Value>)| -> Value {
-        let cid = node_community.get(node_id).copied().unwrap_or(0);
+    let vis_nodes = build_vis_nodes(&VisNodeArgs {
+        graph,
+        node_community: &node_community,
+        community_labels,
+        member_counts,
+        degree: &degree,
+        max_deg,
+        max_mc,
+    });
+    let vis_edges = build_vis_edges(graph);
+    let legend_data = build_legend_data(communities, community_labels, member_counts);
+
+    let nodes_json = json_safe(&Value::Array(vis_nodes));
+    let edges_json = json_safe(&Value::Array(vis_edges));
+    let legend_json = json_safe(&Value::Array(legend_data));
+    let hyperedges_raw = graph
+        .graph_attrs
+        .get("hyperedges")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    let hyperedges_json = json_safe(&hyperedges_raw);
+
+    let html = assemble_html_page(
+        output_path,
+        graph,
+        communities,
+        &nodes_json,
+        &edges_json,
+        &legend_json,
+        &hyperedges_json,
+    );
+    std::fs::write(output_path, html)?;
+    Ok(())
+}
+
+/// Build an aggregated community meta-graph when the input exceeds the viz limit.
+fn handle_oversized_graph(
+    graph: &Graph,
+    communities: &IndexMap<i64, Vec<String>>,
+    output_path: &Path,
+    community_labels: Option<&IndexMap<i64, String>>,
+    limit: usize,
+    aggregate: bool,
+) -> Result<(), ExportError> {
+    if !aggregate {
+        return Err(ExportError::TooLargeForViz {
+            nodes: graph.node_count(),
+            limit,
+        });
+    }
+    println!(
+        "Graph has {} nodes (above {limit} limit). Building aggregated community view...",
+        graph.node_count()
+    );
+    let meta = build_meta_graph(graph, communities, community_labels);
+    if meta.node_count() <= 1 {
+        println!("Single community - aggregated view not useful. Skipping graph.html.");
+        return Ok(());
+    }
+    let meta_communities: IndexMap<i64, Vec<String>> = communities
+        .keys()
+        .map(|&cid| (cid, vec![cid.to_string()]))
+        .collect();
+    let mc: IndexMap<i64, usize> = communities
+        .iter()
+        .map(|(&cid, members)| (cid, members.len()))
+        .collect();
+    to_html(
+        &meta,
+        &meta_communities,
+        output_path,
+        community_labels,
+        Some(&mc),
+        None,
+    )?;
+    println!(
+        "graph.html written (aggregated: {} community nodes, {} cross-community edges)",
+        meta.node_count(),
+        meta.edge_count()
+    );
+    println!("Tip: run with --obsidian for full node-level detail.");
+    Ok(())
+}
+
+/// Build the meta-graph (one node per community, edges weighted by cross-community count).
+fn build_meta_graph(
+    graph: &Graph,
+    communities: &IndexMap<i64, Vec<String>>,
+    community_labels: Option<&IndexMap<i64, String>>,
+) -> Graph {
+    let node_to_community = node_community_map(communities);
+    let mut meta = Graph::new(graphify_build::GraphKind::Graph);
+    for cid in communities.keys() {
+        let mut attrs = indexmap::IndexMap::new();
+        let label = community_labels
+            .and_then(|cl| cl.get(cid))
+            .cloned()
+            .unwrap_or_else(|| format!("Community {cid}"));
+        attrs.insert("label".to_string(), Value::String(label));
+        meta.add_node(&cid.to_string(), attrs);
+    }
+    let mut edge_counts: IndexMap<(i64, i64), usize> = IndexMap::new();
+    for edge in graph.edges() {
+        let cu = node_to_community.get(&edge.source).copied();
+        let cv = node_to_community.get(&edge.target).copied();
+        if let (Some(cu), Some(cv)) = (cu, cv)
+            && cu != cv
+        {
+            let key = (cu.min(cv), cu.max(cv));
+            *edge_counts.entry(key).or_insert(0) += 1;
+        }
+    }
+    for ((cu, cv), w) in &edge_counts {
+        let mut attrs = indexmap::IndexMap::new();
+        attrs.insert("weight".to_string(), json!(*w));
+        attrs.insert(
+            "relation".to_string(),
+            Value::String(format!("{w} cross-community edges")),
+        );
+        attrs.insert("confidence".to_string(), Value::String("AGGREGATED".into()));
+        meta.add_edge(&cu.to_string(), &cv.to_string(), attrs);
+    }
+    meta
+}
+
+/// Arguments passed to [`build_vis_nodes`].
+struct VisNodeArgs<'a> {
+    graph: &'a Graph,
+    node_community: &'a IndexMap<String, i64>,
+    community_labels: Option<&'a IndexMap<i64, String>>,
+    member_counts: Option<&'a IndexMap<i64, usize>>,
+    degree: &'a IndexMap<String, usize>,
+    max_deg: usize,
+    max_mc: usize,
+}
+
+/// Build the vis.js node list (parallel for large graphs).
+fn build_vis_nodes(args: &VisNodeArgs<'_>) -> Vec<Value> {
+    let node_refs: Vec<(&String, &IndexMap<String, Value>)> = args.graph.nodes().collect();
+    let builder = |&(node_id, attrs): &(&String, &IndexMap<String, Value>)| -> Value {
+        let cid = args.node_community.get(node_id).copied().unwrap_or(0);
         // COMMUNITY_COLORS len is 10; usize modulo is always in-bounds
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let color = COMMUNITY_COLORS[(cid.unsigned_abs() as usize) % COMMUNITY_COLORS.len()];
@@ -434,27 +522,11 @@ pub fn to_html(
             .and_then(Value::as_str)
             .unwrap_or(node_id);
         let label = sanitize_label(Some(raw_label));
-        let deg = degree.get(node_id).copied().unwrap_or(1);
-
-        let (size, font_size) = if let Some(mc) = member_counts {
-            let mc_val = mc.get(&cid).copied().unwrap_or(1);
-            #[allow(clippy::cast_precision_loss)]
-            let s = 10.0 + 30.0 * (mc_val as f64 / max_mc as f64);
-            (s, 12_u32)
-        } else {
-            #[allow(clippy::cast_precision_loss)]
-            let s = 10.0 + 30.0 * (deg as f64 / max_deg as f64);
-            #[allow(clippy::cast_precision_loss)]
-            let fs: u32 = if deg as f64 >= max_deg as f64 * 0.15 {
-                12
-            } else {
-                0
-            };
-            (s, fs)
-        };
-
+        let deg = args.degree.get(node_id).copied().unwrap_or(1);
+        let (size, font_size) =
+            node_size_and_font(args.member_counts, cid, args.max_mc, deg, args.max_deg);
         let community_name = sanitize_label(
-            community_labels
+            args.community_labels
                 .and_then(|cl| cl.get(&cid))
                 .map(String::as_str)
                 .or(Some(&format!("Community {cid}"))),
@@ -470,7 +542,6 @@ pub fn to_html(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-
         json!({
             "id": node_id,
             "label": label,
@@ -489,14 +560,42 @@ pub fn to_html(
             "degree": deg,
         })
     };
-    let vis_nodes: Vec<Value> = if node_refs.len() >= PARALLEL_VIS_THRESHOLD {
-        node_refs.par_iter().map(build_vis_node).collect()
+    if node_refs.len() >= PARALLEL_VIS_THRESHOLD {
+        node_refs.par_iter().map(builder).collect()
     } else {
-        node_refs.iter().map(build_vis_node).collect()
-    };
+        node_refs.iter().map(builder).collect()
+    }
+}
 
-    // Build vis.js edges list — same parallel-fan-out pattern as the nodes.
-    let build_vis_edge = |edge: &graphify_build::Edge| -> Value {
+/// Compute the rendered vis.js node size + font size given degree/member-count scaling.
+fn node_size_and_font(
+    member_counts: Option<&IndexMap<i64, usize>>,
+    cid: i64,
+    max_mc: usize,
+    deg: usize,
+    max_deg: usize,
+) -> (f64, u32) {
+    if let Some(mc) = member_counts {
+        let mc_val = mc.get(&cid).copied().unwrap_or(1);
+        #[allow(clippy::cast_precision_loss)]
+        let s = 10.0 + 30.0 * (mc_val as f64 / max_mc as f64);
+        (s, 12_u32)
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        let s = 10.0 + 30.0 * (deg as f64 / max_deg as f64);
+        #[allow(clippy::cast_precision_loss)]
+        let fs: u32 = if deg as f64 >= max_deg as f64 * 0.15 {
+            12
+        } else {
+            0
+        };
+        (s, fs)
+    }
+}
+
+/// Build the vis.js edge list (parallel for large graphs).
+fn build_vis_edges(graph: &Graph) -> Vec<Value> {
+    let builder = |edge: &graphify_build::Edge| -> Value {
         let confidence = edge
             .attrs
             .get("confidence")
@@ -528,63 +627,72 @@ pub fn to_html(
             "confidence": confidence,
         })
     };
-    let vis_edges: Vec<Value> = if graph.edge_list.len() >= PARALLEL_VIS_THRESHOLD {
-        graph.edge_list.par_iter().map(build_vis_edge).collect()
+    if graph.edge_list.len() >= PARALLEL_VIS_THRESHOLD {
+        graph.edge_list.par_iter().map(builder).collect()
     } else {
-        graph.edges().map(build_vis_edge).collect()
-    };
-
-    // Build legend data. Each entry includes the Obsidian-safe tag slug
-    // for the community so the HTML legend can cross-reference a sibling
-    // Obsidian vault built from the same data (Obsidian notes are named
-    // `_COMMUNITY_<tag>.md`).
-    let mut legend_data: Vec<Value> = Vec::new();
-    if let Some(cl) = community_labels {
-        let mut sorted_cids: Vec<i64> = cl.keys().copied().collect();
-        sorted_cids.sort_unstable();
-        for cid in sorted_cids {
-            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-            let color = COMMUNITY_COLORS[(cid.unsigned_abs() as usize) % COMMUNITY_COLORS.len()];
-            let lbl = htmlescape::encode_minimal(&sanitize_label(cl.get(&cid).map(String::as_str)));
-            let n = member_counts
-                .and_then(|mc| mc.get(&cid).copied())
-                .or_else(|| communities.get(&cid).map(Vec::len))
-                .unwrap_or(0);
-            legend_data.push(json!({
-                "cid": cid,
-                "color": color,
-                "label": lbl,
-                "count": n,
-                "tag": community_tag(cid, community_labels),
-            }));
-        }
+        graph.edges().map(builder).collect()
     }
+}
 
-    // Escape `</script>` sequences in JSON strings so embedded JSON cannot break out
-    let js_safe = |v: &Value| -> String {
-        serde_json::to_string(v)
-            .unwrap_or_else(|_| "[]".to_string())
-            .replace("</", "<\\/")
+/// Build the legend data. Each entry includes the Obsidian-safe tag slug for
+/// the community so the HTML legend can cross-reference a sibling Obsidian
+/// vault (notes named `_COMMUNITY_<tag>.md`).
+fn build_legend_data(
+    communities: &IndexMap<i64, Vec<String>>,
+    community_labels: Option<&IndexMap<i64, String>>,
+    member_counts: Option<&IndexMap<i64, usize>>,
+) -> Vec<Value> {
+    let mut legend_data: Vec<Value> = Vec::new();
+    let Some(cl) = community_labels else {
+        return legend_data;
     };
+    let mut sorted_cids: Vec<i64> = cl.keys().copied().collect();
+    sorted_cids.sort_unstable();
+    for cid in sorted_cids {
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let color = COMMUNITY_COLORS[(cid.unsigned_abs() as usize) % COMMUNITY_COLORS.len()];
+        let lbl = htmlescape::encode_minimal(&sanitize_label(cl.get(&cid).map(String::as_str)));
+        let n = member_counts
+            .and_then(|mc| mc.get(&cid).copied())
+            .or_else(|| communities.get(&cid).map(Vec::len))
+            .unwrap_or(0);
+        legend_data.push(json!({
+            "cid": cid,
+            "color": color,
+            "label": lbl,
+            "count": n,
+            "tag": community_tag(cid, community_labels),
+        }));
+    }
+    legend_data
+}
 
-    let nodes_json = js_safe(&Value::Array(vis_nodes));
-    let edges_json = js_safe(&Value::Array(vis_edges));
-    let legend_json = js_safe(&Value::Array(legend_data));
-    let hyperedges_raw = graph
-        .graph_attrs
-        .get("hyperedges")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-    let hyperedges_json = js_safe(&hyperedges_raw);
+/// Serialise `v` and escape `</script>` sequences so embedded JSON cannot break
+/// out of the surrounding `<script>` block.
+fn json_safe(v: &Value) -> String {
+    serde_json::to_string(v)
+        .unwrap_or_else(|_| "[]".to_string())
+        .replace("</", "<\\/")
+}
 
+/// Final HTML page assembly.
+fn assemble_html_page(
+    output_path: &Path,
+    graph: &Graph,
+    communities: &IndexMap<i64, Vec<String>>,
+    nodes_json: &str,
+    edges_json: &str,
+    legend_json: &str,
+    hyperedges_json: &str,
+) -> String {
     let title = htmlescape::encode_minimal(&sanitize_label(output_path.to_str()));
-    let n_communities = communities.len();
-    let n_nodes = graph.node_count();
-    let n_edges = graph.edge_count();
-    let stats =
-        format!("{n_nodes} nodes &middot; {n_edges} edges &middot; {n_communities} communities");
-
-    let html = format!(
+    let stats = format!(
+        "{n_nodes} nodes &middot; {n_edges} edges &middot; {n_communities} communities",
+        n_nodes = graph.node_count(),
+        n_edges = graph.edge_count(),
+        n_communities = communities.len(),
+    );
+    format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -618,12 +726,9 @@ pub fn to_html(
 </body>
 </html>"#,
         styles = html_styles(),
-        script = html_script(&nodes_json, &edges_json, &legend_json),
-        hyperedge_script = hyperedge_script(&hyperedges_json),
-    );
-
-    std::fs::write(output_path, html)?;
-    Ok(())
+        script = html_script(nodes_json, edges_json, legend_json),
+        hyperedge_script = hyperedge_script(hyperedges_json),
+    )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -165,7 +165,6 @@ const LLM_LOW: f64 = 75.0;
 const LLM_HIGH: f64 = 92.0;
 
 /// Runs LLM-assisted disambiguation on `candidates`, unioning pairs in the 75–92 score band that the backend confirms as duplicates.
-#[allow(clippy::too_many_lines)] // mirrors the python reference implementation structure
 pub fn llm_tiebreak(
     candidates: &[&Value],
     uf: &mut UnionFind,
@@ -175,42 +174,49 @@ pub fn llm_tiebreak(
     for (i, node_a) in candidates.iter().enumerate() {
         let id_a = node_a.get("id").and_then(Value::as_str).unwrap_or("");
         let norm_a = norm(node_a.get("label").and_then(Value::as_str).unwrap_or(id_a));
-
         for node_b in candidates.iter().skip(i + 1) {
-            let id_b = node_b.get("id").and_then(Value::as_str).unwrap_or("");
-
-            if uf.find(id_a) == uf.find(id_b) {
-                continue;
-            }
-
-            let norm_b = norm(node_b.get("label").and_then(Value::as_str).unwrap_or(id_b));
-            let mut score = jaro_winkler_score(&norm_a, &norm_b);
-
-            if is_variant_pair(&norm_a, &norm_b) {
-                continue;
-            }
-            if short_label_blocked(&norm_a, &norm_b, score) {
-                continue;
-            }
-
-            let c1 = communities.get(id_a).copied();
-            let c2 = communities.get(id_b).copied();
-            if c1.is_some() && c2.is_some() && c1 == c2 && norm_a.len().min(norm_b.len()) >= 12 {
-                score += COMMUNITY_BOOST;
-            }
-
-            if (LLM_LOW..LLM_HIGH).contains(&score)
-                && let JudgeResult::Merge = backend.judge(&norm_a, &norm_b)
-            {
-                let winner_id = if id_a.len() <= id_b.len() {
-                    id_a.to_string()
-                } else {
-                    id_b.to_string()
-                };
-                uf.union(&winner_id, id_a);
-                uf.union(&winner_id, id_b);
-            }
+            consider_tiebreak_pair(uf, communities, backend, id_a, &norm_a, node_b);
         }
+    }
+}
+
+/// Evaluate one candidate pair: bail if blocked, ask the LLM if the score lies in
+/// the tiebreak band, and union them on a positive verdict.
+fn consider_tiebreak_pair(
+    uf: &mut UnionFind,
+    communities: &IndexMap<String, i64>,
+    backend: &dyn DedupLlmBackend,
+    id_a: &str,
+    norm_a: &str,
+    node_b: &Value,
+) {
+    let id_b = node_b.get("id").and_then(Value::as_str).unwrap_or("");
+    if uf.find(id_a) == uf.find(id_b) {
+        return;
+    }
+    let norm_b = norm(node_b.get("label").and_then(Value::as_str).unwrap_or(id_b));
+    let mut score = jaro_winkler_score(norm_a, &norm_b);
+    if is_variant_pair(norm_a, &norm_b) {
+        return;
+    }
+    if short_label_blocked(norm_a, &norm_b, score) {
+        return;
+    }
+    let c1 = communities.get(id_a).copied();
+    let c2 = communities.get(id_b).copied();
+    if c1.is_some() && c2.is_some() && c1 == c2 && norm_a.len().min(norm_b.len()) >= 12 {
+        score += COMMUNITY_BOOST;
+    }
+    if (LLM_LOW..LLM_HIGH).contains(&score)
+        && let JudgeResult::Merge = backend.judge(norm_a, &norm_b)
+    {
+        let winner_id = if id_a.len() <= id_b.len() {
+            id_a.to_string()
+        } else {
+            id_b.to_string()
+        };
+        uf.union(&winner_id, id_a);
+        uf.union(&winner_id, id_b);
     }
 }
 

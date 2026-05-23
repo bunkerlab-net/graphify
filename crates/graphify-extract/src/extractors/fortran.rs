@@ -102,34 +102,37 @@ pub fn extract_fortran(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_fortran(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        &file_nid,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut scope_bodies,
-    );
+    {
+        let mut walk_ctx = FortranWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            scope_bodies: &mut scope_bodies,
+        };
+        walk_fortran(&mut walk_ctx, root, &source, &file_nid);
+    }
 
     // Call pass
-
-    for (scope_nid, body_start, body_end) in &scope_bodies {
-        // Find the containing node and iterate children excluding headers
-        walk_calls_fortran(
-            tree.root_node(),
-            &source,
-            &str_path,
-            &stem,
-            scope_nid,
-            *body_start,
-            *body_end,
-            STMT_HEADERS,
-            &mut edges,
-        );
+    {
+        let mut call_ctx = FortranCallCtx {
+            str_path: &str_path,
+            stem: &stem,
+            stmt_headers: STMT_HEADERS,
+            edges: &mut edges,
+        };
+        for (scope_nid, body_start, body_end) in &scope_bodies {
+            walk_calls_fortran(
+                &mut call_ctx,
+                tree.root_node(),
+                &source,
+                scope_nid,
+                *body_start,
+                *body_end,
+            );
+        }
     }
 
     FileResult {
@@ -161,19 +164,31 @@ fn fortran_name(stmt_node: tree_sitter::Node<'_>, source: &[u8]) -> Option<Strin
 /// Recursively walk a Fortran AST emitting nodes for programs, modules, subroutines, and functions.
 ///
 /// Records byte ranges of scope bodies for use by `walk_calls_fortran`. Mirrors Python `_walk_fortran`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_fortran`] recursion.
+struct FortranWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    scope_bodies: &'a mut Vec<(String, usize, usize)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Fortran's AST node kinds
 fn walk_fortran(
+    ctx: &mut FortranWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     scope_nid: &str,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    scope_bodies: &mut Vec<(String, usize, usize)>,
 ) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let file_nid = ctx.file_nid;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let scope_bodies = &mut *ctx.scope_bodies;
     let t = node.kind();
 
     match t {
@@ -223,18 +238,7 @@ fn walk_fortran(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_fortran(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            &nid,
-                            nodes,
-                            edges,
-                            seen_ids,
-                            scope_bodies,
-                        );
+                        walk_fortran(ctx, cur.node(), source, &nid);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -287,18 +291,7 @@ fn walk_fortran(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_fortran(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            &nid,
-                            nodes,
-                            edges,
-                            seen_ids,
-                            scope_bodies,
-                        );
+                        walk_fortran(ctx, cur.node(), source, &nid);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -352,18 +345,7 @@ fn walk_fortran(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_fortran(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            &nid,
-                            nodes,
-                            edges,
-                            seen_ids,
-                            scope_bodies,
-                        );
+                        walk_fortran(ctx, cur.node(), source, &nid);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -417,18 +399,7 @@ fn walk_fortran(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_fortran(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            &nid,
-                            nodes,
-                            edges,
-                            seen_ids,
-                            scope_bodies,
-                        );
+                        walk_fortran(ctx, cur.node(), source, &nid);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -484,18 +455,7 @@ fn walk_fortran(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_fortran(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        scope_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        scope_bodies,
-                    );
+                    walk_fortran(ctx, cur.node(), source, scope_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -510,18 +470,26 @@ fn walk_fortran(
 /// Recurses through the AST, only visiting nodes that overlap the `[body_start, body_end)` range
 /// of the enclosing scope. Emits `calls` edges for `call_expression` nodes that match a known
 /// NID. Mirrors Python `_walk_calls_fortran`.
-#[allow(clippy::too_many_arguments)]
+/// Shared state threaded through every [`walk_calls_fortran`] recursion.
+struct FortranCallCtx<'a, 'h> {
+    str_path: &'a str,
+    stem: &'a str,
+    stmt_headers: &'a [&'h str],
+    edges: &'a mut Vec<Edge>,
+}
+
 fn walk_calls_fortran(
+    ctx: &mut FortranCallCtx<'_, '_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
     scope_nid: &str,
     body_start: usize,
     body_end: usize,
-    stmt_headers: &[&str],
-    edges: &mut Vec<Edge>,
 ) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let stmt_headers = ctx.stmt_headers;
+    let edges = &mut *ctx.edges;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
@@ -574,17 +542,7 @@ fn walk_calls_fortran(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_fortran(
-                cur.node(),
-                source,
-                str_path,
-                stem,
-                scope_nid,
-                body_start,
-                body_end,
-                stmt_headers,
-                edges,
-            );
+            walk_calls_fortran(ctx, cur.node(), source, scope_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }

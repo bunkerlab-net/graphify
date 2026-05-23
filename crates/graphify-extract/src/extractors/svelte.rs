@@ -162,21 +162,33 @@ fn fixup_static_relative(raw: &str, path: &Path) -> (String, String) {
     }
 }
 
+/// Bundle of source-side identifiers shared by every Svelte import-edge insert.
+struct SvelteImportEdge<'a> {
+    file_node_id: &'a str,
+    node_id: String,
+    raw: &'a str,
+    stub_source_file: String,
+    relation: &'a str,
+    str_path: &'a str,
+}
+
 /// Append an import edge and, if needed, an import-target stub node to the result.
 ///
 /// Deduplicates by `existing_ids`. Creates a stub file node for the target when it is not
 /// already present, allowing the graph to reference files not yet extracted.
-#[allow(clippy::too_many_arguments)]
 fn add_import_edge(
     result: &mut FileResult,
     existing_ids: &mut HashSet<String>,
-    file_node_id: &str,
-    node_id: String,
-    raw: &str,
-    stub_source_file: String,
-    relation: &str,
-    str_path: &str,
+    args: SvelteImportEdge<'_>,
 ) {
+    let SvelteImportEdge {
+        file_node_id,
+        node_id,
+        raw,
+        stub_source_file,
+        relation,
+        str_path,
+    } = args;
     if node_id.is_empty() {
         return;
     }
@@ -240,12 +252,14 @@ pub fn extract_svelte(path: &Path) -> FileResult {
         add_import_edge(
             &mut result,
             &mut existing_ids,
-            &file_node_id,
-            node_id,
-            raw,
-            stub_source_file,
-            "dynamic_import",
-            &str_path,
+            SvelteImportEdge {
+                file_node_id: &file_node_id,
+                node_id,
+                raw,
+                stub_source_file,
+                relation: "dynamic_import",
+                str_path: &str_path,
+            },
         );
     }
 
@@ -261,12 +275,14 @@ pub fn extract_svelte(path: &Path) -> FileResult {
             add_import_edge(
                 &mut result,
                 &mut existing_ids,
-                &file_node_id,
-                node_id,
-                raw,
-                stub_source_file,
-                "imports_from",
-                &str_path,
+                SvelteImportEdge {
+                    file_node_id: &file_node_id,
+                    node_id,
+                    raw,
+                    stub_source_file,
+                    relation: "imports_from",
+                    str_path: &str_path,
+                },
             );
         }
     }
@@ -299,12 +315,14 @@ pub fn extract_astro(path: &Path) -> FileResult {
         add_import_edge(
             &mut result,
             &mut existing_ids,
-            &file_node_id,
-            node_id,
-            raw,
-            stub_source_file,
-            "dynamic_import",
-            &str_path,
+            SvelteImportEdge {
+                file_node_id: &file_node_id,
+                node_id,
+                raw,
+                stub_source_file,
+                relation: "dynamic_import",
+                str_path: &str_path,
+            },
         );
     }
 
@@ -331,12 +349,14 @@ pub fn extract_astro(path: &Path) -> FileResult {
             add_import_edge(
                 &mut result,
                 &mut existing_ids,
-                &file_node_id,
-                node_id,
-                raw,
-                stub_source_file,
-                "imports_from",
-                &str_path,
+                SvelteImportEdge {
+                    file_node_id: &file_node_id,
+                    node_id,
+                    raw,
+                    stub_source_file,
+                    relation: "imports_from",
+                    str_path: &str_path,
+                },
             );
         }
     }

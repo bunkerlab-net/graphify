@@ -76,7 +76,6 @@ fn git_head() -> Option<String> {
 ///
 /// Returns [`ExportError::Io`] or [`ExportError::Json`] on write / serialisation
 /// failures.
-#[allow(clippy::too_many_lines)] // Inherent complexity of node-link JSON serialisation
 pub fn to_json(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
@@ -84,43 +83,76 @@ pub fn to_json(
     force: bool,
     built_at_commit: Option<&str>,
 ) -> Result<bool, ExportError> {
-    // Safety check: refuse to silently shrink an existing graph (#479)
-    if !force
-        && output_path.exists()
-        && let Ok(text) = std::fs::read_to_string(output_path)
-        && let Ok(existing_data) = serde_json::from_str::<Value>(&text)
-    {
-        let existing_n = existing_data
-            .get("nodes")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        let new_n = graph.node_count();
-        if new_n < existing_n {
-            eprintln!(
-                "[graphify] WARNING: new graph has {new_n} nodes but existing \
-                 graph.json has {existing_n}. Refusing to overwrite — you may be \
-                 missing chunk files from a previous session. \
-                 Pass force=True to override."
-            );
-            return Ok(false);
-        }
+    if !force && would_shrink_graph(graph, output_path) {
+        return Ok(false);
     }
 
     let node_community = node_community_map(communities);
+    let nodes = build_node_link_nodes(graph, &node_community);
+    let links = build_node_link_edges(graph);
+    let hyperedges = graph
+        .graph_attrs
+        .get("hyperedges")
+        .cloned()
+        .and_then(|v| if v.is_array() { Some(v) } else { None })
+        .unwrap_or_else(|| json!([]));
 
-    // Build node-link data
-    let directed = graph.kind.is_directed();
-    let multigraph = graph.kind.is_multi();
+    let mut data = serde_json::Map::new();
+    data.insert("directed".to_string(), json!(graph.kind.is_directed()));
+    data.insert("multigraph".to_string(), json!(graph.kind.is_multi()));
+    data.insert("graph".to_string(), json!({}));
+    data.insert("nodes".to_string(), Value::Array(nodes));
+    data.insert("links".to_string(), Value::Array(links));
+    data.insert("hyperedges".to_string(), hyperedges);
 
+    let commit = built_at_commit.map(str::to_string).or_else(git_head);
+    if let Some(c) = commit {
+        data.insert("built_at_commit".to_string(), Value::String(c));
+    }
+
+    let json_text = serde_json::to_string_pretty(&Value::Object(data))?;
+    std::fs::write(output_path, json_text)?;
+    Ok(true)
+}
+
+/// Safety check: refuse to silently shrink an existing graph (#479). Returns
+/// `true` if `graph` would shrink the on-disk version at `output_path`.
+fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
+    if !output_path.exists() {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(output_path) else {
+        return false;
+    };
+    let Ok(existing_data) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    let existing_n = existing_data
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let new_n = graph.node_count();
+    if new_n < existing_n {
+        eprintln!(
+            "[graphify] WARNING: new graph has {new_n} nodes but existing \
+             graph.json has {existing_n}. Refusing to overwrite — you may be \
+             missing chunk files from a previous session. \
+             Pass force=True to override."
+        );
+        return true;
+    }
+    false
+}
+
+/// Build the `node_link_data.nodes` array (with Python field-order parity).
+fn build_node_link_nodes(graph: &Graph, node_community: &IndexMap<String, i64>) -> Vec<Value> {
     let mut nodes: Vec<Value> = graph
         .nodes()
         .map(|(id, attrs)| {
             let mut node = IndexMap::new();
-            // Merge all attributes first
             for (k, v) in attrs {
                 node.insert(k.clone(), v.clone());
             }
-            // Add community and norm_label
             node.insert(
                 "community".to_string(),
                 node_community
@@ -136,22 +168,17 @@ pub fn to_json(
                 Value::String(strip_diacritics(label).to_lowercase()),
             );
             node.insert("id".to_string(), Value::String(id.clone()));
-            // Wrap in a serde_json::Map (preserving order via IndexMap feature)
             Value::Object(node.into_iter().collect())
         })
         .collect();
 
-    // Reorder node fields to match Python output order:
-    // Python node_link_data emits: <all node attrs in insertion order>, id, community, norm_label
-    // We have already inserted id/community/norm_label at end above.
-    // Reorder each node so non-id fields come first, then id, community, norm_label.
+    // Python node_link_data emits: <all node attrs in insertion order>, id, community,
+    // norm_label. Reorder each node's tail to match.
     for node in &mut nodes {
         if let Value::Object(map) = node {
-            // Extract the three appended fields
             let id_val = map.remove("id");
             let community_val = map.remove("community");
             let norm_label_val = map.remove("norm_label");
-            // Re-append in the correct tail order
             if let Some(v) = id_val {
                 map.insert("id".to_string(), v);
             }
@@ -163,15 +190,17 @@ pub fn to_json(
             }
         }
     }
+    nodes
+}
 
+/// Build the `node_link_data.links` array, restoring true source/target from `_src`/`_tgt`.
+fn build_node_link_edges(graph: &Graph) -> Vec<Value> {
     let mut links: Vec<Value> = Vec::new();
     for edge in graph.edges() {
         let mut link = IndexMap::new();
         for (k, v) in &edge.attrs {
-            // _src and _tgt will be used to restore direction then removed
             link.insert(k.clone(), v.clone());
         }
-        // confidence_score: add if not already present
         if !link.contains_key("confidence_score") {
             let conf = link
                 .get("confidence")
@@ -182,7 +211,6 @@ pub fn to_json(
                 json!(confidence_score(conf)),
             );
         }
-        // Restore original edge direction from _src/_tgt
         let true_src = link.get("_src").and_then(Value::as_str).map(str::to_string);
         let true_tgt = link.get("_tgt").and_then(Value::as_str).map(str::to_string);
         link.shift_remove("_src");
@@ -193,30 +221,7 @@ pub fn to_json(
         link.insert("target".to_string(), Value::String(target));
         links.push(Value::Object(link.into_iter().collect()));
     }
-
-    let hyperedges = graph
-        .graph_attrs
-        .get("hyperedges")
-        .cloned()
-        .and_then(|v| if v.is_array() { Some(v) } else { None })
-        .unwrap_or_else(|| json!([]));
-
-    let mut data = serde_json::Map::new();
-    data.insert("directed".to_string(), json!(directed));
-    data.insert("multigraph".to_string(), json!(multigraph));
-    data.insert("graph".to_string(), json!({}));
-    data.insert("nodes".to_string(), Value::Array(nodes));
-    data.insert("links".to_string(), Value::Array(links));
-    data.insert("hyperedges".to_string(), hyperedges);
-
-    let commit = built_at_commit.map(str::to_string).or_else(git_head);
-    if let Some(c) = commit {
-        data.insert("built_at_commit".to_string(), Value::String(c));
-    }
-
-    let json_text = serde_json::to_string_pretty(&Value::Object(data))?;
-    std::fs::write(output_path, json_text)?;
-    Ok(true)
+    links
 }
 
 /// Remove edges whose source or target node is not in the node set.

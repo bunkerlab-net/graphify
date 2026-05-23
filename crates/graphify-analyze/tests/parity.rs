@@ -17,8 +17,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use graphify_analyze::{
-    file_category, god_nodes, graph_diff, is_concept_node, is_json_key_node, surprise_score,
-    surprising_connections,
+    SurpriseScoreInput, file_category, god_nodes, graph_diff, is_concept_node, is_json_key_node,
+    surprise_score, surprising_connections,
 };
 use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_cluster::cluster;
@@ -323,26 +323,26 @@ fn surprising_connections_ambiguous_scores_higher_than_extracted() {
     nc.insert("b".to_string(), 1);
     nc.insert("d".to_string(), 1);
 
-    let (score_amb, _) = surprise_score(
-        &g,
-        "a",
-        "b",
-        &edge_attrs(&g, "a", "b"),
-        &nc,
-        "repo1/model.py",
-        "repo2/train.py",
-        None,
-    );
-    let (score_ext, _) = surprise_score(
-        &g,
-        "c",
-        "d",
-        &edge_attrs(&g, "c", "d"),
-        &nc,
-        "repo1/data.py",
-        "repo2/eval.py",
-        None,
-    );
+    let (score_amb, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "a",
+        v: "b",
+        data: &edge_attrs(&g, "a", "b"),
+        node_community: &nc,
+        u_source: "repo1/model.py",
+        v_source: "repo2/train.py",
+        degrees: None,
+    });
+    let (score_ext, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "c",
+        v: "d",
+        data: &edge_attrs(&g, "c", "d"),
+        node_community: &nc,
+        u_source: "repo1/data.py",
+        v_source: "repo2/eval.py",
+        degrees: None,
+    });
     assert!(score_amb > score_ext);
 }
 
@@ -395,26 +395,26 @@ fn surprise_score_accepts_precomputed_degrees() {
     degs.insert("n3".to_string(), 1);
     degs.insert("n4".to_string(), 1);
 
-    let without_precomputed = surprise_score(
-        &g,
-        "hub",
-        "leaf",
-        &data,
-        &nc,
-        "repo1/hub.py",
-        "repo2/leaf.py",
-        None,
-    );
-    let with_precomputed = surprise_score(
-        &g,
-        "hub",
-        "leaf",
-        &data,
-        &nc,
-        "repo1/hub.py",
-        "repo2/leaf.py",
-        Some(&degs),
-    );
+    let without_precomputed = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "hub",
+        v: "leaf",
+        data: &data,
+        node_community: &nc,
+        u_source: "repo1/hub.py",
+        v_source: "repo2/leaf.py",
+        degrees: None,
+    });
+    let with_precomputed = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "hub",
+        v: "leaf",
+        data: &data,
+        node_community: &nc,
+        u_source: "repo1/hub.py",
+        v_source: "repo2/leaf.py",
+        degrees: Some(&degs),
+    });
     assert_eq!(without_precomputed, with_precomputed);
 }
 
@@ -464,26 +464,26 @@ fn surprising_connections_cross_type_scores_higher() {
     nc.insert("c".to_string(), 0);
     nc.insert("d".to_string(), 0);
 
-    let (score_cross, reasons_cross) = surprise_score(
-        &g,
-        "a",
-        "b",
-        &edge_attrs(&g, "a", "b"),
-        &nc,
-        "code/model.py",
-        "papers/flash.pdf",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "c",
-        "d",
-        &edge_attrs(&g, "c", "d"),
-        &nc,
-        "code/train.py",
-        "code/data.py",
-        None,
-    );
+    let (score_cross, reasons_cross) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "a",
+        v: "b",
+        data: &edge_attrs(&g, "a", "b"),
+        node_community: &nc,
+        u_source: "code/model.py",
+        v_source: "papers/flash.pdf",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "c",
+        v: "d",
+        data: &edge_attrs(&g, "c", "d"),
+        node_community: &nc,
+        u_source: "code/train.py",
+        v_source: "code/data.py",
+        degrees: None,
+    });
     assert!(score_cross > score_same);
     assert!(
         reasons_cross
@@ -566,26 +566,26 @@ fn cross_language_inferred_calls_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_cross, _) = surprise_score(
-        &g,
-        "py_auth",
-        "ts_member",
-        &edge_attrs(&g, "py_auth", "ts_member"),
-        &nc,
-        "backend/auth.py",
-        "frontend/types.ts",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "backend/service.py",
-        "backend/utils.py",
-        None,
-    );
+    let (score_cross, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_auth",
+        v: "ts_member",
+        data: &edge_attrs(&g, "py_auth", "ts_member"),
+        node_community: &nc,
+        u_source: "backend/auth.py",
+        v_source: "frontend/types.ts",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "backend/service.py",
+        v_source: "backend/utils.py",
+        degrees: None,
+    });
     assert!(score_cross <= score_same);
 }
 
@@ -619,26 +619,26 @@ fn cross_language_inferred_uses_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_cross, _) = surprise_score(
-        &g,
-        "py_auth",
-        "ts_member",
-        &edge_attrs(&g, "py_auth", "ts_member"),
-        &nc,
-        "backend/auth.py",
-        "frontend/types.ts",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "backend/service.py",
-        "backend/utils.py",
-        None,
-    );
+    let (score_cross, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_auth",
+        v: "ts_member",
+        data: &edge_attrs(&g, "py_auth", "ts_member"),
+        node_community: &nc,
+        u_source: "backend/auth.py",
+        v_source: "frontend/types.ts",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "backend/service.py",
+        v_source: "backend/utils.py",
+        degrees: None,
+    });
     assert!(score_cross <= score_same);
 }
 
@@ -672,26 +672,26 @@ fn cross_language_semantically_similar_not_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_sem, _) = surprise_score(
-        &g,
-        "py_auth",
-        "ts_member",
-        &edge_attrs(&g, "py_auth", "ts_member"),
-        &nc,
-        "backend/auth.py",
-        "frontend/types.ts",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "backend/service.py",
-        "backend/utils.py",
-        None,
-    );
+    let (score_sem, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_auth",
+        v: "ts_member",
+        data: &edge_attrs(&g, "py_auth", "ts_member"),
+        node_community: &nc,
+        u_source: "backend/auth.py",
+        v_source: "frontend/types.ts",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "backend/service.py",
+        v_source: "backend/utils.py",
+        degrees: None,
+    });
     assert!(score_sem > score_same);
 }
 
@@ -761,26 +761,26 @@ fn same_language_inferred_calls_not_suppressed() {
     nc.insert("py_c".to_string(), 0);
     nc.insert("py_d".to_string(), 1);
 
-    let (score_inf, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "src/a.py",
-        "src/b.py",
-        None,
-    );
-    let (score_ext, _) = surprise_score(
-        &g,
-        "py_c",
-        "py_d",
-        &edge_attrs(&g, "py_c", "py_d"),
-        &nc,
-        "src/c.py",
-        "src/d.py",
-        None,
-    );
+    let (score_inf, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "src/a.py",
+        v_source: "src/b.py",
+        degrees: None,
+    });
+    let (score_ext, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_c",
+        v: "py_d",
+        data: &edge_attrs(&g, "py_c", "py_d"),
+        node_community: &nc,
+        u_source: "src/c.py",
+        v_source: "src/d.py",
+        degrees: None,
+    });
     assert!(score_inf > score_ext);
 }
 
@@ -802,16 +802,16 @@ fn cross_language_extracted_calls_not_suppressed() {
     nc.insert("py_auth".to_string(), 0);
     nc.insert("ts_member".to_string(), 1);
 
-    let (score, _) = surprise_score(
-        &g,
-        "py_auth",
-        "ts_member",
-        &edge_attrs(&g, "py_auth", "ts_member"),
-        &nc,
-        "backend/auth.py",
-        "frontend/types.ts",
-        None,
-    );
+    let (score, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_auth",
+        v: "ts_member",
+        data: &edge_attrs(&g, "py_auth", "ts_member"),
+        node_community: &nc,
+        u_source: "backend/auth.py",
+        v_source: "frontend/types.ts",
+        degrees: None,
+    });
     assert!(score >= 1);
 }
 
@@ -1015,26 +1015,26 @@ fn code_doc_inferred_calls_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_noise, _) = surprise_score(
-        &g,
-        "py_fn",
-        "md_doc",
-        &edge_attrs(&g, "py_fn", "md_doc"),
-        &nc,
-        "src/processor.py",
-        "docs/readme.md",
-        None,
-    );
-    let (score_real, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "src/service.py",
-        "src/utils.py",
-        None,
-    );
+    let (score_noise, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_fn",
+        v: "md_doc",
+        data: &edge_attrs(&g, "py_fn", "md_doc"),
+        node_community: &nc,
+        u_source: "src/processor.py",
+        v_source: "docs/readme.md",
+        degrees: None,
+    });
+    let (score_real, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "src/service.py",
+        v_source: "src/utils.py",
+        degrees: None,
+    });
     assert!(score_noise <= score_real);
 }
 
@@ -1068,26 +1068,26 @@ fn code_doc_inferred_uses_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_noise, _) = surprise_score(
-        &g,
-        "py_fn",
-        "md_doc",
-        &edge_attrs(&g, "py_fn", "md_doc"),
-        &nc,
-        "src/processor.py",
-        "docs/readme.md",
-        None,
-    );
-    let (score_real, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "src/service.py",
-        "src/utils.py",
-        None,
-    );
+    let (score_noise, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_fn",
+        v: "md_doc",
+        data: &edge_attrs(&g, "py_fn", "md_doc"),
+        node_community: &nc,
+        u_source: "src/processor.py",
+        v_source: "docs/readme.md",
+        degrees: None,
+    });
+    let (score_real, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "src/service.py",
+        v_source: "src/utils.py",
+        degrees: None,
+    });
     assert!(score_noise <= score_real);
 }
 
@@ -1109,16 +1109,16 @@ fn code_doc_extracted_calls_not_suppressed() {
     nc.insert("py_fn".to_string(), 0);
     nc.insert("md_doc".to_string(), 1);
 
-    let (score, _) = surprise_score(
-        &g,
-        "py_fn",
-        "md_doc",
-        &edge_attrs(&g, "py_fn", "md_doc"),
-        &nc,
-        "src/processor.py",
-        "docs/readme.md",
-        None,
-    );
+    let (score, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_fn",
+        v: "md_doc",
+        data: &edge_attrs(&g, "py_fn", "md_doc"),
+        node_community: &nc,
+        u_source: "src/processor.py",
+        v_source: "docs/readme.md",
+        degrees: None,
+    });
     assert!(score >= 1);
 }
 
@@ -1152,26 +1152,26 @@ fn code_doc_inferred_semantically_similar_not_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_sem, _) = surprise_score(
-        &g,
-        "py_fn",
-        "md_doc",
-        &edge_attrs(&g, "py_fn", "md_doc"),
-        &nc,
-        "src/processor.py",
-        "docs/readme.md",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "src/service.py",
-        "src/utils.py",
-        None,
-    );
+    let (score_sem, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_fn",
+        v: "md_doc",
+        data: &edge_attrs(&g, "py_fn", "md_doc"),
+        node_community: &nc,
+        u_source: "src/processor.py",
+        v_source: "docs/readme.md",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "src/service.py",
+        v_source: "src/utils.py",
+        degrees: None,
+    });
     assert!(score_sem > score_same);
 }
 
@@ -1243,26 +1243,26 @@ fn code_unknown_extension_inferred_calls_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 0);
 
-    let (score_unk, _) = surprise_score(
-        &g,
-        "py_fn",
-        "unk",
-        &edge_attrs(&g, "py_fn", "unk"),
-        &nc,
-        "src/handler.py",
-        "vendor/unknown.xyz",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "src/a.py",
-        "src/b.py",
-        None,
-    );
+    let (score_unk, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_fn",
+        v: "unk",
+        data: &edge_attrs(&g, "py_fn", "unk"),
+        node_community: &nc,
+        u_source: "src/handler.py",
+        v_source: "vendor/unknown.xyz",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "src/a.py",
+        v_source: "src/b.py",
+        degrees: None,
+    });
     assert!(score_unk <= score_same);
 }
 
@@ -1332,26 +1332,26 @@ fn code_paper_inferred_calls_not_suppressed() {
     nc.insert("py_a".to_string(), 0);
     nc.insert("py_b".to_string(), 1);
 
-    let (score_cross, _) = surprise_score(
-        &g,
-        "py_model",
-        "pdf_paper",
-        &edge_attrs(&g, "py_model", "pdf_paper"),
-        &nc,
-        "src/model.py",
-        "papers/vaswani.pdf",
-        None,
-    );
-    let (score_same, _) = surprise_score(
-        &g,
-        "py_a",
-        "py_b",
-        &edge_attrs(&g, "py_a", "py_b"),
-        &nc,
-        "src/service.py",
-        "src/utils.py",
-        None,
-    );
+    let (score_cross, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_model",
+        v: "pdf_paper",
+        data: &edge_attrs(&g, "py_model", "pdf_paper"),
+        node_community: &nc,
+        u_source: "src/model.py",
+        v_source: "papers/vaswani.pdf",
+        degrees: None,
+    });
+    let (score_same, _) = surprise_score(&SurpriseScoreInput {
+        graph: &g,
+        u: "py_a",
+        v: "py_b",
+        data: &edge_attrs(&g, "py_a", "py_b"),
+        node_community: &nc,
+        u_source: "src/service.py",
+        v_source: "src/utils.py",
+        degrees: None,
+    });
     assert!(score_cross > score_same);
 }
 

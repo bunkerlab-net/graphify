@@ -85,21 +85,19 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     // ── Structural walk ───────────────────────────────────────────────────────
     let mut cur = root.walk();
     if cur.goto_first_child() {
+        let mut walk_ctx = super::generic::walk::WalkCtx {
+            config,
+            file_nid: &file_nid,
+            stem: &stem,
+            str_path: &str_path,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+        };
         loop {
             let child = cur.node();
-            walk(
-                child,
-                None,
-                &source,
-                config,
-                &file_nid,
-                &stem,
-                &str_path,
-                &mut nodes,
-                &mut edges,
-                &mut seen_ids,
-                &mut function_bodies,
-            );
+            walk(&mut walk_ctx, child, None, &source);
             if !cur.goto_next_sibling() {
                 break;
             }
@@ -123,19 +121,19 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     let mut seen_dyn_import_pairs: HashSet<(String, String)> = HashSet::new();
     let mut raw_calls: Vec<RawCall> = Vec::new();
 
-    for (caller_nid, body_node) in &function_bodies {
-        walk_calls(
-            *body_node,
-            caller_nid,
-            &source,
+    {
+        let mut call_ctx = super::generic::calls::CallWalkCtx {
             config,
-            &str_path,
-            &label_to_nid,
-            &mut seen_call_pairs,
-            &mut seen_dyn_import_pairs,
-            &mut edges,
-            &mut raw_calls,
-        );
+            str_path: &str_path,
+            label_to_nid: &label_to_nid,
+            seen_call_pairs: &mut seen_call_pairs,
+            seen_dyn_import_pairs: &mut seen_dyn_import_pairs,
+            edges: &mut edges,
+            raw_calls: &mut raw_calls,
+        };
+        for (caller_nid, body_node) in &function_bodies {
+            walk_calls(&mut call_ctx, *body_node, caller_nid, &source);
+        }
     }
 
     // ── Clean edges ───────────────────────────────────────────────────────────

@@ -518,21 +518,32 @@ pub(super) fn report_highlights(report_text: &str, lang: &str) -> String {
     )
 }
 
+/// Inputs for [`emit_section_html`].
+pub(super) struct SectionEmit<'a> {
+    pub sec: &'a Section,
+    pub section_num: usize,
+    pub sec_nodes: &'a [Node],
+    pub sec_edges: &'a [CfEdge],
+    pub lang: &'a str,
+    pub diagram_scale: f64,
+    pub max_diagram_nodes: usize,
+    pub max_diagram_edges: usize,
+}
+
 /// Emit the per-section HTML block into `html`.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn emit_section_html(
-    html: &mut String,
-    sec: &Section,
-    section_num: usize,
-    sec_nodes: &[Node],
-    sec_edges: &[CfEdge],
-    lang: &str,
-    diagram_scale: f64,
-    max_diagram_nodes: usize,
-    max_diagram_edges: usize,
-) {
+pub(super) fn emit_section_html(html: &mut String, args: &SectionEmit<'_>) {
     use super::diagram::{FlowchartParams, generate_section_flowchart};
 
+    let SectionEmit {
+        sec,
+        section_num,
+        sec_nodes,
+        sec_edges,
+        lang,
+        diagram_scale,
+        max_diagram_nodes,
+        max_diagram_edges,
+    } = *args;
     let sid = &sec.id;
     let name = &sec.name;
     let edge_count = sec_edges.len();

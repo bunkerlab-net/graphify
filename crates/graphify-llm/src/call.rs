@@ -91,16 +91,16 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
             let region = bedrock::resolve_region();
             bedrock::call_bedrock_plain(mdl, &region, prompt, max_tokens_u32)
         }
-        "kimi" => kimi::call_plain_openai_compat(
-            "https://api.moonshot.ai/v1",
-            &key,
-            mdl,
+        "kimi" => kimi::call_plain_openai_compat(&kimi::PlainOpenAiRequest {
+            base_url: "https://api.moonshot.ai/v1",
+            api_key: &key,
+            model: mdl,
             prompt,
-            Some(0.0),
-            None,
-            true,
-            max_tokens_u32,
-        ),
+            temperature: Some(0.0),
+            reasoning_effort: None,
+            disable_thinking: true,
+            max_tokens: max_tokens_u32,
+        }),
         "gemini" => gemini::call_gemini_plain(&key, mdl, prompt, max_tokens_u32),
         "openai" => openai::call_openai_plain(&key, mdl, prompt, max_tokens_u32),
         "deepseek" => deepseek::call_deepseek_plain(&key, mdl, prompt, max_tokens_u32),

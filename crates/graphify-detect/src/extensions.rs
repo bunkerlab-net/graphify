@@ -92,9 +92,12 @@ static PAPER_SIGNALS: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::new
         r"(?i)\bwe propose\b",
         r"(?i)\bliterature\b",
     ];
-    // SAFETY: all patterns above are known-good literals.
-    #[allow(clippy::unwrap_used)]
-    patterns.iter().map(|p| Regex::new(p).unwrap()).collect()
+    #[allow(clippy::expect_used)]
+    let compiled = patterns
+        .iter()
+        .map(|p| Regex::new(p).expect("literal patterns are valid"))
+        .collect();
+    compiled
 });
 
 const PAPER_SIGNAL_THRESHOLD: usize = 3;

@@ -40,11 +40,10 @@ static ALIAS_CACHE: LazyLock<Mutex<IndexMap<String, IndexMap<String, String>>>> 
 /// Recursively read path aliases from a tsconfig, following `extends` chains.
 ///
 /// Mirrors Python `_read_tsconfig_aliases`.
-#[allow(clippy::implicit_hasher)] // internal helper; generic hasher adds noise
-pub fn read_tsconfig_aliases(
+pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
     tsconfig: &Path,
     base_dir: &Path,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<String, S>,
 ) -> IndexMap<String, String> {
     let key = tsconfig.to_string_lossy().into_owned();
     if seen.contains(&key) {

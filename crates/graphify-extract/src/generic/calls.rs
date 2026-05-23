@@ -23,38 +23,42 @@ use super::names::read_text_owned;
 
 /// Recursively collect call edges from a function body node.
 ///
+/// Shared state threaded through every [`walk_calls`] recursion.
+pub(super) struct CallWalkCtx<'a> {
+    pub config: &'a LangConfig,
+    pub str_path: &'a str,
+    pub label_to_nid: &'a HashMap<String, String>,
+    pub seen_call_pairs: &'a mut HashSet<(String, String)>,
+    pub seen_dyn_import_pairs: &'a mut HashSet<(String, String)>,
+    pub edges: &'a mut Vec<Edge>,
+    pub raw_calls: &'a mut Vec<RawCall>,
+}
+
 /// Stops descending into nested function definitions (`function_boundary_types`)
 /// so that calls from inner lambdas are attributed to the outer function.
 /// Mirrors Python `_walk_calls` from `extract.py`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn walk_calls(
+    ctx: &mut CallWalkCtx<'_>,
     node: Node<'_>,
     caller_nid: &str,
     source: &[u8],
-    config: &LangConfig,
-    str_path: &str,
-    label_to_nid: &HashMap<String, String>,
-    seen_call_pairs: &mut HashSet<(String, String)>,
-    seen_dyn_import_pairs: &mut HashSet<(String, String)>,
-    edges: &mut Vec<Edge>,
-    raw_calls: &mut Vec<RawCall>,
 ) {
-    if config.function_boundary_types.contains(&node.kind()) {
+    if ctx.config.function_boundary_types.contains(&node.kind()) {
         return;
     }
 
-    if config.call_types.contains(&node.kind()) {
+    if ctx.config.call_types.contains(&node.kind()) {
         // JS/TS: detect dynamic import() calls
-        if (config.lang_id == LangId::JavaScript
-            || config.lang_id == LangId::TypeScript
-            || config.lang_id == LangId::TypeScriptX)
+        if (ctx.config.lang_id == LangId::JavaScript
+            || ctx.config.lang_id == LangId::TypeScript
+            || ctx.config.lang_id == LangId::TypeScriptX)
             && dynamic_import_js(
                 node,
                 source,
                 caller_nid,
-                str_path,
-                edges,
-                seen_dyn_import_pairs,
+                ctx.str_path,
+                ctx.edges,
+                ctx.seen_dyn_import_pairs,
             )
         {
             // Still recurse
@@ -62,18 +66,7 @@ pub(super) fn walk_calls(
             if cur.goto_first_child() {
                 loop {
                     let child = cur.node();
-                    walk_calls(
-                        child,
-                        caller_nid,
-                        source,
-                        config,
-                        str_path,
-                        label_to_nid,
-                        seen_call_pairs,
-                        seen_dyn_import_pairs,
-                        edges,
-                        raw_calls,
-                    );
+                    walk_calls(ctx, child, caller_nid, source);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -82,23 +75,24 @@ pub(super) fn walk_calls(
             return;
         }
 
-        let (callee_name, is_member_call) = extract_callee(node, source, config, label_to_nid);
+        let (callee_name, is_member_call) =
+            extract_callee(node, source, ctx.config, ctx.label_to_nid);
 
         if let Some(callee) = callee_name
             && !callee.is_empty()
         {
-            let tgt_nid = label_to_nid.get(&callee.to_lowercase()).cloned();
+            let tgt_nid = ctx.label_to_nid.get(&callee.to_lowercase()).cloned();
             if let Some(tgt) = tgt_nid {
                 if tgt != caller_nid {
                     let pair = (caller_nid.to_string(), tgt.clone());
-                    if seen_call_pairs.insert(pair) {
+                    if ctx.seen_call_pairs.insert(pair) {
                         let line = node.start_position().row as u32 + 1;
-                        edges.push(Edge {
+                        ctx.edges.push(Edge {
                             source: caller_nid.to_string(),
                             target: tgt,
                             relation: "calls".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: Some("call".to_string()),
@@ -107,11 +101,11 @@ pub(super) fn walk_calls(
                     }
                 }
             } else {
-                raw_calls.push(RawCall {
+                ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: callee.clone(),
                     is_member_call,
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: format!("L{}", node.start_position().row + 1),
                 });
             }
@@ -122,18 +116,7 @@ pub(super) fn walk_calls(
     if cur.goto_first_child() {
         loop {
             let child = cur.node();
-            walk_calls(
-                child,
-                caller_nid,
-                source,
-                config,
-                str_path,
-                label_to_nid,
-                seen_call_pairs,
-                seen_dyn_import_pairs,
-                edges,
-                raw_calls,
-            );
+            walk_calls(ctx, child, caller_nid, source);
             if !cur.goto_next_sibling() {
                 break;
             }

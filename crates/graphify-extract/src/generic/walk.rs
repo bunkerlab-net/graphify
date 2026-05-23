@@ -132,33 +132,44 @@ pub(super) fn ensure_named_node(
 
 // ── Structural walk ───────────────────────────────────────────────────────────
 
+/// Shared state threaded through every structural-walk recursion.
+pub(super) struct WalkCtx<'a, 'tree> {
+    pub config: &'a LangConfig,
+    pub file_nid: &'a str,
+    pub stem: &'a str,
+    pub str_path: &'a str,
+    pub nodes: &'a mut Vec<GNode>,
+    pub edges: &'a mut Vec<Edge>,
+    pub seen_ids: &'a mut HashSet<String>,
+    pub function_bodies: &'a mut Vec<(String, Node<'tree>)>,
+}
+
 /// Recursive structural AST walk that emits nodes and edges for classes,
 /// functions, imports, and language-specific constructs.
 ///
-/// The `too_many_lines` / `too_many_arguments` lints are suppressed because
-/// this function is a 1:1 port of Python `_walk` in `extract.py` whose linear
-/// dispatch structure is the documented specification. Splitting it further
-/// would introduce indirection without clarifying the spec.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+/// `clippy::too_many_lines` is suppressed: this is a linear dispatch over many
+/// AST node kinds; splitting it fragments the per-kind branches without
+/// isolating a reusable shape.
+#[allow(clippy::too_many_lines)]
 pub(super) fn walk<'tree>(
+    ctx: &mut WalkCtx<'_, 'tree>,
     node: Node<'tree>,
     parent_class_nid: Option<&str>,
     source: &[u8],
-    config: &LangConfig,
-    file_nid: &str,
-    stem: &str,
-    str_path: &str,
-    nodes: &mut Vec<GNode>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, Node<'tree>)>,
 ) {
+    // Re-bind read-only fields as locals so the function body reads naturally.
+    // Mutable fields stay accessed via `ctx.<field>` so recursive `walk(ctx, …)`
+    // calls remain valid.
+    let config: &LangConfig = ctx.config;
+    let file_nid: &str = ctx.file_nid;
+    let stem: &str = ctx.stem;
+    let str_path: &str = ctx.str_path;
     let t = node.kind();
 
     // ── Imports ──────────────────────────────────────────────────────────────
     if config.import_types.contains(&t) {
         if let Some(handler) = config.import_handler {
-            handler(source, node, file_nid, stem, str_path, edges);
+            handler(source, node, file_nid, stem, str_path, ctx.edges);
         }
         return;
     }
@@ -185,9 +196,16 @@ pub(super) fn walk<'tree>(
         let class_name = read_text_owned(name_node, source);
         let class_nid = make_id(&[stem, &class_name]);
         let line = node.start_position().row as u32 + 1;
-        add_node(&class_nid, &class_name, line, str_path, nodes, seen_ids);
+        add_node(
+            &class_nid,
+            &class_name,
+            line,
+            str_path,
+            ctx.nodes,
+            ctx.seen_ids,
+        );
         add_edge(
-            file_nid, &class_nid, "contains", line, str_path, None, edges,
+            file_nid, &class_nid, "contains", line, str_path, None, ctx.edges,
         );
 
         // Python inheritance
@@ -200,24 +218,24 @@ pub(super) fn walk<'tree>(
                     let arg = cur.node();
                     if arg.kind() == "identifier" {
                         let base = read_text_owned(arg, source);
-                        let base_nid = if seen_ids.contains(&make_id(&[stem, &base])) {
+                        let base_nid = if ctx.seen_ids.contains(&make_id(&[stem, &base])) {
                             make_id(&[stem, &base])
                         } else {
                             let bn = make_id1(&base);
-                            if !seen_ids.contains(&bn) {
-                                nodes.push(GNode {
+                            if !ctx.seen_ids.contains(&bn) {
+                                ctx.nodes.push(GNode {
                                     id: bn.clone(),
                                     label: base.clone(),
                                     file_type: "code".to_string(),
                                     source_file: String::new(),
                                     source_location: None,
                                 });
-                                seen_ids.insert(bn.clone());
+                                ctx.seen_ids.insert(bn.clone());
                             }
                             bn
                         };
                         add_edge(
-                            &class_nid, &base_nid, "inherits", line, str_path, None, edges,
+                            &class_nid, &base_nid, "inherits", line, str_path, None, ctx.edges,
                         );
                     }
                     if !cur.goto_next_sibling() {
@@ -229,30 +247,22 @@ pub(super) fn walk<'tree>(
 
         // Swift conformance/inheritance
         if config.lang_id == LangId::Swift {
-            emit_swift_inheritance(
-                node, source, &class_nid, line, stem, str_path, nodes, edges, seen_ids,
-            );
+            emit_swift_inheritance(ctx, node, source, &class_nid, line);
         }
 
         // C# base_list
         if config.lang_id == LangId::CSharp {
-            emit_csharp_inheritance(
-                node, source, &class_nid, line, stem, str_path, nodes, edges, seen_ids,
-            );
+            emit_csharp_inheritance(ctx, node, source, &class_nid, line);
         }
 
         // Java extends/implements
         if config.lang_id == LangId::Java {
-            emit_java_inheritance(
-                node, source, &class_nid, t, line, stem, str_path, nodes, edges, seen_ids,
-            );
+            emit_java_inheritance(ctx, node, source, &class_nid, t, line);
         }
 
         // C++ base_class_clause
         if config.lang_id == LangId::Cpp {
-            emit_cpp_inheritance(
-                node, source, &class_nid, line, stem, str_path, nodes, edges, seen_ids,
-            );
+            emit_cpp_inheritance(ctx, node, source, &class_nid, line);
         }
 
         // Find body and recurse
@@ -261,19 +271,7 @@ pub(super) fn walk<'tree>(
             if cur.goto_first_child() {
                 loop {
                     let child = cur.node();
-                    walk(
-                        child,
-                        Some(&class_nid),
-                        source,
-                        config,
-                        file_nid,
-                        stem,
-                        str_path,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                    );
+                    walk(ctx, child, Some(&class_nid), source);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -307,7 +305,7 @@ pub(super) fn walk<'tree>(
             && !type_name.is_empty()
         {
             let line = node.start_position().row as u32 + 1;
-            let tgt = ensure_named_node(&type_name, line, stem, str_path, nodes, seen_ids);
+            let tgt = ensure_named_node(&type_name, line, stem, str_path, ctx.nodes, ctx.seen_ids);
             let e = Edge {
                 source: parent.to_string(),
                 target: tgt,
@@ -319,7 +317,7 @@ pub(super) fn walk<'tree>(
                 context: Some("field".to_string()),
                 confidence_score: None,
             };
-            edges.push(e);
+            ctx.edges.push(e);
         }
         return;
     }
@@ -346,7 +344,7 @@ pub(super) fn walk<'tree>(
                 {
                     let line = child.start_position().row as u32 + 1;
                     let field_nid = make_id(&[parent, &name]);
-                    add_node(&field_nid, &name, line, str_path, nodes, seen_ids);
+                    add_node(&field_nid, &name, line, str_path, ctx.nodes, ctx.seen_ids);
                     let e = Edge {
                         source: parent.to_string(),
                         target: field_nid,
@@ -358,7 +356,7 @@ pub(super) fn walk<'tree>(
                         context: Some("field".to_string()),
                         confidence_score: None,
                     };
-                    edges.push(e);
+                    ctx.edges.push(e);
                 }
                 if !cur.goto_next_sibling() {
                     break;
@@ -416,7 +414,7 @@ pub(super) fn walk<'tree>(
             )
         };
 
-        add_node(&func_nid, &label, line, str_path, nodes, seen_ids);
+        add_node(&func_nid, &label, line, str_path, ctx.nodes, ctx.seen_ids);
         let relation = if parent_class_nid.is_some() {
             "method"
         } else {
@@ -429,11 +427,11 @@ pub(super) fn walk<'tree>(
             line,
             str_path,
             None,
-            edges,
+            ctx.edges,
         );
 
         if let Some(body) = find_body(node, config) {
-            function_bodies.push((func_nid, body));
+            ctx.function_bodies.push((func_nid, body));
         }
         return;
     }
@@ -442,19 +440,7 @@ pub(super) fn walk<'tree>(
     if (config.lang_id == LangId::JavaScript
         || config.lang_id == LangId::TypeScript
         || config.lang_id == LangId::TypeScriptX)
-        && js_extra_walk(
-            node,
-            source,
-            config,
-            file_nid,
-            stem,
-            str_path,
-            nodes,
-            edges,
-            seen_ids,
-            function_bodies,
-            parent_class_nid,
-        )
+        && js_extra_walk(ctx, node, source, parent_class_nid)
     {
         return;
     }
@@ -465,27 +451,17 @@ pub(super) fn walk<'tree>(
             let ns_name = read_text_owned(name_node, source);
             let ns_nid = make_id(&[stem, &ns_name]);
             let line = node.start_position().row as u32 + 1;
-            add_node(&ns_nid, &ns_name, line, str_path, nodes, seen_ids);
-            add_edge(file_nid, &ns_nid, "contains", line, str_path, None, edges);
+            add_node(&ns_nid, &ns_name, line, str_path, ctx.nodes, ctx.seen_ids);
+            add_edge(
+                file_nid, &ns_nid, "contains", line, str_path, None, ctx.edges,
+            );
         }
         if let Some(body) = node.child_by_field_name("body") {
             let mut cur = body.walk();
             if cur.goto_first_child() {
                 loop {
                     let child = cur.node();
-                    walk(
-                        child,
-                        parent_class_nid,
-                        source,
-                        config,
-                        file_nid,
-                        stem,
-                        str_path,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                    );
+                    walk(ctx, child, parent_class_nid, source);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -508,8 +484,17 @@ pub(super) fn walk<'tree>(
                     let case_name = read_text_owned(child, source);
                     let case_nid = make_id(&[parent, &case_name]);
                     let line = node.start_position().row as u32 + 1;
-                    add_node(&case_nid, &case_name, line, str_path, nodes, seen_ids);
-                    add_edge(parent, &case_nid, "case_of", line, str_path, None, edges);
+                    add_node(
+                        &case_nid,
+                        &case_name,
+                        line,
+                        str_path,
+                        ctx.nodes,
+                        ctx.seen_ids,
+                    );
+                    add_edge(
+                        parent, &case_nid, "case_of", line, str_path, None, ctx.edges,
+                    );
                 }
                 if !cur.goto_next_sibling() {
                     break;
@@ -524,19 +509,7 @@ pub(super) fn walk<'tree>(
     if cur.goto_first_child() {
         loop {
             let child = cur.node();
-            walk(
-                child,
-                None,
-                source,
-                config,
-                file_nid,
-                stem,
-                str_path,
-                nodes,
-                edges,
-                seen_ids,
-                function_bodies,
-            );
+            walk(ctx, child, None, source);
             if !cur.goto_next_sibling() {
                 break;
             }

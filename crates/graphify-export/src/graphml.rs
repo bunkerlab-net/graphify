@@ -30,15 +30,28 @@ use crate::{ExportError, node_community_map};
 /// # Errors
 ///
 /// Returns [`ExportError::Io`] on file-write failure.
-#[allow(clippy::too_many_lines)] // Inherent complexity of a full GraphML serialiser
 pub fn to_graphml(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
     output_path: &Path,
 ) -> Result<(), ExportError> {
     let node_community = node_community_map(communities);
+    let node_keys = discover_node_keys(graph);
+    let edge_keys = discover_edge_keys(graph);
 
-    // Discover all node attribute keys (excluding `id` which is the GraphML id)
+    let mut out = String::new();
+    write_graphml_preamble(&mut out, &node_keys, &edge_keys, graph.kind.is_directed());
+    write_graphml_nodes(&mut out, graph, &node_community, &node_keys);
+    write_graphml_edges(&mut out, graph, &edge_keys);
+    out.push_str("  </graph>\n");
+    out.push_str("</graphml>\n");
+
+    std::fs::write(output_path, out)?;
+    Ok(())
+}
+
+/// Discover all node attribute keys (community + every non-`id` attr).
+fn discover_node_keys(graph: &Graph) -> IndexSet<String> {
     let mut node_keys: IndexSet<String> = IndexSet::new();
     node_keys.insert("community".to_string());
     for (_, attrs) in graph.nodes() {
@@ -48,8 +61,11 @@ pub fn to_graphml(
             }
         }
     }
+    node_keys
+}
 
-    // Discover all edge attribute keys
+/// Discover all edge attribute keys (excluding internal `_src`/`_tgt`).
+fn discover_edge_keys(graph: &Graph) -> IndexSet<String> {
     let mut edge_keys: IndexSet<String> = IndexSet::new();
     for edge in graph.edges() {
         for k in edge.attrs.keys() {
@@ -58,44 +74,50 @@ pub fn to_graphml(
             }
         }
     }
+    edge_keys
+}
 
-    let mut out = String::new();
+/// Write the XML header, namespace declaration, key declarations, and `<graph>` element.
+fn write_graphml_preamble(
+    out: &mut String,
+    node_keys: &IndexSet<String>,
+    edge_keys: &IndexSet<String>,
+    directed: bool,
+) {
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<graphml xmlns=\"http://graphml.graphdrawing.org/graphml\"\n");
     out.push_str("         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
     out.push_str("         xsi:schemaLocation=\"http://graphml.graphdrawing.org/graphml\n");
     out.push_str("           http://graphml.graphdrawing.org/graphml/1.0/graphml.xsd\">\n");
-
-    // Node key declarations
-    for key in &node_keys {
-        // Infallible write to String
+    for key in node_keys {
         let _ = writeln!(
             out,
             "  <key id=\"d_{key}\" for=\"node\" attr.name=\"{key}\" attr.type=\"string\"/>"
         );
     }
-    // Edge key declarations
-    for key in &edge_keys {
+    for key in edge_keys {
         let _ = writeln!(
             out,
             "  <key id=\"e_{key}\" for=\"edge\" attr.name=\"{key}\" attr.type=\"string\"/>"
         );
     }
-
-    let directed_str = if graph.kind.is_directed() {
-        "directed"
-    } else {
-        "undirected"
-    };
+    let directed_str = if directed { "directed" } else { "undirected" };
     let _ = writeln!(out, "  <graph id=\"G\" edgedefault=\"{directed_str}\">");
+}
 
-    // Nodes
+/// Write `<node>` blocks with the community + per-key `<data>` children.
+fn write_graphml_nodes(
+    out: &mut String,
+    graph: &Graph,
+    node_community: &IndexMap<String, i64>,
+    node_keys: &IndexSet<String>,
+) {
     for (node_id, attrs) in graph.nodes() {
         let id_esc = xml_escape(node_id);
         let _ = writeln!(out, "    <node id=\"{id_esc}\">");
         let cid = node_community.get(node_id).copied().unwrap_or(-1);
         let _ = writeln!(out, "      <data key=\"d_community\">{cid}</data>");
-        for key in &node_keys {
+        for key in node_keys {
             if key == "community" {
                 continue;
             }
@@ -107,8 +129,10 @@ pub fn to_graphml(
         }
         out.push_str("    </node>\n");
     }
+}
 
-    // Edges
+/// Write `<edge>` blocks with per-key `<data>` children.
+fn write_graphml_edges(out: &mut String, graph: &Graph, edge_keys: &IndexSet<String>) {
     for (idx, edge) in graph.edges().enumerate() {
         let src_esc = xml_escape(&edge.source);
         let tgt_esc = xml_escape(&edge.target);
@@ -116,7 +140,7 @@ pub fn to_graphml(
             out,
             "    <edge id=\"e{idx}\" source=\"{src_esc}\" target=\"{tgt_esc}\">"
         );
-        for key in &edge_keys {
+        for key in edge_keys {
             if let Some(val) = edge.attrs.get(key) {
                 let s = value_to_str(val);
                 let s_esc = xml_escape(&s);
@@ -125,12 +149,6 @@ pub fn to_graphml(
         }
         out.push_str("    </edge>\n");
     }
-
-    out.push_str("  </graph>\n");
-    out.push_str("</graphml>\n");
-
-    std::fs::write(output_path, out)?;
-    Ok(())
 }
 
 /// Convert a `serde_json::Value` to a string for XML embedding.

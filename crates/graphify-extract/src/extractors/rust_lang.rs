@@ -65,31 +65,7 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 /// Extract functions, structs, enums, traits, impl methods, and use declarations from a `.rs` file.
 #[must_use]
 pub fn extract_rust(path: &Path) -> FileResult {
-    let source = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => {
-            return FileResult {
-                nodes: vec![],
-                edges: vec![],
-                raw_calls: vec![],
-                error: Some(e.to_string()),
-            };
-        }
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .is_err()
-    {
-        return FileResult {
-            nodes: vec![],
-            edges: vec![],
-            raw_calls: vec![],
-            error: Some("failed to set rust language".to_string()),
-        };
-    }
-    let Some(tree) = parser.parse(&source, None) else {
+    let Some((source, tree)) = parse_rust_source(path) else {
         return FileResult {
             nodes: vec![],
             edges: vec![],
@@ -97,18 +73,10 @@ pub fn extract_rust(path: &Path) -> FileResult {
             error: Some("parse failed".to_string()),
         };
     };
-
     let stem = file_stem(path);
     let str_path = path.to_string_lossy().into_owned();
-
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut edges: Vec<Edge> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
-    let mut function_bodies: Vec<(String, usize, usize)> = Vec::new();
-
     let file_nid = make_id1(&str_path);
-    seen_ids.insert(file_nid.clone());
-    nodes.push(Node {
+    let mut nodes: Vec<Node> = vec![Node {
         id: file_nid.clone(),
         label: path
             .file_name()
@@ -116,23 +84,24 @@ pub fn extract_rust(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
-    });
+    }];
+    let mut edges: Vec<Edge> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::from([file_nid.clone()]);
+    let mut function_bodies: Vec<(String, usize, usize)> = Vec::new();
 
-    let root = tree.root_node();
-    walk_rust(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        None,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-    );
+    {
+        let mut walk_ctx = RustWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+        };
+        walk_rust(&mut walk_ctx, tree.root_node(), &source, None);
+    }
 
-    // Build label→nid map for intra-file call resolution
     let mut label_to_nid: HashMap<String, String> = HashMap::new();
     for n in &nodes {
         let normalised = n.label.trim_end_matches("()").trim_start_matches('.');
@@ -141,33 +110,34 @@ pub fn extract_rust(path: &Path) -> FileResult {
 
     let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
     let mut raw_calls: Vec<RawCall> = Vec::new();
-
-    for (caller_nid, body_start, body_end) in &function_bodies {
-        let root2 = tree.root_node();
-        walk_calls_rust(
-            root2,
-            &source,
-            &str_path,
-            caller_nid,
-            *body_start,
-            *body_end,
-            &label_to_nid,
-            &mut edges,
-            &mut seen_call_pairs,
-            &mut raw_calls,
-        );
+    {
+        let mut call_ctx = RustCallCtx {
+            str_path: &str_path,
+            label_to_nid: &label_to_nid,
+            edges: &mut edges,
+            seen_call_pairs: &mut seen_call_pairs,
+            raw_calls: &mut raw_calls,
+        };
+        for (caller_nid, body_start, body_end) in &function_bodies {
+            walk_calls_rust(
+                &mut call_ctx,
+                tree.root_node(),
+                &source,
+                caller_nid,
+                *body_start,
+                *body_end,
+            );
+        }
     }
 
-    let valid_ids = &seen_ids;
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {
-            valid_ids.contains(&e.source)
-                && (valid_ids.contains(&e.target)
+            seen_ids.contains(&e.source)
+                && (seen_ids.contains(&e.target)
                     || matches!(e.relation.as_str(), "imports" | "imports_from"))
         })
         .collect();
-
     FileResult {
         nodes,
         edges: clean_edges,
@@ -176,22 +146,38 @@ pub fn extract_rust(path: &Path) -> FileResult {
     }
 }
 
+/// Read + tree-sitter-parse a `.rs` file. `None` on any I/O or parse error.
+fn parse_rust_source(path: &Path) -> Option<(Vec<u8>, tree_sitter::Tree)> {
+    let source = std::fs::read(path).ok()?;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .ok()?;
+    let tree = parser.parse(&source, None)?;
+    Some((source, tree))
+}
+
 /// Recursively walk a Rust AST emitting nodes for functions, structs, enums, traits, and impls.
 ///
 /// Records function body byte ranges for the subsequent call-graph pass. Handles `use_declaration`
 /// to produce import edges. Mirrors Python `_walk_rust`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_rust`] recursion.
+struct RustWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Rust's AST node kinds
 fn walk_rust(
+    ctx: &mut RustWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     parent_impl_nid: Option<&str>,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize)>,
 ) {
     let t = node.kind();
 
@@ -208,9 +194,9 @@ fn walk_rust(
                     )
                 } else {
                     (
-                        make_id(&[stem, func_name]),
+                        make_id(&[ctx.stem, func_name]),
                         format!("{func_name}()"),
-                        file_nid.to_string(),
+                        ctx.file_nid.to_string(),
                     )
                 };
                 let relation = if parent_impl_nid.is_some() {
@@ -218,28 +204,29 @@ fn walk_rust(
                 } else {
                     "contains"
                 };
-                if seen_ids.insert(func_nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(func_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: func_nid.clone(),
                         label,
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
+                ctx.edges.push(Edge {
                     source: parent,
                     target: func_nid.clone(),
                     relation: relation.to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
                 });
                 if let Some(body) = node.child_by_field_name("body") {
-                    function_bodies.push((func_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies
+                        .push((func_nid, body.start_byte(), body.end_byte()));
                 }
             }
         }
@@ -247,22 +234,22 @@ fn walk_rust(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let item_name = read_text(name_node, source);
                 let line = node.start_position().row + 1;
-                let item_nid = make_id(&[stem, item_name]);
-                if seen_ids.insert(item_nid.clone()) {
-                    nodes.push(Node {
+                let item_nid = make_id(&[ctx.stem, item_name]);
+                if ctx.seen_ids.insert(item_nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: item_nid.clone(),
                         label: item_name.to_string(),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
-                    source: file_nid.to_string(),
+                ctx.edges.push(Edge {
+                    source: ctx.file_nid.to_string(),
                     target: item_nid,
                     relation: "contains".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
@@ -274,14 +261,14 @@ fn walk_rust(
             let mut impl_nid: Option<String> = None;
             if let Some(type_node) = node.child_by_field_name("type") {
                 let type_name = read_text(type_node, source).trim().to_string();
-                let nid = make_id(&[stem, &type_name]);
+                let nid = make_id(&[ctx.stem, &type_name]);
                 let line = node.start_position().row + 1;
-                if seen_ids.insert(nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: nid.clone(),
                         label: type_name,
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
@@ -291,18 +278,7 @@ fn walk_rust(
                 let mut cur = body.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_rust(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            impl_nid.as_deref(),
-                            nodes,
-                            edges,
-                            seen_ids,
-                            function_bodies,
-                        );
+                        walk_rust(ctx, cur.node(), source, impl_nid.as_deref());
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -325,12 +301,12 @@ fn walk_rust(
                 if !module_name.is_empty() {
                     let tgt_nid = make_id1(&module_name);
                     let line = node.start_position().row + 1;
-                    edges.push(Edge {
-                        source: file_nid.to_string(),
+                    ctx.edges.push(Edge {
+                        source: ctx.file_nid.to_string(),
                         target: tgt_nid,
                         relation: "imports_from".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: Some("import".to_string()),
@@ -344,17 +320,10 @@ fn walk_rust(
             if cur.goto_first_child() {
                 loop {
                     walk_rust(
+                        ctx,
                         cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        // Don't propagate impl_nid through generic nodes
+                        source, // Don't propagate impl_nid through generic ctx.nodes
                         None,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
                     );
                     if !cur.goto_next_sibling() {
                         break;
@@ -365,22 +334,26 @@ fn walk_rust(
     }
 }
 
-/// Collect `calls` edges within a Rust function body's byte range.
+/// Collect `calls` ctx.edges within a Rust function body's byte range.
 ///
-/// Recurses through the body AST, emitting `calls` edges for `call_expression` and
-/// `macro_invocation` nodes whose callee matches a known NID. Mirrors Python `_walk_calls_rust`.
-#[allow(clippy::too_many_arguments)]
+/// Recurses through the body AST, emitting `calls` ctx.edges for `call_expression` and
+/// `macro_invocation` ctx.nodes whose callee matches a known NID. Mirrors Python `_walk_calls_rust`.
+/// Shared state threaded through every [`walk_calls_rust`] recursion.
+struct RustCallCtx<'a> {
+    str_path: &'a str,
+    label_to_nid: &'a HashMap<String, String>,
+    edges: &'a mut Vec<Edge>,
+    seen_call_pairs: &'a mut HashSet<(String, String)>,
+    raw_calls: &'a mut Vec<RawCall>,
+}
+
 fn walk_calls_rust(
+    ctx: &mut RustCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
     caller_nid: &str,
     body_start: usize,
     body_end: usize,
-    label_to_nid: &HashMap<String, String>,
-    edges: &mut Vec<Edge>,
-    seen_call_pairs: &mut HashSet<(String, String)>,
-    raw_calls: &mut Vec<RawCall>,
 ) {
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
@@ -414,18 +387,18 @@ fn walk_calls_rust(
             _ => {}
         }
         if let Some(cn) = callee_name {
-            let tgt_nid = label_to_nid.get(&cn.to_lowercase()).cloned();
+            let tgt_nid = ctx.label_to_nid.get(&cn.to_lowercase()).cloned();
             if let Some(tgt) = tgt_nid {
                 if tgt != caller_nid {
                     let pair = (caller_nid.to_string(), tgt.clone());
-                    if seen_call_pairs.insert(pair) {
+                    if ctx.seen_call_pairs.insert(pair) {
                         let line = node.start_position().row + 1;
-                        edges.push(Edge {
+                        ctx.edges.push(Edge {
                             source: caller_nid.to_string(),
                             target: tgt,
                             relation: "calls".to_string(),
                             confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             weight: 1.0,
                             context: Some("call".to_string()),
@@ -436,11 +409,11 @@ fn walk_calls_rust(
             } else if !is_scoped_call
                 && !RUST_TRAIT_METHOD_BLOCKLIST.contains(cn.to_lowercase().as_str())
             {
-                raw_calls.push(RawCall {
+                ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: cn,
                     is_member_call,
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: format!("L{}", node.start_position().row + 1),
                 });
             }
@@ -450,18 +423,7 @@ fn walk_calls_rust(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_rust(
-                cur.node(),
-                source,
-                str_path,
-                caller_nid,
-                body_start,
-                body_end,
-                label_to_nid,
-                edges,
-                seen_call_pairs,
-                raw_calls,
-            );
+            walk_calls_rust(ctx, cur.node(), source, caller_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }

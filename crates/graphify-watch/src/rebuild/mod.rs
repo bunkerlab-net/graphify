@@ -9,6 +9,7 @@ pub mod community;
 pub mod git;
 pub mod helpers;
 pub mod pipeline;
+mod pipeline_helpers;
 pub mod relativize;
 pub mod shrink;
 
@@ -25,9 +26,34 @@ use crate::lock::RebuildLock;
 
 use pipeline::rebuild_code_inner;
 
+/// Advisory-lock policy for [`rebuild_code`].
+#[derive(Debug, Clone, Copy, Default)]
+pub enum LockPolicy {
+    /// Do not acquire the per-repo lock at all.
+    None,
+    /// Acquire the lock if free; skip the rebuild otherwise.
+    #[default]
+    TryAcquire,
+    /// Acquire the lock, blocking until it becomes available.
+    BlockOn,
+}
+
+/// Flag bundle for [`rebuild_code`].
+///
+/// Mirrors the relevant parameters from Python's `_rebuild_code`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RebuildOptions {
+    /// Bypass the shrink-guard so a rebuild with fewer nodes is allowed.
+    pub force: bool,
+    /// Skip the community-detection step.
+    pub no_cluster: bool,
+    /// Lock-acquisition policy.
+    pub lock: LockPolicy,
+}
+
 /// Re-run AST extraction + build + optional cluster + report for code files.
 ///
-/// Acquires a per-repo advisory lock (unless `acquire_lock` is `false`).
+/// Acquires a per-repo advisory lock unless `opts.lock` is [`LockPolicy::None`].
 /// Returns `Ok(true)` when outputs were updated, `Ok(false)` when the rebuild
 /// was skipped (lock held, no tracked files changed, shrink guard refused).
 ///
@@ -36,36 +62,33 @@ use pipeline::rebuild_code_inner;
 /// # Errors
 ///
 /// Propagates I/O and pipeline errors via [`WatchError`].
-#[allow(clippy::fn_params_excessive_bools)]
-// reason: mirrors Python's _rebuild_code signature 1:1; each bool controls a
-// distinct pipeline flag; extracting enums would diverge from the reference spec.
 pub fn rebuild_code(
     watch_path: &Path,
     changed_paths: Option<&[PathBuf]>,
-    _follow_symlinks: bool,
-    force: bool,
-    no_cluster: bool,
-    acquire_lock: bool,
-    block_on_lock: bool,
+    opts: RebuildOptions,
 ) -> Result<bool, WatchError> {
     let out = watch_path.join(graphify_out());
 
-    if acquire_lock {
-        let guard = RebuildLock::acquire(&out, block_on_lock)?;
-        if !guard.acquired() {
-            println!(
-                "[graphify watch] Rebuild already in progress for {} - skipping.",
-                watch_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| watch_path.to_path_buf())
-                    .display()
-            );
-            return Ok(false);
+    match opts.lock {
+        LockPolicy::None => {
+            rebuild_code_inner(watch_path, changed_paths, opts.force, opts.no_cluster)
         }
-        let result = rebuild_code_inner(watch_path, changed_paths, force, no_cluster);
-        drop(guard);
-        result
-    } else {
-        rebuild_code_inner(watch_path, changed_paths, force, no_cluster)
+        LockPolicy::TryAcquire | LockPolicy::BlockOn => {
+            let block = matches!(opts.lock, LockPolicy::BlockOn);
+            let guard = RebuildLock::acquire(&out, block)?;
+            if !guard.acquired() {
+                println!(
+                    "[graphify watch] Rebuild already in progress for {} - skipping.",
+                    watch_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| watch_path.to_path_buf())
+                        .display()
+                );
+                return Ok(false);
+            }
+            let result = rebuild_code_inner(watch_path, changed_paths, opts.force, opts.no_cluster);
+            drop(guard);
+            result
+        }
     }
 }

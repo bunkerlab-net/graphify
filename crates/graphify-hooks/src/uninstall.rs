@@ -37,14 +37,13 @@ pub(crate) fn uninstall_hook(
         ));
     }
 
-    // SAFETY: pattern is constructed from escaped literals; cannot be invalid.
-    #[allow(clippy::unwrap_used)]
+    #[allow(clippy::expect_used)]
     let re = Regex::new(&format!(
         "(?s){}.*?{}\n?",
         regex::escape(marker),
         regex::escape(marker_end)
     ))
-    .unwrap();
+    .expect("pattern is constructed from escaped literals");
 
     let new_content = re.replace_all(&content, "").trim().to_string();
     if new_content.is_empty() || new_content == "#!/bin/bash" || new_content == "#!/bin/sh" {

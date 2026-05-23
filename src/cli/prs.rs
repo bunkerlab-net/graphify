@@ -41,58 +41,33 @@ impl TriageBackend for LlmTriageBackend {
     }
 }
 
-/// Run the GitHub PR dashboard, forwarding all CLI flags into [`graphify_prs::PrsArgs`].
+/// Run the GitHub PR dashboard from a parsed [`graphify_prs::PrsArgs`] bag.
 ///
-/// Each flag maps 1:1 to the corresponding field on `PrsArgs`, mirroring Python's
-/// `PrsArgs.parse(sys.argv[2:])` call at `__main__.py:1476`.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::fn_params_excessive_bools)]
-// reason: each bool maps 1:1 to a distinct Python CLI flag; collapsing into a
-// struct would break the 1:1 parity with PrsArgs.parse(sys.argv[2:]).
-pub(crate) fn cmd_prs(
-    number: Option<u64>,
-    repo: Option<&str>,
-    base: Option<&str>,
-    limit: usize,
-    triage: bool,
-    worktrees: bool,
-    conflicts: bool,
-    wrong_base: bool,
-    graph: Option<&std::path::Path>,
-) -> Result<()> {
+/// Mirrors Python's `PrsArgs.parse(sys.argv[2:])` call at `__main__.py:1476`.
+pub(crate) fn cmd_prs(args: &graphify_prs::PrsArgs) -> Result<()> {
     eprintln!(
         "fetching PRs{} via gh CLI ...",
-        repo.map(|r| format!(" for {r}")).unwrap_or_default()
+        args.repo
+            .as_deref()
+            .map(|r| format!(" for {r}"))
+            .unwrap_or_default()
     );
-    let args = graphify_prs::PrsArgs {
-        repo: repo.map(str::to_string),
-        base: base.map(str::to_string),
-        pr_number: number,
-        do_triage: triage,
-        do_worktrees: worktrees,
-        do_conflicts: conflicts,
-        show_wrong_base: wrong_base,
-        graph_path: graph
-            .map(std::path::Path::to_path_buf)
-            .or_else(|| Some(std::path::PathBuf::from("graphify-out/graph.json"))),
-        limit,
-    };
     // Only wire the LLM triage backend when the user actually requested triage.
     // Otherwise stay with the no-op so a missing API key never breaks the
     // standalone PR dashboard.
-    if triage {
+    if args.do_triage {
         graphify_prs::run_cmd_prs(
             &graphify_prs::gh::ProcessGhClient,
             &graphify_prs::git::ProcessGitClient,
             &LlmTriageBackend,
-            &args,
+            args,
         )?;
     } else {
         graphify_prs::run_cmd_prs(
             &graphify_prs::gh::ProcessGhClient,
             &graphify_prs::git::ProcessGitClient,
             &graphify_prs::triage::NoOpTriageBackend,
-            &args,
+            args,
         )?;
     }
     Ok(())

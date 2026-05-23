@@ -20,4 +20,4 @@ pub use classify::{file_category, is_concept_node, is_json_key_node};
 pub use diff::graph_diff;
 pub use god_nodes::god_nodes;
 pub use suggest::suggest_questions;
-pub use surprises::{surprise_score, surprising_connections};
+pub use surprises::{SurpriseScoreInput, surprise_score, surprising_connections};

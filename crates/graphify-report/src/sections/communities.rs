@@ -30,18 +30,28 @@ pub(crate) fn render_nav_hubs(
     }
 }
 
+/// Read-only context bundle for community-section rendering.
+pub(crate) struct CommunitiesCtx<'a> {
+    pub graph: &'a Graph,
+    pub communities: &'a [(i64, Vec<&'a str>)],
+    pub cohesion_scores: &'a HashMap<i64, f64>,
+    pub community_labels: &'a HashMap<i64, &'a str>,
+    pub degrees: &'a HashMap<String, usize>,
+    pub thin_count_summary: usize,
+    pub min_community_size: usize,
+}
+
 /// Render the per-community detail blocks.
-#[allow(clippy::too_many_arguments)] // adding `degrees` is required to avoid recomputing per call.
-pub(crate) fn render_communities(
-    lines: &mut Vec<String>,
-    graph: &Graph,
-    communities: &[(i64, Vec<&str>)],
-    cohesion_scores: &HashMap<i64, f64>,
-    community_labels: &HashMap<i64, &str>,
-    thin_count_summary: usize,
-    min_community_size: usize,
-    degrees: &HashMap<String, usize>,
-) {
+pub(crate) fn render_communities(lines: &mut Vec<String>, ctx: &CommunitiesCtx<'_>) {
+    let CommunitiesCtx {
+        graph,
+        communities,
+        cohesion_scores,
+        community_labels,
+        degrees,
+        thin_count_summary,
+        min_community_size,
+    } = *ctx;
     lines.push(String::new());
     lines.push(format!(
         "## Communities ({} total, {thin_count_summary} thin omitted)",

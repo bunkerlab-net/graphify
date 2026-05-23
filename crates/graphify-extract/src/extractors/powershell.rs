@@ -79,18 +79,18 @@ pub fn extract_powershell(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_ps(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        None,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-    );
+    {
+        let mut walk_ctx = PsWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+        };
+        walk_ps(&mut walk_ctx, root, &source, None);
+    }
 
     let mut label_to_nid: HashMap<String, String> = HashMap::new();
     for n in &nodes {
@@ -100,20 +100,24 @@ pub fn extract_powershell(path: &Path) -> FileResult {
 
     let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
     let mut raw_calls: Vec<RawCall> = Vec::new();
-
-    for (caller_nid, body_start, body_end) in &function_bodies {
-        walk_calls_ps(
-            tree.root_node(),
-            &source,
-            &str_path,
-            caller_nid,
-            *body_start,
-            *body_end,
-            &label_to_nid,
-            &mut edges,
-            &mut seen_call_pairs,
-            &mut raw_calls,
-        );
+    {
+        let mut call_ctx = PsCallCtx {
+            str_path: &str_path,
+            label_to_nid: &label_to_nid,
+            edges: &mut edges,
+            seen_call_pairs: &mut seen_call_pairs,
+            raw_calls: &mut raw_calls,
+        };
+        for (caller_nid, body_start, body_end) in &function_bodies {
+            walk_calls_ps(
+                &mut call_ctx,
+                tree.root_node(),
+                &source,
+                caller_nid,
+                *body_start,
+                *body_end,
+            );
+        }
     }
 
     let clean_edges: Vec<Edge> = edges
@@ -168,19 +172,31 @@ fn find_script_block_body(node: tree_sitter::Node<'_>) -> Option<tree_sitter::No
 ///
 /// Handles `function_definition`, `class_statement`, `method_statement`, and `using_statement`
 /// nodes. Mirrors Python `_walk_ps`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_ps`] recursion.
+struct PsWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over PowerShell's AST node kinds
 fn walk_ps(
+    ctx: &mut PsWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     parent_class_nid: Option<&str>,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize)>,
 ) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let file_nid = ctx.file_nid;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let function_bodies = &mut *ctx.function_bodies;
     let t = node.kind();
 
     match t {
@@ -278,18 +294,7 @@ fn walk_ps(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_ps(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            Some(&class_nid),
-                            nodes,
-                            edges,
-                            seen_ids,
-                            function_bodies,
-                        );
+                        walk_ps(ctx, cur.node(), source, Some(&class_nid));
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -438,18 +443,7 @@ fn walk_ps(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_ps(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        parent_class_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                    );
+                    walk_ps(ctx, cur.node(), source, parent_class_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -463,19 +457,28 @@ fn walk_ps(
 ///
 /// Recurses through the body AST, emitting `calls` edges for `command` and `invocation_expression`
 /// nodes whose callee matches a known function NID. Mirrors Python `_walk_calls_ps`.
-#[allow(clippy::too_many_arguments)]
+/// Shared state threaded through every [`walk_calls_ps`] recursion.
+struct PsCallCtx<'a> {
+    str_path: &'a str,
+    label_to_nid: &'a HashMap<String, String>,
+    edges: &'a mut Vec<Edge>,
+    seen_call_pairs: &'a mut HashSet<(String, String)>,
+    raw_calls: &'a mut Vec<RawCall>,
+}
+
 fn walk_calls_ps(
+    ctx: &mut PsCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
     caller_nid: &str,
     body_start: usize,
     body_end: usize,
-    label_to_nid: &HashMap<String, String>,
-    edges: &mut Vec<Edge>,
-    seen_call_pairs: &mut HashSet<(String, String)>,
-    raw_calls: &mut Vec<RawCall>,
 ) {
+    let str_path = ctx.str_path;
+    let label_to_nid = ctx.label_to_nid;
+    let edges = &mut *ctx.edges;
+    let seen_call_pairs = &mut *ctx.seen_call_pairs;
+    let raw_calls = &mut *ctx.raw_calls;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
@@ -540,18 +543,7 @@ fn walk_calls_ps(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_ps(
-                cur.node(),
-                source,
-                str_path,
-                caller_nid,
-                body_start,
-                body_end,
-                label_to_nid,
-                edges,
-                seen_call_pairs,
-                raw_calls,
-            );
+            walk_calls_ps(ctx, cur.node(), source, caller_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }

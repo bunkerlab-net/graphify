@@ -11,7 +11,6 @@
 /// Called from hook shell scripts — the Python entrypoint is referenced
 /// by those scripts and this Rust equivalent must exist at the same
 /// symbol path so the hooks continue to work after the Rust port lands.
-#[allow(clippy::missing_panics_doc)] // reason: this function never panics
 pub fn apply_resource_limits() {
     // Best-effort only — failures are silently swallowed, matching Python.
     #[cfg(unix)]

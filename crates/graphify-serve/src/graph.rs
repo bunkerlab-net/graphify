@@ -3,6 +3,7 @@
 //! Ports all `_`-prefixed helper functions from `graphify-py/graphify/serve.py`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::BuildHasher;
 use std::path::Path;
 
 use graphify_build::Graph;
@@ -104,12 +105,11 @@ pub fn communities_from_graph(graph: &Graph) -> IndexMap<i64, Vec<String>> {
 ///
 /// Mirrors Python `_compute_idf`.
 #[must_use]
-// implicit_hasher: public API with concrete HashMap is intentional — callers manage their own cache.
-#[allow(clippy::implicit_hasher, clippy::cast_precision_loss)]
-pub fn compute_idf<'a>(
+#[allow(clippy::cast_precision_loss)] // graph node count fits comfortably in f64.
+pub fn compute_idf<'a, S: BuildHasher>(
     graph: &Graph,
     terms: &[&'a str],
-    idf_cache: &mut HashMap<String, f64>,
+    idf_cache: &mut HashMap<String, f64, S>,
 ) -> HashMap<&'a str, f64> {
     let n = graph.node_count().max(1) as f64;
     let uncached: Vec<&str> = terms
@@ -161,12 +161,11 @@ fn get_norm_label(attrs: &IndexMap<String, Value>) -> String {
 ///
 /// Mirrors Python `_score_nodes`.
 #[must_use]
-// implicit_hasher: public API with concrete HashMap; callers manage the IDF cache.
-#[allow(clippy::implicit_hasher, clippy::cast_precision_loss)]
-pub fn score_nodes(
+#[allow(clippy::cast_precision_loss)] // graph node count fits comfortably in f64.
+pub fn score_nodes<S: BuildHasher>(
     graph: &Graph,
     terms: &[&str],
-    idf_cache: &mut HashMap<String, f64>,
+    idf_cache: &mut HashMap<String, f64, S>,
 ) -> Vec<(f64, String)> {
     let norm_terms: Vec<String> = terms
         .iter()
@@ -521,11 +520,9 @@ pub fn dfs(
 ///
 /// Mirrors Python `_subgraph_to_text`.
 #[must_use]
-// implicit_hasher: public API with concrete HashSet; callers build their own node sets.
-#[allow(clippy::implicit_hasher)]
-pub fn subgraph_to_text(
+pub fn subgraph_to_text<S: BuildHasher>(
     graph: &Graph,
-    nodes: &HashSet<String>,
+    nodes: &HashSet<String, S>,
     edges: &[(String, String)],
     token_budget: usize,
     seeds: Option<&[String]>,
@@ -711,16 +708,14 @@ pub fn shortest_path(graph: &Graph, src: &str, tgt: &str) -> Option<Vec<String>>
 ///
 /// Mirrors Python `_query_graph_text`.
 #[must_use]
-// implicit_hasher: IDF cache is owned by callers; concrete HashMap is intentional.
-#[allow(clippy::implicit_hasher)]
-pub fn query_graph_text(
+pub fn query_graph_text<S: BuildHasher>(
     graph: &Graph,
     question: &str,
     mode: &str,
     depth: usize,
     token_budget: usize,
     context_filters: Option<&[String]>,
-    idf_cache: &mut HashMap<String, f64>,
+    idf_cache: &mut HashMap<String, f64, S>,
 ) -> String {
     let terms: Vec<String> = question
         .split_whitespace()

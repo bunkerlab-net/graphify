@@ -25,11 +25,9 @@ pub fn cypher_escape(s: &str) -> String {
 
 // Restrict identifier-position values (labels and relationship types are NOT
 // quoted in Cypher and so cannot be safely escaped — they must be allowlisted).
-static CYPHER_IDENT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    // Known-good literal pattern — panic here would be a programmer error.
-    #[allow(clippy::unwrap_used)]
-    Regex::new(r"[^A-Za-z0-9_]").unwrap()
-});
+#[allow(clippy::expect_used)]
+static CYPHER_IDENT_RE: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"[^A-Za-z0-9_]").expect("literal pattern is valid"));
 
 /// Sanitise a value used in identifier position (node label / rel type).
 ///

@@ -1,8 +1,33 @@
 # Agents
 
-This repository contains a Rust workspace that is a complete 1:1 reimplementation of
-`./graphify-py` (a git submodule pointing at the Python reference). Subagents working
-on individual module ports MUST follow these conventions.
+This repository contains a Rust workspace that reimplements every **feature** of
+`./graphify-py` (a git submodule pointing at the Python reference). The goal is
+behavioral parity, not stylistic parity. **This is a Rust codebase, not a Python
+codebase translated word-for-word.**
+
+## Parity ≠ code transliteration
+
+- **Feature parity is the bar.** Every public command, output file, and observable
+  side-effect of `graphify-py` has a Rust equivalent.
+- **Behavioural parity is the bar.** Given the same inputs, the Rust pipeline
+  produces the same JSON / report / HTML / exit code (byte-identical where tests
+  assert it).
+- **Code style is NOT the bar.** Idiomatic Rust always wins over Python-shaped Rust:
+  - A 12-parameter Python function should become a `fn foo(opts: FooOptions)` in
+    Rust, not `fn foo(a, b, c, d, e, f, g, h, i, j, k, l)`.
+  - A 300-line Python monolith should be split into focused helpers — not
+    reproduced as a 300-line Rust monolith.
+  - Mutable global state in Python should become explicit struct fields in Rust.
+  - Python's `**kwargs` should become a typed options struct.
+- **Bugs in the Python reference are NOT requirements.** If `graphify-py` does
+  something obviously wrong, fix it in Rust and note the divergence in a comment.
+  Tests assert observable contracts, not implementation choices.
+- **Never justify a clippy suppression with "that's how Python does it".** Valid
+  justifications describe the *Rust* trade-off (e.g. "splitting fragments linear
+  AST dispatch logic"). Invalid justifications mirror Python's accidental
+  complexity.
+
+Subagents working on individual module ports MUST follow these conventions.
 
 ## Rules
 
@@ -53,7 +78,9 @@ Practical impact:
 
 ## Porting conventions
 
-1. **Read the Python module + its corresponding test file together.** They are the spec.
+1. **Read the Python module + its corresponding test file together.** The test
+   file is the spec; the Python source is a reference implementation, not a
+   blueprint to copy.
 2. **Map Python types to Rust idiomatically:**
    - `dict` → `serde_json::Value`, `indexmap::IndexMap<String, Value>`, or a struct
      with `#[derive(Serialize, Deserialize)]`. Use `IndexMap` (not `HashMap`) anywhere
@@ -63,14 +90,21 @@ Practical impact:
    - `pathlib.Path` → `std::path::PathBuf` / `&Path`
    - `Optional[T]` → `Option<T>`
    - Raised exceptions → `thiserror::Error` enum per crate
+   - Long parameter lists (3+ bools, 6+ positional args) → a dedicated options
+     struct; the Python signature is not a contract.
+   - Mutable shared state threaded through many parameters → a context struct
+     that owns the state.
 3. **Mirror exception messages byte-for-byte where tests assert on them.** Python tests
    commonly use `pytest.raises(..., match="substring")` — the substring must appear in
-   the Rust `Display` output.
+   the Rust `Display` output. This is one of the few places exact-string parity matters.
 4. **Use `serde_json` with `features = ["preserve_order"]`** (already in
    `workspace.dependencies`) so JSON output ordering matches Python's `json.dumps`.
 5. **Reuse workspace-level crates from `[workspace.dependencies]`.** Reference them as
    `name = { workspace = true }`. Add new deps to your crate's Cargo.toml only — never
    to the workspace root unless it is shared across crates.
+6. **Refactor freely.** Splitting a long function into helpers, replacing booleans
+   with enums, or turning a god-class into a few focused structs is encouraged —
+   as long as the observable behaviour and parity tests still pass.
 
 ## Test conventions
 

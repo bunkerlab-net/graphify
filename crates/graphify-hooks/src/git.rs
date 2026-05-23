@@ -112,10 +112,9 @@ fn default_rev_parse(root: &Path) -> Option<String> {
 /// `hookspath` — this matcher accepts either. Returns the trimmed value,
 /// or `None` if not present / empty.
 fn parse_hooks_path(config_text: &str) -> Option<String> {
+    #[allow(clippy::expect_used)]
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        // SAFETY: literal pattern is valid.
-        #[allow(clippy::unwrap_used)]
-        Regex::new(r"(?i)^hookspath\s*=\s*(.+)$").unwrap()
+        Regex::new(r"(?i)^hookspath\s*=\s*(.+)$").expect("literal pattern is valid")
     });
 
     let mut in_core = false;

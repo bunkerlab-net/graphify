@@ -13,33 +13,8 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 
 /// Extract functions, methods, type declarations, and imports from a `.go` file.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn extract_go(path: &Path) -> FileResult {
-    let source = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => {
-            return FileResult {
-                nodes: vec![],
-                edges: vec![],
-                raw_calls: vec![],
-                error: Some(e.to_string()),
-            };
-        }
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser
-        .set_language(&tree_sitter_go::LANGUAGE.into())
-        .is_err()
-    {
-        return FileResult {
-            nodes: vec![],
-            edges: vec![],
-            raw_calls: vec![],
-            error: Some("failed to set go language".to_string()),
-        };
-    }
-    let Some(tree) = parser.parse(&source, None) else {
+    let Some((source, tree)) = parse_go_source(path) else {
         return FileResult {
             nodes: vec![],
             edges: vec![],
@@ -49,103 +24,50 @@ pub fn extract_go(path: &Path) -> FileResult {
     };
 
     let stem = file_stem(path);
-    // Use directory name as package scope so methods on the same type across
-    // multiple files in a package share one canonical type node.
-    let pkg_scope = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&stem)
-        .to_string();
+    let pkg_scope = derive_pkg_scope(path, &stem);
     let str_path = path.to_string_lossy().into_owned();
+    let file_nid = make_id1(&str_path);
 
-    let mut nodes: Vec<Node> = Vec::new();
+    let mut nodes: Vec<Node> = vec![Node {
+        id: file_nid.clone(),
+        label: path
+            .file_name()
+            .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
+        file_type: "code".to_string(),
+        source_file: str_path.clone(),
+        source_location: Some("L1".to_string()),
+    }];
     let mut edges: Vec<Edge> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::from([file_nid.clone()]);
     let mut function_bodies: Vec<(String, usize, usize)> = Vec::new();
     let mut go_imported_pkgs: HashSet<String> = HashSet::new();
 
-    macro_rules! add_node {
-        ($nid:expr, $label:expr, $line:expr) => {
-            let nid: String = $nid;
-            if seen_ids.insert(nid.clone()) {
-                nodes.push(Node {
-                    id: nid,
-                    label: $label,
-                    file_type: "code".to_string(),
-                    source_file: str_path.clone(),
-                    source_location: Some(format!("L{}", $line)),
-                });
-            }
+    {
+        let mut walk_ctx = GoWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            pkg_scope: &pkg_scope,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+            go_imported_pkgs: &mut go_imported_pkgs,
         };
+        walk_go(&mut walk_ctx, tree.root_node(), &source);
     }
 
-    let file_nid = make_id1(&str_path);
-    add_node!(
-        file_nid.clone(),
-        path.file_name()
-            .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
-        1
-    );
-
-    // Structural walk
-    let root = tree.root_node();
-    walk_go(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &pkg_scope,
-        &file_nid,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-        &mut go_imported_pkgs,
-    );
-
-    // Build label→nid map for intra-file call resolution
-    let mut label_to_nid: HashMap<String, String> = HashMap::new();
-    for n in &nodes {
-        let normalised = n.label.trim_end_matches("()").trim_start_matches('.');
-        label_to_nid.insert(normalised.to_lowercase(), n.id.clone());
-    }
-
-    let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
-    let mut raw_calls: Vec<RawCall> = Vec::new();
-
-    // Second pass: calls inside function/method bodies
-    for (caller_nid, body_start, body_end) in &function_bodies {
-        let body_bytes = &source[*body_start..*body_end];
-        // Re-parse just the body range via cursor walk
-        let body_root = tree.root_node();
-        walk_calls_go(
-            body_root,
-            &source,
-            &str_path,
-            caller_nid,
-            *body_start,
-            *body_end,
-            &label_to_nid,
-            &go_imported_pkgs,
-            &mut edges,
-            &mut seen_call_pairs,
-            &mut raw_calls,
-        );
-        let _ = body_bytes; // suppress unused warning
-    }
-
-    // Filter edges: src must be valid, tgt must be valid OR relation is import
-    let valid_ids = &seen_ids;
-    let clean_edges: Vec<Edge> = edges
-        .into_iter()
-        .filter(|e| {
-            valid_ids.contains(&e.source)
-                && (valid_ids.contains(&e.target)
-                    || matches!(e.relation.as_str(), "imports" | "imports_from"))
-        })
-        .collect();
+    let label_to_nid = build_go_label_map(&nodes);
+    let raw_calls = resolve_go_function_calls(GoResolveArgs {
+        tree: &tree,
+        source: &source,
+        str_path: &str_path,
+        function_bodies: &function_bodies,
+        label_to_nid: &label_to_nid,
+        go_imported_pkgs: &go_imported_pkgs,
+        edges: &mut edges,
+    });
+    let clean_edges = filter_dangling_edges(edges, &seen_ids);
 
     FileResult {
         nodes,
@@ -155,24 +77,123 @@ pub fn extract_go(path: &Path) -> FileResult {
     }
 }
 
+/// Read the file and parse with tree-sitter-go. `None` on any I/O or parse error.
+fn parse_go_source(path: &Path) -> Option<(Vec<u8>, tree_sitter::Tree)> {
+    let source = std::fs::read(path).ok()?;
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok()?;
+    let tree = parser.parse(&source, None)?;
+    Some((source, tree))
+}
+
+/// Use the directory name as package scope so methods on the same type share a
+/// canonical type node across files in the same package.
+fn derive_pkg_scope(path: &Path, fallback_stem: &str) -> String {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback_stem)
+        .to_string()
+}
+
+/// Build a `normalised_label → nid` map for intra-file call resolution.
+fn build_go_label_map(nodes: &[Node]) -> HashMap<String, String> {
+    let mut label_to_nid: HashMap<String, String> = HashMap::new();
+    for n in nodes {
+        let normalised = n.label.trim_end_matches("()").trim_start_matches('.');
+        label_to_nid.insert(normalised.to_lowercase(), n.id.clone());
+    }
+    label_to_nid
+}
+
+/// Bundle of shared inputs for [`resolve_go_function_calls`].
+struct GoResolveArgs<'a> {
+    tree: &'a tree_sitter::Tree,
+    source: &'a [u8],
+    str_path: &'a str,
+    function_bodies: &'a [(String, usize, usize)],
+    label_to_nid: &'a HashMap<String, String>,
+    go_imported_pkgs: &'a HashSet<String>,
+    edges: &'a mut Vec<Edge>,
+}
+
+/// Walk each function body to emit call edges and `RawCall` entries.
+fn resolve_go_function_calls(args: GoResolveArgs<'_>) -> Vec<RawCall> {
+    let GoResolveArgs {
+        tree,
+        source,
+        str_path,
+        function_bodies,
+        label_to_nid,
+        go_imported_pkgs,
+        edges,
+    } = args;
+    let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
+    let mut raw_calls: Vec<RawCall> = Vec::new();
+    {
+        let mut call_ctx = GoCallCtx {
+            str_path,
+            label_to_nid,
+            go_imported_pkgs,
+            edges,
+            seen_call_pairs: &mut seen_call_pairs,
+            raw_calls: &mut raw_calls,
+        };
+        for (caller_nid, body_start, body_end) in function_bodies {
+            walk_calls_go(
+                &mut call_ctx,
+                tree.root_node(),
+                source,
+                caller_nid,
+                *body_start,
+                *body_end,
+            );
+        }
+    }
+    raw_calls
+}
+
+/// Drop edges whose endpoints aren't in `valid_ids` (except for `imports` edges).
+fn filter_dangling_edges(edges: Vec<Edge>, valid_ids: &HashSet<String>) -> Vec<Edge> {
+    edges
+        .into_iter()
+        .filter(|e| {
+            valid_ids.contains(&e.source)
+                && (valid_ids.contains(&e.target)
+                    || matches!(e.relation.as_str(), "imports" | "imports_from"))
+        })
+        .collect()
+}
+
 /// Recursively walk a Go AST emitting nodes and edges for functions, methods, and type declarations.
 ///
 /// Handles `function_declaration`, `method_declaration`, `type_declaration`, and `import_declaration`
 /// nodes. Descends into all child nodes. Mirrors Python `_walk_go`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn walk_go(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    str_path: &str,
-    stem: &str,
-    pkg_scope: &str,
-    file_nid: &str,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize)>,
-    go_imported_pkgs: &mut HashSet<String>,
-) {
+/// Shared state threaded through every [`walk_go`] recursion.
+struct GoWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    pkg_scope: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize)>,
+    go_imported_pkgs: &'a mut HashSet<String>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Go's AST node kinds
+fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let pkg_scope = ctx.pkg_scope;
+    let file_nid = ctx.file_nid;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let function_bodies = &mut *ctx.function_bodies;
+    let go_imported_pkgs = &mut *ctx.go_imported_pkgs;
     let t = node.kind();
 
     match t {
@@ -348,19 +369,7 @@ fn walk_go(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_go(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        pkg_scope,
-                        file_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                        go_imported_pkgs,
-                    );
+                    walk_go(ctx, cur.node(), source);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -474,20 +483,31 @@ fn emit_go_import_spec(
 /// Recurses through the body AST, emitting `calls` edges for `call_expression` nodes whose
 /// callee matches a known function NID in this file. Selector expressions (package.Func) are
 /// resolved against `go_imported_pkgs`. Mirrors Python `_walk_calls_go`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_calls_go`] recursion.
+struct GoCallCtx<'a> {
+    str_path: &'a str,
+    label_to_nid: &'a HashMap<String, String>,
+    go_imported_pkgs: &'a HashSet<String>,
+    edges: &'a mut Vec<Edge>,
+    seen_call_pairs: &'a mut HashSet<(String, String)>,
+    raw_calls: &'a mut Vec<RawCall>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Go's call-site AST shapes
 fn walk_calls_go(
+    ctx: &mut GoCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
     caller_nid: &str,
     body_start: usize,
     body_end: usize,
-    label_to_nid: &HashMap<String, String>,
-    go_imported_pkgs: &HashSet<String>,
-    edges: &mut Vec<Edge>,
-    seen_call_pairs: &mut HashSet<(String, String)>,
-    raw_calls: &mut Vec<RawCall>,
 ) {
+    let str_path = ctx.str_path;
+    let label_to_nid = ctx.label_to_nid;
+    let go_imported_pkgs = ctx.go_imported_pkgs;
+    let edges = &mut *ctx.edges;
+    let seen_call_pairs = &mut *ctx.seen_call_pairs;
+    let raw_calls = &mut *ctx.raw_calls;
     // Only visit nodes within the body range
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
@@ -554,19 +574,7 @@ fn walk_calls_go(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_calls_go(
-                        cur.node(),
-                        source,
-                        str_path,
-                        caller_nid,
-                        body_start,
-                        body_end,
-                        label_to_nid,
-                        go_imported_pkgs,
-                        edges,
-                        seen_call_pairs,
-                        raw_calls,
-                    );
+                    walk_calls_go(ctx, cur.node(), source, caller_nid, body_start, body_end);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -577,19 +585,7 @@ fn walk_calls_go(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_calls_go(
-                        cur.node(),
-                        source,
-                        str_path,
-                        caller_nid,
-                        body_start,
-                        body_end,
-                        label_to_nid,
-                        go_imported_pkgs,
-                        edges,
-                        seen_call_pairs,
-                        raw_calls,
-                    );
+                    walk_calls_go(ctx, cur.node(), source, caller_nid, body_start, body_end);
                     if !cur.goto_next_sibling() {
                         break;
                     }

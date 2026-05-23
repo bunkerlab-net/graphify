@@ -68,18 +68,18 @@ pub fn extract_zig(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_zig(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        None,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-    );
+    {
+        let mut walk_ctx = ZigWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+        };
+        walk_zig(&mut walk_ctx, root, &source, None);
+    }
 
     // Build label→nid map
     let mut label_to_nid: HashMap<String, String> = HashMap::new();
@@ -90,20 +90,24 @@ pub fn extract_zig(path: &Path) -> FileResult {
 
     let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
     let mut raw_calls: Vec<RawCall> = Vec::new();
-
-    for (caller_nid, body_start, body_end) in &function_bodies {
-        walk_calls_zig(
-            tree.root_node(),
-            &source,
-            &str_path,
-            caller_nid,
-            *body_start,
-            *body_end,
-            &label_to_nid,
-            &mut edges,
-            &mut seen_call_pairs,
-            &mut raw_calls,
-        );
+    {
+        let mut call_ctx = ZigCallCtx {
+            str_path: &str_path,
+            label_to_nid: &label_to_nid,
+            edges: &mut edges,
+            seen_call_pairs: &mut seen_call_pairs,
+            raw_calls: &mut raw_calls,
+        };
+        for (caller_nid, body_start, body_end) in &function_bodies {
+            walk_calls_zig(
+                &mut call_ctx,
+                tree.root_node(),
+                &source,
+                caller_nid,
+                *body_start,
+                *body_end,
+            );
+        }
     }
 
     let clean_edges: Vec<Edge> = edges
@@ -126,19 +130,32 @@ pub fn extract_zig(path: &Path) -> FileResult {
 ///
 /// Handles `function_declaration`, `struct_declaration`, `enum_declaration`, and
 /// `@import` builtin calls. Mirrors Python `_walk_zig`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_zig`] recursion.
+struct ZigWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over many AST node kinds
 fn walk_zig(
+    ctx: &mut ZigWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     parent_struct_nid: Option<&str>,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize)>,
 ) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let file_nid = ctx.file_nid;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let function_bodies = &mut *ctx.function_bodies;
+
     let t = node.kind();
 
     match t {
@@ -238,18 +255,7 @@ fn walk_zig(
                         let mut c2 = vn.walk();
                         if c2.goto_first_child() {
                             loop {
-                                walk_zig(
-                                    c2.node(),
-                                    source,
-                                    str_path,
-                                    stem,
-                                    file_nid,
-                                    Some(&struct_nid),
-                                    nodes,
-                                    edges,
-                                    seen_ids,
-                                    function_bodies,
-                                );
+                                walk_zig(ctx, c2.node(), source, Some(&struct_nid));
                                 if !c2.goto_next_sibling() {
                                     break;
                                 }
@@ -293,18 +299,7 @@ fn walk_zig(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_zig(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        parent_struct_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                    );
+                    walk_zig(ctx, cur.node(), source, parent_struct_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -408,19 +403,29 @@ fn extract_zig_import(
 ///
 /// Recurses through the body AST, emitting `calls` edges for `call_expression` nodes whose
 /// callee matches a known NID. Mirrors Python `_walk_calls_zig`.
-#[allow(clippy::too_many_arguments)]
+/// Shared state threaded through every [`walk_calls_zig`] recursion.
+struct ZigCallCtx<'a> {
+    str_path: &'a str,
+    label_to_nid: &'a HashMap<String, String>,
+    edges: &'a mut Vec<Edge>,
+    seen_call_pairs: &'a mut HashSet<(String, String)>,
+    raw_calls: &'a mut Vec<RawCall>,
+}
+
 fn walk_calls_zig(
+    ctx: &mut ZigCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
     caller_nid: &str,
     body_start: usize,
     body_end: usize,
-    label_to_nid: &HashMap<String, String>,
-    edges: &mut Vec<Edge>,
-    seen_call_pairs: &mut HashSet<(String, String)>,
-    raw_calls: &mut Vec<RawCall>,
 ) {
+    let str_path = ctx.str_path;
+    let label_to_nid = ctx.label_to_nid;
+    let edges = &mut *ctx.edges;
+    let seen_call_pairs = &mut *ctx.seen_call_pairs;
+    let raw_calls = &mut *ctx.raw_calls;
+
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
@@ -474,18 +479,7 @@ fn walk_calls_zig(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_zig(
-                cur.node(),
-                source,
-                str_path,
-                caller_nid,
-                body_start,
-                body_end,
-                label_to_nid,
-                edges,
-                seen_call_pairs,
-                raw_calls,
-            );
+            walk_calls_zig(ctx, cur.node(), source, caller_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }

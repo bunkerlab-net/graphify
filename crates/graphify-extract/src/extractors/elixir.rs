@@ -101,18 +101,18 @@ pub fn extract_elixir(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_elixir(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        None,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-    );
+    {
+        let mut walk_ctx = ElixirWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+        };
+        walk_elixir(&mut walk_ctx, root, &source, None);
+    }
 
     let mut label_to_nid: HashMap<String, String> = HashMap::new();
     for n in &nodes {
@@ -122,20 +122,24 @@ pub fn extract_elixir(path: &Path) -> FileResult {
 
     let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
     let mut raw_calls: Vec<RawCall> = Vec::new();
-
-    for (caller_nid, body_start, body_end) in &function_bodies {
-        walk_calls_elixir(
-            tree.root_node(),
-            &source,
-            &str_path,
-            caller_nid,
-            *body_start,
-            *body_end,
-            &label_to_nid,
-            &mut edges,
-            &mut seen_call_pairs,
-            &mut raw_calls,
-        );
+    {
+        let mut call_ctx = ElixirCallCtx {
+            str_path: &str_path,
+            label_to_nid: &label_to_nid,
+            edges: &mut edges,
+            seen_call_pairs: &mut seen_call_pairs,
+            raw_calls: &mut raw_calls,
+        };
+        for (caller_nid, body_start, body_end) in &function_bodies {
+            walk_calls_elixir(
+                &mut call_ctx,
+                tree.root_node(),
+                &source,
+                caller_nid,
+                *body_start,
+                *body_end,
+            );
+        }
     }
 
     let clean_edges: Vec<Edge> = edges
@@ -175,35 +179,36 @@ fn get_alias_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> 
 ///
 /// Handles `defmodule`, `def`/`defp`, `alias`/`import`/`require`/`use` call expressions.
 /// Descends into nested modules. Mirrors Python `_walk_elixir`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_elixir`] recursion.
+struct ElixirWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize)>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Elixir's call/macro node shapes
 fn walk_elixir(
+    ctx: &mut ElixirWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     parent_module_nid: Option<&str>,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize)>,
 ) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let file_nid = ctx.file_nid;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let function_bodies = &mut *ctx.function_bodies;
     if node.kind() != "call" {
         let mut cur = node.walk();
         if cur.goto_first_child() {
             loop {
-                walk_elixir(
-                    cur.node(),
-                    source,
-                    str_path,
-                    stem,
-                    file_nid,
-                    parent_module_nid,
-                    nodes,
-                    edges,
-                    seen_ids,
-                    function_bodies,
-                );
+                walk_elixir(ctx, cur.node(), source, parent_module_nid);
                 if !cur.goto_next_sibling() {
                     break;
                 }
@@ -236,18 +241,7 @@ fn walk_elixir(
         let mut cur2 = node.walk();
         if cur2.goto_first_child() {
             loop {
-                walk_elixir(
-                    cur2.node(),
-                    source,
-                    str_path,
-                    stem,
-                    file_nid,
-                    parent_module_nid,
-                    nodes,
-                    edges,
-                    seen_ids,
-                    function_bodies,
-                );
+                walk_elixir(ctx, cur2.node(), source, parent_module_nid);
                 if !cur2.goto_next_sibling() {
                     break;
                 }
@@ -288,18 +282,7 @@ fn walk_elixir(
                 let mut c = do_block.walk();
                 if c.goto_first_child() {
                     loop {
-                        walk_elixir(
-                            c.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            Some(&module_nid),
-                            nodes,
-                            edges,
-                            seen_ids,
-                            function_bodies,
-                        );
+                        walk_elixir(ctx, c.node(), source, Some(&module_nid));
                         if !c.goto_next_sibling() {
                             break;
                         }
@@ -395,18 +378,7 @@ fn walk_elixir(
             let mut cur2 = node.walk();
             if cur2.goto_first_child() {
                 loop {
-                    walk_elixir(
-                        cur2.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        parent_module_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                    );
+                    walk_elixir(ctx, cur2.node(), source, parent_module_nid);
                     if !cur2.goto_next_sibling() {
                         break;
                     }
@@ -421,19 +393,29 @@ fn walk_elixir(
 /// Recurses through the body's AST, skipping nested `def`/`defp` definitions, and emits
 /// `calls` edges for `call_expression` nodes whose callee matches a known function NID.
 /// Elixir Kernel built-ins in `SKIP_KEYWORDS` are filtered out. Mirrors Python `_walk_calls_elixir`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_calls_elixir`] recursion.
+struct ElixirCallCtx<'a> {
+    str_path: &'a str,
+    label_to_nid: &'a HashMap<String, String>,
+    edges: &'a mut Vec<Edge>,
+    seen_call_pairs: &'a mut HashSet<(String, String)>,
+    raw_calls: &'a mut Vec<RawCall>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Elixir's call-site shapes
 fn walk_calls_elixir(
+    ctx: &mut ElixirCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
     caller_nid: &str,
     body_start: usize,
     body_end: usize,
-    label_to_nid: &HashMap<String, String>,
-    edges: &mut Vec<Edge>,
-    seen_call_pairs: &mut HashSet<(String, String)>,
-    raw_calls: &mut Vec<RawCall>,
 ) {
+    let str_path = ctx.str_path;
+    let label_to_nid = ctx.label_to_nid;
+    let edges = &mut *ctx.edges;
+    let seen_call_pairs = &mut *ctx.seen_call_pairs;
+    let raw_calls = &mut *ctx.raw_calls;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
@@ -441,18 +423,7 @@ fn walk_calls_elixir(
         let mut cur = node.walk();
         if cur.goto_first_child() {
             loop {
-                walk_calls_elixir(
-                    cur.node(),
-                    source,
-                    str_path,
-                    caller_nid,
-                    body_start,
-                    body_end,
-                    label_to_nid,
-                    edges,
-                    seen_call_pairs,
-                    raw_calls,
-                );
+                walk_calls_elixir(ctx, cur.node(), source, caller_nid, body_start, body_end);
                 if !cur.goto_next_sibling() {
                     break;
                 }
@@ -483,18 +454,7 @@ fn walk_calls_elixir(
         let mut cur = node.walk();
         if cur.goto_first_child() {
             loop {
-                walk_calls_elixir(
-                    cur.node(),
-                    source,
-                    str_path,
-                    caller_nid,
-                    body_start,
-                    body_end,
-                    label_to_nid,
-                    edges,
-                    seen_call_pairs,
-                    raw_calls,
-                );
+                walk_calls_elixir(ctx, cur.node(), source, caller_nid, body_start, body_end);
                 if !cur.goto_next_sibling() {
                     break;
                 }
@@ -562,18 +522,7 @@ fn walk_calls_elixir(
     let mut cur2 = node.walk();
     if cur2.goto_first_child() {
         loop {
-            walk_calls_elixir(
-                cur2.node(),
-                source,
-                str_path,
-                caller_nid,
-                body_start,
-                body_end,
-                label_to_nid,
-                edges,
-                seen_call_pairs,
-                raw_calls,
-            );
+            walk_calls_elixir(ctx, cur2.node(), source, caller_nid, body_start, body_end);
             if !cur2.goto_next_sibling() {
                 break;
             }

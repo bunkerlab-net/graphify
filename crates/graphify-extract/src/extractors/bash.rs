@@ -81,34 +81,38 @@ pub fn extract_bash(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_bash(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        path,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-        &mut function_bodies,
-        &mut defined_functions,
-    );
+    {
+        let mut walk_ctx = BashWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            path,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+            function_bodies: &mut function_bodies,
+            defined_functions: &mut defined_functions,
+        };
+        walk_bash(&mut walk_ctx, root, &source);
+    }
 
     // Second pass: cross-function calls
     for (fn_nid, body_start, body_end) in &function_bodies {
         let mut seen_calls: HashSet<(String, String)> = HashSet::new();
+        let mut call_ctx = BashCallCtx {
+            str_path: &str_path,
+            stem: &stem,
+            defined_functions: &defined_functions,
+            edges: &mut edges,
+            seen_calls: &mut seen_calls,
+        };
         walk_calls_bash(
+            &mut call_ctx,
             tree.root_node(),
             &source,
-            &str_path,
-            &stem,
             fn_nid,
             *body_start,
             *body_end,
-            &defined_functions,
-            &mut edges,
-            &mut seen_calls,
         );
     }
 
@@ -125,20 +129,30 @@ pub fn extract_bash(path: &Path) -> FileResult {
 /// Handles `function_definition` (named Bash functions), `command` nodes whose name is `source`
 /// or `.` (treated as file imports), and descends into all child nodes. Mirrors Python
 /// `_walk_bash`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn walk_bash(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
-    path: &Path,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, usize, usize)>,
-    defined_functions: &mut HashSet<String>,
-) {
+/// Shared state threaded through every [`walk_bash`] recursion.
+struct BashWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    path: &'a Path,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+    function_bodies: &'a mut Vec<(String, usize, usize)>,
+    defined_functions: &'a mut HashSet<String>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Bash's AST node kinds
+fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let file_nid = ctx.file_nid;
+    let path = ctx.path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let function_bodies = &mut *ctx.function_bodies;
+    let defined_functions = &mut *ctx.defined_functions;
     let t = node.kind();
 
     match t {
@@ -334,19 +348,7 @@ fn walk_bash(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_bash(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        path,
-                        nodes,
-                        edges,
-                        seen_ids,
-                        function_bodies,
-                        defined_functions,
-                    );
+                    walk_bash(ctx, cur.node(), source);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -361,19 +363,28 @@ fn walk_bash(
 /// Recursively descends the AST looking for `command` nodes. When the command name is a known
 /// function in this file (via `label_to_nid`), a `calls` edge is emitted. Bash built-ins and
 /// control-flow keywords are filtered via `BASH_SKIP`. Mirrors Python `_walk_calls_bash`.
-#[allow(clippy::too_many_arguments)]
+/// Shared state threaded through every [`walk_calls_bash`] recursion.
+struct BashCallCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    defined_functions: &'a HashSet<String>,
+    edges: &'a mut Vec<Edge>,
+    seen_calls: &'a mut HashSet<(String, String)>,
+}
+
 fn walk_calls_bash(
+    ctx: &mut BashCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
     func_nid: &str,
     body_start: usize,
     body_end: usize,
-    defined_functions: &HashSet<String>,
-    edges: &mut Vec<Edge>,
-    seen_calls: &mut HashSet<(String, String)>,
 ) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let defined_functions = ctx.defined_functions;
+    let edges = &mut *ctx.edges;
+    let seen_calls = &mut *ctx.seen_calls;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
@@ -415,18 +426,7 @@ fn walk_calls_bash(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_bash(
-                cur.node(),
-                source,
-                str_path,
-                stem,
-                func_nid,
-                body_start,
-                body_end,
-                defined_functions,
-                edges,
-                seen_calls,
-            );
+            walk_calls_bash(ctx, cur.node(), source, func_nid, body_start, body_end);
             if !cur.goto_next_sibling() {
                 break;
             }

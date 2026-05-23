@@ -5,6 +5,41 @@ use anyhow::Result;
 
 use crate::cli::{build_analysis, graphify_out_dir};
 
+/// Knobs for the LLM semantic-extraction phase.
+pub(crate) struct LlmOptions<'a> {
+    pub backend: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub max_workers: Option<usize>,
+    pub token_budget: usize,
+    pub max_concurrency: usize,
+    pub api_timeout: u64,
+    pub dedup_llm: bool,
+}
+
+/// Clustering / hub-exclusion knobs.
+pub(crate) struct ClusterOptions {
+    pub no_cluster: bool,
+    pub resolution: f64,
+    pub exclude_hubs: Option<f64>,
+}
+
+/// Knobs for "promote into the global graph" behaviour.
+pub(crate) struct GlobalOptions<'a> {
+    pub global: bool,
+    pub as_tag: Option<&'a str>,
+}
+
+/// Aggregated arguments for [`cmd_extract`].
+pub(crate) struct ExtractOptions<'a> {
+    pub path: &'a std::path::Path,
+    pub out: Option<&'a std::path::Path>,
+    pub exclude: &'a [String],
+    pub google_workspace: bool,
+    pub llm: LlmOptions<'a>,
+    pub cluster: ClusterOptions,
+    pub global: GlobalOptions<'a>,
+}
+
 /// Run the headless full extraction pipeline (AST + optional LLM semantic enrichment).
 ///
 /// When a `--backend` is explicitly provided, or when `detect_backend()` finds an
@@ -15,58 +50,38 @@ use crate::cli::{build_analysis, graphify_out_dir};
 /// `conceptually_related_to`, etc.) that the AST extractor cannot infer.
 ///
 /// Ports `__main__.py:2397` (`elif cmd == "extract"`).
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::fn_params_excessive_bools)]
-// reason: mirrors the monolithic extract command from Python's __main__.py:2397;
-// each bool maps 1:1 to a distinct CLI flag and collapsing them into an enum
-// would diverge from the Python reference.
-pub(crate) fn cmd_extract(
-    path: &std::path::Path,
-    no_cluster: bool,
-    out: Option<&std::path::Path>,
-    backend: Option<&str>,
-    model: Option<&str>,
-    max_workers: Option<usize>,
-    token_budget: usize,
-    max_concurrency: usize,
-    api_timeout: u64,
-    google_workspace: bool,
-    global: bool,
-    as_tag: Option<&str>,
-    resolution: f64,
-    exclude_hubs: Option<f64>,
-    exclude: &[String],
-    dedup_llm: bool,
-) -> Result<()> {
+pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
+    let ExtractOptions {
+        path,
+        out,
+        exclude,
+        google_workspace,
+        llm,
+        cluster,
+        global,
+    } = opts;
+    let LlmOptions {
+        backend,
+        model,
+        max_workers,
+        token_budget,
+        max_concurrency,
+        api_timeout,
+        dedup_llm,
+    } = llm;
+    let ClusterOptions {
+        no_cluster,
+        resolution,
+        exclude_hubs,
+    } = cluster;
+    let GlobalOptions { global, as_tag } = global;
+
     let extra_excludes: Option<&[String]> = if exclude.is_empty() {
         None
     } else {
         Some(exclude)
     };
-    // Mirror Python `__main__.py:2518-2519`: propagate `--api-timeout S` into
-    // `GRAPHIFY_API_TIMEOUT` so the LLM client honours it. Set at the very top
-    // of `cmd_extract`, before any LLM worker threads spawn, so the SAFETY
-    // contract on `std::env::set_var` (no concurrent env reads/writes) holds.
-    if api_timeout > 0 {
-        // SAFETY: cmd_extract runs on the single-threaded main runtime; no
-        // other thread reads or writes the environment at this point.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("GRAPHIFY_API_TIMEOUT", api_timeout.to_string());
-        }
-    }
-    // `--google-workspace` mirrors Python's `__main__.py:2479-2480`: it forces
-    // Google Drive shortcut export ON for this run. We set the env var that
-    // `graphify_detect::walk` and `graphify_google::google_workspace_enabled`
-    // read so the detection path picks it up. Same SAFETY contract as above.
-    if google_workspace {
-        // SAFETY: see above — set before any worker thread is spawned.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("GRAPHIFY_GOOGLE_WORKSPACE", "1");
-        }
-    }
+    apply_env_overrides(api_timeout, google_workspace);
 
     // Resolve the effective backend: explicit flag wins; otherwise auto-detect from
     // environment (mirrors Python's `_detect_backend()` at llm.py).
@@ -75,27 +90,84 @@ pub(crate) fn cmd_extract(
         .or_else(graphify_llm::detect_backend);
 
     let start = std::time::Instant::now();
-
-    // Pre-resolve the output dir + manifest path so we can decide between full
-    // detect and incremental detect without rebuilding paths later. Mirrors
-    // Python's `incremental_mode = manifest_path.exists() and graph_path.exists()`
-    // at `__main__.py:2611`.
-    let resolved_out_dir = out.map_or_else(
+    let out_dir = out.map_or_else(
         || path.join(graphify_out_dir()),
         std::path::Path::to_path_buf,
     );
-    let manifest_probe = resolved_out_dir.join("manifest.json");
-    let graph_probe = resolved_out_dir.join("graph.json");
-    let incremental_mode = manifest_probe.exists() && graph_probe.exists();
 
-    let detect = if incremental_mode {
+    let detect = run_detect_phase(path, &out_dir, extra_excludes);
+    let files = collect_extract_files(path, &detect);
+    let extraction = run_ast_extract_phase(&files, path);
+    let cfg = SemanticConfig {
+        backend: effective_backend.as_deref(),
+        model,
+        max_workers,
+        token_budget,
+        max_concurrency,
+    };
+    let SemanticOutcome {
+        extraction_json,
+        sem_input_tokens,
+        sem_output_tokens,
+    } = run_semantic_phase(path, &files, &extraction, &cfg);
+
+    std::fs::create_dir_all(&out_dir)?;
+    write_scan_breadcrumb(path, &out_dir);
+    persist_raw_extraction(&out_dir, &extraction_json)?;
+
+    let graph = build_graph_phase(
+        &extraction_json,
+        dedup_llm,
+        effective_backend.as_deref(),
+        path,
+    )?;
+    let graph_path = out_dir.join("graph.json");
+    let communities = run_cluster_phase(&graph, no_cluster, resolution, exclude_hubs);
+    graphify_export::to_json(&graph, &communities, &graph_path, true, None)?;
+    eprintln!("      wrote {}", graph_path.display());
+    persist_semantic_marker(&out_dir, sem_output_tokens)?;
+
+    if no_cluster {
+        if global {
+            cmd_extract_global_add(&graph_path, as_tag, path);
+        }
+        eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
+        return Ok(());
+    }
+
+    run_analysis_phase(&graph, &communities, path, &out_dir)?;
+    let labels = sync_labels_file(&out_dir, &communities)?;
+    render_html_viz(&graph, &communities, &out_dir, &labels);
+
+    if global {
+        cmd_extract_global_add(&graph_path, as_tag, path);
+    }
+    persist_manifest(&detect.files, &out_dir);
+    print_token_summary(
+        effective_backend.as_deref(),
+        sem_input_tokens,
+        sem_output_tokens,
+    );
+
+    eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
+    Ok(())
+}
+
+/// Detect phase: incremental scan when a manifest is present, otherwise a full scan.
+fn run_detect_phase(
+    path: &std::path::Path,
+    resolved_out_dir: &std::path::Path,
+    extra_excludes: Option<&[String]>,
+) -> graphify_detect::DetectResult {
+    // Mirrors Python's `incremental_mode = manifest_path.exists() and graph_path.exists()`
+    // at `__main__.py:2611`.
+    let incremental_mode = resolved_out_dir.join("manifest.json").exists()
+        && resolved_out_dir.join("graph.json").exists();
+    if incremental_mode {
         eprintln!(
             "[1/6] incremental scan of {} (manifest present) ...",
             path.display()
         );
-        // Load the existing manifest, then ask detect_incremental which files
-        // changed since the last run. On any I/O error we fall back to a full
-        // scan so the user is never blocked.
         let prev = graphify_detect::load_manifest(path).unwrap_or_default();
         match graphify_detect::detect_incremental(path, &prev) {
             Ok(inc) => {
@@ -105,18 +177,21 @@ pub(crate) fn cmd_extract(
                     "      {new_total} new/changed, {unchanged_total} unchanged, {} deleted",
                     inc.deleted_files.len()
                 );
-                graphify_detect::detect(path, None, extra_excludes)
             }
-            Err(e) => {
-                eprintln!("      incremental scan failed ({e}); falling back to full scan");
-                graphify_detect::detect(path, None, extra_excludes)
-            }
+            Err(e) => eprintln!("      incremental scan failed ({e}); falling back to full scan"),
         }
+        graphify_detect::detect(path, None, extra_excludes)
     } else {
         eprintln!("[1/6] detecting files in {} ...", path.display());
         graphify_detect::detect(path, None, extra_excludes)
-    };
+    }
+}
 
+/// Flatten the "code" + "document" buckets into absolute paths and print a summary.
+fn collect_extract_files(
+    path: &std::path::Path,
+    detect: &graphify_detect::DetectResult,
+) -> Vec<std::path::PathBuf> {
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut by_kind: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (kind, paths) in &detect.files {
@@ -137,142 +212,179 @@ pub(crate) fn cmd_extract(
         detect.total_files,
         files.len()
     );
+    files
+}
 
+/// AST extraction stage (step [2/6]).
+fn run_ast_extract_phase(
+    files: &[std::path::PathBuf],
+    path: &std::path::Path,
+) -> graphify_extract::ExtractOutput {
     eprintln!("[2/6] extracting AST from {} files ...", files.len());
     let extract_start = std::time::Instant::now();
-    let extraction = graphify_extract::extract(&files, Some(path));
+    let extraction = graphify_extract::extract(files, Some(path));
     eprintln!(
         "      extracted {} nodes, {} edges in {:.1}s",
         extraction.nodes.len(),
         extraction.edges.len(),
         extract_start.elapsed().as_secs_f64()
     );
+    extraction
+}
 
-    // When an LLM backend is available, run semantic extraction and merge the
-    // results on top of the AST output.  Semantic nodes/edges take priority
-    // because they carry richer relation types (calls, cites, etc.) that the
-    // AST extractor cannot infer.  This matches Python's two-pass strategy at
-    // __main__.py:2500–2560.
-    //
-    // `extraction.nodes`/`edges` are `Vec<IndexMap<String, Value>>` (graphify-extract
-    // types).  `sem_result.nodes`/`edges` are `Vec<serde_json::Value>` (graphify-llm
-    // types).  We convert by serializing via serde_json so the final JSON is uniform.
-    // Track the LLM output_tokens so we can write `.graphify_semantic_marker`
-    // when the run had real LLM content (mirrors Python `__main__.py:2864`).
-    let mut sem_output_tokens: u64 = 0;
-    let mut sem_input_tokens: u64 = 0;
-    let extraction_json = if let Some(ref b) = effective_backend {
-        // Semantic cache check — skip files already extracted to avoid re-spending
-        // LLM tokens on the same content. Mirrors Python `__main__.py:2682`.
-        let sem_paths: Vec<String> = files
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        let cache_split = graphify_cache::check_semantic_cache(&sem_paths, path);
-        let cache_hits = sem_paths
-            .len()
-            .saturating_sub(cache_split.uncached_files.len());
-        if cache_hits > 0 {
-            eprintln!(
-                "      semantic cache: {cache_hits} hit / {} miss",
-                cache_split.uncached_files.len()
-            );
-        }
-        let uncached_files: Vec<std::path::PathBuf> = cache_split
-            .uncached_files
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
+/// Sub-options needed to drive [`run_semantic_phase`].
+struct SemanticConfig<'a> {
+    backend: Option<&'a str>,
+    model: Option<&'a str>,
+    max_workers: Option<usize>,
+    token_budget: usize,
+    max_concurrency: usize,
+}
 
-        let chunk_size = max_workers.unwrap_or(8);
-        let cfg = graphify_llm::CorpusConfig {
-            backend: b.as_str(),
-            api_key: None,
-            model: model.filter(|s| !s.is_empty()),
-            root: path,
-            chunk_size,
-            token_budget: Some(token_budget),
-            max_concurrency,
-            max_retry_depth: 3,
-        };
-        eprintln!(
-            "      running LLM semantic extraction via backend={b} \
-             (model={}, token-budget={token_budget}, max-concurrency={max_concurrency}) on {} files ...",
-            model.unwrap_or("<default>"),
-            uncached_files.len()
-        );
-        let sem_start = std::time::Instant::now();
-        let (mut sem_result, failed) =
-            graphify_llm::extract_corpus_parallel(&uncached_files, &cfg, None);
-        sem_output_tokens = sem_result.output_tokens;
-        sem_input_tokens = sem_result.input_tokens;
-        eprintln!(
-            "      semantic extraction done in {:.1}s \
-             ({} nodes, {} edges, {failed} failed chunks)",
-            sem_start.elapsed().as_secs_f64(),
-            sem_result.nodes.len(),
-            sem_result.edges.len(),
-        );
+/// Output of [`run_semantic_phase`]: merged JSON plus token totals.
+struct SemanticOutcome {
+    extraction_json: serde_json::Value,
+    sem_input_tokens: u64,
+    sem_output_tokens: u64,
+}
 
-        // Save the fresh semantic results into the cache so future runs can
-        // skip them. Mirrors Python's `_save_semantic_cache` call.
-        if (!sem_result.nodes.is_empty() || !sem_result.edges.is_empty())
-            && let Err(e) = graphify_cache::save_semantic_cache(
-                &sem_result.nodes,
-                &sem_result.edges,
-                &sem_result.hyperedges,
-                path,
-            )
-        {
-            eprintln!("      warning: failed to save semantic cache: {e}");
-        }
-
-        // Prepend the cached results so they live alongside the fresh ones.
-        let mut all_nodes = cache_split.cached_nodes;
-        all_nodes.extend(sem_result.nodes);
-        sem_result.nodes = all_nodes;
-        let mut all_edges = cache_split.cached_edges;
-        all_edges.extend(sem_result.edges);
-        sem_result.edges = all_edges;
-        let mut all_hyper = cache_split.cached_hyperedges;
-        all_hyper.extend(sem_result.hyperedges);
-        sem_result.hyperedges = all_hyper;
-        // Append AST nodes/edges after the semantic ones; semantic entries win
-        // any deduplication that happens inside build_from_json.
-        // Convert IndexMap→Value via JSON round-trip (both serialize identically).
-        if let serde_json::Value::Array(ast_nodes_v) =
-            serde_json::to_value(&extraction.nodes).unwrap_or(serde_json::Value::Array(vec![]))
-        {
-            sem_result.nodes.extend(ast_nodes_v);
-        }
-        if let serde_json::Value::Array(ast_edges_v) =
-            serde_json::to_value(&extraction.edges).unwrap_or(serde_json::Value::Array(vec![]))
-        {
-            sem_result.edges.extend(ast_edges_v);
-        }
-        serde_json::json!({
-            "nodes": sem_result.nodes,
-            "edges": sem_result.edges,
-            "hyperedges": sem_result.hyperedges,
-        })
-    } else {
-        serde_json::json!({
+/// Optional LLM semantic-extraction stage, merging onto the AST result.
+///
+/// When no backend is configured, returns the AST extraction as-is.
+fn run_semantic_phase(
+    path: &std::path::Path,
+    files: &[std::path::PathBuf],
+    extraction: &graphify_extract::ExtractOutput,
+    cfg: &SemanticConfig<'_>,
+) -> SemanticOutcome {
+    let Some(b) = cfg.backend else {
+        let extraction_json = serde_json::json!({
             "nodes": extraction.nodes,
             "edges": extraction.edges,
             "hyperedges": [],
-        })
+        });
+        return SemanticOutcome {
+            extraction_json,
+            sem_input_tokens: 0,
+            sem_output_tokens: 0,
+        };
     };
-    // Resolve output dir. When `--out` is not set, use GRAPHIFY_OUT (defaulting
-    // to "graphify-out") relative to the source path, matching Python's contract.
-    let out_dir = out.map_or_else(
-        || path.join(graphify_out_dir()),
-        std::path::Path::to_path_buf,
-    );
-    std::fs::create_dir_all(&out_dir)?;
 
-    // Drop a `.graphify_root` breadcrumb so `graphify update` invoked from
-    // anywhere can recover the original scan root. Mirrors Python's
-    // `(out / ".graphify_root").write_text(...)` at `watch.py:424`.
+    // Semantic cache check — skip files already extracted to avoid re-spending
+    // LLM tokens on the same content. Mirrors Python `__main__.py:2682`.
+    let sem_paths: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let cache_split = graphify_cache::check_semantic_cache(&sem_paths, path);
+    let cache_hits = sem_paths
+        .len()
+        .saturating_sub(cache_split.uncached_files.len());
+    if cache_hits > 0 {
+        eprintln!(
+            "      semantic cache: {cache_hits} hit / {} miss",
+            cache_split.uncached_files.len()
+        );
+    }
+    let uncached_files: Vec<std::path::PathBuf> = cache_split
+        .uncached_files
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+
+    let chunk_size = cfg.max_workers.unwrap_or(8);
+    let llm_cfg = graphify_llm::CorpusConfig {
+        backend: b,
+        api_key: None,
+        model: cfg.model.filter(|s| !s.is_empty()),
+        root: path,
+        chunk_size,
+        token_budget: Some(cfg.token_budget),
+        max_concurrency: cfg.max_concurrency,
+        max_retry_depth: 3,
+    };
+    eprintln!(
+        "      running LLM semantic extraction via backend={b} \
+         (model={}, token-budget={}, max-concurrency={}) on {} files ...",
+        cfg.model.unwrap_or("<default>"),
+        cfg.token_budget,
+        cfg.max_concurrency,
+        uncached_files.len()
+    );
+    let sem_start = std::time::Instant::now();
+    let (mut sem_result, failed) =
+        graphify_llm::extract_corpus_parallel(&uncached_files, &llm_cfg, None);
+    let sem_output_tokens = sem_result.output_tokens;
+    let sem_input_tokens = sem_result.input_tokens;
+    eprintln!(
+        "      semantic extraction done in {:.1}s \
+         ({} nodes, {} edges, {failed} failed chunks)",
+        sem_start.elapsed().as_secs_f64(),
+        sem_result.nodes.len(),
+        sem_result.edges.len(),
+    );
+
+    save_semantic_cache_safe(&sem_result, path);
+    merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);
+    let extraction_json = serde_json::json!({
+        "nodes": sem_result.nodes,
+        "edges": sem_result.edges,
+        "hyperedges": sem_result.hyperedges,
+    });
+    SemanticOutcome {
+        extraction_json,
+        sem_input_tokens,
+        sem_output_tokens,
+    }
+}
+
+/// Best-effort persistence of fresh semantic results into the cache. Warns on
+/// I/O failure instead of bubbling the error up.
+fn save_semantic_cache_safe(sem_result: &graphify_llm::LlmResponse, path: &std::path::Path) {
+    if (!sem_result.nodes.is_empty() || !sem_result.edges.is_empty())
+        && let Err(e) = graphify_cache::save_semantic_cache(
+            &sem_result.nodes,
+            &sem_result.edges,
+            &sem_result.hyperedges,
+            path,
+        )
+    {
+        eprintln!("      warning: failed to save semantic cache: {e}");
+    }
+}
+
+/// Prepend cached semantic entries to `sem_result`, then append AST nodes/edges.
+///
+/// Semantic entries win any deduplication that happens inside `build_from_json`.
+fn merge_semantic_with_cache_and_ast(
+    sem_result: &mut graphify_llm::LlmResponse,
+    cache_split: graphify_cache::SemanticCacheSplit,
+    extraction: &graphify_extract::ExtractOutput,
+) {
+    let mut all_nodes = cache_split.cached_nodes;
+    all_nodes.extend(std::mem::take(&mut sem_result.nodes));
+    sem_result.nodes = all_nodes;
+    let mut all_edges = cache_split.cached_edges;
+    all_edges.extend(std::mem::take(&mut sem_result.edges));
+    sem_result.edges = all_edges;
+    let mut all_hyper = cache_split.cached_hyperedges;
+    all_hyper.extend(std::mem::take(&mut sem_result.hyperedges));
+    sem_result.hyperedges = all_hyper;
+    if let serde_json::Value::Array(ast_nodes_v) =
+        serde_json::to_value(&extraction.nodes).unwrap_or(serde_json::Value::Array(vec![]))
+    {
+        sem_result.nodes.extend(ast_nodes_v);
+    }
+    if let serde_json::Value::Array(ast_edges_v) =
+        serde_json::to_value(&extraction.edges).unwrap_or(serde_json::Value::Array(vec![]))
+    {
+        sem_result.edges.extend(ast_edges_v);
+    }
+}
+
+/// Drop a `.graphify_root` breadcrumb so `graphify update` invoked from any
+/// directory can recover the original scan root.
+fn write_scan_breadcrumb(path: &std::path::Path, out_dir: &std::path::Path) {
     let scan_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Err(e) = std::fs::write(
         out_dir.join(".graphify_root"),
@@ -280,93 +392,112 @@ pub(crate) fn cmd_extract(
     ) {
         eprintln!("      warning: failed to write .graphify_root: {e}");
     }
+}
 
+/// Persist the raw extraction (AST + semantic) JSON sidecar.
+fn persist_raw_extraction(
+    out_dir: &std::path::Path,
+    extraction_json: &serde_json::Value,
+) -> Result<()> {
     let extraction_path = out_dir.join("stage_02_extract.json");
     std::fs::write(
         &extraction_path,
-        serde_json::to_string_pretty(&extraction_json)?,
+        serde_json::to_string_pretty(extraction_json)?,
     )?;
     eprintln!("      wrote {}", extraction_path.display());
+    Ok(())
+}
 
+/// Build stage (step [3/6]): entity dedup + `build_from_json`.
+fn build_graph_phase(
+    extraction_json: &serde_json::Value,
+    dedup_llm: bool,
+    backend: Option<&str>,
+    path: &std::path::Path,
+) -> Result<graphify_build::Graph> {
     eprintln!("[3/6] building graph ...");
-    // Run entity dedup before the graph build so fuzzy duplicates (Jaro-Winkler
-    // 92+ on normalised labels, plus MinHash candidate pairs) collapse into one
-    // surviving node. Mirrors Python's `build([...], dedup=True, dedup_llm_backend=...)`
-    // at `__main__.py:2839` — Python ALWAYS runs dedup on extract.
-    let deduped_json = run_entity_dedup(&extraction_json, dedup_llm, effective_backend.as_deref());
+    let deduped_json = run_entity_dedup(extraction_json, dedup_llm, backend);
     let graph = graphify_build::build_from_json(deduped_json, true, Some(path))?;
     eprintln!(
         "      built graph: {} nodes, {} edges",
         graph.node_count(),
         graph.edge_count()
     );
-    let graph_path = out_dir.join("graph.json");
+    Ok(graph)
+}
 
-    let communities = if no_cluster {
+/// Cluster stage (step [4/6]) — returns an empty map when clustering is skipped.
+fn run_cluster_phase(
+    graph: &graphify_build::Graph,
+    no_cluster: bool,
+    resolution: f64,
+    exclude_hubs: Option<f64>,
+) -> indexmap::IndexMap<i64, Vec<String>> {
+    if no_cluster {
         eprintln!("[4/6] clustering: skipped (--no-cluster)");
-        indexmap::IndexMap::new()
-    } else {
-        let hub_desc = exclude_hubs
-            .map(|p| format!(", exclude-hubs={p}"))
-            .unwrap_or_default();
-        eprintln!(
-            "[4/6] clustering (Louvain, resolution={resolution}{hub_desc}) on {} nodes ...",
-            graph.node_count()
-        );
-        let cluster_start = std::time::Instant::now();
-        // Python's `--exclude-hubs` takes a 0.0–1.0 fraction; graphify_cluster
-        // expects a 0.0–100.0 percentile. Convert here so the CLI surface
-        // matches Python byte-for-byte.
-        let hubs_pct = exclude_hubs.map(|p| p * 100.0);
-        let c = graphify_cluster::cluster(&graph, resolution, hubs_pct);
-        eprintln!(
-            "      found {} communities in {:.1}s",
-            c.len(),
-            cluster_start.elapsed().as_secs_f64()
-        );
-        c
-    };
-    graphify_export::to_json(&graph, &communities, &graph_path, true, None)?;
-    eprintln!("      wrote {}", graph_path.display());
+        return indexmap::IndexMap::new();
+    }
+    let hub_desc = exclude_hubs
+        .map(|p| format!(", exclude-hubs={p}"))
+        .unwrap_or_default();
+    eprintln!(
+        "[4/6] clustering (Louvain, resolution={resolution}{hub_desc}) on {} nodes ...",
+        graph.node_count()
+    );
+    let cluster_start = std::time::Instant::now();
+    // Python's `--exclude-hubs` takes a 0.0–1.0 fraction; graphify_cluster expects
+    // a 0.0–100.0 percentile. Convert here so the CLI surface matches Python.
+    let hubs_pct = exclude_hubs.map(|p| p * 100.0);
+    let c = graphify_cluster::cluster(graph, resolution, hubs_pct);
+    eprintln!(
+        "      found {} communities in {:.1}s",
+        c.len(),
+        cluster_start.elapsed().as_secs_f64()
+    );
+    c
+}
 
-    // Drop a marker so downstream consumers (e.g. wiki export) can tell
-    // semantic content was generated. Mirrors `__main__.py:2864`.
+/// Drop a `.graphify_semantic_marker` so downstream consumers (e.g. wiki export)
+/// can tell semantic content was generated. Mirrors `__main__.py:2864`.
+fn persist_semantic_marker(out_dir: &std::path::Path, sem_output_tokens: u64) -> Result<()> {
     if sem_output_tokens > 0 {
         let marker_path = out_dir.join(".graphify_semantic_marker");
         let marker = serde_json::json!({"output_tokens": sem_output_tokens});
         std::fs::write(&marker_path, serde_json::to_string(&marker)?)?;
     }
+    Ok(())
+}
 
-    if no_cluster {
-        // Wire --global/--as even when clustering is skipped (mirrors Python).
-        if global {
-            cmd_extract_global_add(&graph_path, as_tag, path);
-        }
-        eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
-        return Ok(());
-    }
-
+/// Analyze stage (step [5/6]): god nodes + surprises + suggested questions + sidecar.
+fn run_analysis_phase(
+    graph: &graphify_build::Graph,
+    communities: &indexmap::IndexMap<i64, Vec<String>>,
+    path: &std::path::Path,
+    out_dir: &std::path::Path,
+) -> Result<()> {
     eprintln!("[5/6] analyzing (god nodes, surprising connections, suggested questions) ...");
     let analyze_start = std::time::Instant::now();
-    let analysis = build_analysis(&graph, &communities, path);
+    let analysis = build_analysis(graph, communities, path);
     eprintln!(
         "      analysis done in {:.1}s",
         analyze_start.elapsed().as_secs_f64()
     );
     let report_path = out_dir.join("GRAPH_REPORT.md");
-    graphify_report::write_report(&graph, &analysis, &report_path)?;
+    graphify_report::write_report(graph, &analysis, &report_path)?;
     eprintln!("      wrote {}", report_path.display());
 
-    // Persist the analysis sidecar so subsequent `graphify export wiki/obsidian/svg/html`
-    // invocations can recover communities/cohesion/gods. Mirrors `__main__.py:2889`.
     let analysis_path = out_dir.join(".graphify_analysis.json");
     std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
     eprintln!("      wrote {}", analysis_path.display());
+    Ok(())
+}
 
-    // Persist (or refresh) `.graphify_labels.json` so the HTML viz renders
-    // per-community checkboxes and subsequent exports can recover the names.
-    // Loads existing labels first to preserve user-edited names; falls back to
-    // `"Community <cid>"`. Mirrors `cluster_only` and the watch rebuild pipeline.
+/// Load `.graphify_labels.json`, top up missing entries with `"Community <cid>"`,
+/// and write the merged map back. Preserves user-edited names.
+fn sync_labels_file(
+    out_dir: &std::path::Path,
+    communities: &indexmap::IndexMap<i64, Vec<String>>,
+) -> Result<indexmap::IndexMap<i64, String>> {
     let labels_path = out_dir.join(".graphify_labels.json");
     let mut labels: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
     if let Ok(text) = std::fs::read_to_string(&labels_path)
@@ -394,53 +525,81 @@ pub(crate) fn cmd_extract(
         serde_json::to_string(&serde_json::Value::Object(labels_json))?,
     )?;
     eprintln!("      wrote {}", labels_path.display());
+    Ok(labels)
+}
 
+/// HTML viz stage (step [6/6]).
+fn render_html_viz(
+    graph: &graphify_build::Graph,
+    communities: &indexmap::IndexMap<i64, Vec<String>>,
+    out_dir: &std::path::Path,
+    labels: &indexmap::IndexMap<i64, String>,
+) {
     eprintln!("[6/6] rendering HTML viz ...");
     let html_path = out_dir.join("graph.html");
     let labels_opt = if labels.is_empty() {
         None
     } else {
-        Some(&labels)
+        Some(labels)
     };
-    match graphify_export::to_html(&graph, &communities, &html_path, labels_opt, None, None) {
+    match graphify_export::to_html(graph, communities, &html_path, labels_opt, None, None) {
         Ok(()) => eprintln!("      wrote {}", html_path.display()),
         Err(e) => eprintln!("      skipped ({e})"),
     }
+}
 
-    // Wire --global/--as after extract+cluster+report, mirroring Python's
-    // `global_add` call at __main__.py:2867.
-    if global {
-        cmd_extract_global_add(&graph_path, as_tag, path);
-    }
-
-    // Persist a manifest so subsequent `extract`/`update` runs can take the
-    // incremental code path (compare file hashes, only re-extract changed files).
-    // Mirrors `_save_manifest(... kind="both")` at `__main__.py:2891`. The
-    // graphify_detect API expects an IndexMap (deterministic ordering); the
-    // detect() result hands us a HashMap so we copy through.
+/// Persist a manifest so subsequent `extract`/`update` runs can take the
+/// incremental code path. Mirrors `_save_manifest(... kind="both")` at
+/// `__main__.py:2891`.
+fn persist_manifest(
+    detect_files: &std::collections::HashMap<String, Vec<String>>,
+    out_dir: &std::path::Path,
+) {
     let manifest_path = out_dir.join("manifest.json");
-    let files_indexed: indexmap::IndexMap<String, Vec<String>> = detect
-        .files
+    let files_indexed: indexmap::IndexMap<String, Vec<String>> = detect_files
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if let Err(e) = graphify_detect::save_manifest(&files_indexed, &manifest_path, "both") {
         eprintln!("      warning: could not write manifest: {e}");
     }
+}
 
-    // Token + cost summary so users can see what the LLM run cost. Python
-    // prints this at `__main__.py:2895`. Skip when no LLM was used.
+/// Print the token + cost summary so users can see what the LLM run cost.
+/// Mirrors Python's `__main__.py:2895`. No-op when no LLM was used.
+fn print_token_summary(backend: Option<&str>, sem_input_tokens: u64, sem_output_tokens: u64) {
     if (sem_output_tokens > 0 || sem_input_tokens > 0)
-        && let Some(b) = effective_backend.as_deref()
+        && let Some(b) = backend
     {
         let cost = graphify_llm::estimate_cost(b, sem_input_tokens, sem_output_tokens);
         eprintln!(
             "[graphify extract] tokens: {sem_input_tokens} in / {sem_output_tokens} out (${cost:.4} on {b})"
         );
     }
+}
 
-    eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
-    Ok(())
+/// Apply per-run environment overrides for the LLM client and Google Workspace.
+///
+/// Mirrors Python `__main__.py:2518-2519` (API timeout) and `__main__.py:2479-2480`
+/// (Google Workspace).  Called at the top of `cmd_extract`, before any LLM worker
+/// threads spawn, so the SAFETY contract on `std::env::set_var` (no concurrent env
+/// reads/writes) holds.
+fn apply_env_overrides(api_timeout: u64, google_workspace: bool) {
+    if api_timeout > 0 {
+        // SAFETY: cmd_extract runs on the single-threaded main runtime; no other
+        // thread reads or writes the environment at this point.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("GRAPHIFY_API_TIMEOUT", api_timeout.to_string());
+        }
+    }
+    if google_workspace {
+        // SAFETY: see above — set before any worker thread is spawned.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("GRAPHIFY_GOOGLE_WORKSPACE", "1");
+        }
+    }
 }
 
 /// Re-extract code files and update the graph (no LLM re-run by default).
@@ -476,15 +635,12 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
         "Re-extracting code files in {} (no LLM needed)...",
         watch_path.display()
     );
-    let ok = graphify_watch::rebuild_code(
-        &watch_path,
-        None,
-        false,
-        effective_force,
+    let opts = graphify_watch::RebuildOptions {
+        force: effective_force,
         no_cluster,
-        true, // acquire_lock
-        true, // block_on_lock — interactive
-    )?;
+        lock: graphify_watch::LockPolicy::BlockOn, // interactive
+    };
+    let ok = graphify_watch::rebuild_code(&watch_path, None, opts)?;
     if ok {
         println!(
             "Code graph updated. For doc/paper/image changes run /graphify --update in your AI assistant."

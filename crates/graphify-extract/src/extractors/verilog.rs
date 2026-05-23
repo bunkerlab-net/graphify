@@ -67,17 +67,17 @@ pub fn extract_verilog(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
-    walk_verilog(
-        root,
-        &source,
-        &str_path,
-        &stem,
-        &file_nid,
-        None,
-        &mut nodes,
-        &mut edges,
-        &mut seen_ids,
-    );
+    {
+        let mut walk_ctx = VerilogWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+        };
+        walk_verilog(&mut walk_ctx, root, &source, None);
+    }
 
     FileResult {
         nodes,
@@ -91,17 +91,22 @@ pub fn extract_verilog(path: &Path) -> FileResult {
 ///
 /// Handles `module_declaration`, `function_declaration`, `task_declaration`, and
 /// `module_instantiation` (as `uses` edges). Mirrors Python `_walk_verilog`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_verilog`] recursion.
+struct VerilogWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Verilog's AST node kinds
 fn walk_verilog(
+    ctx: &mut VerilogWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     module_nid: Option<&str>,
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
 ) {
     let t = node.kind();
     match t {
@@ -109,22 +114,22 @@ fn walk_verilog(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let mod_name = read_text(name_node, source);
                 let line = node.start_position().row + 1;
-                let nid = make_id(&[stem, mod_name]);
-                if seen_ids.insert(nid.clone()) {
-                    nodes.push(Node {
+                let nid = make_id(&[ctx.stem, mod_name]);
+                if ctx.seen_ids.insert(nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: nid.clone(),
                         label: mod_name.to_string(),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
-                    source: file_nid.to_string(),
+                ctx.edges.push(Edge {
+                    source: ctx.file_nid.to_string(),
                     target: nid.clone(),
                     relation: "defines".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
@@ -133,17 +138,7 @@ fn walk_verilog(
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
-                        walk_verilog(
-                            cur.node(),
-                            source,
-                            str_path,
-                            stem,
-                            file_nid,
-                            Some(&nid),
-                            nodes,
-                            edges,
-                            seen_ids,
-                        );
+                        walk_verilog(ctx, cur.node(), source, Some(&nid));
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -155,23 +150,23 @@ fn walk_verilog(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let func_name = read_text(name_node, source);
                 let line = node.start_position().row + 1;
-                let parent = module_nid.unwrap_or(file_nid);
+                let parent = module_nid.unwrap_or(ctx.file_nid);
                 let nid = make_id(&[parent, func_name]);
-                if seen_ids.insert(nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: nid.clone(),
                         label: format!("{func_name}()"),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
+                ctx.edges.push(Edge {
                     source: parent.to_string(),
                     target: nid,
                     relation: "contains".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
@@ -183,23 +178,23 @@ fn walk_verilog(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let task_name = read_text(name_node, source);
                 let line = node.start_position().row + 1;
-                let parent = module_nid.unwrap_or(file_nid);
+                let parent = module_nid.unwrap_or(ctx.file_nid);
                 let nid = make_id(&[parent, task_name]);
-                if seen_ids.insert(nid.clone()) {
-                    nodes.push(Node {
+                if ctx.seen_ids.insert(nid.clone()) {
+                    ctx.nodes.push(Node {
                         id: nid.clone(),
                         label: task_name.to_string(),
                         file_type: "code".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                     });
                 }
-                edges.push(Edge {
+                ctx.edges.push(Edge {
                     source: parent.to_string(),
                     target: nid,
                     relation: "contains".to_string(),
                     confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.to_string(),
+                    source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     weight: 1.0,
                     context: None,
@@ -217,22 +212,22 @@ fn walk_verilog(
                         if !pkg_name.is_empty() {
                             let line = node.start_position().row + 1;
                             let tgt_nid = make_id1(&pkg_name);
-                            if seen_ids.insert(tgt_nid.clone()) {
-                                nodes.push(Node {
+                            if ctx.seen_ids.insert(tgt_nid.clone()) {
+                                ctx.nodes.push(Node {
                                     id: tgt_nid.clone(),
                                     label: pkg_name,
                                     file_type: "code".to_string(),
-                                    source_file: str_path.to_string(),
+                                    source_file: ctx.str_path.to_string(),
                                     source_location: Some(format!("L{line}")),
                                 });
                             }
-                            let src = module_nid.unwrap_or(file_nid);
-                            edges.push(Edge {
+                            let src = module_nid.unwrap_or(ctx.file_nid);
+                            ctx.edges.push(Edge {
                                 source: src.to_string(),
                                 target: tgt_nid,
                                 relation: "imports_from".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: None,
@@ -254,21 +249,21 @@ fn walk_verilog(
                 if !inst_type.is_empty() {
                     let line = node.start_position().row + 1;
                     let tgt_nid = make_id1(&inst_type);
-                    if seen_ids.insert(tgt_nid.clone()) {
-                        nodes.push(Node {
+                    if ctx.seen_ids.insert(tgt_nid.clone()) {
+                        ctx.nodes.push(Node {
                             id: tgt_nid.clone(),
                             label: inst_type,
                             file_type: "code".to_string(),
-                            source_file: str_path.to_string(),
+                            source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                         });
                     }
-                    edges.push(Edge {
+                    ctx.edges.push(Edge {
                         source: mnid.to_string(),
                         target: tgt_nid,
                         relation: "instantiates".to_string(),
                         confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 1.0,
                         context: None,
@@ -279,17 +274,7 @@ fn walk_verilog(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_verilog(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        module_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                    );
+                    walk_verilog(ctx, cur.node(), source, module_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -300,17 +285,7 @@ fn walk_verilog(
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    walk_verilog(
-                        cur.node(),
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        module_nid,
-                        nodes,
-                        edges,
-                        seen_ids,
-                    );
+                    walk_verilog(ctx, cur.node(), source, module_nid);
                     if !cur.goto_next_sibling() {
                         break;
                     }

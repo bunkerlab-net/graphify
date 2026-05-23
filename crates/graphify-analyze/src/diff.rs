@@ -15,165 +15,16 @@ use serde_json::{Value, json};
 ///
 /// Mirrors Python `graph_diff`.
 #[must_use]
-#[allow(clippy::too_many_lines)] // diff collects four lists independently; splitting adds no clarity
 pub fn graph_diff(graph_old: &Graph, graph_new: &Graph) -> Value {
-    let old_node_ids: IndexSet<&str> = graph_old.nodes().map(|(id, _)| id.as_str()).collect();
-    let new_node_ids: IndexSet<&str> = graph_new.nodes().map(|(id, _)| id.as_str()).collect();
-
-    let added_ids: Vec<&str> = new_node_ids
-        .iter()
-        .filter(|id| !old_node_ids.contains(*id))
-        .copied()
-        .collect();
-    let removed_ids: Vec<&str> = old_node_ids
-        .iter()
-        .filter(|id| !new_node_ids.contains(*id))
-        .copied()
-        .collect();
-
-    let new_nodes: Vec<Value> = added_ids
-        .iter()
-        .map(|&id| {
-            let label = graph_new
-                .node_data(id)
-                .and_then(|a| a.get("label"))
-                .and_then(Value::as_str)
-                .unwrap_or(id);
-            json!({"id": id, "label": label})
-        })
-        .collect();
-
-    let removed_nodes: Vec<Value> = removed_ids
-        .iter()
-        .map(|&id| {
-            let label = graph_old
-                .node_data(id)
-                .and_then(|a| a.get("label"))
-                .and_then(Value::as_str)
-                .unwrap_or(id);
-            json!({"id": id, "label": label})
-        })
-        .collect();
-
-    // Edge key function: (min(u,v), max(u,v), relation) for undirected
+    let (new_nodes, removed_nodes) = diff_nodes(graph_old, graph_new);
     let directed = graph_old.kind.is_directed() || graph_new.kind.is_directed();
-    let edge_key = |u: &str, v: &str, relation: &str| -> (String, String, String) {
-        if directed {
-            (u.to_string(), v.to_string(), relation.to_string())
-        } else {
-            let (a, b) = if u <= v { (u, v) } else { (v, u) };
-            (a.to_string(), b.to_string(), relation.to_string())
-        }
-    };
-
-    let old_edge_keys: IndexSet<(String, String, String)> = graph_old
-        .edges()
-        .map(|e| {
-            let rel = e
-                .attrs
-                .get("relation")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            edge_key(&e.source, &e.target, rel)
-        })
-        .collect();
-
-    let new_edge_keys: IndexSet<(String, String, String)> = graph_new
-        .edges()
-        .map(|e| {
-            let rel = e
-                .attrs
-                .get("relation")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            edge_key(&e.source, &e.target, rel)
-        })
-        .collect();
-
-    let new_edges: Vec<Value> = graph_new
-        .edges()
-        .filter_map(|e| {
-            let rel = e
-                .attrs
-                .get("relation")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let key = edge_key(&e.source, &e.target, rel);
-            if old_edge_keys.contains(&key) {
-                None
-            } else {
-                let conf = e
-                    .attrs
-                    .get("confidence")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                Some(json!({
-                    "source": e.source,
-                    "target": e.target,
-                    "relation": rel,
-                    "confidence": conf,
-                }))
-            }
-        })
-        .collect();
-
-    let removed_edges: Vec<Value> = graph_old
-        .edges()
-        .filter_map(|e| {
-            let rel = e
-                .attrs
-                .get("relation")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let key = edge_key(&e.source, &e.target, rel);
-            if new_edge_keys.contains(&key) {
-                None
-            } else {
-                let conf = e
-                    .attrs
-                    .get("confidence")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                Some(json!({
-                    "source": e.source,
-                    "target": e.target,
-                    "relation": rel,
-                    "confidence": conf,
-                }))
-            }
-        })
-        .collect();
-
-    // Build summary
-    let mut parts: Vec<String> = Vec::new();
-    let nn = new_nodes.len();
-    let ne = new_edges.len();
-    let rn = removed_nodes.len();
-    let re = removed_edges.len();
-    if nn > 0 {
-        parts.push(format!("{nn} new node{}", if nn == 1 { "" } else { "s" }));
-    }
-    if ne > 0 {
-        parts.push(format!("{ne} new edge{}", if ne == 1 { "" } else { "s" }));
-    }
-    if rn > 0 {
-        parts.push(format!(
-            "{rn} node{} removed",
-            if rn == 1 { "" } else { "s" }
-        ));
-    }
-    if re > 0 {
-        parts.push(format!(
-            "{re} edge{} removed",
-            if re == 1 { "" } else { "s" }
-        ));
-    }
-    let summary = if parts.is_empty() {
-        "no changes".to_string()
-    } else {
-        parts.join(", ")
-    };
-
+    let (new_edges, removed_edges) = diff_edges(graph_old, graph_new, directed);
+    let summary = build_summary(
+        new_nodes.len(),
+        new_edges.len(),
+        removed_nodes.len(),
+        removed_edges.len(),
+    );
     json!({
         "new_nodes": new_nodes,
         "removed_nodes": removed_nodes,
@@ -181,4 +32,138 @@ pub fn graph_diff(graph_old: &Graph, graph_new: &Graph) -> Value {
         "removed_edges": removed_edges,
         "summary": summary,
     })
+}
+
+/// Compute new vs removed nodes as `(id, label)` JSON pairs.
+fn diff_nodes(graph_old: &Graph, graph_new: &Graph) -> (Vec<Value>, Vec<Value>) {
+    let old_ids: IndexSet<&str> = graph_old.nodes().map(|(id, _)| id.as_str()).collect();
+    let new_ids: IndexSet<&str> = graph_new.nodes().map(|(id, _)| id.as_str()).collect();
+
+    let added: Vec<Value> = new_ids
+        .iter()
+        .filter(|id| !old_ids.contains(*id))
+        .map(|&id| node_entry(graph_new, id))
+        .collect();
+    let removed: Vec<Value> = old_ids
+        .iter()
+        .filter(|id| !new_ids.contains(*id))
+        .map(|&id| node_entry(graph_old, id))
+        .collect();
+    (added, removed)
+}
+
+/// Build a `{"id": ..., "label": ...}` entry, falling back to the id when no label.
+fn node_entry(graph: &Graph, id: &str) -> Value {
+    let label = graph
+        .node_data(id)
+        .and_then(|a| a.get("label"))
+        .and_then(Value::as_str)
+        .unwrap_or(id);
+    json!({"id": id, "label": label})
+}
+
+/// Compute new vs removed edges using a canonical edge key (undirected = sorted endpoints).
+fn diff_edges(graph_old: &Graph, graph_new: &Graph, directed: bool) -> (Vec<Value>, Vec<Value>) {
+    let old_keys = edge_key_set(graph_old, directed);
+    let new_keys = edge_key_set(graph_new, directed);
+    let new_edges = edges_missing_from(graph_new, &old_keys, directed);
+    let removed_edges = edges_missing_from(graph_old, &new_keys, directed);
+    (new_edges, removed_edges)
+}
+
+/// Canonical edge key: directed = (u,v,relation); undirected = sorted endpoints.
+fn make_edge_key(u: &str, v: &str, relation: &str, directed: bool) -> (String, String, String) {
+    if directed {
+        (u.to_string(), v.to_string(), relation.to_string())
+    } else {
+        let (a, b) = if u <= v { (u, v) } else { (v, u) };
+        (a.to_string(), b.to_string(), relation.to_string())
+    }
+}
+
+/// Collect the canonical edge-key set from a graph.
+fn edge_key_set(graph: &Graph, directed: bool) -> IndexSet<(String, String, String)> {
+    graph
+        .edges()
+        .map(|e| {
+            let rel = e
+                .attrs
+                .get("relation")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            make_edge_key(&e.source, &e.target, rel, directed)
+        })
+        .collect()
+}
+
+/// Collect edges in `graph` whose canonical key is missing from `other_keys`.
+fn edges_missing_from(
+    graph: &Graph,
+    other_keys: &IndexSet<(String, String, String)>,
+    directed: bool,
+) -> Vec<Value> {
+    graph
+        .edges()
+        .filter_map(|e| {
+            let rel = e
+                .attrs
+                .get("relation")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let key = make_edge_key(&e.source, &e.target, rel, directed);
+            if other_keys.contains(&key) {
+                return None;
+            }
+            let conf = e
+                .attrs
+                .get("confidence")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            Some(json!({
+                "source": e.source,
+                "target": e.target,
+                "relation": rel,
+                "confidence": conf,
+            }))
+        })
+        .collect()
+}
+
+/// Build the human-readable "1 new node, 2 edges removed" summary string.
+fn build_summary(
+    new_nodes: usize,
+    new_edges: usize,
+    removed_nodes: usize,
+    removed_edges: usize,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if new_nodes > 0 {
+        parts.push(format!(
+            "{new_nodes} new node{}",
+            if new_nodes == 1 { "" } else { "s" }
+        ));
+    }
+    if new_edges > 0 {
+        parts.push(format!(
+            "{new_edges} new edge{}",
+            if new_edges == 1 { "" } else { "s" }
+        ));
+    }
+    if removed_nodes > 0 {
+        parts.push(format!(
+            "{removed_nodes} node{} removed",
+            if removed_nodes == 1 { "" } else { "s" }
+        ));
+    }
+    if removed_edges > 0 {
+        parts.push(format!(
+            "{removed_edges} edge{} removed",
+            if removed_edges == 1 { "" } else { "s" }
+        ));
+    }
+    if parts.is_empty() {
+        "no changes".to_string()
+    } else {
+        parts.join(", ")
+    }
 }

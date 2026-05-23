@@ -134,7 +134,6 @@ pub(super) fn suggest_tag(label: &str, file_type: &str, lang: &str, kind: &str) 
     )
 }
 
-#[allow(clippy::too_many_lines)] // Long dispatch function; splitting into sub-functions would obscure the linear logic.
 /// Generate a one-sentence plain-language description of a node.
 ///
 /// Uses a cascade of label-keyword heuristics to produce a human-readable
@@ -176,93 +175,8 @@ pub(super) fn describe_node(label: &str, source_file: &str, file_type: &str, lan
         )
         .to_owned();
     }
-    if lower.contains("config") {
-        return pick_text(
-            lang,
-            "读取、解析或持久化项目配置。",
-            "Reads, resolves, or persists project configuration.",
-        )
-        .to_owned();
-    }
-    if lower.contains("scan") {
-        return pick_text(
-            lang,
-            "触发项目扫描或处理扫描状态。",
-            "Starts scanning or handles scan status.",
-        )
-        .to_owned();
-    }
-    if lower.contains("ingest") || lower.contains("clone") || lower.contains("git") {
-        return pick_text(
-            lang,
-            "把本地目录或远程仓库转换为分析上下文。",
-            "Turns a local path or remote repository into analysis context.",
-        )
-        .to_owned();
-    }
-    if lower.contains("prompt") {
-        return pick_text(
-            lang,
-            "构造发送给 LLM 的结构化提示。",
-            "Builds structured prompts for model calls.",
-        )
-        .to_owned();
-    }
-    if lower.contains("analy") {
-        return pick_text(
-            lang,
-            "编排分析流程并产出结构化文档数据。",
-            "Orchestrates analysis and returns structured documentation data.",
-        )
-        .to_owned();
-    }
-    if lower.contains("graph") || lower.contains("dependency") {
-        return pick_text(
-            lang,
-            "构建依赖关系并提供排序或图形化数据。",
-            "Builds dependency relationships and graph data.",
-        )
-        .to_owned();
-    }
-    if lower.contains("export") || lower.contains("markdown") || lower.contains("html") {
-        return pick_text(
-            lang,
-            "将文档数据导出为目标格式。",
-            "Exports documentation data to a target format.",
-        )
-        .to_owned();
-    }
-    if lower.contains("chat") || lower.contains("rag") || lower.contains("retrieve") {
-        return pick_text(
-            lang,
-            "支撑检索增强问答或流式聊天。",
-            "Supports retrieval-augmented Q&A or streaming chat.",
-        )
-        .to_owned();
-    }
-    if lower.contains("wiki") || lower.contains("page") || lower.contains("sidebar") {
-        return pick_text(
-            lang,
-            "组织文档页面、侧边栏或内容读取。",
-            "Organizes documentation pages, navigation, or content lookup.",
-        )
-        .to_owned();
-    }
-    if lower.contains("cache") || lower.contains("hash") {
-        return pick_text(
-            lang,
-            "缓存分析结果或生成缓存键。",
-            "Caches analysis results or computes cache keys.",
-        )
-        .to_owned();
-    }
-    if lower.contains("test") {
-        return pick_text(
-            lang,
-            "验证导入、入口点或版本等基础行为。",
-            "Verifies imports, entry points, or version behavior.",
-        )
-        .to_owned();
+    if let Some(s) = keyword_description(&lower, lang) {
+        return s;
     }
     pick_text(
         lang,
@@ -270,4 +184,71 @@ pub(super) fn describe_node(label: &str, source_file: &str, file_type: &str, lan
         &format!("{label} node in {source}."),
     )
     .to_owned()
+}
+
+/// Match label keywords against a fixed `(needles, zh, en)` table.
+fn keyword_description(lower: &str, lang: &str) -> Option<String> {
+    const TABLE: &[(&[&str], &str, &str)] = &[
+        (
+            &["config"],
+            "读取、解析或持久化项目配置。",
+            "Reads, resolves, or persists project configuration.",
+        ),
+        (
+            &["scan"],
+            "触发项目扫描或处理扫描状态。",
+            "Starts scanning or handles scan status.",
+        ),
+        (
+            &["ingest", "clone", "git"],
+            "把本地目录或远程仓库转换为分析上下文。",
+            "Turns a local path or remote repository into analysis context.",
+        ),
+        (
+            &["prompt"],
+            "构造发送给 LLM 的结构化提示。",
+            "Builds structured prompts for model calls.",
+        ),
+        (
+            &["analy"],
+            "编排分析流程并产出结构化文档数据。",
+            "Orchestrates analysis and returns structured documentation data.",
+        ),
+        (
+            &["graph", "dependency"],
+            "构建依赖关系并提供排序或图形化数据。",
+            "Builds dependency relationships and graph data.",
+        ),
+        (
+            &["export", "markdown", "html"],
+            "将文档数据导出为目标格式。",
+            "Exports documentation data to a target format.",
+        ),
+        (
+            &["chat", "rag", "retrieve"],
+            "支撑检索增强问答或流式聊天。",
+            "Supports retrieval-augmented Q&A or streaming chat.",
+        ),
+        (
+            &["wiki", "page", "sidebar"],
+            "组织文档页面、侧边栏或内容读取。",
+            "Organizes documentation pages, navigation, or content lookup.",
+        ),
+        (
+            &["cache", "hash"],
+            "缓存分析结果或生成缓存键。",
+            "Caches analysis results or computes cache keys.",
+        ),
+        (
+            &["test"],
+            "验证导入、入口点或版本等基础行为。",
+            "Verifies imports, entry points, or version behavior.",
+        ),
+    ];
+    for (needles, zh, en) in TABLE {
+        if needles.iter().any(|n| lower.contains(n)) {
+            return Some(pick_text(lang, zh, en).to_owned());
+        }
+    }
+    None
 }

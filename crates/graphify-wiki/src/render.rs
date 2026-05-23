@@ -10,6 +10,18 @@ use graphify_build::Graph;
 use crate::types::GodNodeData;
 use crate::util::{audit_trail_lines, cross_community_links, neighbors_of};
 
+/// Read-only inputs for [`community_article`].
+pub(crate) struct CommunityArticleArgs<'a> {
+    pub graph: &'a Graph,
+    pub cid: i64,
+    pub nodes: &'a [String],
+    pub label: &'a str,
+    pub labels: &'a IndexMap<i64, String>,
+    pub cohesion: Option<f64>,
+    pub node_community: &'a HashMap<String, i64>,
+    pub deg_map: &'a HashMap<&'a str, usize>,
+}
+
 /// Render one community article as a Markdown string.
 ///
 /// Builds, in order: the title, a metadata blockquote, a "Key Concepts"
@@ -17,25 +29,22 @@ use crate::util::{audit_trail_lines, cross_community_links, neighbors_of};
 /// linked sibling communities, an optional "Source Files" listing, and the
 /// "Audit Trail" confidence breakdown.
 ///
-/// Suppressed: `clippy::too_many_arguments` — this is a pure rendering
-/// function that needs all contextual parameters; splitting it into a struct
-/// would add indirection with no benefit.
-/// Suppressed: `clippy::too_many_lines` — the function is long because it
-/// builds every section of the Markdown article inline; extracting helpers
-/// would obscure the 1:1 mapping with the Python reference.
+/// `clippy::too_many_lines` is suppressed: the function is a single sequential
+/// markdown emission where each phase reads earlier-computed locals; splitting
+/// fragments the linear flow without isolating reusable pieces.
 #[must_use]
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-// reason: pure rendering function — all args are required context; splitting adds no benefit
-pub(crate) fn community_article(
-    graph: &Graph,
-    cid: i64,
-    nodes: &[String],
-    label: &str,
-    labels: &IndexMap<i64, String>,
-    cohesion: Option<f64>,
-    node_community: &HashMap<String, i64>,
-    deg_map: &HashMap<&str, usize>,
-) -> String {
+#[allow(clippy::too_many_lines)]
+pub(crate) fn community_article(args: &CommunityArticleArgs<'_>) -> String {
+    let CommunityArticleArgs {
+        graph,
+        cid,
+        nodes,
+        label,
+        labels,
+        cohesion,
+        node_community,
+        deg_map,
+    } = *args;
     let mut sorted_nodes: Vec<&String> = nodes.iter().collect();
     sorted_nodes.sort_by(|a, b| {
         let da = deg_map.get(a.as_str()).copied().unwrap_or(0);

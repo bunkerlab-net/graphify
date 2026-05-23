@@ -116,20 +116,17 @@ pub fn extract_json(path: &Path) -> FileResult {
     };
 
     if doc.kind() == "object" {
-        walk_json_object(
-            doc,
-            &source,
-            &str_path,
-            &stem,
-            &file_nid,
-            &file_nid,
-            None,
-            0,
-            &mut [0usize],
-            &mut nodes,
-            &mut edges,
-            &mut seen_ids,
-        );
+        let mut pair_count = [0usize];
+        let mut walk_ctx = JsonWalkCtx {
+            str_path: &str_path,
+            stem: &stem,
+            file_nid: &file_nid,
+            pair_count: &mut pair_count,
+            nodes: &mut nodes,
+            edges: &mut edges,
+            seen_ids: &mut seen_ids,
+        };
+        walk_json_object(&mut walk_ctx, doc, &source, &file_nid, None, 0);
     }
 
     FileResult {
@@ -158,20 +155,25 @@ fn key_text<'a>(pair_node: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'
 /// Depth-limited to 6 levels to avoid over-expanding deeply nested configs. At each level,
 /// `object` pairs become child nodes with `contains` edges to `parent_nid`. Mirrors Python
 /// `_walk_json_object`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Shared state threaded through every [`walk_json_object`] recursion.
+struct JsonWalkCtx<'a> {
+    str_path: &'a str,
+    stem: &'a str,
+    file_nid: &'a str,
+    pair_count: &'a mut [usize],
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over JSON object/value shapes
 fn walk_json_object(
+    ctx: &mut JsonWalkCtx<'_>,
     obj_node: tree_sitter::Node<'_>,
     source: &[u8],
-    str_path: &str,
-    stem: &str,
-    file_nid: &str,
     parent_nid: &str,
     parent_key: Option<&str>,
     depth: usize,
-    pair_count: &mut [usize],
-    nodes: &mut Vec<Node>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
 ) {
     if depth > 6 {
         return;
@@ -188,10 +190,10 @@ fn walk_json_object(
             }
             continue;
         }
-        if pair_count[0] >= 500 {
+        if ctx.pair_count[0] >= 500 {
             break;
         }
-        pair_count[0] += 1;
+        ctx.pair_count[0] += 1;
 
         let Some(key) = key_text(child, source) else {
             if !cur.goto_next_sibling() {
@@ -200,9 +202,9 @@ fn walk_json_object(
             continue;
         };
         let key_nid = if let Some(pk) = parent_key {
-            make_id(&[stem, pk, key])
+            make_id(&[ctx.stem, pk, key])
         } else {
-            make_id(&[stem, key])
+            make_id(&[ctx.stem, key])
         };
         if key_nid.is_empty() {
             if !cur.goto_next_sibling() {
@@ -211,21 +213,21 @@ fn walk_json_object(
             continue;
         }
         let line = child.start_position().row + 1;
-        if seen_ids.insert(key_nid.clone()) {
-            nodes.push(Node {
+        if ctx.seen_ids.insert(key_nid.clone()) {
+            ctx.nodes.push(Node {
                 id: key_nid.clone(),
                 label: key.to_string(),
                 file_type: "code".to_string(),
-                source_file: str_path.to_string(),
+                source_file: ctx.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
             });
         }
-        edges.push(Edge {
+        ctx.edges.push(Edge {
             source: parent_nid.to_string(),
             target: key_nid.clone(),
             relation: "contains".to_string(),
             confidence: "EXTRACTED".to_string(),
-            source_file: str_path.to_string(),
+            source_file: ctx.str_path.to_string(),
             source_location: Some(format!("L{line}")),
             weight: 1.0,
             context: None,
@@ -236,20 +238,7 @@ fn walk_json_object(
         if let Some(val_node) = val {
             match val_node.kind() {
                 "object" => {
-                    walk_json_object(
-                        val_node,
-                        source,
-                        str_path,
-                        stem,
-                        file_nid,
-                        &key_nid,
-                        Some(key),
-                        depth + 1,
-                        pair_count,
-                        nodes,
-                        edges,
-                        seen_ids,
-                    );
+                    walk_json_object(ctx, val_node, source, &key_nid, Some(key), depth + 1);
                 }
                 "array" => {
                     // For "extends" arrays: each string element becomes a ref edge
@@ -267,12 +256,12 @@ fn walk_json_object(
                                 if !r.is_empty() {
                                     let ref_nid = make_id(&["ref", r]);
                                     if !ref_nid.is_empty() {
-                                        edges.push(Edge {
+                                        ctx.edges.push(Edge {
                                             source: key_nid.clone(),
                                             target: ref_nid,
                                             relation: "extends".to_string(),
                                             confidence: "EXTRACTED".to_string(),
-                                            source_file: str_path.to_string(),
+                                            source_file: ctx.str_path.to_string(),
                                             source_location: Some(format!("L{line}")),
                                             weight: 1.0,
                                             context: Some("import".to_string()),
@@ -297,12 +286,12 @@ fn walk_json_object(
                     if key == "extends" && !val_text.is_empty() {
                         let ref_nid = make_id(&["ref", val_text]);
                         if !ref_nid.is_empty() {
-                            edges.push(Edge {
-                                source: file_nid.to_string(),
+                            ctx.edges.push(Edge {
+                                source: ctx.file_nid.to_string(),
                                 target: ref_nid,
                                 relation: "extends".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: Some("import".to_string()),
@@ -312,12 +301,12 @@ fn walk_json_object(
                     } else if key == "$ref" && !val_text.is_empty() {
                         let ref_nid = make_id(&["ref", val_text]);
                         if !ref_nid.is_empty() {
-                            edges.push(Edge {
+                            ctx.edges.push(Edge {
                                 source: parent_nid.to_string(),
                                 target: ref_nid,
                                 relation: "references".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: None,
@@ -329,12 +318,12 @@ fn walk_json_object(
                     {
                         let dep_nid = make_id1(key);
                         if !dep_nid.is_empty() {
-                            edges.push(Edge {
+                            ctx.edges.push(Edge {
                                 source: key_nid.clone(),
                                 target: dep_nid,
                                 relation: "imports".to_string(),
                                 confidence: "EXTRACTED".to_string(),
-                                source_file: str_path.to_string(),
+                                source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 weight: 1.0,
                                 context: Some("import".to_string()),

@@ -18,7 +18,7 @@ use tree_sitter::Node;
 
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::tsconfig::load_tsconfig_aliases;
-use crate::types::{Edge, Node as GNode};
+use crate::types::Edge;
 
 use super::names::{read_text, read_text_owned};
 use super::walk::{add_edge, add_node};
@@ -32,20 +32,19 @@ use super::walk::{add_edge, add_node};
 /// `CommonJS` `require()` imports. Returns `true` when at least one construct was handled,
 /// signalling to the caller that the node should not be processed again generically.
 /// Mirrors Python `_js_extra_walk`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn js_extra_walk<'tree>(
+    ctx: &mut super::walk::WalkCtx<'_, 'tree>,
     node: Node<'tree>,
     source: &[u8],
-    _config: &super::config::LangConfig,
-    file_nid: &str,
-    stem: &str,
-    str_path: &str,
-    nodes: &mut Vec<GNode>,
-    edges: &mut Vec<Edge>,
-    seen_ids: &mut HashSet<String>,
-    function_bodies: &mut Vec<(String, Node<'tree>)>,
     _parent_class_nid: Option<&str>,
 ) -> bool {
+    let file_nid = ctx.file_nid;
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let function_bodies = &mut *ctx.function_bodies;
     let t = node.kind();
     if t != "lexical_declaration" && t != "variable_declaration" {
         return false;

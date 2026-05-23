@@ -94,16 +94,16 @@ pub fn call_deepseek_plain(
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String, LlmError> {
-    call_plain_openai_compat(
-        BASE_URL,
+    call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
+        base_url: BASE_URL,
         api_key,
         model,
         prompt,
-        Some(0.0),
-        None,
-        false,
+        temperature: Some(0.0),
+        reasoning_effort: None,
+        disable_thinking: false,
         max_tokens,
-    )
+    })
 }
 
 /// Default max tokens for deepseek.

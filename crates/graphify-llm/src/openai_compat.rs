@@ -73,55 +73,12 @@ struct OaiUsage {
 /// Returns [`LlmError::Security`] if the URL fails SSRF validation, or
 /// [`LlmError::Http`] / [`LlmError::Parse`] / [`LlmError::EmptyResponse`] on
 /// transport or response errors.
-#[allow(clippy::too_many_lines)]
 pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmError> {
     // SSRF guard — validate URL before making any network call.
     graphify_security::validate_url(req.base_url)?;
 
-    let mut body = json!({
-        "model": req.model,
-        "messages": req.messages,
-        "max_completion_tokens": req.max_completion_tokens,
-    });
-
-    if let Some(t) = req.temperature {
-        body["temperature"] = json!(t);
-    }
-    if let Some(re) = req.reasoning_effort {
-        body["reasoning_effort"] = json!(re);
-    }
-
-    // Kimi-k2.6 — disable thinking so content isn't empty.
-    if req.disable_thinking {
-        body["extra_body"] = json!({"thinking": {"type": "disabled"}});
-    }
-
-    // Ollama — inject num_ctx + keep_alive.
-    if let Some(opts) = &req.ollama_options {
-        body["extra_body"] = json!({
-            "options": {"num_ctx": opts.num_ctx},
-            "keep_alive": opts.keep_alive,
-        });
-    }
-
-    let endpoint = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(req.timeout))
-        .build()
-        .into();
-
-    let http_resp = agent
-        .post(&endpoint)
-        .header("Authorization", &format!("Bearer {}", req.api_key))
-        .header("Content-Type", "application/json")
-        .send_json(&body)
-        .map_err(|e| LlmError::Http(e.to_string()))?;
-
-    let resp_body: OaiResponse = http_resp
-        .into_body()
-        .read_json()
-        .map_err(|e| LlmError::Parse(e.to_string()))?;
-
+    let body = build_chat_request_body(req);
+    let resp_body = send_chat_request(req, &body)?;
     let choice = resp_body
         .choices
         .into_iter()
@@ -130,7 +87,6 @@ pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmErr
 
     let raw_content = choice.message.and_then(|m| m.content);
     let finish_reason_raw = choice.finish_reason.unwrap_or_else(|| "stop".to_string());
-
     let content_str = raw_content.as_deref().unwrap_or("");
     let input_tokens = resp_body
         .usage
@@ -144,38 +100,15 @@ pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmErr
         .unwrap_or(0);
 
     let mut parsed = parse_llm_json(content_str);
-    let mut finish_reason = if finish_reason_raw == "length" {
-        "length".to_string()
-    } else {
-        "stop".to_string()
-    };
-
-    // Hollow-response detection: re-label as "length" so adaptive retry bisects.
-    if response_is_hollow(raw_content.as_deref(), &parsed) && finish_reason != "length" {
-        let content_desc = if content_str.trim().is_empty() {
-            "empty"
-        } else {
-            "no nodes/edges"
-        };
-        eprintln!(
-            "[graphify] {} returned a hollow response \
-             (content={content_desc}, output_tokens={output_tokens}); \
-             treating as truncation so adaptive retry can bisect the chunk.",
-            req.backend_name
-        );
-        finish_reason = "length".to_string();
-    }
-
-    if output_tokens < 50 && req.backend_name == "ollama" {
-        eprintln!(
-            "[graphify] warning: ollama returned very few tokens — likely causes: \
-             (1) VRAM pressure: check `nvidia-smi` and reduce chunk size with \
-             --token-budget (e.g. --token-budget 4096) or set \
-             GRAPHIFY_OLLAMA_NUM_CTX to a smaller value; \
-             (2) model too small for JSON instruction following — \
-             try a larger model with --model (e.g. --model qwen2.5-coder:14b)."
-        );
-    }
+    let finish_reason = resolve_finish_reason(
+        req,
+        raw_content.as_deref(),
+        content_str,
+        output_tokens,
+        &parsed,
+        &finish_reason_raw,
+    );
+    maybe_warn_low_token_ollama(req, output_tokens);
 
     parsed["input_tokens"] = json!(input_tokens);
     parsed["output_tokens"] = json!(output_tokens);
@@ -193,6 +126,98 @@ pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmErr
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
     })
+}
+
+/// Build the OpenAI-compatible chat-completions JSON body from the request bundle.
+fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
+    let mut body = json!({
+        "model": req.model,
+        "messages": req.messages,
+        "max_completion_tokens": req.max_completion_tokens,
+    });
+    if let Some(t) = req.temperature {
+        body["temperature"] = json!(t);
+    }
+    if let Some(re) = req.reasoning_effort {
+        body["reasoning_effort"] = json!(re);
+    }
+    if req.disable_thinking {
+        // Kimi-k2.6 — disable thinking so content isn't empty.
+        body["extra_body"] = json!({"thinking": {"type": "disabled"}});
+    }
+    if let Some(opts) = &req.ollama_options {
+        // Ollama — inject num_ctx + keep_alive.
+        body["extra_body"] = json!({
+            "options": {"num_ctx": opts.num_ctx},
+            "keep_alive": opts.keep_alive,
+        });
+    }
+    body
+}
+
+/// POST the chat-completions request and parse the response body.
+fn send_chat_request(req: &OpenAiRequest<'_>, body: &Value) -> Result<OaiResponse, LlmError> {
+    let endpoint = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(req.timeout))
+        .build()
+        .into();
+    let http_resp = agent
+        .post(&endpoint)
+        .header("Authorization", &format!("Bearer {}", req.api_key))
+        .header("Content-Type", "application/json")
+        .send_json(body)
+        .map_err(|e| LlmError::Http(e.to_string()))?;
+    http_resp
+        .into_body()
+        .read_json()
+        .map_err(|e| LlmError::Parse(e.to_string()))
+}
+
+/// Re-label `finish_reason="length"` when the response is structurally hollow
+/// so the adaptive-retry layer bisects the chunk.
+fn resolve_finish_reason(
+    req: &OpenAiRequest<'_>,
+    raw_content: Option<&str>,
+    content_str: &str,
+    output_tokens: u64,
+    parsed: &Value,
+    finish_reason_raw: &str,
+) -> String {
+    let mut finish_reason = if finish_reason_raw == "length" {
+        "length".to_string()
+    } else {
+        "stop".to_string()
+    };
+    if response_is_hollow(raw_content, parsed) && finish_reason != "length" {
+        let content_desc = if content_str.trim().is_empty() {
+            "empty"
+        } else {
+            "no nodes/edges"
+        };
+        eprintln!(
+            "[graphify] {} returned a hollow response \
+             (content={content_desc}, output_tokens={output_tokens}); \
+             treating as truncation so adaptive retry can bisect the chunk.",
+            req.backend_name
+        );
+        finish_reason = "length".to_string();
+    }
+    finish_reason
+}
+
+/// Surface a hint about VRAM / model size when Ollama responses come back tiny.
+fn maybe_warn_low_token_ollama(req: &OpenAiRequest<'_>, output_tokens: u64) {
+    if output_tokens < 50 && req.backend_name == "ollama" {
+        eprintln!(
+            "[graphify] warning: ollama returned very few tokens — likely causes: \
+             (1) VRAM pressure: check `nvidia-smi` and reduce chunk size with \
+             --token-budget (e.g. --token-budget 4096) or set \
+             GRAPHIFY_OLLAMA_NUM_CTX to a smaller value; \
+             (2) model too small for JSON instruction following — \
+             try a larger model with --model (e.g. --model qwen2.5-coder:14b)."
+        );
+    }
 }
 
 /// Compute Ollama's `num_ctx` from the user message length.

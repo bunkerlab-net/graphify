@@ -55,11 +55,9 @@ fn status_order_index(status: &str) -> usize {
 // ── Public render functions ────────────────────────────────────────────────
 
 /// Render the main PR dashboard to stdout.
-#[allow(clippy::too_many_lines)] // direct port of Python render_dashboard
 pub fn render_dashboard(prs: &[PrInfo], base: &str, show_wrong_base: bool) {
     let mut actionable: Vec<&PrInfo> = prs.iter().filter(|p| p.base_branch == base).collect();
     let wrong_base: Vec<&PrInfo> = prs.iter().filter(|p| p.base_branch != base).collect();
-
     actionable.sort_by_key(|p| (status_order_index(&p.status()), p.days_old()));
 
     println!();
@@ -75,58 +73,72 @@ pub fn render_dashboard(prs: &[PrInfo], base: &str, show_wrong_base: bool) {
     if actionable.is_empty() {
         println!("{}", dim("  No open PRs targeting this base branch."));
     } else {
-        println!(
-            "  {:>4}  {:2}  {:13}  {:8}  {:22}  TITLE",
-            "#", "CI", "STATUS", "UPDATED", "IMPACT"
-        );
-        println!(
-            "  {}  {}  {}  {}  {}  {}",
-            "─".repeat(4),
-            "─".repeat(2),
-            "─".repeat(13),
-            "─".repeat(8),
-            "─".repeat(22),
-            "─".repeat(40),
-        );
-
-        for pr in &actionable {
-            let status_str = pad(&status_color(&pr.status()), 13);
-            let ci_str = ci_icon(&pr.ci_status);
-            let age = if pr.days_old() > 0 {
-                format!("{}d", pr.days_old())
-            } else {
-                "today".to_string()
-            };
-            let br = pr.blast_radius();
-            let impact = if br.is_empty() {
-                pad(&dim("–"), 22)
-            } else {
-                pad(&dim(&truncate(&br, 22)), 22)
-            };
-            let wt = if pr.worktree_path.is_some() {
-                format!(" {}", cyan("⬡"))
-            } else {
-                "  ".to_string()
-            };
-            let draft_str = if pr.is_draft {
-                dim(" [draft]")
-            } else {
-                String::new()
-            };
-            let title = truncate(&pr.title, 52);
-            let num = pad(&bold(&format!("#{}", pr.number)), 6);
-            println!(
-                "  {num}{wt}  {ci_str}  {status_str}  {age:>6}   {impact}  {title}{draft_str}"
-            );
-        }
+        render_dashboard_table(&actionable);
     }
 
-    // Summary line
+    render_dashboard_summary(&actionable, &wrong_base);
+
+    if !wrong_base.is_empty() && show_wrong_base {
+        render_wrong_base_section(wrong_base);
+    }
+}
+
+/// Render the dashboard's main PR table.
+fn render_dashboard_table(actionable: &[&PrInfo]) {
+    println!(
+        "  {:>4}  {:2}  {:13}  {:8}  {:22}  TITLE",
+        "#", "CI", "STATUS", "UPDATED", "IMPACT"
+    );
+    println!(
+        "  {}  {}  {}  {}  {}  {}",
+        "─".repeat(4),
+        "─".repeat(2),
+        "─".repeat(13),
+        "─".repeat(8),
+        "─".repeat(22),
+        "─".repeat(40),
+    );
+    for pr in actionable {
+        render_dashboard_row(pr);
+    }
+}
+
+/// Render a single PR row.
+fn render_dashboard_row(pr: &PrInfo) {
+    let status_str = pad(&status_color(&pr.status()), 13);
+    let ci_str = ci_icon(&pr.ci_status);
+    let age = if pr.days_old() > 0 {
+        format!("{}d", pr.days_old())
+    } else {
+        "today".to_string()
+    };
+    let br = pr.blast_radius();
+    let impact = if br.is_empty() {
+        pad(&dim("–"), 22)
+    } else {
+        pad(&dim(&truncate(&br, 22)), 22)
+    };
+    let wt = if pr.worktree_path.is_some() {
+        format!(" {}", cyan("⬡"))
+    } else {
+        "  ".to_string()
+    };
+    let draft_str = if pr.is_draft {
+        dim(" [draft]")
+    } else {
+        String::new()
+    };
+    let title = truncate(&pr.title, 52);
+    let num = pad(&bold(&format!("#{}", pr.number)), 6);
+    println!("  {num}{wt}  {ci_str}  {status_str}  {age:>6}   {impact}  {title}{draft_str}");
+}
+
+/// Render the dashboard's per-status summary line.
+fn render_dashboard_summary(actionable: &[&PrInfo], wrong_base: &[&PrInfo]) {
     let mut by_status: HashMap<String, usize> = HashMap::new();
-    for p in &actionable {
+    for p in actionable {
         *by_status.entry(p.status()).or_insert(0) += 1;
     }
-
     let mut parts: Vec<String> = Vec::new();
     if let Some(&n) = by_status.get("READY") {
         parts.push(green(&format!("{n} ready")));
@@ -152,34 +164,34 @@ pub fn render_dashboard(prs: &[PrInfo], base: &str, show_wrong_base: bool) {
     if !wrong_base.is_empty() {
         parts.push(dim(&format!("{} wrong base", wrong_base.len())));
     }
-
     println!();
     println!("  {}", parts.join(" · "));
     println!();
+}
 
-    if !wrong_base.is_empty() && show_wrong_base {
+/// Render the optional "wrong base" PR list.
+fn render_wrong_base_section(wrong_base: Vec<&PrInfo>) {
+    println!(
+        "{}",
+        dim(&format!(
+            "  ── {} PRs targeting wrong base ──",
+            wrong_base.len()
+        ))
+    );
+    let mut sorted_wrong: Vec<&PrInfo> = wrong_base;
+    sorted_wrong.sort_by_key(|p| std::cmp::Reverse(p.number));
+    for pr in sorted_wrong {
         println!(
             "{}",
             dim(&format!(
-                "  ── {} PRs targeting wrong base ──",
-                wrong_base.len()
+                "  #{:4}  base={:12}  {}",
+                pr.number,
+                pr.base_branch,
+                truncate(&pr.title, 60)
             ))
         );
-        let mut sorted_wrong: Vec<&PrInfo> = wrong_base;
-        sorted_wrong.sort_by_key(|p| std::cmp::Reverse(p.number));
-        for pr in sorted_wrong {
-            println!(
-                "{}",
-                dim(&format!(
-                    "  #{:4}  base={:12}  {}",
-                    pr.number,
-                    pr.base_branch,
-                    truncate(&pr.title, 60)
-                ))
-            );
-        }
-        println!();
     }
+    println!();
 }
 
 /// Render the worktree → branch → PR mapping.

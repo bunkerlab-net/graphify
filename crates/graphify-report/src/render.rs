@@ -26,22 +26,18 @@ use crate::sections::{
 /// The output is byte-identical to the Python `generate()` function for
 /// the same inputs.
 #[must_use]
-#[allow(clippy::too_many_lines)] // reason: mirrors the Python generate() function which is a single sequential renderer
 pub fn render_report(graph: &Graph, analysis: &Value) -> String {
     let today = Local::now().format("%Y-%m-%d").to_string();
-
     let empty_obj = serde_json::Map::new();
     let obj = analysis.as_object().unwrap_or(&empty_obj);
 
     let root = obj.get("root").and_then(Value::as_str).unwrap_or_default();
-
     let min_community_size = usize::try_from(
         obj.get("min_community_size")
             .and_then(Value::as_u64)
             .unwrap_or(3),
     )
     .unwrap_or(3);
-
     let built_at_commit = obj
         .get("built_at_commit")
         .and_then(Value::as_str)
@@ -64,6 +60,130 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
     let token_cost = obj.get("token_cost").and_then(Value::as_object);
     let suggested_questions = obj.get("suggested_questions").and_then(Value::as_array);
 
+    let (stats, inf_edges_len, amb_pct) = collect_confidence_stats(graph);
+
+    // Precompute degrees once — `is_file_node` and isolated-node detection
+    // both need them. Without this, every per-node call iterates the full
+    // edge list (`O(N × E)` total) and dominates report time on large graphs.
+    let degrees = sections::compute_degrees(graph);
+    let layout = collect_community_layout(graph, &communities, &degrees, min_community_size);
+
+    let isolated = collect_isolated_nodes(graph, &degrees);
+    let thin_community_count = count_thin_communities(graph, &communities, &degrees, 3);
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("# Graph Report - {root}  ({today})"));
+    lines.push(String::new());
+    render_corpus_check(&mut lines, detection);
+    render_summary(
+        &mut lines,
+        graph,
+        communities.len(),
+        layout.thin_count_summary,
+        layout.shown_count,
+        &stats,
+        token_cost,
+    );
+    if let Some(commit) = built_at_commit {
+        render_freshness(&mut lines, commit);
+    }
+    if !layout.non_empty.is_empty() {
+        render_nav_hubs(&mut lines, &layout.non_empty, &community_labels);
+    }
+    render_god_nodes(&mut lines, god_node_list);
+    render_surprising(&mut lines, surprise_list);
+    if let Some(hyperedges) = graph
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        && !hyperedges.is_empty()
+    {
+        render_hyperedges(&mut lines, hyperedges);
+    }
+    render_communities(
+        &mut lines,
+        &crate::sections::communities::CommunitiesCtx {
+            graph,
+            communities: &communities,
+            cohesion_scores: &cohesion_scores,
+            community_labels: &community_labels,
+            degrees: &degrees,
+            thin_count_summary: layout.thin_count_summary,
+            min_community_size,
+        },
+    );
+    render_ambiguous(&mut lines, graph);
+    render_gaps(
+        &mut lines,
+        graph,
+        thin_community_count,
+        &isolated,
+        min_community_size,
+        amb_pct,
+    );
+    if let Some(qs) = suggested_questions {
+        render_questions(&mut lines, qs);
+    }
+    // inf_edges_len consumed via ConfidenceStats — kept for future expansion if needed.
+    let _ = inf_edges_len;
+
+    lines.join("\n")
+}
+
+/// Aggregated community-level counts used by [`render_report`].
+struct CommunityLayout<'a> {
+    non_empty: Vec<(i64, &'a Vec<&'a str>)>,
+    thin_count_summary: usize,
+    shown_count: usize,
+}
+
+/// Bucket communities into renderable/thin and produce the navigation list.
+fn collect_community_layout<'a>(
+    graph: &Graph,
+    communities: &'a Communities<'a>,
+    degrees: &std::collections::HashMap<String, usize>,
+    min_community_size: usize,
+) -> CommunityLayout<'a> {
+    let non_empty: Vec<(i64, &Vec<&str>)> = communities
+        .iter()
+        .filter(|(_, nodes)| {
+            nodes
+                .iter()
+                .any(|n| !sections::is_file_node(graph, n, degrees))
+        })
+        .map(|(cid, nodes)| (*cid, nodes))
+        .collect();
+    let thin_count_summary =
+        count_thin_communities(graph, communities, degrees, min_community_size);
+    let shown_count = communities.len() - thin_count_summary;
+    CommunityLayout {
+        non_empty,
+        thin_count_summary,
+        shown_count,
+    }
+}
+
+/// Count communities with fewer than `threshold` non-file nodes.
+fn count_thin_communities(
+    graph: &Graph,
+    communities: &Communities<'_>,
+    degrees: &std::collections::HashMap<String, usize>,
+    threshold: usize,
+) -> usize {
+    communities
+        .iter()
+        .filter(|(_, nodes)| {
+            let real = nodes
+                .iter()
+                .filter(|n| !sections::is_file_node(graph, n, degrees))
+                .count();
+            real > 0 && real < threshold
+        })
+        .count()
+}
+
+/// Confidence-distribution stats + per-confidence percentages.
+fn collect_confidence_stats(graph: &Graph) -> (ConfidenceStats, usize, u64) {
     let confidences: Vec<&str> = graph
         .edges()
         .map(|e| {
@@ -101,64 +221,9 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         None
     } else {
         let sum: f64 = inf_scores.iter().sum();
-        #[allow(clippy::cast_precision_loss)] // reason: small list, precision loss negligible
+        #[allow(clippy::cast_precision_loss)] // small list, precision loss negligible
         Some((sum / inf_scores.len() as f64 * 100.0).round() / 100.0)
     };
-
-    // Precompute degrees once — `is_file_node` and isolated-node detection
-    // both need them. Without this, every per-node call iterates the full
-    // edge list (`O(N × E)` total) and dominates report time on large graphs.
-    let degrees = sections::compute_degrees(graph);
-
-    let non_empty: Vec<(i64, &Vec<&str>)> = communities
-        .iter()
-        .filter(|(_, nodes)| {
-            nodes
-                .iter()
-                .any(|n| !sections::is_file_node(graph, n, &degrees))
-        })
-        .map(|(cid, nodes)| (*cid, nodes))
-        .collect();
-
-    let thin_count_summary = communities
-        .iter()
-        .filter(|(_, nodes)| {
-            let real = nodes
-                .iter()
-                .filter(|n| !sections::is_file_node(graph, n, &degrees))
-                .count();
-            real > 0 && real < min_community_size
-        })
-        .count();
-    let shown_count = communities.len() - thin_count_summary;
-
-    let isolated: Vec<&str> = graph
-        .nodes()
-        .filter(|(id, attrs)| {
-            degrees.get(id.as_str()).copied().unwrap_or(0) <= 1
-                && !sections::is_file_node(graph, id, &degrees)
-                && !sections::is_concept_node(graph, id)
-                && attrs.get("file_type").and_then(Value::as_str) != Some("rationale")
-        })
-        .map(|(id, _)| id.as_str())
-        .collect();
-
-    let thin_community_count = communities
-        .iter()
-        .filter(|(_, nodes)| {
-            let real = nodes
-                .iter()
-                .filter(|n| !sections::is_file_node(graph, n, &degrees))
-                .count();
-            real > 0 && real < 3
-        })
-        .count();
-
-    let mut lines: Vec<String> = Vec::new();
-
-    lines.push(format!("# Graph Report - {root}  ({today})"));
-    lines.push(String::new());
-    render_corpus_check(&mut lines, detection);
     let stats = ConfidenceStats {
         ext_pct,
         inf_pct,
@@ -166,58 +231,24 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         inf_edges_len: inf_edges.len(),
         inf_avg,
     };
-    render_summary(
-        &mut lines,
-        graph,
-        communities.len(),
-        thin_count_summary,
-        shown_count,
-        &stats,
-        token_cost,
-    );
-    if let Some(commit) = built_at_commit {
-        render_freshness(&mut lines, commit);
-    }
-    if !non_empty.is_empty() {
-        render_nav_hubs(&mut lines, &non_empty, &community_labels);
-    }
-    render_god_nodes(&mut lines, god_node_list);
-    render_surprising(&mut lines, surprise_list);
+    (stats, inf_edges.len(), amb_pct)
+}
 
-    if let Some(hyperedges) = graph
-        .graph_attrs
-        .get("hyperedges")
-        .and_then(Value::as_array)
-        && !hyperedges.is_empty()
-    {
-        render_hyperedges(&mut lines, hyperedges);
-    }
-
-    render_communities(
-        &mut lines,
-        graph,
-        &communities,
-        &cohesion_scores,
-        &community_labels,
-        thin_count_summary,
-        min_community_size,
-        &degrees,
-    );
-    render_ambiguous(&mut lines, graph);
-    render_gaps(
-        &mut lines,
-        graph,
-        thin_community_count,
-        &isolated,
-        min_community_size,
-        amb_pct,
-    );
-
-    if let Some(qs) = suggested_questions {
-        render_questions(&mut lines, qs);
-    }
-
-    lines.join("\n")
+/// Collect IDs of weakly-connected, non-file, non-concept, non-rationale nodes.
+fn collect_isolated_nodes<'a>(
+    graph: &'a Graph,
+    degrees: &std::collections::HashMap<String, usize>,
+) -> Vec<&'a str> {
+    graph
+        .nodes()
+        .filter(|(id, attrs)| {
+            degrees.get(id.as_str()).copied().unwrap_or(0) <= 1
+                && !sections::is_file_node(graph, id, degrees)
+                && !sections::is_concept_node(graph, id)
+                && attrs.get("file_type").and_then(Value::as_str) != Some("rationale")
+        })
+        .map(|(id, _)| id.as_str())
+        .collect()
 }
 
 /// Write a `GRAPH_REPORT.md` to `path`.

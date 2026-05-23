@@ -16,8 +16,9 @@ static NO_COLOR: LazyLock<bool> =
     LazyLock::new(|| std::env::var_os("NO_COLOR").is_some() || !std::io::stdout().is_terminal());
 
 // Regex matching ANSI escape sequences; used by `pad`.
-#[allow(clippy::unwrap_used)] // literal is valid; invariant upheld by construction
-static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").unwrap());
+#[allow(clippy::expect_used)]
+static ANSI_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").expect("literal pattern is valid"));
 
 /// Wrap `text` in the given ANSI SGR escape code.
 #[must_use]

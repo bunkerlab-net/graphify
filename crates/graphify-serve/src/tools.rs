@@ -22,13 +22,11 @@ use crate::graph::{
 
 /// Execute the `query_graph` tool.
 #[must_use]
-// implicit_hasher/cast_possible_truncation: IDF cache and depth/budget casts are
-// bounded and safe; concrete types used for ergonomics.
-#[allow(clippy::implicit_hasher, clippy::cast_possible_truncation)]
-pub fn tool_query_graph(
+#[allow(clippy::cast_possible_truncation)] // depth/budget casts are bounded by tool config.
+pub fn tool_query_graph<S: std::hash::BuildHasher>(
     graph: &Graph,
     arguments: &serde_json::Map<String, Value>,
-    idf_cache: &mut HashMap<String, f64>,
+    idf_cache: &mut HashMap<String, f64, S>,
 ) -> String {
     let question = match arguments.get("question").and_then(Value::as_str) {
         Some(q) => q.to_string(),

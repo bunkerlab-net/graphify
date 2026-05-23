@@ -128,11 +128,9 @@ fn file_result_to_value(result: &FileResult) -> Value {
 
 /// Deserialise a cached `serde_json::Value` back into a `FileResult`.
 ///
-/// Returns `None` only if the value is structurally broken (never in practice, but the `Option`
-/// is kept for forward compatibility). Missing or malformed sub-fields silently fall back to
-/// empty `Vec`s. Counterpart to `file_result_to_value`.
-#[allow(clippy::unnecessary_wraps)] // caller uses Option for future extensibility
-fn value_to_file_result(v: &Value) -> Option<FileResult> {
+/// Missing or malformed sub-fields silently fall back to empty `Vec`s.
+/// Counterpart to `file_result_to_value`.
+fn value_to_file_result(v: &Value) -> FileResult {
     let nodes = v
         .get("nodes")
         .and_then(Value::as_array)
@@ -179,12 +177,12 @@ fn value_to_file_result(v: &Value) -> Option<FileResult> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(FileResult {
+    FileResult {
         nodes,
         edges,
         raw_calls,
         error: None,
-    })
+    }
 }
 
 // ── Extract a single file (with cache) ───────────────────────────────────────
@@ -197,10 +195,8 @@ fn value_to_file_result(v: &Value) -> Option<FileResult> {
 fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
     // Check cache
     let cached = graphify_cache::load_cached(path, effective_root, "ast");
-    if let Some(v) = cached
-        && let Some(r) = value_to_file_result(&v)
-    {
-        return r;
+    if let Some(v) = cached {
+        return value_to_file_result(&v);
     }
 
     let Some(extractor) = get_extractor(path) else {
@@ -228,17 +224,18 @@ fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
 /// On finding an `import_from_statement`, resolves the source module to a known stem via
 /// `bare_to_qualified`, then emits `uses` edges from each local class to each imported symbol
 /// that is present in `stem_to_entities`. Mirrors Python `_walk_imports` from `extract.py`.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // tree-walk helper; direct port
-fn walk_imports(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    path: &Path,
-    stem_to_entities: &HashMap<String, HashMap<String, String>>,
-    bare_to_qualified: &HashMap<String, String>,
-    local_classes: &[String],
-    str_path: &str,
-    new_edges: &mut Vec<Edge>,
-) {
+/// Shared state threaded through every [`walk_imports`] recursion.
+struct ImportWalkCtx<'a> {
+    path: &'a Path,
+    stem_to_entities: &'a HashMap<String, HashMap<String, String>>,
+    bare_to_qualified: &'a HashMap<String, String>,
+    local_classes: &'a [String],
+    str_path: &'a str,
+    new_edges: &'a mut Vec<Edge>,
+}
+
+#[allow(clippy::too_many_lines)] // linear dispatch over Python's import_from_statement variants
+fn walk_imports(ctx: &mut ImportWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) {
     if node.kind() == "import_from_statement" {
         let mut target_fq: Option<String> = None;
         let mut past_import_kw = false;
@@ -257,8 +254,11 @@ fn walk_imports(
                                     std::str::from_utf8(&source[sub.start_byte()..sub.end_byte()])
                                         .unwrap_or("");
                                 let bare = raw.split('.').next_back().unwrap_or("").to_string();
-                                let candidate =
-                                    path.parent().unwrap_or(path).join(format!("{bare}.py"));
+                                let candidate = ctx
+                                    .path
+                                    .parent()
+                                    .unwrap_or(ctx.path)
+                                    .join(format!("{bare}.py"));
                                 target_fq = Some(crate::ids::file_stem(&candidate));
                                 break;
                             }
@@ -273,7 +273,7 @@ fn walk_imports(
                     let raw = std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
                         .unwrap_or("");
                     let bare = raw.split('.').next_back().unwrap_or("");
-                    target_fq = bare_to_qualified.get(bare).cloned();
+                    target_fq = ctx.bare_to_qualified.get(bare).cloned();
                 }
                 if child.kind() == "import" {
                     past_import_kw = true;
@@ -303,19 +303,19 @@ fn walk_imports(
         }
 
         let Some(fq) = target_fq else { return };
-        let Some(entities) = stem_to_entities.get(&fq) else {
+        let Some(entities) = ctx.stem_to_entities.get(&fq) else {
             return;
         };
         let line = node.start_position().row + 1;
         for name in &imported_names {
             if let Some(tgt_nid) = entities.get(name) {
-                for src_class_nid in local_classes {
-                    new_edges.push(Edge {
+                for src_class_nid in ctx.local_classes {
+                    ctx.new_edges.push(Edge {
                         source: src_class_nid.clone(),
                         target: tgt_nid.clone(),
                         relation: "uses".to_string(),
                         confidence: "INFERRED".to_string(),
-                        source_file: str_path.to_string(),
+                        source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         weight: 0.8,
                         context: None,
@@ -329,16 +329,7 @@ fn walk_imports(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_imports(
-                cur.node(),
-                source,
-                path,
-                stem_to_entities,
-                bare_to_qualified,
-                local_classes,
-                str_path,
-                new_edges,
-            );
+            walk_imports(ctx, cur.node(), source);
             if !cur.goto_next_sibling() {
                 break;
             }
@@ -437,22 +428,58 @@ fn walk_java(
 /// Two-pass: first builds a map of (file-qualified-stem → label → nid) and
 /// (bare stem → qualified stem); then re-parses each Python file to find
 /// `from X import Y` statements and emit edges. Mirrors Python `_resolve_cross_file_imports`.
-#[allow(clippy::too_many_lines)]
 fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf]) -> Vec<Edge> {
-    use crate::ids::file_stem;
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser
+    let mut probe = tree_sitter::Parser::new();
+    if probe
         .set_language(&tree_sitter_python::LANGUAGE.into())
         .is_err()
     {
         return vec![];
     }
+    drop(probe);
 
-    // Pass 1: file-qualified stem → {label: nid}
+    let (stem_to_entities, bare_to_qualified) = build_python_symbol_maps(per_file);
+    let work: Vec<(&FileResult, &PathBuf)> = per_file.iter().zip(paths.iter()).collect();
+    let init_parser = || -> tree_sitter::Parser {
+        let mut p = tree_sitter::Parser::new();
+        let _ = p.set_language(&tree_sitter_python::LANGUAGE.into());
+        p
+    };
+    if work.len() >= PARALLEL_THRESHOLD {
+        work.par_iter()
+            .map_init(init_parser, |parser, (result, path)| {
+                python_per_file_edges(result, path, parser, &stem_to_entities, &bare_to_qualified)
+            })
+            .reduce(Vec::new, |mut a, b| {
+                a.extend(b);
+                a
+            })
+    } else {
+        let mut parser = init_parser();
+        work.iter()
+            .flat_map(|(result, path)| {
+                python_per_file_edges(
+                    result,
+                    path,
+                    &mut parser,
+                    &stem_to_entities,
+                    &bare_to_qualified,
+                )
+            })
+            .collect()
+    }
+}
+
+/// Pass 1: build `(stem → {label → nid})` + `(bare stem → qualified stem)` maps.
+fn build_python_symbol_maps(
+    per_file: &[FileResult],
+) -> (
+    HashMap<String, HashMap<String, String>>,
+    HashMap<String, String>,
+) {
+    use crate::ids::file_stem;
     let mut stem_to_entities: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut bare_to_qualified: HashMap<String, String> = HashMap::new();
-
     for result in per_file {
         for node in &result.nodes {
             if node.source_file.is_empty() {
@@ -479,81 +506,54 @@ fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf])
             bare_to_qualified.entry(bare).or_insert(fq_stem);
         }
     }
+    (stem_to_entities, bare_to_qualified)
+}
 
-    // Pass 2: for each Python file, find from-imports and resolve. Per-file
-    // work is independent and I/O-bound (read + tree-sitter parse), so fan
-    // out across Rayon. The seed `parser` above is dropped here; each
-    // worker thread gets its own parser via `par_iter().map_init`, since
-    // `tree_sitter::Parser` is `Send` but not cheaply clonable.
-    drop(parser);
-
-    let work: Vec<(&FileResult, &PathBuf)> = per_file.iter().zip(paths.iter()).collect();
-
-    let per_file_edges = |result: &FileResult, path: &PathBuf, parser: &mut tree_sitter::Parser| {
-        let mut local_edges: Vec<Edge> = Vec::new();
-        let str_path = path.to_string_lossy().into_owned();
-        let this_stem = file_stem(path);
-        let this_file_nid = make_id1(&str_path);
-
-        let local_classes: Vec<String> = result
-            .nodes
-            .iter()
-            .filter(|n| {
-                n.source_file == str_path
-                    && !n.label.ends_with(')')
-                    && !n.label.to_lowercase().ends_with(".py")
-                    && n.id != this_file_nid
-                    && n.id != make_id1(&this_stem)
-                    && n.file_type != "rationale"
-            })
-            .map(|n| n.id.clone())
-            .collect();
-
-        if local_classes.is_empty() {
-            return local_edges;
-        }
-
-        let Ok(source) = std::fs::read(path) else {
-            return local_edges;
-        };
-        let Some(tree) = parser.parse(&source, None) else {
-            return local_edges;
-        };
-
-        walk_imports(
-            tree.root_node(),
-            &source,
-            path,
-            &stem_to_entities,
-            &bare_to_qualified,
-            &local_classes,
-            &str_path,
-            &mut local_edges,
-        );
-        local_edges
-    };
-
-    let init_parser = || -> tree_sitter::Parser {
-        let mut p = tree_sitter::Parser::new();
-        let _ = p.set_language(&tree_sitter_python::LANGUAGE.into());
-        p
-    };
-
-    if work.len() >= PARALLEL_THRESHOLD {
-        work.par_iter()
-            .map_init(init_parser, |parser, (result, path)| {
-                per_file_edges(result, path, parser)
-            })
-            .reduce(Vec::new, |mut a, b| {
-                a.extend(b);
-                a
-            })
-    } else {
-        let mut parser = init_parser();
-        work.iter()
-            .flat_map(|(result, path)| per_file_edges(result, path, &mut parser))
-            .collect()
+/// Pass 2: per-file Python parse + import-edge emission.
+fn python_per_file_edges(
+    result: &FileResult,
+    path: &Path,
+    parser: &mut tree_sitter::Parser,
+    stem_to_entities: &HashMap<String, HashMap<String, String>>,
+    bare_to_qualified: &HashMap<String, String>,
+) -> Vec<Edge> {
+    use crate::ids::file_stem;
+    let mut local_edges: Vec<Edge> = Vec::new();
+    let str_path = path.to_string_lossy().into_owned();
+    let this_stem = file_stem(path);
+    let this_file_nid = make_id1(&str_path);
+    let local_classes: Vec<String> = result
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.source_file == str_path
+                && !n.label.ends_with(')')
+                && !n.label.to_lowercase().ends_with(".py")
+                && n.id != this_file_nid
+                && n.id != make_id1(&this_stem)
+                && n.file_type != "rationale"
+        })
+        .map(|n| n.id.clone())
+        .collect();
+    if local_classes.is_empty() {
+        return local_edges;
     }
+    let Ok(source) = std::fs::read(path) else {
+        return local_edges;
+    };
+    let Some(tree) = parser.parse(&source, None) else {
+        return local_edges;
+    };
+    let mut import_ctx = ImportWalkCtx {
+        path,
+        stem_to_entities,
+        bare_to_qualified,
+        local_classes: &local_classes,
+        str_path: &str_path,
+        new_edges: &mut local_edges,
+    };
+    walk_imports(&mut import_ctx, tree.root_node(), &source);
+    local_edges
 }
 
 // ── Cross-file Java import resolution ────────────────────────────────────────

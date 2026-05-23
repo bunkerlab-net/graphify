@@ -17,11 +17,9 @@ pub type IgnorePatterns = Vec<(PathBuf, String)>;
 // ── Pattern parsing ──────────────────────────────────────────────────────────
 
 /// Inline comment stripper: whitespace + one-or-more # + rest.
-static INLINE_COMMENT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    // SAFETY: known-good literal.
-    #[allow(clippy::unwrap_used)]
-    Regex::new(r"\s+#+[^\\].*$").unwrap()
-});
+#[allow(clippy::expect_used)]
+static INLINE_COMMENT_RE: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"\s+#+[^\\].*$").expect("literal pattern is valid"));
 
 /// Parse one raw line from a `.graphifyignore` or `.gitignore` file.
 ///

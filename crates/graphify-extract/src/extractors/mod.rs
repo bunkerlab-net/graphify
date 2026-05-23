@@ -484,18 +484,17 @@ fn extract_python_rationale(path: &Path, result: &mut FileResult) {
     }
 
     // Walk class/function docstrings
-    walk_docstrings(
-        root,
-        &file_nid,
-        &source,
-        &stem,
-        &str_path,
-        &file_nid,
-        &mut seen_ids,
-        &mut result.nodes,
-        &mut result.edges,
-        &add_rationale,
-    );
+    {
+        let mut doc_ctx = DocstringWalkCtx {
+            stem: &stem,
+            file_nid: &file_nid,
+            seen_ids: &mut seen_ids,
+            nodes: &mut result.nodes,
+            edges: &mut result.edges,
+            add_rationale: &add_rationale,
+        };
+        walk_docstrings(&mut doc_ctx, root, &file_nid, &source);
+    }
 
     // Rationale comments
     let source_text = String::from_utf8_lossy(&source).into_owned();
@@ -594,18 +593,10 @@ fn get_docstring(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<(String, 
 /// For `class_definition` nodes, extracts the class body docstring and recurses into methods.
 /// For `function_definition` nodes, extracts the function body docstring and stops recursing.
 /// All other nodes are traversed without emitting rationale. Called by `extract_python_rationale`.
-#[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
-fn walk_docstrings(
-    node: tree_sitter::Node<'_>,
-    parent_nid: &str,
-    source: &[u8],
-    stem: &str,
-    str_path: &str,
-    file_nid: &str,
-    seen_ids: &mut std::collections::HashSet<String>,
-    nodes: &mut Vec<crate::types::Node>,
-    edges: &mut Vec<crate::types::Edge>,
-    add_rationale: &impl Fn(
+/// Shared state threaded through every [`walk_docstrings`] recursion.
+struct DocstringWalkCtx<'a, F>
+where
+    F: Fn(
         &str,
         u32,
         &str,
@@ -613,7 +604,30 @@ fn walk_docstrings(
         &mut Vec<crate::types::Node>,
         &mut Vec<crate::types::Edge>,
     ),
-) {
+{
+    stem: &'a str,
+    file_nid: &'a str,
+    seen_ids: &'a mut std::collections::HashSet<String>,
+    nodes: &'a mut Vec<crate::types::Node>,
+    edges: &'a mut Vec<crate::types::Edge>,
+    add_rationale: &'a F,
+}
+
+fn walk_docstrings<F>(
+    ctx: &mut DocstringWalkCtx<'_, F>,
+    node: tree_sitter::Node<'_>,
+    parent_nid: &str,
+    source: &[u8],
+) where
+    F: Fn(
+        &str,
+        u32,
+        &str,
+        &mut std::collections::HashSet<String>,
+        &mut Vec<crate::types::Node>,
+        &mut Vec<crate::types::Edge>,
+    ),
+{
     use crate::ids::make_id;
     let t = node.kind();
     if t == "class_definition" {
@@ -621,27 +635,16 @@ fn walk_docstrings(
             let class_name =
                 String::from_utf8_lossy(&source[name_node.start_byte()..name_node.end_byte()])
                     .into_owned();
-            let nid = make_id(&[stem, &class_name]);
+            let nid = make_id(&[ctx.stem, &class_name]);
             if let Some(body) = node.child_by_field_name("body") {
                 if let Some((doc, line)) = get_docstring(body, source) {
-                    add_rationale(&doc, line, &nid, seen_ids, nodes, edges);
+                    (ctx.add_rationale)(&doc, line, &nid, ctx.seen_ids, ctx.nodes, ctx.edges);
                 }
                 let mut cur = body.walk();
                 if cur.goto_first_child() {
                     loop {
                         let child = cur.node();
-                        walk_docstrings(
-                            child,
-                            &nid,
-                            source,
-                            stem,
-                            str_path,
-                            file_nid,
-                            seen_ids,
-                            nodes,
-                            edges,
-                            add_rationale,
-                        );
+                        walk_docstrings(ctx, child, &nid, source);
                         if !cur.goto_next_sibling() {
                             break;
                         }
@@ -656,15 +659,15 @@ fn walk_docstrings(
             let func_name =
                 String::from_utf8_lossy(&source[name_node.start_byte()..name_node.end_byte()])
                     .into_owned();
-            let nid = if parent_nid == file_nid {
-                make_id(&[stem, &func_name])
+            let nid = if parent_nid == ctx.file_nid {
+                make_id(&[ctx.stem, &func_name])
             } else {
                 make_id(&[parent_nid, &func_name])
             };
             if let Some(body) = node.child_by_field_name("body")
                 && let Some((doc, line)) = get_docstring(body, source)
             {
-                add_rationale(&doc, line, &nid, seen_ids, nodes, edges);
+                (ctx.add_rationale)(&doc, line, &nid, ctx.seen_ids, ctx.nodes, ctx.edges);
             }
         }
         return;
@@ -673,18 +676,7 @@ fn walk_docstrings(
     if cur.goto_first_child() {
         loop {
             let child = cur.node();
-            walk_docstrings(
-                child,
-                parent_nid,
-                source,
-                stem,
-                str_path,
-                file_nid,
-                seen_ids,
-                nodes,
-                edges,
-                add_rationale,
-            );
+            walk_docstrings(ctx, child, parent_nid, source);
             if !cur.goto_next_sibling() {
                 break;
             }

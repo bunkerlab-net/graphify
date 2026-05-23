@@ -171,16 +171,16 @@ pub fn call_ollama_plain(
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String, LlmError> {
-    call_plain_openai_compat(
+    call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
         base_url,
         api_key,
         model,
         prompt,
-        Some(0.0),
-        None,
-        false,
+        temperature: Some(0.0),
+        reasoning_effort: None,
+        disable_thinking: false,
         max_tokens,
-    )
+    })
 }
 
 /// Validate the Ollama base URL (warn, do not raise, matching Python behaviour).

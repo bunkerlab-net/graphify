@@ -86,10 +86,10 @@ pub fn read_google_shortcut(path: &Path) -> Result<ShortcutMetadata, GoogleError
     })
 }
 
-// SAFETY: known-valid literal regex pattern.
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
 static FILE_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"/(?:document|spreadsheets|presentation|file)/d/([^/?#]+)").unwrap()
+    Regex::new(r"/(?:document|spreadsheets|presentation|file)/d/([^/?#]+)")
+        .expect("literal pattern is valid")
 });
 
 /// Extract a Drive file ID from common Google Docs/Drive URL shapes.

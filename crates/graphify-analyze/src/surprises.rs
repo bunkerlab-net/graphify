@@ -22,21 +22,33 @@ const PARALLEL_SURPRISE_THRESHOLD: usize = 256;
 ///
 /// Mirrors Python `_surprise_score`.
 ///
+/// Inputs to [`surprise_score`].
+pub struct SurpriseScoreInput<'a> {
+    pub graph: &'a Graph,
+    pub u: &'a str,
+    pub v: &'a str,
+    pub data: &'a IndexMap<String, Value>,
+    pub node_community: &'a IndexMap<String, i64>,
+    pub u_source: &'a str,
+    pub v_source: &'a str,
+    pub degrees: Option<&'a IndexMap<String, usize>>,
+}
+
 /// # Errors
 ///
 /// This function is infallible; it returns a plain `(i32, Vec<String>)`.
 #[must_use]
-#[allow(clippy::too_many_arguments)] // mirrors the Python _surprise_score signature 1:1
-pub fn surprise_score(
-    graph: &Graph,
-    u: &str,
-    v: &str,
-    data: &IndexMap<String, Value>,
-    node_community: &IndexMap<String, i64>,
-    u_source: &str,
-    v_source: &str,
-    degrees: Option<&IndexMap<String, usize>>,
-) -> (i32, Vec<String>) {
+pub fn surprise_score(input: &SurpriseScoreInput<'_>) -> (i32, Vec<String>) {
+    let SurpriseScoreInput {
+        graph,
+        u,
+        v,
+        data,
+        node_community,
+        u_source,
+        v_source,
+        degrees,
+    } = *input;
     let mut score: i32 = 0;
     let mut reasons: Vec<String> = Vec::new();
 
@@ -139,6 +151,99 @@ pub fn surprise_score(
     (score, reasons)
 }
 
+/// Shared context for per-edge cross-file scoring.
+struct CrossFileCtx<'a> {
+    graph: &'a Graph,
+    node_community: IndexMap<String, i64>,
+    degrees: IndexMap<String, usize>,
+    structural_relations: IndexSet<&'static str>,
+}
+
+/// Score a single cross-file edge or return `None` if it should be filtered out.
+fn score_cross_file_edge(
+    edge: &graphify_build::Edge,
+    ctx: &CrossFileCtx<'_>,
+) -> Option<(i32, Value)> {
+    let u = edge.source.as_str();
+    let v = edge.target.as_str();
+    let data = &edge.attrs;
+
+    let relation = data.get("relation").and_then(Value::as_str).unwrap_or("");
+    if ctx.structural_relations.contains(relation) {
+        return None;
+    }
+    if is_concept_node(ctx.graph, u) || is_concept_node(ctx.graph, v) {
+        return None;
+    }
+    if is_file_node(ctx.graph, u, &ctx.degrees) || is_file_node(ctx.graph, v, &ctx.degrees) {
+        return None;
+    }
+
+    let u_source = node_source_file(ctx.graph, u);
+    let v_source = node_source_file(ctx.graph, v);
+    if u_source.is_empty() || v_source.is_empty() || u_source == v_source {
+        return None;
+    }
+
+    let (score, reasons) = surprise_score(&SurpriseScoreInput {
+        graph: ctx.graph,
+        u,
+        v,
+        data,
+        node_community: &ctx.node_community,
+        u_source,
+        v_source,
+        degrees: Some(&ctx.degrees),
+    });
+
+    let (src_id, tgt_id) = resolved_endpoints(ctx.graph, data, u, v);
+    let entry = json!({
+        "source": node_label(ctx.graph, src_id),
+        "target": node_label(ctx.graph, tgt_id),
+        "source_files": [node_source_file(ctx.graph, src_id), node_source_file(ctx.graph, tgt_id)],
+        "confidence": data.get("confidence").and_then(Value::as_str).unwrap_or("EXTRACTED"),
+        "relation": relation,
+        "why": if reasons.is_empty() { "cross-file semantic connection".to_string() } else { reasons.join("; ") },
+    });
+    Some((score, entry))
+}
+
+/// Resolve `_src`/`_tgt` overrides (used for split-node aliases), falling back to `u`/`v`.
+fn resolved_endpoints<'a>(
+    graph: &Graph,
+    data: &'a indexmap::IndexMap<String, Value>,
+    u: &'a str,
+    v: &'a str,
+) -> (&'a str, &'a str) {
+    let src = data
+        .get("_src")
+        .and_then(Value::as_str)
+        .filter(|id| graph.contains_node(id))
+        .unwrap_or(u);
+    let tgt = data
+        .get("_tgt")
+        .and_then(Value::as_str)
+        .filter(|id| graph.contains_node(id))
+        .unwrap_or(v);
+    (src, tgt)
+}
+
+fn node_label<'a>(graph: &'a Graph, id: &'a str) -> &'a str {
+    graph
+        .node_data(id)
+        .and_then(|a| a.get("label"))
+        .and_then(Value::as_str)
+        .unwrap_or(id)
+}
+
+fn node_source_file<'a>(graph: &'a Graph, id: &str) -> &'a str {
+    graph
+        .node_data(id)
+        .and_then(|a| a.get("source_file"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
 /// Find surprising connections for multi-file corpora.
 ///
 /// Iterates all edges between nodes in different source files, scores each
@@ -146,119 +251,32 @@ pub fn surprise_score(
 /// to [`cross_community_surprises`] when no cross-file edges are found.
 ///
 /// Mirrors the multi-source branch of Python `surprising_connections`.
-#[allow(clippy::too_many_lines)] // closure-heavy edge scorer; splitting would obscure flow.
 fn cross_file_surprises(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
     top_n: usize,
 ) -> Vec<Value> {
-    let node_community = node_community_map(communities);
-    let degrees = all_degrees(graph);
-
-    let structural_relations: IndexSet<&str> = ["imports", "imports_from", "contains", "method"]
-        .into_iter()
-        .collect();
-
-    // Per-edge scoring is read-only over `graph` and produces an owned tuple,
-    // so it parallelises cleanly. Sort restores deterministic ordering.
-    let score_edge = |edge: &graphify_build::Edge| -> Option<(i32, Value)> {
-        let u = edge.source.as_str();
-        let v = edge.target.as_str();
-        let data = &edge.attrs;
-
-        let relation = data.get("relation").and_then(Value::as_str).unwrap_or("");
-        if structural_relations.contains(relation) {
-            return None;
-        }
-        if is_concept_node(graph, u) || is_concept_node(graph, v) {
-            return None;
-        }
-        if is_file_node(graph, u, &degrees) || is_file_node(graph, v, &degrees) {
-            return None;
-        }
-
-        let u_source = graph
-            .node_data(u)
-            .and_then(|a| a.get("source_file"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let v_source = graph
-            .node_data(v)
-            .and_then(|a| a.get("source_file"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-
-        if u_source.is_empty() || v_source.is_empty() || u_source == v_source {
-            return None;
-        }
-
-        let (score, reasons) = surprise_score(
-            graph,
-            u,
-            v,
-            data,
-            &node_community,
-            u_source,
-            v_source,
-            Some(&degrees),
-        );
-
-        let src_id = data
-            .get("_src")
-            .and_then(Value::as_str)
-            .filter(|id| graph.contains_node(id))
-            .unwrap_or(u);
-        let tgt_id = data
-            .get("_tgt")
-            .and_then(Value::as_str)
-            .filter(|id| graph.contains_node(id))
-            .unwrap_or(v);
-
-        let src_label = graph
-            .node_data(src_id)
-            .and_then(|a| a.get("label"))
-            .and_then(Value::as_str)
-            .unwrap_or(src_id);
-        let tgt_label = graph
-            .node_data(tgt_id)
-            .and_then(|a| a.get("label"))
-            .and_then(Value::as_str)
-            .unwrap_or(tgt_id);
-        let src_file = graph
-            .node_data(src_id)
-            .and_then(|a| a.get("source_file"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let tgt_file = graph
-            .node_data(tgt_id)
-            .and_then(|a| a.get("source_file"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-
-        let why = if reasons.is_empty() {
-            "cross-file semantic connection".to_string()
-        } else {
-            reasons.join("; ")
-        };
-
-        Some((
-            score,
-            json!({
-                "source": src_label,
-                "target": tgt_label,
-                "source_files": [src_file, tgt_file],
-                "confidence": data.get("confidence").and_then(Value::as_str).unwrap_or("EXTRACTED"),
-                "relation": relation,
-                "why": why,
-            }),
-        ))
+    let ctx = CrossFileCtx {
+        graph,
+        node_community: node_community_map(communities),
+        degrees: all_degrees(graph),
+        structural_relations: ["imports", "imports_from", "contains", "method"]
+            .into_iter()
+            .collect(),
     };
 
     let mut candidates: Vec<(i32, Value)> = if graph.edge_list.len() >= PARALLEL_SURPRISE_THRESHOLD
     {
-        graph.edge_list.par_iter().filter_map(score_edge).collect()
+        graph
+            .edge_list
+            .par_iter()
+            .filter_map(|e| score_cross_file_edge(e, &ctx))
+            .collect()
     } else {
-        graph.edges().filter_map(score_edge).collect()
+        graph
+            .edges()
+            .filter_map(|e| score_cross_file_edge(e, &ctx))
+            .collect()
     };
 
     candidates.sort_by_key(|item| Reverse(item.0));
@@ -270,6 +288,92 @@ fn cross_file_surprises(
     result.into_iter().take(top_n).collect()
 }
 
+/// Edge betweenness fallback when no community data exists.
+fn betweenness_fallback(graph: &Graph, top_n: usize) -> Vec<Value> {
+    if graph.edge_count() == 0 || graph.node_count() > 5000 {
+        return Vec::new();
+    }
+    let mut top_edges = edge_betweenness_centrality(graph);
+    top_edges.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    top_edges
+        .into_iter()
+        .take(top_n)
+        .map(|((u, v), score_val)| {
+            let u_attrs = graph.node_data(&u);
+            let v_attrs = graph.node_data(&v);
+            let data = graph.edge_data(&u, &v);
+            json!({
+                "source": u_attrs.and_then(|a| a.get("label")).and_then(Value::as_str).unwrap_or(u.as_str()),
+                "target": v_attrs.and_then(|a| a.get("label")).and_then(Value::as_str).unwrap_or(v.as_str()),
+                "source_files": [
+                    u_attrs.and_then(|a| a.get("source_file")).and_then(Value::as_str).unwrap_or(""),
+                    v_attrs.and_then(|a| a.get("source_file")).and_then(Value::as_str).unwrap_or(""),
+                ],
+                "confidence": data.and_then(|d| d.get("confidence")).and_then(Value::as_str).unwrap_or("EXTRACTED"),
+                "relation": data.and_then(|d| d.get("relation")).and_then(Value::as_str).unwrap_or(""),
+                "note": format!("Bridges graph structure (betweenness={score_val:.3})"),
+            })
+        })
+        .collect()
+}
+
+/// Confidence ordering used to dedupe surprises by community pair (AMBIGUOUS first).
+fn conf_order(c: &str) -> i32 {
+    match c {
+        "AMBIGUOUS" => 0,
+        "INFERRED" => 1,
+        "EXTRACTED" => 2,
+        _ => 3,
+    }
+}
+
+/// Shared context for per-edge cross-community scoring.
+struct CrossCommunityCtx<'a> {
+    graph: &'a Graph,
+    node_community: IndexMap<String, i64>,
+    degrees: IndexMap<String, usize>,
+    structural_relations: IndexSet<&'static str>,
+}
+
+/// Score a single cross-community edge or return `None` to filter it out.
+fn score_cross_community_edge(
+    edge: &graphify_build::Edge,
+    ctx: &CrossCommunityCtx<'_>,
+) -> Option<(i32, (i64, i64), Value)> {
+    let u = edge.source.as_str();
+    let v = edge.target.as_str();
+    let data = &edge.attrs;
+
+    let cu = ctx.node_community.get(u).copied()?;
+    let cv = ctx.node_community.get(v).copied()?;
+    if cu == cv {
+        return None;
+    }
+    if is_file_node(ctx.graph, u, &ctx.degrees) || is_file_node(ctx.graph, v, &ctx.degrees) {
+        return None;
+    }
+    let relation = data.get("relation").and_then(Value::as_str).unwrap_or("");
+    if ctx.structural_relations.contains(relation) {
+        return None;
+    }
+    let confidence = data
+        .get("confidence")
+        .and_then(Value::as_str)
+        .unwrap_or("EXTRACTED");
+
+    let (src_id, tgt_id) = resolved_endpoints(ctx.graph, data, u, v);
+    let pair = if cu <= cv { (cu, cv) } else { (cv, cu) };
+    let entry = json!({
+        "source": node_label(ctx.graph, src_id),
+        "target": node_label(ctx.graph, tgt_id),
+        "source_files": [node_source_file(ctx.graph, src_id), node_source_file(ctx.graph, tgt_id)],
+        "confidence": confidence,
+        "relation": relation,
+        "note": format!("Bridges community {cu} \u{2192} community {cv}"),
+    });
+    Some((conf_order(confidence), pair, entry))
+}
+
 /// Find surprising connections for single-source corpora.
 ///
 /// When the entire corpus comes from one file (no cross-file edges), community
@@ -279,141 +383,36 @@ fn cross_file_surprises(
 /// betweenness centrality when no community data is available.
 ///
 /// Mirrors the single-source branch of Python `surprising_connections`.
-#[allow(clippy::too_many_lines)] // algorithm has many branch cases; splitting would obscure flow
 fn cross_community_surprises(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
     top_n: usize,
 ) -> Vec<Value> {
     if communities.is_empty() {
-        // Fall back to edge betweenness centrality
-        if graph.edge_count() == 0 {
-            return Vec::new();
-        }
-        if graph.node_count() > 5000 {
-            return Vec::new();
-        }
-        let mut top_edges = edge_betweenness_centrality(graph);
-        top_edges.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let result = top_edges
-            .into_iter()
-            .take(top_n)
-            .map(|((u, v), score_val)| {
-                let u_attrs = graph.node_data(&u);
-                let v_attrs = graph.node_data(&v);
-                let data = graph.edge_data(&u, &v);
-                json!({
-                    "source": u_attrs.and_then(|a| a.get("label")).and_then(Value::as_str).unwrap_or(u.as_str()),
-                    "target": v_attrs.and_then(|a| a.get("label")).and_then(Value::as_str).unwrap_or(v.as_str()),
-                    "source_files": [
-                        u_attrs.and_then(|a| a.get("source_file")).and_then(Value::as_str).unwrap_or(""),
-                        v_attrs.and_then(|a| a.get("source_file")).and_then(Value::as_str).unwrap_or(""),
-                    ],
-                    "confidence": data.and_then(|d| d.get("confidence")).and_then(Value::as_str).unwrap_or("EXTRACTED"),
-                    "relation": data.and_then(|d| d.get("relation")).and_then(Value::as_str).unwrap_or(""),
-                    "note": format!("Bridges graph structure (betweenness={score_val:.3})"),
-                })
-            })
-            .collect();
-        return result;
+        return betweenness_fallback(graph, top_n);
     }
 
-    let node_community = node_community_map(communities);
-    let degrees = all_degrees(graph);
-    let structural_relations: IndexSet<&str> = ["imports", "imports_from", "contains", "method"]
-        .into_iter()
-        .collect();
-
-    // Confidence ordering: AMBIGUOUS < INFERRED < EXTRACTED
-    let conf_order = |c: &str| -> i32 {
-        match c {
-            "AMBIGUOUS" => 0,
-            "INFERRED" => 1,
-            "EXTRACTED" => 2,
-            _ => 3,
-        }
-    };
-
-    // Per-edge scoring is read-only — fan out across Rayon. The downstream
-    // `sort_by_key` makes ordering deterministic regardless of fan-in order.
-    let score_edge = |edge: &graphify_build::Edge| -> Option<(i32, (i64, i64), Value)> {
-        let u = edge.source.as_str();
-        let v = edge.target.as_str();
-        let data = &edge.attrs;
-
-        let cid_u = node_community.get(u).copied();
-        let cid_v = node_community.get(v).copied();
-        let (Some(cu), Some(cv)) = (cid_u, cid_v) else {
-            return None;
-        };
-        if cu == cv {
-            return None;
-        }
-        if is_file_node(graph, u, &degrees) || is_file_node(graph, v, &degrees) {
-            return None;
-        }
-        let relation = data.get("relation").and_then(Value::as_str).unwrap_or("");
-        if structural_relations.contains(relation) {
-            return None;
-        }
-
-        let confidence = data
-            .get("confidence")
-            .and_then(Value::as_str)
-            .unwrap_or("EXTRACTED");
-
-        let src_id = data
-            .get("_src")
-            .and_then(Value::as_str)
-            .filter(|id| graph.contains_node(id))
-            .unwrap_or(u);
-        let tgt_id = data
-            .get("_tgt")
-            .and_then(Value::as_str)
-            .filter(|id| graph.contains_node(id))
-            .unwrap_or(v);
-
-        let src_label = graph
-            .node_data(src_id)
-            .and_then(|a| a.get("label"))
-            .and_then(Value::as_str)
-            .unwrap_or(src_id);
-        let tgt_label = graph
-            .node_data(tgt_id)
-            .and_then(|a| a.get("label"))
-            .and_then(Value::as_str)
-            .unwrap_or(tgt_id);
-        let src_file = graph
-            .node_data(src_id)
-            .and_then(|a| a.get("source_file"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let tgt_file = graph
-            .node_data(tgt_id)
-            .and_then(|a| a.get("source_file"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-
-        let pair = if cu <= cv { (cu, cv) } else { (cv, cu) };
-        Some((
-            conf_order(confidence),
-            pair,
-            json!({
-                "source": src_label,
-                "target": tgt_label,
-                "source_files": [src_file, tgt_file],
-                "confidence": confidence,
-                "relation": relation,
-                "note": format!("Bridges community {cu} \u{2192} community {cv}"),
-            }),
-        ))
+    let ctx = CrossCommunityCtx {
+        graph,
+        node_community: node_community_map(communities),
+        degrees: all_degrees(graph),
+        structural_relations: ["imports", "imports_from", "contains", "method"]
+            .into_iter()
+            .collect(),
     };
 
     let mut surprises: Vec<(i32, (i64, i64), Value)> =
         if graph.edge_list.len() >= PARALLEL_SURPRISE_THRESHOLD {
-            graph.edge_list.par_iter().filter_map(score_edge).collect()
+            graph
+                .edge_list
+                .par_iter()
+                .filter_map(|e| score_cross_community_edge(e, &ctx))
+                .collect()
         } else {
-            graph.edges().filter_map(score_edge).collect()
+            graph
+                .edges()
+                .filter_map(|e| score_cross_community_edge(e, &ctx))
+                .collect()
         };
 
     // Sort by confidence order (AMBIGUOUS first)

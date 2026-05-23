@@ -59,13 +59,23 @@ enum ChunkOutcome {
 /// # Panics
 /// Never panics in practice; the inner `expect` on a single-thread fallback pool
 /// cannot fail because Rayon always permits at least one thread.
-#[allow(clippy::too_many_lines)]
+#[must_use]
 pub fn extract_corpus_parallel(
     files: &[PathBuf],
     cfg: &CorpusConfig<'_>,
     on_chunk_done: Option<&ChunkDoneCb>,
 ) -> (LlmResponse, usize) {
-    let chunks: Vec<Vec<PathBuf>> = if let Some(budget) = cfg.token_budget {
+    let chunks = pack_chunks(files, cfg);
+    let total = chunks.len();
+    let workers = resolve_worker_count(cfg, total);
+    let outcomes = run_chunks(&chunks, cfg, workers);
+    merge_outcomes(outcomes, cfg, total, on_chunk_done)
+}
+
+/// Split `files` into chunks using either the token-budget packer or a fixed
+/// `chunk_size` slice.
+fn pack_chunks(files: &[PathBuf], cfg: &CorpusConfig<'_>) -> Vec<Vec<PathBuf>> {
+    if let Some(budget) = cfg.token_budget {
         pack_chunks_by_tokens(files, budget).unwrap_or_else(|_| {
             files
                 .chunks(cfg.chunk_size.max(1))
@@ -77,11 +87,11 @@ pub fn extract_corpus_parallel(
             .chunks(cfg.chunk_size.max(1))
             .map(<[PathBuf]>::to_vec)
             .collect()
-    };
+    }
+}
 
-    let total = chunks.len();
-
-    // Force serial for backends that don't support concurrent calls.
+/// Decide how many workers to use, honouring backend-specific serial overrides.
+fn resolve_worker_count(cfg: &CorpusConfig<'_>, total: usize) -> usize {
     let force_serial = (cfg.backend == "ollama"
         && std::env::var("GRAPHIFY_OLLAMA_PARALLEL")
             .as_deref()
@@ -94,91 +104,82 @@ pub fn extract_corpus_parallel(
                 .unwrap_or("")
                 .trim()
                 != "1");
-    let workers = if force_serial {
-        1_usize
+    if force_serial {
+        1
     } else {
         cfg.max_concurrency.max(1).min(total.max(1))
-    };
+    }
+}
 
-    // Run chunks — serial path avoids Rayon overhead and keeps callback ordering
-    // identical to the pre-parallelism sequential path (matches Python's serial branch).
-    let outcomes: Vec<ChunkOutcome> = if workers == 1 {
-        chunks
+/// Run a single chunk through the adaptive-retry extractor.
+fn extract_one_chunk(idx: usize, chunk: &[PathBuf], cfg: &CorpusConfig<'_>) -> ChunkOutcome {
+    let t0 = Instant::now();
+    match extract_with_adaptive_retry(
+        chunk,
+        cfg.backend,
+        cfg.api_key,
+        cfg.model,
+        cfg.root,
+        cfg.max_retry_depth,
+        0,
+    ) {
+        Ok(mut result) => {
+            result.elapsed_seconds = t0.elapsed().as_secs_f64();
+            ChunkOutcome::Ok { idx, result }
+        }
+        Err(e) => ChunkOutcome::Err {
+            idx,
+            msg: e.to_string(),
+        },
+    }
+}
+
+/// Execute all chunks, dispatching to Rayon when `workers > 1`.
+fn run_chunks(
+    chunks: &[Vec<PathBuf>],
+    cfg: &CorpusConfig<'_>,
+    workers: usize,
+) -> Vec<ChunkOutcome> {
+    if workers == 1 {
+        return chunks
             .iter()
             .enumerate()
-            .map(|(idx, chunk)| {
-                let t0 = Instant::now();
-                match extract_with_adaptive_retry(
-                    chunk,
-                    cfg.backend,
-                    cfg.api_key,
-                    cfg.model,
-                    cfg.root,
-                    cfg.max_retry_depth,
-                    0,
-                ) {
-                    Ok(mut result) => {
-                        result.elapsed_seconds = t0.elapsed().as_secs_f64();
-                        ChunkOutcome::Ok { idx, result }
-                    }
-                    Err(e) => ChunkOutcome::Err {
-                        idx,
-                        msg: e.to_string(),
-                    },
-                }
-            })
+            .map(|(idx, chunk)| extract_one_chunk(idx, chunk, cfg))
+            .collect();
+    }
+    // Build a scoped Rayon thread-pool to honour max_concurrency.
+    // If pool construction fails fall back to a single-thread pool.
+    #[allow(clippy::expect_used)]
+    // reason: build() only fails on invalid thread counts which we clamp above.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap_or_else(|_| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("fallback single-thread pool always succeeds")
+        });
+    pool.install(|| {
+        use rayon::prelude::*;
+        chunks
+            .par_iter()
+            .enumerate()
+            .map(|(idx, chunk)| extract_one_chunk(idx, chunk, cfg))
             .collect()
-    } else {
-        // Build a scoped Rayon thread-pool to honour max_concurrency.
-        // If pool construction fails fall back to the global pool.
-        #[allow(clippy::expect_used)]
-        // reason: build() only fails on invalid thread counts which we clamp above.
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap_or_else(|_| {
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(1)
-                    .build()
-                    .expect("fallback single-thread pool always succeeds")
-            });
+    })
+}
 
-        pool.install(|| {
-            use rayon::prelude::*;
-            chunks
-                .par_iter()
-                .enumerate()
-                .map(|(idx, chunk)| {
-                    let t0 = Instant::now();
-                    match extract_with_adaptive_retry(
-                        chunk,
-                        cfg.backend,
-                        cfg.api_key,
-                        cfg.model,
-                        cfg.root,
-                        cfg.max_retry_depth,
-                        0,
-                    ) {
-                        Ok(mut result) => {
-                            result.elapsed_seconds = t0.elapsed().as_secs_f64();
-                            ChunkOutcome::Ok { idx, result }
-                        }
-                        Err(e) => ChunkOutcome::Err {
-                            idx,
-                            msg: e.to_string(),
-                        },
-                    }
-                })
-                .collect()
-        })
-    };
-
-    // Merge outcomes in chunk-index order so the merged result is deterministic.
-    let mut ordered: Vec<ChunkOutcome> = outcomes;
-    ordered.sort_by_key(|o| match o {
+/// Merge per-chunk outcomes in deterministic order, dispatching `on_chunk_done`.
+fn merge_outcomes(
+    mut outcomes: Vec<ChunkOutcome>,
+    cfg: &CorpusConfig<'_>,
+    total: usize,
+    on_chunk_done: Option<&ChunkDoneCb>,
+) -> (LlmResponse, usize) {
+    outcomes.sort_by_key(|o| match o {
         ChunkOutcome::Ok { idx, .. } | ChunkOutcome::Err { idx, .. } => *idx,
     });
-
     let mut merged = LlmResponse {
         nodes: vec![],
         edges: vec![],
@@ -190,8 +191,7 @@ pub fn extract_corpus_parallel(
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
     };
-
-    for outcome in ordered {
+    for outcome in outcomes {
         match outcome {
             ChunkOutcome::Ok { idx, result } => {
                 merge_into(&mut merged, &result);
@@ -205,7 +205,6 @@ pub fn extract_corpus_parallel(
             }
         }
     }
-
     let failed_chunks = merged.failed_chunk_indices.len();
     if failed_chunks > 0 {
         eprintln!(
@@ -213,6 +212,5 @@ pub fn extract_corpus_parallel(
              — see errors above. Partial results returned."
         );
     }
-
     (merged, failed_chunks)
 }
