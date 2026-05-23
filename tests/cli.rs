@@ -435,9 +435,15 @@ fn hermes_subcommand_is_dispatched() {
 #[test]
 fn install_accepts_positional_platform() {
     // We can't actually install — that would touch the user's home dir.
-    // Verify the parser accepts both forms by checking --help is identical.
-    let positional = cli().arg("install").arg("--help").assert().success();
-    let _ = positional;
+    // Verify the parser accepts the install subcommand and that `--help`
+    // mentions the positional platform argument so the surface stays
+    // discoverable.
+    cli()
+        .arg("install")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("install"));
 }
 
 /// `graphify save-result` writes a Q&A markdown file and prints `Saved to <path>`
