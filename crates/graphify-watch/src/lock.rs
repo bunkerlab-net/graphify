@@ -91,7 +91,6 @@ impl RebuildLock {
             libc::LOCK_EX | libc::LOCK_NB
         };
 
-        // SAFETY: raw_fd is valid; flock semantics are well-defined.
         // SAFETY: raw_fd was just unwrapped from an open File; flock semantics are well-defined.
         #[allow(unsafe_code)] // reason: libc::flock has no safe Rust wrapper; FD is valid
         let rc = unsafe { libc::flock(raw_fd, flags) };

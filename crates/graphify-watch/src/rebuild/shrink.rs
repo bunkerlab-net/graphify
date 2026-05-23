@@ -1,5 +1,6 @@
-//! Shrink-guard: refuses to overwrite graph output when node count drops
-//! by more than 50%.
+//! Shrink-guard: refuses to overwrite graph output when the new node
+//! count is strictly less than the previous one (matches Python's
+//! `_check_shrink`, which also rejects any decrease, not just `>= 50%`).
 //!
 //! Extracted from `rebuild.rs` so the shrink-detection logic is isolated and
 //! independently testable.

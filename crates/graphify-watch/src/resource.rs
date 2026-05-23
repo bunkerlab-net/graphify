@@ -47,8 +47,11 @@ pub fn apply_resource_limits() {
                 } else {
                     limit
                 };
+                // POSIX requires rlim_cur <= rlim_max; clamp so we never
+                // submit an invalid request to setrlimit.
+                let new_cur = limit.min(new_hard);
                 let new_rl = libc::rlimit {
-                    rlim_cur: limit,
+                    rlim_cur: new_cur,
                     rlim_max: new_hard,
                 };
                 libc::setrlimit(resource, &raw const new_rl);

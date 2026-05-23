@@ -9,6 +9,7 @@ use graphify_watch::{
     apply_resource_limits, check_shrink, git_head, node_community_map, relativize_source_files,
 };
 use serde_json::json;
+use serial_test::serial;
 
 // ── apply_resource_limits ────────────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ fn apply_resource_limits_runs_without_panicking() {
 }
 
 #[test]
+#[serial(rebuild_memory_limit_env)]
 fn apply_resource_limits_with_memory_limit_env() {
     // SAFETY: test-only env var manipulation.
     #[allow(unsafe_code)]
@@ -33,6 +35,7 @@ fn apply_resource_limits_with_memory_limit_env() {
 }
 
 #[test]
+#[serial(rebuild_memory_limit_env)]
 fn apply_resource_limits_with_invalid_memory_env() {
     #[allow(unsafe_code)]
     unsafe {
