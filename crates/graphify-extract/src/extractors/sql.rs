@@ -462,15 +462,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                 let nid = make_id(&[ctx.stem, name]);
                 add_node(&nid, name, line, ctx.nodes, ctx.edges, ctx.seen_ids);
                 ctx.table_nids.insert(name.to_lowercase(), nid.clone());
-                walk_from_refs(
-                    node,
-                    source,
-                    ctx.str_path,
-                    ctx.stem,
-                    &nid,
-                    ctx.edges,
-                    ctx.table_nids,
-                );
+                walk_from_refs(node, source, ctx.str_path, ctx.stem, &nid, ctx.edges);
             }
         }
         "create_function" | "create_procedure" => {
@@ -484,15 +476,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                     ctx.edges,
                     ctx.seen_ids,
                 );
-                walk_from_refs(
-                    node,
-                    source,
-                    ctx.str_path,
-                    ctx.stem,
-                    &nid,
-                    ctx.edges,
-                    ctx.table_nids,
-                );
+                walk_from_refs(node, source, ctx.str_path, ctx.stem, &nid, ctx.edges);
             }
         }
         "alter_table" => {
@@ -723,7 +707,6 @@ fn walk_from_refs(
     stem: &str,
     caller_nid: &str,
     edges: &mut Vec<Edge>,
-    table_nids: &std::collections::HashMap<String, String>,
 ) {
     if matches!(node.kind(), "from" | "join") {
         let mut cur = node.walk();
@@ -737,7 +720,6 @@ fn walk_from_refs(
                                 let tbl = read_text(rc.node(), source);
                                 let tbl_nid = make_id(&[stem, tbl]);
                                 let line = rc.node().start_position().row + 1;
-                                let _ = table_nids; // used implicitly
                                 edges.push(Edge {
                                     source: caller_nid.to_string(),
                                     target: tbl_nid,
@@ -765,15 +747,7 @@ fn walk_from_refs(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_from_refs(
-                cur.node(),
-                source,
-                str_path,
-                stem,
-                caller_nid,
-                edges,
-                table_nids,
-            );
+            walk_from_refs(cur.node(), source, str_path, stem, caller_nid, edges);
             if !cur.goto_next_sibling() {
                 break;
             }

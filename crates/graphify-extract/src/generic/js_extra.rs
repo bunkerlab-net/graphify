@@ -321,8 +321,16 @@ fn normalize_path(path: &std::path::Path) -> String {
     for c in path.components() {
         match c {
             std::path::Component::ParentDir => {
-                if !components.is_empty() {
+                // Pop a real component if one exists; otherwise preserve the
+                // leading `..` so callers like `../../foo` don't collapse to
+                // `../foo`.
+                if components
+                    .last()
+                    .is_some_and(|c| *c != std::ffi::OsStr::new(".."))
+                {
                     components.pop();
+                } else {
+                    components.push(std::ffi::OsStr::new(".."));
                 }
             }
             std::path::Component::CurDir => {}

@@ -240,7 +240,7 @@ fn walk_json_object(
                 "object" => {
                     walk_json_object(ctx, val_node, source, &key_nid, Some(key), depth + 1);
                 }
-                "array" => {
+                "array" if key == "extends" => {
                     // For "extends" arrays: each string element becomes a ref edge
                     let mut ac = val_node.walk();
                     if ac.goto_first_child() {

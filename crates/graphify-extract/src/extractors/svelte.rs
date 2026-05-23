@@ -149,7 +149,11 @@ fn fixup_static_relative(raw: &str, path: &Path) -> (String, String) {
             }
         }
         if let Some(alias_path) = resolved_alias {
-            let stub = alias_path.to_string_lossy().into_owned();
+            // Route the aliased path through `resolve_js_module_path` so the
+            // same `.js` → `.ts` / `.jsx` → `.tsx` fallback used for
+            // relative imports applies to aliased ones too.
+            let resolved = resolve_js_module_path(&alias_path);
+            let stub = resolved.to_string_lossy().into_owned();
             (make_id1(&stub), stub)
         } else {
             let module_name = raw.split('/').next_back().unwrap_or(raw);

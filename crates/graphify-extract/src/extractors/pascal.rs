@@ -205,7 +205,6 @@ fn pascal_resolve_unit(from_path: &Path, unit_name: &str) -> String {
     let root = pascal_project_root(from_path);
     let lower = unit_name.to_lowercase();
     for ext in &[".pas", ".pp", ".dpr", ".dpk", ".inc"] {
-        let pattern = format!("*{ext}");
         if let Ok(rd) = root.read_dir() {
             for entry in rd.filter_map(std::result::Result::ok) {
                 let p = entry.path();
@@ -216,7 +215,6 @@ fn pascal_resolve_unit(from_path: &Path, unit_name: &str) -> String {
                 {
                     return make_id1(&p.to_string_lossy());
                 }
-                let _ = pattern;
             }
         }
         // Also rglob-style search via walkdir

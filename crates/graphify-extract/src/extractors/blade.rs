@@ -11,7 +11,7 @@ use crate::types::{Edge, FileResult, Node};
 
 #[allow(clippy::expect_used)] // literal patterns
 static INCLUDE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"@include\(['"]([ ^'"]+)['"]\)"#).expect("static blade include regex")
+    Regex::new(r#"@include\(['"]([^'"]+)['"]\)"#).expect("static blade include regex")
 });
 
 #[allow(clippy::expect_used)]

@@ -745,6 +745,36 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         }
     }
 
+    // Cross-file Python import resolution — must run BEFORE per_file is
+    // drained into `all_*`, otherwise `resolve_cross_file_*` sees empty
+    // FileResults and emits no cross-module edges.
+    let mut cross_edges: Vec<Edge> = Vec::new();
+    let py_indices: Vec<usize> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.extension().is_some_and(|e| e == "py"))
+        .map(|(i, _)| i)
+        .collect();
+    if !py_indices.is_empty() {
+        let py_results: Vec<FileResult> = py_indices.iter().map(|&i| per_file[i].clone()).collect();
+        let py_paths: Vec<PathBuf> = py_indices.iter().map(|&i| paths[i].clone()).collect();
+        cross_edges.extend(resolve_cross_file_python_imports(&py_results, &py_paths));
+    }
+
+    // Cross-file Java import resolution
+    let java_indices: Vec<usize> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.extension().is_some_and(|e| e == "java"))
+        .map(|(i, _)| i)
+        .collect();
+    if !java_indices.is_empty() {
+        let java_results: Vec<FileResult> =
+            java_indices.iter().map(|&i| per_file[i].clone()).collect();
+        let java_paths: Vec<PathBuf> = java_indices.iter().map(|&i| paths[i].clone()).collect();
+        cross_edges.extend(resolve_cross_file_java_imports(&java_results, &java_paths));
+    }
+
     let mut all_nodes: Vec<Node> = Vec::new();
     let mut all_edges: Vec<Edge> = Vec::new();
     let mut all_raw_calls: Vec<RawCall> = Vec::new();
@@ -754,6 +784,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         all_edges.append(&mut result.edges);
         all_raw_calls.append(&mut result.raw_calls);
     }
+    all_edges.extend(cross_edges);
 
     // Remap absolute file-node IDs to project-relative IDs (#502)
     let mut id_remap: HashMap<String, String> = HashMap::new();
@@ -780,38 +811,6 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
                 e.target = new_id.clone();
             }
         }
-    }
-
-    // Cross-file Python import resolution
-    let py_indices: Vec<usize> = paths
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.extension().is_some_and(|e| e == "py"))
-        .map(|(i, _)| i)
-        .collect();
-    if !py_indices.is_empty() {
-        let py_results: Vec<&FileResult> = py_indices.iter().map(|&i| &per_file[i]).collect();
-        let py_paths: Vec<PathBuf> = py_indices.iter().map(|&i| paths[i].clone()).collect();
-        let cross = resolve_cross_file_python_imports(
-            &py_results.into_iter().cloned().collect::<Vec<_>>(),
-            &py_paths,
-        );
-        all_edges.extend(cross);
-    }
-
-    // Cross-file Java import resolution
-    let java_indices: Vec<usize> = paths
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.extension().is_some_and(|e| e == "java"))
-        .map(|(i, _)| i)
-        .collect();
-    if !java_indices.is_empty() {
-        let java_results: Vec<FileResult> =
-            java_indices.iter().map(|&i| per_file[i].clone()).collect();
-        let java_paths: Vec<PathBuf> = java_indices.iter().map(|&i| paths[i].clone()).collect();
-        let cross = resolve_cross_file_java_imports(&java_results, &java_paths);
-        all_edges.extend(cross);
     }
 
     // Cross-file call resolution via raw_calls

@@ -439,14 +439,10 @@ fn walk_calls_zig(
         let fn_text = read_text(func_node, source);
         let callee = fn_text.split('.').next_back().unwrap_or("").to_string();
         let is_member_call = fn_text.contains('.');
-        // Find matching node label
-        let tgt_nid = label_to_nid
-            .get(&callee.to_lowercase())
-            .cloned()
-            .or_else(|| {
-                let dotted = format!(".{callee}");
-                label_to_nid.get(dotted.trim_start_matches('.')).cloned()
-            });
+        // Find matching node label. The dotted fallback originally tried
+        // a different key but ended up probing the same one after the
+        // trim, so a single lookup suffices.
+        let tgt_nid = label_to_nid.get(&callee.to_lowercase()).cloned();
         if let Some(tgt) = tgt_nid {
             if tgt != caller_nid {
                 let pair = (caller_nid.to_string(), tgt.clone());
