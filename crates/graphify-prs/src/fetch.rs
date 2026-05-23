@@ -12,6 +12,10 @@ use crate::git::{GitClient, parse_worktree_porcelain};
 use crate::graph::{build_community_labels, build_file_index, compute_pr_impact, load_graph_json};
 use crate::model::PrInfo;
 
+/// Number of representative labels emitted per community in the dashboard.
+/// Matches the Python default of `build_community_labels(data, top_n=4)`.
+const DEFAULT_COMMUNITY_LABEL_TOP_N: usize = 4;
+
 /// Fetch open PRs from GitHub.
 ///
 /// `base` defaults to the repo's detected default branch when `None`.
@@ -81,5 +85,5 @@ pub fn attach_graph_impact(
         pr.nodes_affected = nodes_affected;
     }
 
-    build_community_labels(&data, 4)
+    build_community_labels(&data, DEFAULT_COMMUNITY_LABEL_TOP_N)
 }

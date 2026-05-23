@@ -82,6 +82,9 @@ impl PrsArgs {
                     parsed.repo = Some(argv[i + 1].to_string());
                     i += 1;
                 }
+                arg if arg.starts_with("--repo=") => {
+                    parsed.repo = Some(arg["--repo=".len()..].to_string());
+                }
                 arg if arg.starts_with("--graph=") => {
                     parsed.graph_path = Some(PathBuf::from(&arg["--graph=".len()..]));
                 }
@@ -90,14 +93,24 @@ impl PrsArgs {
                     i += 1;
                 }
                 "--limit" if i + 1 < argv.len() => {
-                    if let Ok(n) = argv[i + 1].parse::<usize>() {
-                        parsed.limit = n;
+                    let raw = argv[i + 1];
+                    match raw.parse::<usize>() {
+                        Ok(n) => parsed.limit = n,
+                        Err(_) => eprintln!(
+                            "Warning: ignoring invalid --limit value {raw:?}; keeping default ({})",
+                            parsed.limit
+                        ),
                     }
                     i += 1;
                 }
                 arg if arg.starts_with("--limit=") => {
-                    if let Ok(n) = arg["--limit=".len()..].parse::<usize>() {
-                        parsed.limit = n;
+                    let raw = &arg["--limit=".len()..];
+                    match raw.parse::<usize>() {
+                        Ok(n) => parsed.limit = n,
+                        Err(_) => eprintln!(
+                            "Warning: ignoring invalid --limit value {raw:?}; keeping default ({})",
+                            parsed.limit
+                        ),
                     }
                 }
                 arg => {
@@ -105,6 +118,7 @@ impl PrsArgs {
                     if !stripped.is_empty()
                         && stripped.chars().all(|c| c.is_ascii_digit())
                         && let Ok(n) = stripped.parse::<u64>()
+                        && n > 0
                     {
                         parsed.pr_number = Some(n);
                     }

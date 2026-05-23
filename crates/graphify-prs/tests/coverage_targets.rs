@@ -175,7 +175,7 @@ fn render_dashboard_with_wrong_base_shown() {
 #[test]
 fn render_worktrees_empty_map() {
     let wts: HashMap<String, String> = HashMap::new();
-    render_worktrees::<std::collections::hash_map::RandomState>(&[], &wts);
+    render_worktrees(&[], &wts);
 }
 
 #[test]
