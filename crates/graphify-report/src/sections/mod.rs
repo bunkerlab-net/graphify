@@ -88,8 +88,11 @@ pub(crate) fn is_file_node(graph: &Graph, node_id: &str, degrees: &HashMap<Strin
 /// semantic entities), but they are excluded from cross-file surprise
 /// detection.  Mirrors `graphify-py/graphify/analyze.py` `_is_concept_node`.
 pub(crate) fn is_concept_node(graph: &Graph, node_id: &str) -> bool {
+    // Python raises `KeyError` for an unknown id; the safer Rust analogue
+    // is to report `false` so callers don't silently lump truly-missing
+    // nodes into the "concept" bucket.
     let Some(attrs) = graph.node_data(node_id) else {
-        return true;
+        return false;
     };
     let source = attrs
         .get("source_file")
