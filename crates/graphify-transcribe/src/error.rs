@@ -21,7 +21,9 @@ pub enum TranscribeError {
     BinaryFailed {
         /// The binary name (e.g. `"yt-dlp"`).
         binary: String,
-        /// The process exit code (or `-1` if it was killed by a signal).
+        /// The process exit code. On Unix, set to `-1` if the process was
+        /// terminated by a signal; on Windows, set to `-1` when the
+        /// platform did not return a numeric exit code.
         code: i32,
         /// Captured stderr from the failed process.
         stderr: String,

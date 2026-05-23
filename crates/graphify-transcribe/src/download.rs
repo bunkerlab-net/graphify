@@ -43,7 +43,7 @@ pub fn download_audio_with(
         .to_string_lossy()
         .into_owned();
 
-    for ext in &["m4a", "opus", "mp3", "ogg", "wav", "webm"] {
+    for ext in crate::constants::AUDIO_EXTENSIONS {
         let candidate = output_dir.join(format!("yt_{hash_prefix}.{ext}"));
         if candidate.exists() {
             return Ok(candidate);

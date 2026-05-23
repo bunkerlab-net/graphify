@@ -5,6 +5,10 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mp3", ".wav", ".m4a", ".ogg",
 ];
 
+/// Audio output extensions yt-dlp may emit, in priority order. Used to
+/// look up already-downloaded files before re-running yt-dlp.
+pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["m4a", "opus", "mp3", "ogg", "wav", "webm"];
+
 /// Prefixes that mark a string as a URL rather than a local file path.
 pub(crate) const URL_PREFIXES: &[&str] = &["http://", "https://", "www."];
 

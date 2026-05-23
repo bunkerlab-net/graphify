@@ -61,10 +61,14 @@ pub fn transcribe_with(
         video_path.as_ref().to_path_buf()
     };
 
+    // Fall back to `transcript` when the audio file has no stem (e.g.
+    // a hidden file like `.opus`) so we don't write `.txt` with an
+    // empty stem.
     let stem = audio_path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "transcript".to_string());
     let transcript_path = out_dir.join(format!("{stem}.txt"));
 
     if transcript_path.exists() && !force {
