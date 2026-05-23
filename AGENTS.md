@@ -15,6 +15,7 @@ on individual module ports MUST follow these conventions.
 - Test coverage report: `cargo llvm-cov nextest`
 - Do not use `cargo check`, use `cargo clippy` instead
 - Any test that interacts with the filesystem **MUST** be isolated and use a temporary directory
+- All tests must be in dedicated `test.rs` files, not inline with the main module code
 
 ## Workspace layout
 
@@ -36,7 +37,7 @@ All crates inherit lints via `[lints] workspace = true`
 
 Practical impact:
 
-- When deciding to suppress a lint, **give genuine attempt at resolving the issue first**
+- When deciding to suppress a lint, **give genuine attempt at resolving the lint first**
   - **Only** then suppress the lint with a valid reason why with an inline comment
 - `.unwrap()` and `.expect("...")` are forbidden in non-test code. Use `?` propagation
   or explicit `match` arms. For `Lazy<Regex>` of a known-good literal pattern, document
@@ -69,7 +70,7 @@ Practical impact:
    `workspace.dependencies`) so JSON output ordering matches Python's `json.dumps`.
 5. **Reuse workspace-level crates from `[workspace.dependencies]`.** Reference them as
    `name = { workspace = true }`. Add new deps to your crate's Cargo.toml only — never
-   to the workspace root unless explicitly approved.
+   to the workspace root unless it is shared across crates.
 
 ## Test conventions
 
