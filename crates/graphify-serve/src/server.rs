@@ -422,7 +422,12 @@ where
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or(0, |d| {
-                u64::from(d.subsec_nanos()) + d.as_secs() * 1_000_000_000
+                // Use checked arithmetic so a post-2554 mtime (~`u64::MAX`
+                // ns since the epoch) saturates instead of wrapping.
+                d.as_secs()
+                    .checked_mul(1_000_000_000)
+                    .and_then(|s| s.checked_add(u64::from(d.subsec_nanos())))
+                    .unwrap_or(u64::MAX)
             });
         (mtime, m.len())
     });

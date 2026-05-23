@@ -356,10 +356,9 @@ Use a more specific label or the exact node ID."
     for i in 0..path_nodes.len().saturating_sub(1) {
         let u = &path_nodes[i];
         let v = &path_nodes[i + 1];
-        let (edata, forward) = if graph.edge_data(u, v).is_some() {
-            (graph.edge_data(u, v).cloned().unwrap_or_default(), true)
-        } else {
-            (graph.edge_data(v, u).cloned().unwrap_or_default(), false)
+        let (edata, forward) = match graph.edge_data(u, v).cloned() {
+            Some(e) => (e, true),
+            None => (graph.edge_data(v, u).cloned().unwrap_or_default(), false),
         };
         let rel = edata.get("relation").and_then(Value::as_str).unwrap_or("");
         let conf = edata
