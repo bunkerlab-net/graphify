@@ -4,10 +4,12 @@
 //! group.  Shared helpers used by more than one command live here.
 
 pub(crate) mod add;
+pub(crate) mod args;
 pub(crate) mod benchmark;
 pub(crate) mod cache_check;
 pub(crate) mod clone;
 pub(crate) mod cluster_only;
+pub(crate) mod dispatch;
 pub(crate) mod export;
 pub(crate) mod extract;
 pub(crate) mod global;
@@ -24,6 +26,31 @@ pub(crate) mod validate;
 pub(crate) mod watch;
 
 use std::path::PathBuf;
+
+use anyhow::Result;
+use clap::Parser;
+
+/// Configure runtime services, parse argv, and dispatch the selected subcommand.
+///
+/// Registers the `graphify-cache` atexit flush, initialises `tracing`, then
+/// parses [`args::Cli`] and forwards to [`dispatch::dispatch`]. When no
+/// subcommand is supplied, prints a help hint and returns `Ok(())`.
+pub(crate) fn run() -> Result<()> {
+    graphify_cache::ensure_atexit_flush_registered();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    let parsed = args::Cli::parse();
+    match parsed.command {
+        None => {
+            println!("graphify {} — run with --help", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some(cmd) => dispatch::dispatch(cmd),
+    }
+}
 
 /// Return the graphify output directory, honouring the `GRAPHIFY_OUT` env var.
 ///

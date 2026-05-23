@@ -13,7 +13,7 @@ use graphify_hooks::platform::{
     pi_install, pi_uninstall, uninstall_all, vscode_install, vscode_uninstall,
 };
 
-use crate::PlatformCmd;
+use crate::cli::args::PlatformCmd;
 
 /// Install the graphify skill for the given platform.
 ///

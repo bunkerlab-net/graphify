@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::GlobalCmd;
+use crate::cli::args::GlobalCmd;
 
 /// Manage the global graph (`~/.graphify/global-graph.json`).
 ///

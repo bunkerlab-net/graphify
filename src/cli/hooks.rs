@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::HookCmd;
+use crate::cli::args::HookCmd;
 
 /// Install, uninstall, or query the status of git hooks.
 ///

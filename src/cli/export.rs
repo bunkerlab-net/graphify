@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 
-use crate::ExportCmd;
+use crate::cli::args::ExportCmd;
 use crate::cli::{default_graph_path, graphify_out_dir, load_graph};
 
 #[allow(clippy::too_many_lines)]
