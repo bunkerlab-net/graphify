@@ -125,7 +125,7 @@ fn louvain_phase1(
     n: usize,
     adj: &[HashMap<usize, f64>],
     resolution: f64,
-    _threshold: f64,
+    threshold: f64,
     community: &mut [usize],
     rng: &mut StdRng,
 ) -> bool {
@@ -184,11 +184,15 @@ fn louvain_phase1(
                 let k_i_in_c = nbr_community_weight.get(&c).copied().unwrap_or(0.0);
                 let tot_c = *tot.get(&c).unwrap_or(&0.0);
                 let gain = k_i_in_c / m - resolution * (tot_c * k_i) / (2.0 * m * m) - remove_gain;
-                // Use a small epsilon for float comparison to avoid pedantic float_cmp
-                // The epsilon is relative to the modularity scale (1/m).
-                let is_better = gain > best_gain + f64::EPSILON / m;
-                // Tie-break by smaller community id for determinism
-                let is_tied_better = (gain - best_gain).abs() <= f64::EPSILON / m && c < best_c;
+                // Require strictly better gain than the running best by at least
+                // `threshold` so NetworkX-style convergence is honoured rather
+                // than oscillating on negligible improvements. The constant
+                // floor (EPSILON / m) prevents float-cmp flake on perfectly
+                // tied gains.
+                let tol = threshold.max(f64::EPSILON / m);
+                let is_better = gain > best_gain + tol;
+                // Tie-break by smaller community id for determinism.
+                let is_tied_better = (gain - best_gain).abs() <= tol && c < best_c;
                 if is_better || is_tied_better {
                     best_gain = gain;
                     best_c = c;
@@ -209,7 +213,6 @@ fn louvain_phase1(
         } else {
             break;
         }
-        // _threshold is used implicitly: we break when no moves happen.
     }
 
     any_improved

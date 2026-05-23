@@ -34,14 +34,12 @@ pub fn cohesion_score(graph: &Graph, community_nodes: &[String]) -> f64 {
     if directed {
         // Count only unique unordered pairs to mirror undirected cohesion
         use std::collections::HashSet;
-        let mut seen: HashSet<(String, String)> = HashSet::new();
+        let mut seen: HashSet<(&str, &str)> = HashSet::new();
         for edge in graph.edges() {
-            if node_set.contains(edge.source.as_str()) && node_set.contains(edge.target.as_str()) {
-                let key = if edge.source <= edge.target {
-                    (edge.source.clone(), edge.target.clone())
-                } else {
-                    (edge.target.clone(), edge.source.clone())
-                };
+            let src = edge.source.as_str();
+            let tgt = edge.target.as_str();
+            if node_set.contains(src) && node_set.contains(tgt) {
+                let key = if src <= tgt { (src, tgt) } else { (tgt, src) };
                 if seen.insert(key) {
                     actual += 1;
                 }
@@ -100,8 +98,10 @@ pub fn score_all(graph: &Graph, communities: &IndexMap<i64, Vec<String>>) -> Ind
     // subgraphing.
     let directed = graph.kind.is_directed();
     let mut actual: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
-    let mut seen_directed: std::collections::HashSet<(i64, &str, &str)> =
-        std::collections::HashSet::new();
+    // Only directed graphs need the duplicate-pair guard; undirected graphs
+    // store each edge once.
+    let mut seen_directed: Option<std::collections::HashSet<(i64, &str, &str)>> =
+        directed.then(std::collections::HashSet::new);
 
     for edge in graph.edges() {
         let src = edge.source.as_str();
@@ -112,10 +112,10 @@ pub fn score_all(graph: &Graph, communities: &IndexMap<i64, Vec<String>>) -> Ind
         if cu != cv {
             continue;
         }
-        if directed {
+        if let Some(ref mut seen) = seen_directed {
             // Order-insensitive key for undirected counting under directed storage.
             let (a, b) = if src <= tgt { (src, tgt) } else { (tgt, src) };
-            if !seen_directed.insert((cu, a, b)) {
+            if !seen.insert((cu, a, b)) {
                 continue;
             }
         }

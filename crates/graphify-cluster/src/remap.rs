@@ -75,17 +75,21 @@ pub fn remap_communities_to_previous(
         .copied()
         .filter(|cid| !matched_new_ids.contains(cid))
         .collect();
+    // Pre-sort node lists once so the comparator is allocation-free.
+    let sorted_nodes_by_cid: IndexMap<i64, Vec<String>> = unmatched
+        .iter()
+        .map(|cid| {
+            let mut sorted = communities[cid].clone();
+            sorted.sort_unstable();
+            (*cid, sorted)
+        })
+        .collect();
     unmatched.sort_unstable_by(|a, b| {
         let size_a = communities[a].len();
         let size_b = communities[b].len();
-        size_b.cmp(&size_a).then_with(|| {
-            // lexical tie-break on sorted node list
-            let mut na = communities[a].clone();
-            let mut nb = communities[b].clone();
-            na.sort_unstable();
-            nb.sort_unstable();
-            na.cmp(&nb)
-        })
+        size_b
+            .cmp(&size_a)
+            .then_with(|| sorted_nodes_by_cid[a].cmp(&sorted_nodes_by_cid[b]))
     });
 
     let mut next_id: i64 = 0;
