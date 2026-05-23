@@ -101,18 +101,23 @@ pub fn md5_file(path: &Path) -> String {
     format!("{digest:x}")
 }
 
+/// Minimum mtime delta (1 µs) considered a real change. `f64::EPSILON`
+/// (~2.2e-16) is meaningless against Unix-epoch second magnitudes and
+/// causes spurious "changed" verdicts.
+const MTIME_TOLERANCE: f64 = 1e-6;
+
 // ── mtime helper ─────────────────────────────────────────────────────────────
 
 /// Returns the file's modification time as seconds since the Unix epoch, with nanosecond precision in the fractional part.
-fn file_mtime(path: &Path) -> Option<f64> {
-    use std::os::unix::fs::MetadataExt;
+pub(crate) fn file_mtime(path: &Path) -> Option<f64> {
     let meta = path.metadata().ok()?;
-    // Use i64 → f64 cast only for the seconds field.
-    // Nanoseconds fit in i32, so no precision loss there.
+    let mtime = meta.modified().ok()?;
+    let duration = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
     #[allow(clippy::cast_precision_loss)]
-    let secs = meta.mtime() as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let nsecs = meta.mtime_nsec() as f64 / 1_000_000_000.0;
+    // seconds fit safely in f64 mantissa for realistic timestamps
+    let secs = duration.as_secs() as f64;
+    #[allow(clippy::cast_precision_loss)] // subsec_nanos < 1e9, always exact in f64
+    let nsecs = f64::from(duration.subsec_nanos()) / 1_000_000_000.0;
     Some(secs + nsecs)
 }
 
@@ -285,7 +290,7 @@ pub fn detect_incremental_with_manifest(
                 };
                 if stored_hash.is_empty() {
                     true
-                } else if (current_mtime - entry.mtime).abs() > f64::EPSILON {
+                } else if (current_mtime - entry.mtime).abs() > MTIME_TOLERANCE {
                     md5_file(p) != *stored_hash
                 } else {
                     false

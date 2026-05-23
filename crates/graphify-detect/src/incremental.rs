@@ -8,8 +8,8 @@ use indexmap::IndexMap;
 
 use crate::error::DetectError;
 use crate::manifest::{
-    MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, load_manifest_from_path,
-    save_manifest_to_path,
+    MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, file_mtime,
+    load_manifest_from_path, save_manifest_to_path,
 };
 use crate::walk;
 
@@ -86,30 +86,44 @@ pub fn detect_incremental(
     let manifest_path = root.join(MANIFEST_PATH);
     let had_manifest = manifest_path.exists() || !prev.is_empty();
 
+    // Walk once and reuse the result both for the first-run "everything
+    // changed" branch and the per-type bucketing below.
+    let full = walk::detect(root, None, None);
+
     let (changed_paths, deleted_files, manifest) = if manifest_path.exists() {
         detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None)?
     } else if prev.is_empty() {
-        // No previous run at all — everything is new.
-        let full = walk::detect(root, None, None);
+        // No previous run at all — everything is new. Seed the returned
+        // manifest with the current files so callers can persist it
+        // without re-walking.
         let changed: Vec<PathBuf> = full.files.values().flatten().map(PathBuf::from).collect();
-        (changed, Vec::new(), Manifest::new())
+        let mut seeded = Manifest::new();
+        for f in full.files.values().flatten() {
+            let mtime = file_mtime(Path::new(f)).unwrap_or(0.0);
+            seeded.insert(
+                f.clone(),
+                ManifestEntry {
+                    mtime,
+                    semantic_hash: String::new(),
+                    ast_hash: String::new(),
+                },
+            );
+        }
+        (changed, Vec::new(), seeded)
     } else {
-        // Caller provided an in-memory manifest — write to a tempfile and delegate.
-        let tmp = std::env::temp_dir().join(format!(
-            "graphify_manifest_{}.json",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        // Caller provided an in-memory manifest — write to a NamedTempFile
+        // (guaranteed unique, auto-cleaned) and delegate.
+        let mut tmp = tempfile::Builder::new()
+            .prefix("graphify_manifest_")
+            .suffix(".json")
+            .tempfile()
+            .map_err(DetectError::Io)?;
         let json = serde_json::to_string_pretty(prev).map_err(DetectError::Json)?;
-        std::fs::write(&tmp, json).map_err(DetectError::Io)?;
-        let res = detect_incremental_with_manifest(root, &tmp, None, "semantic", None)?;
-        let _ = std::fs::remove_file(&tmp);
-        res
+        std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(DetectError::Io)?;
+        detect_incremental_with_manifest(root, tmp.path(), None, "semantic", None)?
     };
 
     let changed_set: HashSet<PathBuf> = changed_paths.iter().cloned().collect();
-    let full = walk::detect(root, None, None);
     let mut changed_files: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut unchanged_files: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut new_total: u64 = 0;

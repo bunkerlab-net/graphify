@@ -541,9 +541,12 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
     std::fs::create_dir_all(out_dir).map_err(DetectError::Io)?;
 
     // Stable name derived from the resolved absolute path (mirrors Python).
+    // Normalize separators to `/` so a manifest written on Windows and
+    // read on Unix (or vice versa) produces the same sidecar name.
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let normalized = resolved.to_string_lossy().replace('\\', "/");
     let mut hasher = Sha256::new();
-    hasher.update(resolved.to_string_lossy().as_bytes());
+    hasher.update(normalized.as_bytes());
     let digest = hex::encode(hasher.finalize());
     let name_hash = &digest[..8];
 

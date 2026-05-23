@@ -141,6 +141,7 @@ fn detect_incremental_detects_deleted_file() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn detect_incremental_propagates_follow_symlinks() {
     // detect_incremental must forward follow_symlinks so symlinked sub-trees

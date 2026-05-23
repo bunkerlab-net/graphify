@@ -673,8 +673,12 @@ fn convert_google_workspace(
 fn convert_office(ctx: &mut ConvertCtx<'_>, p: &Path, ftype: FileType) {
     match convert_office_file(p, ctx.converted_dir) {
         Ok(Some(md_path)) => ctx.record(&md_path, ftype),
-        _ => ctx.skipped_sensitive.push(format!(
-            "{} [office conversion failed - install zip/calamine deps]",
+        Ok(None) => ctx.skipped_sensitive.push(format!(
+            "{} [office document contained no extractable text]",
+            p.to_string_lossy()
+        )),
+        Err(e) => ctx.skipped_sensitive.push(format!(
+            "{} [office conversion failed: {e}]",
             p.to_string_lossy()
         )),
     }

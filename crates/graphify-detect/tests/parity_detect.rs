@@ -252,6 +252,7 @@ fn detect_graphifyignore_comments_ignored() {
     assert!(result.files["code"].iter().any(|f| f.contains("other.py")));
 }
 
+#[cfg(unix)]
 #[test]
 fn detect_follows_symlinked_directory() {
     let tmp = tempdir().unwrap();
@@ -280,6 +281,7 @@ fn detect_follows_symlinked_directory() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn detect_follows_symlinked_file() {
     let tmp = tempdir().unwrap();
@@ -291,6 +293,7 @@ fn detect_follows_symlinked_file() {
     assert!(code.iter().any(|f| f.contains("link.py")));
 }
 
+#[cfg(unix)]
 #[test]
 fn detect_handles_circular_symlinks() {
     let tmp = tempdir().unwrap();
@@ -302,6 +305,7 @@ fn detect_handles_circular_symlinks() {
     assert!(result.files["code"].iter().any(|f| f.contains("main.py")));
 }
 
+#[cfg(unix)]
 #[test]
 fn detect_auto_detects_direct_symlink_child() {
     let tmp = tempdir().unwrap();
@@ -330,6 +334,7 @@ fn detect_default_does_not_follow_when_no_symlinks() {
     assert!(result.files["code"].iter().any(|f| f.contains("other.py")));
 }
 
+#[cfg(unix)]
 #[test]
 fn detect_explicit_false_overrides_auto_detect() {
     let tmp = tempdir().unwrap();

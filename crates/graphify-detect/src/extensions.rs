@@ -104,17 +104,17 @@ const PAPER_SIGNAL_THRESHOLD: usize = 3;
 
 /// Heuristic: does this text file read like an academic paper?
 ///
-/// Scans the first 3000 bytes (matching Python's `[:3000]`).
+/// Reads only the first 3000 bytes (matching Python's `[:3000]`) so big
+/// papers don't get fully loaded into memory.
 fn looks_like_paper(path: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };
-    let slice = if bytes.len() > 3000 {
-        &bytes[..3000]
-    } else {
-        &bytes[..]
+    let mut buf = [0u8; 3000];
+    let Ok(n) = std::io::Read::read(&mut file, &mut buf) else {
+        return false;
     };
-    let text = String::from_utf8_lossy(slice);
+    let text = String::from_utf8_lossy(&buf[..n]);
     let hits = PAPER_SIGNALS.iter().filter(|r| r.is_match(&text)).count();
     hits >= PAPER_SIGNAL_THRESHOLD
 }
