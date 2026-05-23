@@ -48,6 +48,11 @@ pub(crate) fn lock_index() -> std::sync::MutexGuard<'static, StatIndexState> {
 ///
 /// The first call to `file_hash` per process loads the index; subsequent
 /// calls hit the in-memory state.
+///
+/// **Single-root per process**: `state.root` is set on the first call and
+/// later calls with a different `root` are silently ignored. The index
+/// file at `stat_index_file(root)` is loaded only once, so callers must
+/// not expect per-call rooting.
 pub(crate) fn ensure_stat_index(root: &Path) {
     let mut state = lock_index();
     if state.root.is_some() {
@@ -81,10 +86,8 @@ pub fn flush_stat_index() -> Result<(), CacheError> {
         return Ok(());
     };
     let path = stat_index_file(&root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent_dir)?;
     let mut tmp = tempfile::Builder::new()
         .prefix("stat-index.")
         .suffix(".tmp")

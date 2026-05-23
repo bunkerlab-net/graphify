@@ -15,6 +15,15 @@ fn write_text(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write");
 }
 
+/// Deterministically advance `path`'s mtime instead of sleeping, so the
+/// stat-index fastpath sees a change on filesystems with coarse mtime
+/// resolution (HFS+, FAT32, NFS).
+fn bump_mtime(path: &Path) {
+    let f = fs::OpenOptions::new().write(true).open(path).expect("open");
+    let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    f.set_modified(new_mtime).expect("set_modified");
+}
+
 #[test]
 #[serial]
 fn file_hash_consistent() {
@@ -68,8 +77,8 @@ fn cache_miss_on_change() {
     let result = json!({"nodes": [], "edges": [{"source": "a", "target": "b"}]});
     save_cached(&f, &result, tmp.path(), "ast").expect("save");
     _reset_stat_index_for_tests(); // bust stat fastpath so we re-hash
-    std::thread::sleep(std::time::Duration::from_millis(20));
     write_text(&f, "completely different content");
+    bump_mtime(&f);
     assert!(load_cached(&f, tmp.path(), "ast").is_none());
 }
 
@@ -129,11 +138,11 @@ fn md_frontmatter_only_change_same_hash() {
     );
     let h1 = file_hash(&f, tmp.path()).expect("h1");
     _reset_stat_index_for_tests(); // bust stat fastpath
-    std::thread::sleep(std::time::Duration::from_millis(20));
     write_text(
         &f,
         "---\nreviewed: 2026-04-09\n---\n\n# Title\n\nBody text.",
     );
+    bump_mtime(&f);
     let h2 = file_hash(&f, tmp.path()).expect("h2");
     assert_eq!(h1, h2);
 }
@@ -150,11 +159,11 @@ fn md_body_change_different_hash() {
     );
     let h1 = file_hash(&f, tmp.path()).expect("h1");
     _reset_stat_index_for_tests();
-    std::thread::sleep(std::time::Duration::from_millis(20));
     write_text(
         &f,
         "---\nreviewed: 2026-01-01\n---\n\n# Title\n\nChanged body.",
     );
+    bump_mtime(&f);
     let h2 = file_hash(&f, tmp.path()).expect("h2");
     assert_ne!(h1, h2);
 }
@@ -168,8 +177,8 @@ fn md_no_frontmatter_hashed_normally() {
     write_text(&f, "# Just a heading\n\nNo frontmatter here.");
     let h1 = file_hash(&f, tmp.path()).expect("h1");
     _reset_stat_index_for_tests();
-    std::thread::sleep(std::time::Duration::from_millis(20));
     write_text(&f, "# Just a heading\n\nDifferent content.");
+    bump_mtime(&f);
     let h2 = file_hash(&f, tmp.path()).expect("h2");
     assert_ne!(h1, h2);
 }
@@ -183,8 +192,8 @@ fn non_md_file_hashed_fully() {
     write_text(&f, "# comment\nx = 1");
     let h1 = file_hash(&f, tmp.path()).expect("h1");
     _reset_stat_index_for_tests();
-    std::thread::sleep(std::time::Duration::from_millis(20));
     write_text(&f, "# changed comment\nx = 1");
+    bump_mtime(&f);
     let h2 = file_hash(&f, tmp.path()).expect("h2");
     assert_ne!(h1, h2);
 }

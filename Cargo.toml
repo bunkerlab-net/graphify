@@ -59,6 +59,7 @@ rayon = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+serial_test = "3"
 sha2 = "0.11"
 tempfile = "3"
 thiserror = "2"

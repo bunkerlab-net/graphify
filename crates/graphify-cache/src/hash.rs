@@ -11,19 +11,18 @@ use crate::stat_index::{StatEntry, ensure_stat_index, lock_index};
 
 /// Strip YAML frontmatter from Markdown content, returning only the body.
 ///
-/// Mirrors Python's `_body_content` byte-identically. Files without
-/// frontmatter are returned unchanged.
+/// Mirrors Python's `_body_content` semantically, but operates on raw bytes
+/// so non-UTF-8 content in the Markdown body is preserved verbatim instead
+/// of being passed through `decode(errors="replace")` like Python does.
+/// Files without frontmatter are returned unchanged.
 #[must_use]
 pub fn body_content(content: &[u8]) -> Vec<u8> {
-    let text = String::from_utf8_lossy(content);
-    if let Some(after_open) = text.strip_prefix("---")
-        && let Some(end) = after_open.find("\n---")
+    const OPEN: &[u8] = b"---";
+    const CLOSE: &[u8] = b"\n---";
+    if let Some(after_open) = content.strip_prefix(OPEN)
+        && let Some(end) = after_open.windows(CLOSE.len()).position(|w| w == CLOSE)
     {
-        // Python uses `text.find("\n---", 3)` returning the absolute index of
-        // the newline before the closing ---. `text[end+4:]` slices past
-        // "\n---" (4 chars). Replicate that exactly so byte-identity holds.
-        let body_start = end + "\n---".len();
-        return after_open.as_bytes()[body_start..].to_vec();
+        return after_open[end + CLOSE.len()..].to_vec();
     }
     content.to_vec()
 }

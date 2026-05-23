@@ -15,7 +15,11 @@ pub(crate) fn graphify_out() -> String {
 /// `root`.
 ///
 /// If the configured output path is absolute, it is returned as-is;
-/// otherwise it is joined to the canonicalised `root`.
+/// otherwise it is joined to the canonicalised `root`. When
+/// `root.canonicalize()` fails (e.g. the directory does not yet exist
+/// during initial setup) the un-canonicalised `root` is used; the
+/// downstream `fs::create_dir_all` call in [`cache_dir`] will surface
+/// the underlying I/O error if the path is unusable.
 pub(crate) fn out_base(root: &Path) -> PathBuf {
     let out = PathBuf::from(graphify_out());
     if out.is_absolute() {
@@ -66,7 +70,9 @@ pub(crate) fn posix_string(path: &Path) -> String {
     for comp in path.components() {
         match comp {
             Prefix(_) | RootDir => {
-                out.push('/');
+                if !out.ends_with('/') {
+                    out.push('/');
+                }
                 first = false;
             }
             CurDir => {}
