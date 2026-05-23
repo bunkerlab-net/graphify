@@ -222,7 +222,19 @@ pub fn build_from_json(
     }
 
     canonicalise_nodes(&mut extraction);
-    let _ = graphify_validate::validate_extraction(&extraction);
+    // Mirror Python `build.py:148-152`: surface real schema errors, but ignore
+    // dangling-edge warnings (stdlib/external imports are expected).
+    let errors = graphify_validate::validate_extraction(&extraction);
+    let real_errors: Vec<&String> = errors
+        .iter()
+        .filter(|e| !e.contains("does not match any node id"))
+        .collect();
+    if let Some(first) = real_errors.first() {
+        eprintln!(
+            "[graphify] Extraction warning ({} issues): {first}",
+            real_errors.len()
+        );
+    }
 
     let mut graph = Graph::new(kind);
     add_nodes(&mut graph, &mut extraction, root_str.as_deref());

@@ -13,4 +13,7 @@ pub enum DetectError {
 
     #[error("Root path does not exist: {0}")]
     RootMissing(PathBuf),
+
+    #[error("Office conversion error: {0}")]
+    Office(String),
 }

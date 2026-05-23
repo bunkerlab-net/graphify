@@ -195,8 +195,7 @@ fn handle_docx_start(state: &mut DocxState, e: &quick_xml::events::BytesStart) {
             // The Word style name lives in the `val` attribute of `<w:pStyle>`.
             for attr in e.attributes().flatten() {
                 if local_name(attr.key.as_ref()) == "val" {
-                    state.current_para_style =
-                        String::from_utf8_lossy(&attr.value).into_owned();
+                    state.current_para_style = String::from_utf8_lossy(&attr.value).into_owned();
                 }
             }
         }
@@ -228,7 +227,9 @@ fn handle_docx_end(state: &mut DocxState, e: &quick_xml::events::BytesEnd) {
             state.ctx_stack.pop();
         }
         "tr" => {
-            state.table_rows.push(std::mem::take(&mut state.current_row));
+            state
+                .table_rows
+                .push(std::mem::take(&mut state.current_row));
             state.ctx_stack.pop();
         }
         "tbl" => {
@@ -363,8 +364,8 @@ fn xlsx_to_markdown_inner(path: &Path) -> Result<String, DetectError> {
 
     // `open_workbook` is generic over the reader type; the turbofish locks it
     // to `Xlsx` so calamine knows which workbook kind to load.
-    let mut wb: Xlsx<_> = open_workbook::<Xlsx<_>, _>(path)
-        .map_err(|e| DetectError::Office(e.to_string()))?;
+    let mut wb: Xlsx<_> =
+        open_workbook::<Xlsx<_>, _>(path).map_err(|e| DetectError::Office(e.to_string()))?;
 
     let sheet_names: Vec<String> = wb.sheet_names().clone();
     let mut sections: Vec<String> = Vec::new();
@@ -464,8 +465,8 @@ fn xlsx_extract_structure_inner(path: &Path) -> Result<XlsxStructure, DetectErro
 
     // `open_workbook` is generic over the reader type; the turbofish locks it
     // to `Xlsx` so calamine knows which workbook kind to load.
-    let mut wb: Xlsx<_> = open_workbook::<Xlsx<_>, _>(path)
-        .map_err(|e| DetectError::Office(e.to_string()))?;
+    let mut wb: Xlsx<_> =
+        open_workbook::<Xlsx<_>, _>(path).map_err(|e| DetectError::Office(e.to_string()))?;
 
     let sheet_names: Vec<String> = wb.sheet_names().clone();
     let mut sheets: Vec<SheetInfo> = Vec::new();

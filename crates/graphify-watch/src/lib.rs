@@ -123,11 +123,6 @@ pub fn check_update(watch_path: &Path) -> bool {
 /// Called from hook shell scripts — the Python entrypoint is referenced by
 /// those scripts and this Rust equivalent must exist at the same symbol path.
 ///
-/// # Note
-///
-/// Full resource-limit support is deferred pending stabilisation of platform
-/// bindings.  The current implementation is a no-op placeholder; see
-/// `.claude/local/notes/module_watch.md`.
 #[allow(clippy::missing_panics_doc)] // reason: this function never panics
 pub fn apply_resource_limits() {
     // Best-effort only — failures are silently swallowed, matching Python.

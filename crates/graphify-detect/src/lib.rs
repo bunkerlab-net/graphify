@@ -16,6 +16,7 @@ pub mod error;
 pub mod extensions;
 pub mod ignore;
 pub mod manifest;
+pub mod office;
 pub mod sensitive;
 pub mod walk;
 

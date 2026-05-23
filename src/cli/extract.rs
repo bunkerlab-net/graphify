@@ -39,28 +39,34 @@ pub(crate) fn cmd_extract(
     exclude: &[String],
     dedup_llm: bool,
 ) -> Result<()> {
-    if !exclude.is_empty() {
-        // Detect crate honours .graphifyignore patterns from disk; programmatic
-        // excludes are not yet wired through `detect()`. Surface this so users
-        // do not silently rely on the flag.
-        eprintln!(
-            "warning: --exclude accepted but is currently a no-op \
-             (graphify_detect reads patterns from .graphifyignore only)"
-        );
+    let extra_excludes: Option<&[String]> = if exclude.is_empty() {
+        None
+    } else {
+        Some(exclude)
+    };
+    // Mirror Python `__main__.py:2518-2519`: propagate `--api-timeout S` into
+    // `GRAPHIFY_API_TIMEOUT` so the LLM client honours it. Set at the very top
+    // of `cmd_extract`, before any LLM worker threads spawn, so the SAFETY
+    // contract on `std::env::set_var` (no concurrent env reads/writes) holds.
+    if api_timeout > 0 {
+        // SAFETY: cmd_extract runs on the single-threaded main runtime; no
+        // other thread reads or writes the environment at this point.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("GRAPHIFY_API_TIMEOUT", api_timeout.to_string());
+        }
     }
-    // `--google-workspace` controls whether Google Drive files are included in
-    // detection; the Rust detect crate does not yet expose this flag so we warn.
+    // `--google-workspace` mirrors Python's `__main__.py:2479-2480`: it forces
+    // Google Drive shortcut export ON for this run. We set the env var that
+    // `graphify_detect::walk` and `graphify_google::google_workspace_enabled`
+    // read so the detection path picks it up. Same SAFETY contract as above.
     if google_workspace {
-        eprintln!(
-            "warning: --google-workspace accepted but is currently a no-op \
-             (graphify_detect does not yet support Google Drive scanning)"
-        );
+        // SAFETY: see above — set before any worker thread is spawned.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("GRAPHIFY_GOOGLE_WORKSPACE", "1");
+        }
     }
-    // `--api-timeout` is accepted for CLI compatibility.  The graphify-llm crate
-    // reads `GRAPHIFY_API_TIMEOUT` from the environment; callers who need a custom
-    // timeout should set that env var directly.  We do not set it here because
-    // `std::env::set_var` is unsafe in multi-threaded contexts (Rust 2024 edition).
-    let _ = api_timeout; // suppress unused-variable lint
 
     // Resolve the effective backend: explicit flag wins; otherwise auto-detect from
     // environment (mirrors Python's `_detect_backend()` at llm.py).
@@ -99,16 +105,16 @@ pub(crate) fn cmd_extract(
                     "      {new_total} new/changed, {unchanged_total} unchanged, {} deleted",
                     inc.deleted_files.len()
                 );
-                graphify_detect::detect(path, None, None)
+                graphify_detect::detect(path, None, extra_excludes)
             }
             Err(e) => {
                 eprintln!("      incremental scan failed ({e}); falling back to full scan");
-                graphify_detect::detect(path, None, None)
+                graphify_detect::detect(path, None, extra_excludes)
             }
         }
     } else {
         eprintln!("[1/6] detecting files in {} ...", path.display());
-        graphify_detect::detect(path, None, None)
+        graphify_detect::detect(path, None, extra_excludes)
     };
 
     let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -357,9 +363,46 @@ pub(crate) fn cmd_extract(
     std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
     eprintln!("      wrote {}", analysis_path.display());
 
+    // Persist (or refresh) `.graphify_labels.json` so the HTML viz renders
+    // per-community checkboxes and subsequent exports can recover the names.
+    // Loads existing labels first to preserve user-edited names; falls back to
+    // `"Community <cid>"`. Mirrors `cluster_only` and the watch rebuild pipeline.
+    let labels_path = out_dir.join(".graphify_labels.json");
+    let mut labels: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
+    if let Ok(text) = std::fs::read_to_string(&labels_path)
+        && let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+    {
+        for (k, v) in &map {
+            if let (Ok(cid), Some(s)) = (k.parse::<i64>(), v.as_str())
+                && communities.contains_key(&cid)
+            {
+                labels.insert(cid, s.to_string());
+            }
+        }
+    }
+    for cid in communities.keys() {
+        labels
+            .entry(*cid)
+            .or_insert_with(|| format!("Community {cid}"));
+    }
+    let labels_json: serde_json::Map<String, serde_json::Value> = labels
+        .iter()
+        .map(|(cid, name)| (cid.to_string(), serde_json::Value::String(name.clone())))
+        .collect();
+    std::fs::write(
+        &labels_path,
+        serde_json::to_string(&serde_json::Value::Object(labels_json))?,
+    )?;
+    eprintln!("      wrote {}", labels_path.display());
+
     eprintln!("[6/6] rendering HTML viz ...");
     let html_path = out_dir.join("graph.html");
-    match graphify_export::to_html(&graph, &communities, &html_path, None, None, None) {
+    let labels_opt = if labels.is_empty() {
+        None
+    } else {
+        Some(&labels)
+    };
+    match graphify_export::to_html(&graph, &communities, &html_path, labels_opt, None, None) {
         Ok(()) => eprintln!("      wrote {}", html_path.display()),
         Err(e) => eprintln!("      skipped ({e})"),
     }
@@ -402,9 +445,10 @@ pub(crate) fn cmd_extract(
 
 /// Re-extract code files and update the graph (no LLM re-run by default).
 ///
-/// Thin wrapper over `cmd_extract` with all LLM flags disabled.  The `force`
-/// flag is accepted for CLI compatibility but is currently a no-op in the Rust
-/// port; future versions may use it to skip the incremental-cache check.
+/// Thin wrapper over `cmd_extract` with all LLM flags disabled.  `force` is
+/// forwarded to `graphify_watch::rebuild_code` where it overrides the
+/// shrink-guard so a rebuild with fewer nodes is allowed (mirrors Python's
+/// `--force` and `GRAPHIFY_FORCE=1` at `__main__.py:1854,1860`).
 pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) -> Result<()> {
     // Mirror Python's `update` at `__main__.py:1853`: AST-only rebuild via the
     // watch crate's `rebuild_code`, blocking on the lock so an interactive

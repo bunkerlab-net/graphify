@@ -16,11 +16,13 @@ graphify-cluster = { workspace = true }
 graphify-security = { workspace = true }
 htmlescape = { workspace = true }
 indexmap = { workspace = true }
+neo4rs = "0.8"
 petgraph = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

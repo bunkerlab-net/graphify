@@ -11,7 +11,12 @@ use crate::ignore::{
     IgnorePatterns, could_contain_included_path, is_ignored, load_graphifyignore,
     load_graphifyinclude,
 };
+use crate::office::{convert_office_file, xlsx_to_markdown};
 use crate::sensitive::{SKIP_FILES, is_noise_dir, is_sensitive};
+
+/// Convertible Google Workspace extensions (matches
+/// `graphify_google::GOOGLE_WORKSPACE_EXTENSIONS`, with leading dots stripped).
+const GOOGLE_CONVERTIBLE_EXTS: &[&str] = &["gdoc", "gsheet", "gslides"];
 
 /// Corpus size warning thresholds (mirrors Python constants).
 pub const CORPUS_WARN_THRESHOLD: u64 = 50_000;
@@ -216,6 +221,7 @@ pub fn detect(
 
     let memory_dir = root.join("graphify-out").join("memory");
     let converted_dir = root.join("graphify-out").join("converted");
+    let google_workspace = graphify_google::google_workspace_enabled(None);
 
     let scan_paths: Vec<(PathBuf, bool)> = {
         let mut v = vec![(root.clone(), false)];
@@ -267,26 +273,25 @@ pub fn detect(
             continue;
         };
 
-        // Google Workspace shortcuts: skip by default.
         let ext_lower = p
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_lowercase)
             .unwrap_or_default();
+        let mut convert_ctx = ConvertCtx {
+            root: &root,
+            converted_dir: &converted_dir,
+            ignore_patterns: &ignore_patterns,
+            files: &mut files,
+            total_words: &mut total_words,
+            skipped_sensitive: &mut skipped_sensitive,
+        };
         if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext_lower.as_str()) {
-            skipped_sensitive.push(format!(
-                "{} [Google Workspace shortcut skipped - pass --google-workspace or set GRAPHIFY_GOOGLE_WORKSPACE=1]",
-                p.to_string_lossy()
-            ));
+            convert_google_workspace(&mut convert_ctx, p, &ext_lower, ftype, google_workspace);
             continue;
         }
-
-        // Office files: skip with note (conversion libs not yet ported).
         if ext_lower == "docx" || ext_lower == "xlsx" {
-            skipped_sensitive.push(format!(
-                "{} [office conversion failed - pip install graphifyy[office]]",
-                p.to_string_lossy()
-            ));
+            convert_office(&mut convert_ctx, p, ftype);
             continue;
         }
 
@@ -326,4 +331,88 @@ pub fn collect_files(root: &Path) -> Vec<PathBuf> {
         .flatten()
         .map(PathBuf::from)
         .collect()
+}
+
+/// Mutable bundle threaded through the per-file conversion helpers.
+struct ConvertCtx<'a> {
+    root: &'a Path,
+    converted_dir: &'a Path,
+    ignore_patterns: &'a IgnorePatterns,
+    files: &'a mut HashMap<String, Vec<String>>,
+    total_words: &'a mut u64,
+    skipped_sensitive: &'a mut Vec<String>,
+}
+
+impl ConvertCtx<'_> {
+    fn record(&mut self, md_path: &Path, ftype: FileType) {
+        if is_ignored(md_path, self.root, self.ignore_patterns) {
+            return;
+        }
+        *self.total_words += count_words(md_path, ftype);
+        self.files
+            .entry(ftype.as_str().to_string())
+            .or_default()
+            .push(md_path.to_string_lossy().into_owned());
+    }
+}
+
+/// Convert a `.gdoc`/`.gsheet`/`.gslides` shortcut to a markdown sidecar.
+///
+/// Other Google Workspace types (`.gdraw`, `.gform`, etc.) have no Markdown
+/// export path and are recorded in `skipped_sensitive`.
+fn convert_google_workspace(
+    ctx: &mut ConvertCtx<'_>,
+    p: &Path,
+    ext_lower: &str,
+    ftype: FileType,
+    google_workspace: bool,
+) {
+    if !google_workspace {
+        ctx.skipped_sensitive.push(format!(
+            "{} [Google Workspace shortcut skipped - pass --google-workspace or set GRAPHIFY_GOOGLE_WORKSPACE=1]",
+            p.to_string_lossy()
+        ));
+        return;
+    }
+    if !GOOGLE_CONVERTIBLE_EXTS.contains(&ext_lower) {
+        ctx.skipped_sensitive.push(format!(
+            "{} [Google Workspace shortcut type .{ext_lower} not exportable to Markdown]",
+            p.to_string_lossy(),
+        ));
+        return;
+    }
+    let convert_res = graphify_google::convert_google_workspace_file::<
+        fn(&str, &str, &Path, Option<&str>) -> Result<(), graphify_google::GoogleError>,
+        _,
+        std::io::Error,
+    >(
+        p,
+        ctx.converted_dir,
+        Some(|tmp_path: &Path| -> Result<String, std::io::Error> {
+            Ok(xlsx_to_markdown(tmp_path))
+        }),
+        None,
+    );
+    match convert_res {
+        Ok(Some(md_path)) => ctx.record(&md_path, ftype),
+        Ok(None) => ctx.skipped_sensitive.push(format!(
+            "{} [Google Workspace export produced no readable text]",
+            p.to_string_lossy()
+        )),
+        Err(e) => ctx.skipped_sensitive.push(format!(
+            "{} [Google Workspace export failed: {e}]",
+            p.to_string_lossy()
+        )),
+    }
+}
+
+/// Convert a `.docx`/`.xlsx` to a markdown sidecar via `office::convert_office_file`.
+fn convert_office(ctx: &mut ConvertCtx<'_>, p: &Path, ftype: FileType) {
+    match convert_office_file(p, ctx.converted_dir) {
+        Ok(Some(md_path)) => ctx.record(&md_path, ftype),
+        _ => ctx.skipped_sensitive.push(format!(
+            "{} [office conversion failed - install zip/calamine deps]",
+            p.to_string_lossy()
+        )),
+    }
 }

@@ -43,9 +43,7 @@ impl TriageBackend for LlmTriageBackend {
 /// Run the GitHub PR dashboard, forwarding all CLI flags into [`graphify_prs::PrsArgs`].
 ///
 /// Each flag maps 1:1 to the corresponding field on `PrsArgs`, mirroring Python's
-/// `PrsArgs.parse(sys.argv[2:])` call at `__main__.py:1476`.  The `--limit` flag
-/// is accepted for CLI consistency but `run_cmd_prs` currently uses an internal
-/// hard-coded fetch limit of 50; this is a known gap in the crate API.
+/// `PrsArgs.parse(sys.argv[2:])` call at `__main__.py:1476`.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::fn_params_excessive_bools)]
 // reason: each bool maps 1:1 to a distinct Python CLI flag; collapsing into a
@@ -54,7 +52,7 @@ pub(crate) fn cmd_prs(
     number: Option<u64>,
     repo: Option<&str>,
     base: Option<&str>,
-    _limit: usize,
+    limit: usize,
     triage: bool,
     worktrees: bool,
     conflicts: bool,
@@ -76,6 +74,7 @@ pub(crate) fn cmd_prs(
         graph_path: graph
             .map(std::path::Path::to_path_buf)
             .or_else(|| Some(std::path::PathBuf::from("graphify-out/graph.json"))),
+        limit,
     };
     // Only wire the LLM triage backend when the user actually requested triage.
     // Otherwise stay with the no-op so a missing API key never breaks the

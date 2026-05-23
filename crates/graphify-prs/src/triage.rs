@@ -1,9 +1,9 @@
 //! Triage backend trait.
 //!
-//! The LLM-powered triage logic depends on `graphify-llm` which is being
-//! ported separately. This module exposes a `TriageBackend` trait so the
-//! dashboard can call into it without a hard dependency, and provides a
-//! `NoOpTriageBackend` stub.
+//! The LLM-powered triage logic lives in the `graphify` binary (so the prs
+//! crate stays free of an `llm` dependency).  This module exposes a
+//! `TriageBackend` trait the binary's `LlmTriageBackend` implements, plus a
+//! `NoOpTriageBackend` used when `--triage` is not requested.
 
 use crate::model::PrInfo;
 
@@ -21,13 +21,15 @@ pub trait TriageBackend {
     fn triage(&self, candidates: &[&PrInfo], prompt: &str) -> Result<(), String>;
 }
 
-/// Stub implementation — prints a placeholder.  Replace once `graphify-llm`
-/// is ported.
+/// Inert backend used when the dashboard is invoked without `--triage`.
+///
+/// The binary substitutes `LlmTriageBackend` whenever the user passes
+/// `--triage`, so this implementation is only reached if triage was not
+/// requested — in which case `triage()` is never actually called.
 pub struct NoOpTriageBackend;
 
 impl TriageBackend for NoOpTriageBackend {
     fn triage(&self, _candidates: &[&PrInfo], _prompt: &str) -> Result<(), String> {
-        println!("  [triage: graphify-llm not yet wired — deferred]");
         Ok(())
     }
 }

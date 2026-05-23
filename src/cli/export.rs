@@ -17,16 +17,17 @@ pub(crate) fn cmd_export(cmd: ExportCmd) -> Result<()> {
     match cmd {
         ExportCmd::Graphml { graph } => {
             let path = graph.unwrap_or_else(default_graph_path);
+            let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
             eprintln!("loading {} ...", path.display());
             let g = load_graph(&path)?;
-            let communities = indexmap::IndexMap::new();
+            let analysis = load_analysis_sidecar(&out_dir.join(".graphify_analysis.json"));
             let out = path.with_file_name("graph.graphml");
             eprintln!(
                 "exporting GraphML ({} nodes, {} edges) ...",
                 g.node_count(),
                 g.edge_count()
             );
-            graphify_export::to_graphml(&g, &communities, &out)?;
+            graphify_export::to_graphml(&g, &analysis.communities, &out)?;
             eprintln!("wrote {}", out.display());
         }
         ExportCmd::Svg { graph, labels } => {
@@ -247,32 +248,45 @@ pub(crate) fn cmd_export(cmd: ExportCmd) -> Result<()> {
         ExportCmd::Neo4j {
             graph,
             push,
-            user: _,
-            password: _,
+            user,
+            password,
         } => {
             let path = graph.unwrap_or_else(default_graph_path);
             eprintln!("loading {} ...", path.display());
             let g = load_graph(&path)?;
             let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
 
-            if push.is_some() {
-                // Live push requires neo4rs integration which is gated behind
-                // a feature flag (deferred until the workspace pulls in the
-                // dep). The cypher.txt path below remains a fully functional
-                // alternative — load it with `cypher-shell < cypher.txt`.
-                anyhow::bail!(
-                    "--push (live Neo4j push) is not yet wired into the Rust port; \
-                     run without --push to emit cypher.txt and import via cypher-shell"
+            if let Some(uri) = push {
+                let analysis = load_analysis_sidecar(&out_dir.join(".graphify_analysis.json"));
+                let resolved_password = password
+                    .or_else(|| std::env::var("NEO4J_PASSWORD").ok())
+                    .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--push requires a password (--password or NEO4J_PASSWORD env var)"
+                    )
+                })?;
+                eprintln!(
+                    "pushing {} nodes / {} edges to {uri} ...",
+                    g.node_count(),
+                    g.edge_count()
+                );
+                let (n_nodes, n_rels) = graphify_export::push_to_neo4j_blocking(
+                    &uri,
+                    &user,
+                    &resolved_password,
+                    &g,
+                    &analysis.communities,
+                    false,
+                )?;
+                println!("pushed {n_nodes} nodes, {n_rels} relationships to {uri}");
+            } else {
+                let out = out_dir.join("cypher.txt");
+                graphify_export::to_cypher(&g, &out)?;
+                println!(
+                    "cypher.txt written - import with: cypher-shell < {}",
+                    out.display()
                 );
             }
-
-            // Default: write cypher.txt next to graph.json.
-            let out = out_dir.join("cypher.txt");
-            graphify_export::to_cypher(&g, &out)?;
-            println!(
-                "cypher.txt written - import with: cypher-shell < {}",
-                out.display()
-            );
         }
     }
     Ok(())

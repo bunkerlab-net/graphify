@@ -7,14 +7,16 @@ pub mod cypher;
 pub mod graphml;
 pub mod html;
 pub mod json;
+pub mod neo4j;
 pub mod obsidian;
 pub mod svg;
 
 pub use canvas::to_canvas;
-pub use cypher::to_cypher;
+pub use cypher::{cypher_escape, cypher_label, to_cypher};
 pub use graphml::to_graphml;
 pub use html::to_html;
 pub use json::{attach_hyperedges, backup_if_protected, prune_dangling_edges, to_json};
+pub use neo4j::{Neo4jError, push_to_neo4j, push_to_neo4j_blocking};
 pub use obsidian::to_obsidian;
 pub use svg::to_svg;
 

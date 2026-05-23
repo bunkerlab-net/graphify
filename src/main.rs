@@ -195,7 +195,7 @@ pub(crate) enum Command {
         /// Extra path globs to exclude from detection (repeatable).
         #[arg(long = "exclude")]
         exclude: Vec<String>,
-        /// Run LLM-driven dedup tiebreak after clustering (deferred — currently a no-op).
+        /// Run LLM-driven dedup tiebreak after clustering.
         #[arg(long = "dedup-llm")]
         dedup_llm: bool,
     },
@@ -271,8 +271,9 @@ pub(crate) enum Command {
         /// Base branch to filter PRs by. Defaults to the repo's default branch.
         #[arg(long, short = 'b')]
         base: Option<String>,
-        /// Cap the number of PRs fetched from GitHub. Defaults to 30.
-        #[arg(long, default_value_t = 30)]
+        /// Cap the number of PRs fetched from GitHub. Defaults to 50 (matches
+        /// Python `fetch_prs(limit=50)`).
+        #[arg(long, default_value_t = 50)]
         limit: usize,
         #[arg(long)]
         triage: bool,
@@ -676,7 +677,11 @@ fn dispatch(cmd: Command) -> Result<()> {
         Command::CacheCheck { files_from, root } => {
             cli::cache_check::cmd_cache_check(&files_from, &root)
         }
-        Command::HookCheck => Ok(()), // silent no-op until needs_update logic ports
+        // Cross-platform no-op — mirrors Python `__main__.py:1905-1909`.
+        // Codex Desktop rejects hookSpecificOutput.additionalContext on
+        // PreToolUse, so installed hooks must exit silently. Graph guidance
+        // reaches the agent via AGENTS.md / skill instead.
+        Command::HookCheck => Ok(()),
         Command::Claude { cmd: c } => cli::install::cmd_platform("claude", &c),
         Command::Gemini { cmd: c } => cli::install::cmd_platform("gemini", &c),
         Command::Cursor { cmd: c } => cli::install::cmd_platform("cursor", &c),

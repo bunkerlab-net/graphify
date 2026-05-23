@@ -53,9 +53,9 @@ pub(crate) fn rebuild_code_inner(
             .canonicalize()
             .unwrap_or_else(|_| watch_root.clone())
     };
-    // Computed for the report header but not yet wired into `build_analysis`;
-    // see `module_watch.md` for the parity TODO.
-    let _report_root_label = report_root_label(watch_path);
+    // Display label for the report header (mirrors Python's `_report_root_label`
+    // at watch.py:125-128 — used as `root` arg to `generate()` at watch.py:516).
+    let report_root = report_root_label(watch_path);
     let out = watch_path.join(graphify_out());
 
     // We currently only use the `code_files` list; the full `DetectResult`
@@ -362,7 +362,12 @@ pub(crate) fn rebuild_code_inner(
             .or_insert_with(|| format!("Community {cid}"));
     }
 
-    let analysis = build_analysis(&graph, &communities, watch_path);
+    let mut analysis = build_analysis(&graph, &communities, watch_path);
+    // Override the auto-derived "root" with the human-readable label so the
+    // report header reads `# Graph Report - {label}` instead of an absolute path.
+    if let Some(obj) = analysis.as_object_mut() {
+        obj.insert("root".to_string(), Value::String(report_root.clone()));
+    }
 
     // Write graph to a temp file first, then atomically replace.
     let graph_tmp = out.join(".graph.tmp.json");

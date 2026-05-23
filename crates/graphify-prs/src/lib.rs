@@ -132,7 +132,7 @@ pub fn attach_graph_impact(
 /// reasonably be collapsed into an enum without losing the independent-flag
 /// semantics (e.g. `--triage` can combine with other options).
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PrsArgs {
     pub base: Option<String>,
     pub repo: Option<String>,
@@ -142,6 +142,23 @@ pub struct PrsArgs {
     pub show_wrong_base: bool,
     pub pr_number: Option<u64>,
     pub graph_path: Option<PathBuf>,
+    pub limit: usize,
+}
+
+impl Default for PrsArgs {
+    fn default() -> Self {
+        Self {
+            base: None,
+            repo: None,
+            do_triage: false,
+            do_worktrees: false,
+            do_conflicts: false,
+            show_wrong_base: false,
+            pr_number: None,
+            graph_path: None,
+            limit: 50,
+        }
+    }
 }
 
 impl PrsArgs {
@@ -181,6 +198,17 @@ impl PrsArgs {
                     parsed.graph_path = Some(PathBuf::from(argv[i + 1]));
                     i += 1;
                 }
+                "--limit" if i + 1 < argv.len() => {
+                    if let Ok(n) = argv[i + 1].parse::<usize>() {
+                        parsed.limit = n;
+                    }
+                    i += 1;
+                }
+                arg if arg.starts_with("--limit=") => {
+                    if let Ok(n) = arg["--limit=".len()..].parse::<usize>() {
+                        parsed.limit = n;
+                    }
+                }
                 arg => {
                     let stripped = arg.trim_start_matches('#');
                     if !stripped.is_empty()
@@ -214,7 +242,7 @@ pub fn run_cmd_prs(
         .clone()
         .unwrap_or_else(|| detect_default_branch(gh_client, git_client, repo));
 
-    let mut prs = fetch_prs(gh_client, git_client, repo, Some(&base), 50)?;
+    let mut prs = fetch_prs(gh_client, git_client, repo, Some(&base), args.limit)?;
 
     // Attach worktree paths.
     let worktrees = fetch_worktrees(git_client);
