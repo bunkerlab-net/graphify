@@ -46,6 +46,7 @@ pub(crate) fn build_analysis(
     communities: &IndexMap<i64, Vec<String>>,
     root: &Path,
 ) -> Value {
+    let perf = std::env::var("GRAPHIFY_PERF_LOG").is_ok();
     let mut communities_json = serde_json::Map::new();
     for (cid, members) in communities {
         communities_json.insert(
@@ -53,7 +54,14 @@ pub(crate) fn build_analysis(
             Value::Array(members.iter().map(|m| Value::String(m.clone())).collect()),
         );
     }
+    let t = std::time::Instant::now();
     let cohesion = graphify_cluster::score_all(graph, communities);
+    if perf {
+        eprintln!(
+            "[perf]   build_analysis/score_all: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
     let mut cohesion_json = serde_json::Map::new();
     for (cid, score) in &cohesion {
         cohesion_json.insert(
@@ -61,10 +69,31 @@ pub(crate) fn build_analysis(
             serde_json::Number::from_f64(*score).map_or(Value::Null, Value::Number),
         );
     }
+    let t = std::time::Instant::now();
     let gods = god_nodes(graph, 12);
+    if perf {
+        eprintln!(
+            "[perf]   build_analysis/god_nodes: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
     let surprising = surprising_connections(graph, communities, 12);
+    if perf {
+        eprintln!(
+            "[perf]   build_analysis/surprising: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
     let empty_labels: IndexMap<i64, String> = IndexMap::new();
+    let t = std::time::Instant::now();
     let suggested = suggest_questions(graph, communities, &empty_labels, 8);
+    if perf {
+        eprintln!(
+            "[perf]   build_analysis/suggest_questions: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
     json!({
         "root": root.display().to_string(),
         "communities": Value::Object(communities_json),

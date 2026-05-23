@@ -10,6 +10,7 @@ use std::path::Path;
 
 use graphify_build::Graph;
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 
@@ -433,18 +434,23 @@ pub fn to_obsidian(
         node_filename.insert(node_id.clone(), fname);
     }
 
-    // Write one .md per node
-    for (node_id, attrs) in graph.nodes() {
-        write_node_note(
-            node_id,
-            attrs,
-            graph,
-            &node_community,
-            &node_filename,
-            community_labels,
-            output_dir,
-        )?;
-    }
+    // Write one .md per node — fully independent file writes, so fan out
+    // across Rayon. `?` is hoisted out via `collect::<Result<_, _>>()` so the
+    // first error short-circuits the parallel walk.
+    let node_refs: Vec<(&String, &indexmap::IndexMap<String, Value>)> = graph.nodes().collect();
+    node_refs
+        .par_iter()
+        .try_for_each(|(node_id, attrs)| -> Result<(), ExportError> {
+            write_node_note(
+                node_id,
+                attrs,
+                graph,
+                &node_community,
+                &node_filename,
+                community_labels,
+                output_dir,
+            )
+        })?;
 
     // Build inter-community edge counts
     let mut inter_community: IndexMap<i64, IndexMap<i64, usize>> =
@@ -468,22 +474,25 @@ pub fn to_obsidian(
         }
     }
 
-    // Write one _COMMUNITY_<name>.md per community
-    let mut community_notes_written = 0_usize;
-    for (cid, members) in communities {
-        write_community_note(
-            *cid,
-            members,
-            graph,
-            &node_community,
-            &node_filename,
-            community_labels,
-            cohesion,
-            &inter_community,
-            output_dir,
-        )?;
-        community_notes_written += 1;
-    }
+    // Write one _COMMUNITY_<name>.md per community. Per-community writes are
+    // independent files, safe to fan out across Rayon.
+    let community_pairs: Vec<(&i64, &Vec<String>)> = communities.iter().collect();
+    let community_notes_written = community_pairs.len();
+    community_pairs
+        .par_iter()
+        .try_for_each(|(cid, members)| -> Result<(), ExportError> {
+            write_community_note(
+                **cid,
+                members,
+                graph,
+                &node_community,
+                &node_filename,
+                community_labels,
+                cohesion,
+                &inter_community,
+                output_dir,
+            )
+        })?;
 
     // Write .obsidian/graph.json for community colour groups
     let obsidian_dir = output_dir.join(".obsidian");

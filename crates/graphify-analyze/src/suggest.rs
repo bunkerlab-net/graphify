@@ -9,9 +9,70 @@ use indexmap::{IndexMap, IndexSet};
 use serde_json::{Value, json};
 use std::cmp::Reverse;
 
-use crate::centrality::{all_degrees, betweenness_centrality, cohesion_score, neighbors};
+use crate::centrality::{all_degrees, betweenness_centrality, neighbors};
 use crate::classify::{is_concept_node, is_file_node};
 use crate::cross_lang::node_community_map;
+
+/// Single-pass cohesion scores for every community.
+///
+/// Builds a `node → community_id` map, walks the edge list once counting
+/// intra-community edges per community, then divides by the maximum
+/// possible edges. Runs in `O(N + E + C)` instead of the per-community
+/// `cohesion_score` call's `O(C × E)`.
+fn precompute_cohesion(
+    graph: &Graph,
+    communities: &IndexMap<i64, Vec<String>>,
+) -> IndexMap<i64, f64> {
+    if communities.is_empty() {
+        return IndexMap::new();
+    }
+    let mut node_to_cid: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    for (&cid, nodes) in communities {
+        for n in nodes {
+            node_to_cid.insert(n.as_str(), cid);
+        }
+    }
+    let directed = graph.kind.is_directed();
+    let mut actual: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    let mut seen_directed: std::collections::HashSet<(i64, &str, &str)> =
+        std::collections::HashSet::new();
+    for edge in graph.edges() {
+        let src = edge.source.as_str();
+        let tgt = edge.target.as_str();
+        let (Some(&cu), Some(&cv)) = (node_to_cid.get(src), node_to_cid.get(tgt)) else {
+            continue;
+        };
+        if cu != cv {
+            continue;
+        }
+        if directed {
+            let (a, b) = if src <= tgt { (src, tgt) } else { (tgt, src) };
+            if !seen_directed.insert((cu, a, b)) {
+                continue;
+            }
+        }
+        *actual.entry(cu).or_insert(0) += 1;
+    }
+    communities
+        .iter()
+        .map(|(&cid, nodes)| {
+            let n = nodes.len();
+            if n <= 1 {
+                return (cid, 1.0);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let possible = (n * (n - 1)) as f64 / 2.0;
+            #[allow(clippy::cast_precision_loss)]
+            let actual_f = actual.get(&cid).copied().unwrap_or(0) as f64;
+            let score = if possible > 0.0 {
+                actual_f / possible
+            } else {
+                0.0
+            };
+            (cid, score)
+        })
+        .collect()
+}
 
 /// Generate questions the graph is uniquely positioned to answer.
 ///
@@ -29,7 +90,13 @@ pub fn suggest_questions(
 ) -> Vec<Value> {
     let node_community = node_community_map(communities);
     let mut questions: Vec<Value> = Vec::new();
+    let perf = std::env::var("GRAPHIFY_PERF_LOG").is_ok();
 
+    // Precompute degrees once — `is_file_node` requires a `degrees` map, and
+    // we re-use it across sections 2/3/4 to avoid recomputing.
+    let degrees = all_degrees(graph);
+
+    let t = std::time::Instant::now();
     // 1. AMBIGUOUS edges → unresolved relationship questions
     for edge in graph.edges() {
         let data = &edge.attrs;
@@ -56,6 +123,13 @@ pub fn suggest_questions(
         }
     }
 
+    if perf {
+        eprintln!(
+            "[perf]     suggest_questions/s1_ambiguous: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
     // 2. Bridge nodes (high betweenness) → cross-cutting concern questions
     if graph.edge_count() > 0 {
         let k = if graph.node_count() > 1000 {
@@ -67,7 +141,10 @@ pub fn suggest_questions(
         let mut bridges: Vec<(&str, f64)> = betweenness
             .iter()
             .filter_map(|(node_id, &sc)| {
-                if !is_file_node(graph, node_id) && !is_concept_node(graph, node_id) && sc > 0.0 {
+                if !is_file_node(graph, node_id, &degrees)
+                    && !is_concept_node(graph, node_id)
+                    && sc > 0.0
+                {
                     Some((node_id.as_str(), sc))
                 } else {
                     None
@@ -120,12 +197,18 @@ pub fn suggest_questions(
         }
     }
 
+    if perf {
+        eprintln!(
+            "[perf]     suggest_questions/s2_bridges: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
     // 3. God nodes with many INFERRED edges → verification questions
-    let degrees = all_degrees(graph);
     let mut top_nodes: Vec<(&str, usize)> = degrees
         .iter()
         .filter_map(|(id, &d)| {
-            if is_file_node(graph, id) {
+            if is_file_node(graph, id, &degrees) {
                 None
             } else {
                 Some((id.as_str(), d))
@@ -135,13 +218,30 @@ pub fn suggest_questions(
     top_nodes.sort_by_key(|item| Reverse(item.1));
     top_nodes.truncate(5);
 
+    // Pre-bucket edges by their endpoints once so the per-top-node lookup
+    // below is O(1) instead of an O(E) scan per node (5 nodes × 36k edges
+    // was the previous shape).
+    let mut edges_by_node: std::collections::HashMap<&str, Vec<&graphify_build::Edge>> =
+        std::collections::HashMap::new();
+    for edge in graph.edges() {
+        edges_by_node
+            .entry(edge.source.as_str())
+            .or_default()
+            .push(edge);
+        if edge.target != edge.source {
+            edges_by_node
+                .entry(edge.target.as_str())
+                .or_default()
+                .push(edge);
+        }
+    }
+
     for (node_id, _) in top_nodes {
-        let inferred: Vec<(&str, &str, &IndexMap<String, Value>)> = graph
-            .edges()
-            .filter(|e| {
-                (e.source == node_id || e.target == node_id)
-                    && e.attrs.get("confidence").and_then(Value::as_str) == Some("INFERRED")
-            })
+        let inferred: Vec<(&str, &str, &IndexMap<String, Value>)> = edges_by_node
+            .get(node_id)
+            .into_iter()
+            .flatten()
+            .filter(|e| e.attrs.get("confidence").and_then(Value::as_str) == Some("INFERRED"))
             .map(|e| (e.source.as_str(), e.target.as_str(), &e.attrs))
             .collect();
 
@@ -180,13 +280,21 @@ pub fn suggest_questions(
         }
     }
 
-    // 4. Isolated or weakly-connected nodes → exploration questions
-    let deg_map = all_degrees(graph);
+    if perf {
+        eprintln!(
+            "[perf]     suggest_questions/s3_gods: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
+    // 4. Isolated or weakly-connected nodes → exploration questions.
+    // Reuse the `degrees` map computed at function entry rather than
+    // recomputing.
     let isolated: Vec<&str> = graph
         .nodes()
         .filter_map(|(id, _)| {
-            if deg_map.get(id).copied().unwrap_or(0) <= 1
-                && !is_file_node(graph, id)
+            if degrees.get(id).copied().unwrap_or(0) <= 1
+                && !is_file_node(graph, id, &degrees)
                 && !is_concept_node(graph, id)
             {
                 Some(id.as_str())
@@ -221,9 +329,23 @@ pub fn suggest_questions(
         }));
     }
 
-    // 5. Low-cohesion communities → structural questions
+    if perf {
+        eprintln!(
+            "[perf]     suggest_questions/s4_isolated: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
+    // 5. Low-cohesion communities → structural questions.
+    //
+    // The naive shape called `cohesion_score(graph, nodes)` per community,
+    // each rescanning the full edge list — `O(C × E)` total. For a graph
+    // with 785 communities and 36k edges that's 28M edge iterations.
+    // Precompute per-community intra-edge counts in one pass and consult
+    // that map instead.
+    let cohesion_scores = precompute_cohesion(graph, communities);
     for (cid, nodes) in communities {
-        let score = cohesion_score(graph, nodes);
+        let score = cohesion_scores.get(cid).copied().unwrap_or(0.0);
         if score < 0.15 && nodes.len() >= 5 {
             let label = community_labels
                 .get(cid)
@@ -237,6 +359,12 @@ pub fn suggest_questions(
         }
     }
 
+    if perf {
+        eprintln!(
+            "[perf]     suggest_questions/s5_cohesion: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
     if questions.is_empty() {
         return vec![json!({
             "type": "no_signal",

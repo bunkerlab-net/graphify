@@ -74,10 +74,73 @@ pub fn cohesion_score(graph: &Graph, community_nodes: &[String]) -> f64 {
 ///
 /// Returns an `IndexMap<community_id, score>` with the same key set as
 /// `communities`.
+///
+/// Runs in `O(N + E + C)` rather than the naive `O(C × E)` of calling
+/// [`cohesion_score`] per community. For a graph with 25k nodes / 36k edges
+/// and 785 communities, the naive shape costs ~28M edge iterations; the
+/// single-pass version is one walk over the edge list plus one over the
+/// community map.
 #[must_use]
 pub fn score_all(graph: &Graph, communities: &IndexMap<i64, Vec<String>>) -> IndexMap<i64, f64> {
+    if communities.is_empty() {
+        return IndexMap::new();
+    }
+
+    // node_id → community_id (one lookup per edge endpoint instead of
+    // O(C × N) set rebuilds).
+    let mut node_to_cid: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    for (&cid, nodes) in communities {
+        for n in nodes {
+            node_to_cid.insert(n.as_str(), cid);
+        }
+    }
+
+    // For directed graphs we deduplicate (u, v) / (v, u) pairs per-community
+    // to match the Python reference, which converts DiGraph→Graph before
+    // subgraphing.
+    let directed = graph.kind.is_directed();
+    let mut actual: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    let mut seen_directed: std::collections::HashSet<(i64, &str, &str)> =
+        std::collections::HashSet::new();
+
+    for edge in graph.edges() {
+        let src = edge.source.as_str();
+        let tgt = edge.target.as_str();
+        let (Some(&cu), Some(&cv)) = (node_to_cid.get(src), node_to_cid.get(tgt)) else {
+            continue;
+        };
+        if cu != cv {
+            continue;
+        }
+        if directed {
+            // Order-insensitive key for undirected counting under directed storage.
+            let (a, b) = if src <= tgt { (src, tgt) } else { (tgt, src) };
+            if !seen_directed.insert((cu, a, b)) {
+                continue;
+            }
+        }
+        *actual.entry(cu).or_insert(0) += 1;
+    }
+
     communities
         .iter()
-        .map(|(&cid, nodes)| (cid, cohesion_score(graph, nodes)))
+        .map(|(&cid, nodes)| {
+            let n = nodes.len();
+            if n <= 1 {
+                return (cid, 1.0);
+            }
+            // n*(n-1)/2 fits in u64 well within f64 mantissa for any
+            // realistic graph size.
+            #[allow(clippy::cast_precision_loss)]
+            let possible = (n * (n - 1)) as f64 / 2.0;
+            #[allow(clippy::cast_precision_loss)]
+            let actual_f = actual.get(&cid).copied().unwrap_or(0) as f64;
+            let score = if possible > 0.0 {
+                actual_f / possible
+            } else {
+                0.0
+            };
+            (cid, score)
+        })
         .collect()
 }

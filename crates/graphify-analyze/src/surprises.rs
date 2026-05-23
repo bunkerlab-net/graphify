@@ -5,12 +5,16 @@
 
 use graphify_build::Graph;
 use indexmap::{IndexMap, IndexSet};
+use rayon::prelude::*;
 use serde_json::{Value, json};
 use std::cmp::Reverse;
 
 use crate::centrality::{all_degrees, edge_betweenness_centrality};
 use crate::classify::{file_category, is_concept_node, is_file_node, top_level_dir};
 use crate::cross_lang::{cross_language, node_community_map};
+
+/// Edge-count threshold above which surprise scoring is dispatched to Rayon.
+const PARALLEL_SURPRISE_THRESHOLD: usize = 256;
 
 /// Score how surprising a cross-file edge is.
 ///
@@ -142,6 +146,7 @@ pub fn surprise_score(
 /// to [`cross_community_surprises`] when no cross-file edges are found.
 ///
 /// Mirrors the multi-source branch of Python `surprising_connections`.
+#[allow(clippy::too_many_lines)] // closure-heavy edge scorer; splitting would obscure flow.
 fn cross_file_surprises(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
@@ -149,26 +154,27 @@ fn cross_file_surprises(
 ) -> Vec<Value> {
     let node_community = node_community_map(communities);
     let degrees = all_degrees(graph);
-    let mut candidates: Vec<(i32, Value)> = Vec::new();
 
     let structural_relations: IndexSet<&str> = ["imports", "imports_from", "contains", "method"]
         .into_iter()
         .collect();
 
-    for edge in graph.edges() {
+    // Per-edge scoring is read-only over `graph` and produces an owned tuple,
+    // so it parallelises cleanly. Sort restores deterministic ordering.
+    let score_edge = |edge: &graphify_build::Edge| -> Option<(i32, Value)> {
         let u = edge.source.as_str();
         let v = edge.target.as_str();
         let data = &edge.attrs;
 
         let relation = data.get("relation").and_then(Value::as_str).unwrap_or("");
         if structural_relations.contains(relation) {
-            continue;
+            return None;
         }
         if is_concept_node(graph, u) || is_concept_node(graph, v) {
-            continue;
+            return None;
         }
-        if is_file_node(graph, u) || is_file_node(graph, v) {
-            continue;
+        if is_file_node(graph, u, &degrees) || is_file_node(graph, v, &degrees) {
+            return None;
         }
 
         let u_source = graph
@@ -183,7 +189,7 @@ fn cross_file_surprises(
             .unwrap_or("");
 
         if u_source.is_empty() || v_source.is_empty() || u_source == v_source {
-            continue;
+            return None;
         }
 
         let (score, reasons) = surprise_score(
@@ -235,7 +241,7 @@ fn cross_file_surprises(
             reasons.join("; ")
         };
 
-        candidates.push((
+        Some((
             score,
             json!({
                 "source": src_label,
@@ -245,8 +251,15 @@ fn cross_file_surprises(
                 "relation": relation,
                 "why": why,
             }),
-        ));
-    }
+        ))
+    };
+
+    let mut candidates: Vec<(i32, Value)> = if graph.edge_list.len() >= PARALLEL_SURPRISE_THRESHOLD
+    {
+        graph.edge_list.par_iter().filter_map(score_edge).collect()
+    } else {
+        graph.edges().filter_map(score_edge).collect()
+    };
 
     candidates.sort_by_key(|item| Reverse(item.0));
     let result: Vec<Value> = candidates.into_iter().map(|(_, v)| v).collect();
@@ -306,6 +319,7 @@ fn cross_community_surprises(
     }
 
     let node_community = node_community_map(communities);
+    let degrees = all_degrees(graph);
     let structural_relations: IndexSet<&str> = ["imports", "imports_from", "contains", "method"]
         .into_iter()
         .collect();
@@ -320,9 +334,9 @@ fn cross_community_surprises(
         }
     };
 
-    let mut surprises: Vec<(i32, (i64, i64), Value)> = Vec::new();
-
-    for edge in graph.edges() {
+    // Per-edge scoring is read-only — fan out across Rayon. The downstream
+    // `sort_by_key` makes ordering deterministic regardless of fan-in order.
+    let score_edge = |edge: &graphify_build::Edge| -> Option<(i32, (i64, i64), Value)> {
         let u = edge.source.as_str();
         let v = edge.target.as_str();
         let data = &edge.attrs;
@@ -330,17 +344,17 @@ fn cross_community_surprises(
         let cid_u = node_community.get(u).copied();
         let cid_v = node_community.get(v).copied();
         let (Some(cu), Some(cv)) = (cid_u, cid_v) else {
-            continue;
+            return None;
         };
         if cu == cv {
-            continue;
+            return None;
         }
-        if is_file_node(graph, u) || is_file_node(graph, v) {
-            continue;
+        if is_file_node(graph, u, &degrees) || is_file_node(graph, v, &degrees) {
+            return None;
         }
         let relation = data.get("relation").and_then(Value::as_str).unwrap_or("");
         if structural_relations.contains(relation) {
-            continue;
+            return None;
         }
 
         let confidence = data
@@ -381,7 +395,7 @@ fn cross_community_surprises(
             .unwrap_or("");
 
         let pair = if cu <= cv { (cu, cv) } else { (cv, cu) };
-        surprises.push((
+        Some((
             conf_order(confidence),
             pair,
             json!({
@@ -392,8 +406,15 @@ fn cross_community_surprises(
                 "relation": relation,
                 "note": format!("Bridges community {cu} \u{2192} community {cv}"),
             }),
-        ));
-    }
+        ))
+    };
+
+    let mut surprises: Vec<(i32, (i64, i64), Value)> =
+        if graph.edge_list.len() >= PARALLEL_SURPRISE_THRESHOLD {
+            graph.edge_list.par_iter().filter_map(score_edge).collect()
+        } else {
+            graph.edges().filter_map(score_edge).collect()
+        };
 
     // Sort by confidence order (AMBIGUOUS first)
     surprises.sort_by_key(|(order, _, _)| *order);

@@ -11,10 +11,12 @@ description = "File discovery + filtering, gitignore-aware"
 calamine = "0.35"
 graphify-google = { workspace = true }
 hex = { workspace = true }
+ignore_walk = { version = "0.4", package = "ignore" }
 indexmap = { workspace = true }
 lopdf = "0.40"
 md5 = "0.8"
 quick-xml = "0.40"
+rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -3,6 +3,7 @@
 use std::sync::LazyLock;
 
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 
@@ -14,6 +15,10 @@ use crate::{
         is_variant_pair, jaro_winkler_score, make_minhash, norm, short_label_blocked,
     },
 };
+
+/// Candidate-count threshold above which `MinHash` construction and LSH pair
+/// scanning are dispatched to Rayon.
+const PARALLEL_DEDUP_THRESHOLD: usize = 64;
 
 // ── chunk-suffix regex ────────────────────────────────────────────────────────
 
@@ -119,17 +124,38 @@ pub fn pick_winner<'a>(nodes: &'a [&'a Value]) -> Result<&'a Value, DedupError> 
 /// Naive LSH: for each candidate pair whose Jaccard estimate >= `threshold`,
 /// yield `(i, j)`. O(n²) on candidates that pass the entropy gate; in practice
 /// the candidate list is much smaller than the full node list.
-/// Returns index pairs `(i, j)` from `minhashes` whose estimated Jaccard similarity meets `threshold`.
+///
+/// Returns index pairs `(i, j)` from `minhashes` whose estimated Jaccard
+/// similarity meets `threshold`. The outer loop is parallelised via Rayon
+/// when the candidate set is large enough; pairs are then sorted into the
+/// same `(pos_a, pos_b)` order the sequential implementation would emit,
+/// preserving downstream determinism in `pass2_fuzzy`'s union-find.
 fn lsh_pairs(minhashes: &[(usize, MinHash)], threshold: f64) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for (pos_a, (idx_a, mh_a)) in minhashes.iter().enumerate() {
-        for (_pos_b, (idx_b, mh_b)) in minhashes.iter().enumerate().skip(pos_a + 1) {
+    let scan_row = |pos_a: usize| -> Vec<(usize, usize, usize, usize)> {
+        let (idx_a, mh_a) = &minhashes[pos_a];
+        let mut row = Vec::new();
+        for (pos_b, (idx_b, mh_b)) in minhashes.iter().enumerate().skip(pos_a + 1) {
             if mh_a.jaccard(mh_b) >= threshold {
-                pairs.push((*idx_a, *idx_b));
+                row.push((pos_a, pos_b, *idx_a, *idx_b));
             }
         }
-    }
-    pairs
+        row
+    };
+
+    let mut rows: Vec<(usize, usize, usize, usize)> = if minhashes.len() >= PARALLEL_DEDUP_THRESHOLD
+    {
+        (0..minhashes.len())
+            .into_par_iter()
+            .flat_map_iter(scan_row)
+            .collect()
+    } else {
+        (0..minhashes.len()).flat_map(scan_row).collect()
+    };
+
+    // Sort by (pos_a, pos_b) so the order matches the sequential implementation;
+    // downstream union-find depends on stable pair ordering for determinism.
+    rows.sort_unstable_by_key(|(pos_a, pos_b, _, _)| (*pos_a, *pos_b));
+    rows.into_iter().map(|(_, _, ia, ib)| (ia, ib)).collect()
 }
 
 // ── LLM tiebreaker ────────────────────────────────────────────────────────────
@@ -271,11 +297,21 @@ fn pass2_fuzzy(
         return Ok(());
     }
 
-    let minhashes: Vec<(usize, MinHash)> = candidates
-        .iter()
-        .enumerate()
-        .map(|(i, node)| (i, make_minhash(&norm(node_label(node)))))
-        .collect();
+    // `make_minhash` is pure, dominated by hashing — fan out across Rayon
+    // when the candidate set is large enough to amortise pool overhead.
+    let minhashes: Vec<(usize, MinHash)> = if candidates.len() >= PARALLEL_DEDUP_THRESHOLD {
+        candidates
+            .par_iter()
+            .enumerate()
+            .map(|(i, node)| (i, make_minhash(&norm(node_label(node)))))
+            .collect()
+    } else {
+        candidates
+            .iter()
+            .enumerate()
+            .map(|(i, node)| (i, make_minhash(&norm(node_label(node)))))
+            .collect()
+    };
 
     let pairs = lsh_pairs(&minhashes, LSH_THRESHOLD);
 

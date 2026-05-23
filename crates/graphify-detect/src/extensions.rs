@@ -151,10 +151,13 @@ fn shebang_file_type(path: &Path) -> Option<FileType> {
 /// Returns `None` for unknown/unsupported types.
 #[must_use]
 pub fn classify_file(path: &Path) -> Option<FileType> {
-    // Compound extension check first (.blade.php)
-    if path
-        .to_str()
-        .is_some_and(|s| s.to_lowercase().ends_with(".blade.php"))
+    // Compound extension check first (.blade.php). The case-insensitive
+    // `.to_lowercase()` on the full path was the most expensive allocation
+    // in this function — replace with an `eq_ignore_ascii_case` suffix
+    // check that needs no allocation at all.
+    if let Some(s) = path.to_str()
+        && s.len() >= 10
+        && s.as_bytes()[s.len() - 10..].eq_ignore_ascii_case(b".blade.php")
     {
         return Some(FileType::Code);
     }
@@ -163,14 +166,24 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
     if ext_raw.is_empty() {
         return shebang_file_type(path);
     }
-    let ext = ext_raw.to_lowercase();
+    // Only allocate the lowercase string if the raw extension contains any
+    // uppercase ASCII letters. The hot path on macOS/Linux for typical
+    // file extensions (`.rs`, `.js`, `.py`) is already lowercase, so this
+    // skips the allocation entirely for the common case.
+    let ext_owned;
+    let ext: &str = if ext_raw.bytes().any(|b| b.is_ascii_uppercase()) {
+        ext_owned = ext_raw.to_ascii_lowercase();
+        &ext_owned
+    } else {
+        ext_raw
+    };
 
     // Check case-sensitive CODE_EXTENSIONS first (some have upper-case variants like .F90)
-    if CODE_EXTENSIONS.contains(&ext_raw) || CODE_EXTENSIONS.contains(&ext.as_str()) {
+    if CODE_EXTENSIONS.contains(&ext_raw) || CODE_EXTENSIONS.contains(&ext) {
         return Some(FileType::Code);
     }
 
-    if PAPER_EXTENSIONS.contains(&ext.as_str()) {
+    if PAPER_EXTENSIONS.contains(&ext) {
         // PDFs inside Xcode asset catalogs are vector icons, not papers.
         let in_asset_catalog = path.components().any(|c| {
             c.as_os_str()
@@ -183,26 +196,26 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
         return Some(FileType::Paper);
     }
 
-    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+    if IMAGE_EXTENSIONS.contains(&ext) {
         return Some(FileType::Image);
     }
 
-    if DOC_EXTENSIONS.contains(&ext.as_str()) {
+    if DOC_EXTENSIONS.contains(&ext) {
         if looks_like_paper(path) {
             return Some(FileType::Paper);
         }
         return Some(FileType::Document);
     }
 
-    if OFFICE_EXTENSIONS.contains(&ext.as_str()) {
+    if OFFICE_EXTENSIONS.contains(&ext) {
         return Some(FileType::Document);
     }
 
-    if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext.as_str()) {
+    if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext) {
         return Some(FileType::Document);
     }
 
-    if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+    if VIDEO_EXTENSIONS.contains(&ext) {
         return Some(FileType::Video);
     }
 

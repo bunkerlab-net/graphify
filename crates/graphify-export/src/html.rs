@@ -7,9 +7,14 @@ use std::path::Path;
 use graphify_build::Graph;
 use graphify_security::sanitize_label;
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::{COMMUNITY_COLORS, ExportError, node_community_map, obsidian_tag, viz_node_limit};
+
+/// Threshold above which vis.js node / edge construction is dispatched to
+/// Rayon. Below this, the sequential path avoids thread-pool overhead.
+const PARALLEL_VIS_THRESHOLD: usize = 1024;
 
 // ── Static HTML / JS fragments ─────────────────────────────────────────────────
 
@@ -414,9 +419,12 @@ pub fn to_html(
     let max_deg = degree.values().copied().max().unwrap_or(1).max(1);
     let max_mc = member_counts.map_or(1, |mc| mc.values().copied().max().unwrap_or(1).max(1));
 
-    // Build vis.js nodes list
-    let mut vis_nodes: Vec<Value> = Vec::new();
-    for (node_id, attrs) in graph.nodes() {
+    // Build vis.js nodes list. Per-node JSON construction is independent and
+    // O(n) — fan out across Rayon for large graphs. Insertion order is
+    // preserved because both the sequential and parallel paths consume the
+    // same input ordering via a single collected slice.
+    let node_refs: Vec<(&String, &IndexMap<String, Value>)> = graph.nodes().collect();
+    let build_vis_node = |&(node_id, attrs): &(&String, &IndexMap<String, Value>)| -> Value {
         let cid = node_community.get(node_id).copied().unwrap_or(0);
         // COMMUNITY_COLORS len is 10; usize modulo is always in-bounds
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -463,7 +471,7 @@ pub fn to_html(
             .unwrap_or("")
             .to_string();
 
-        vis_nodes.push(json!({
+        json!({
             "id": node_id,
             "label": label,
             "color": {
@@ -479,12 +487,16 @@ pub fn to_html(
             "source_file": source_file,
             "file_type": file_type,
             "degree": deg,
-        }));
-    }
+        })
+    };
+    let vis_nodes: Vec<Value> = if node_refs.len() >= PARALLEL_VIS_THRESHOLD {
+        node_refs.par_iter().map(build_vis_node).collect()
+    } else {
+        node_refs.iter().map(build_vis_node).collect()
+    };
 
-    // Build vis.js edges list
-    let mut vis_edges: Vec<Value> = Vec::new();
-    for edge in graph.edges() {
+    // Build vis.js edges list — same parallel-fan-out pattern as the nodes.
+    let build_vis_edge = |edge: &graphify_build::Edge| -> Value {
         let confidence = edge
             .attrs
             .get("confidence")
@@ -505,7 +517,7 @@ pub fn to_html(
             .get("_tgt")
             .and_then(Value::as_str)
             .unwrap_or(&edge.target);
-        vis_edges.push(json!({
+        json!({
             "from": true_src,
             "to": true_tgt,
             "label": relation,
@@ -514,10 +526,18 @@ pub fn to_html(
             "width": if confidence == "EXTRACTED" { 2 } else { 1 },
             "color": {"opacity": if confidence == "EXTRACTED" { 0.7f64 } else { 0.35f64 }},
             "confidence": confidence,
-        }));
-    }
+        })
+    };
+    let vis_edges: Vec<Value> = if graph.edge_list.len() >= PARALLEL_VIS_THRESHOLD {
+        graph.edge_list.par_iter().map(build_vis_edge).collect()
+    } else {
+        graph.edges().map(build_vis_edge).collect()
+    };
 
-    // Build legend data
+    // Build legend data. Each entry includes the Obsidian-safe tag slug
+    // for the community so the HTML legend can cross-reference a sibling
+    // Obsidian vault built from the same data (Obsidian notes are named
+    // `_COMMUNITY_<tag>.md`).
     let mut legend_data: Vec<Value> = Vec::new();
     if let Some(cl) = community_labels {
         let mut sorted_cids: Vec<i64> = cl.keys().copied().collect();
@@ -535,6 +555,7 @@ pub fn to_html(
                 "color": color,
                 "label": lbl,
                 "count": n,
+                "tag": community_tag(cid, community_labels),
             }));
         }
     }
@@ -637,9 +658,9 @@ fn community_name_for(cid: i64, community_labels: Option<&IndexMap<i64, String>>
         .unwrap_or_else(|| format!("Community {cid}"))
 }
 
-/// Returns the Obsidian-safe tag string for a community, derived from its display name.
-// Suppress dead-code — helper will be wired up by the CLI once src/main.rs is ported.
-#[allow(dead_code)]
+/// Returns the Obsidian-safe tag string for a community, derived from its
+/// display name. Used by the HTML legend to emit cross-format reference
+/// slugs that match the Obsidian vault's `_COMMUNITY_<tag>.md` filenames.
 fn community_tag(cid: i64, community_labels: Option<&IndexMap<i64, String>>) -> String {
     obsidian_tag(&community_name_for(cid, community_labels))
 }

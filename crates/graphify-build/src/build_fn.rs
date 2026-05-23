@@ -54,10 +54,25 @@ pub fn build_from_json(
         obj.insert("edges".into(), links);
     }
 
+    let perf = std::env::var("GRAPHIFY_PERF_LOG").is_ok();
+    let t = std::time::Instant::now();
     canonicalise_nodes(&mut extraction);
+    if perf {
+        eprintln!(
+            "[perf]   build_from_json/canonicalise: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
     // Mirror Python `build.py:148-152`: surface real schema errors, but ignore
     // dangling-edge warnings (stdlib/external imports are expected).
     let errors = graphify_validate::validate_extraction(&extraction);
+    if perf {
+        eprintln!(
+            "[perf]   build_from_json/validate: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
     let real_errors: Vec<&String> = errors
         .iter()
         .filter(|e| !e.contains("does not match any node id"))
@@ -70,8 +85,22 @@ pub fn build_from_json(
     }
 
     let mut graph = Graph::new(kind);
+    let t = std::time::Instant::now();
     add_nodes(&mut graph, &mut extraction, root_str.as_deref());
+    if perf {
+        eprintln!(
+            "[perf]   build_from_json/add_nodes: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+    let t = std::time::Instant::now();
     add_edges(&mut graph, &extraction, root_str.as_deref());
+    if perf {
+        eprintln!(
+            "[perf]   build_from_json/add_edges: {:.2}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
 
     if let Some(hyperedges) = extraction
         .as_object()

@@ -75,26 +75,25 @@ const CREDENTIAL_KEYWORDS: &[&str] = &[
 /// Maps to Python: `(?<![a-zA-Z0-9])tokens?(?![a-zA-Z])`
 const TOKEN_KEYWORDS: &[&str] = &["token", "tokens"];
 
-/// Return `true` if `text` contains `keyword` at a word boundary matching the
-/// Python lookaround semantics:
+/// Match `keyword` against `lowered_bytes` with Python lookaround semantics:
 /// - Not preceded by `[a-zA-Z0-9]`
 /// - Not followed by `[a-zA-Z]`
 ///
-/// This is a case-insensitive check.
-fn word_boundary_match(text: &str, keyword: &str) -> bool {
-    let lower = text.to_lowercase();
-    let kw = keyword.to_lowercase();
-    let kw_len = kw.len();
-    let bytes = lower.as_bytes();
-    let kw_bytes = kw.as_bytes();
-
+/// Caller pre-lowercases the text exactly once per filename and passes its
+/// bytes. The keyword arrays ([`CREDENTIAL_KEYWORDS`], [`TOKEN_KEYWORDS`])
+/// are already lowercase, so no lowercase work happens here at all.
+fn word_boundary_match_bytes(lowered_bytes: &[u8], keyword: &str) -> bool {
+    let kw_bytes = keyword.as_bytes();
+    let kw_len = kw_bytes.len();
+    if kw_len == 0 || lowered_bytes.len() < kw_len {
+        return false;
+    }
     let mut i = 0;
-    while i + kw_len <= bytes.len() {
-        if bytes[i..i + kw_len] == *kw_bytes {
-            // Check lookbehind: char before match must NOT be [a-zA-Z0-9]
-            let pre_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-            // Check lookahead: char after match must NOT be [a-zA-Z]
-            let post_ok = i + kw_len >= bytes.len() || !bytes[i + kw_len].is_ascii_alphabetic();
+    while i + kw_len <= lowered_bytes.len() {
+        if &lowered_bytes[i..i + kw_len] == kw_bytes {
+            let pre_ok = i == 0 || !lowered_bytes[i - 1].is_ascii_alphanumeric();
+            let post_ok = i + kw_len >= lowered_bytes.len()
+                || !lowered_bytes[i + kw_len].is_ascii_alphabetic();
             if pre_ok && post_ok {
                 return true;
             }
@@ -102,20 +101,6 @@ fn word_boundary_match(text: &str, keyword: &str) -> bool {
         i += 1;
     }
     false
-}
-
-/// Returns `true` if `name` contains a credential-related keyword at a word boundary.
-fn has_credential_keyword(name: &str) -> bool {
-    CREDENTIAL_KEYWORDS
-        .iter()
-        .any(|kw| word_boundary_match(name, kw))
-}
-
-/// Returns `true` if `name` contains a token-related keyword at a word boundary, excluding compound words like "tokenizer".
-fn has_token_keyword(name: &str) -> bool {
-    TOKEN_KEYWORDS
-        .iter()
-        .any(|kw| word_boundary_match(name, kw))
 }
 
 /// Return `true` if this file likely contains secrets and should be skipped.
@@ -146,10 +131,21 @@ pub fn is_sensitive(path: &Path) -> bool {
     if SIMPLE_PATTERNS.iter().any(|p| p.is_match(name)) {
         return true;
     }
-    if has_credential_keyword(name) {
+    // Lowercase the filename exactly once and reuse for every keyword scan.
+    // The keyword arrays are pre-lowercased compile-time constants, so the
+    // hot loop does no String allocation at all.
+    let lowered = name.to_ascii_lowercase();
+    let lowered_bytes = lowered.as_bytes();
+    if CREDENTIAL_KEYWORDS
+        .iter()
+        .any(|kw| word_boundary_match_bytes(lowered_bytes, kw))
+    {
         return true;
     }
-    if has_token_keyword(name) {
+    if TOKEN_KEYWORDS
+        .iter()
+        .any(|kw| word_boundary_match_bytes(lowered_bytes, kw))
+    {
         return true;
     }
     false

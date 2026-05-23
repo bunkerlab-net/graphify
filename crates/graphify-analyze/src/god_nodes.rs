@@ -23,7 +23,7 @@ pub fn god_nodes(graph: &Graph, top_n: usize) -> Vec<Value> {
 
     let mut result = Vec::new();
     for (node_id, deg) in sorted {
-        if is_file_node(graph, node_id)
+        if is_file_node(graph, node_id, &degrees)
             || is_concept_node(graph, node_id)
             || is_json_key_node(graph, node_id)
         {

@@ -105,9 +105,18 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         Some((sum / inf_scores.len() as f64 * 100.0).round() / 100.0)
     };
 
+    // Precompute degrees once — `is_file_node` and isolated-node detection
+    // both need them. Without this, every per-node call iterates the full
+    // edge list (`O(N × E)` total) and dominates report time on large graphs.
+    let degrees = sections::compute_degrees(graph);
+
     let non_empty: Vec<(i64, &Vec<&str>)> = communities
         .iter()
-        .filter(|(_, nodes)| nodes.iter().any(|n| !sections::is_file_node(graph, n)))
+        .filter(|(_, nodes)| {
+            nodes
+                .iter()
+                .any(|n| !sections::is_file_node(graph, n, &degrees))
+        })
         .map(|(cid, nodes)| (*cid, nodes))
         .collect();
 
@@ -116,7 +125,7 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         .filter(|(_, nodes)| {
             let real = nodes
                 .iter()
-                .filter(|n| !sections::is_file_node(graph, n))
+                .filter(|n| !sections::is_file_node(graph, n, &degrees))
                 .count();
             real > 0 && real < min_community_size
         })
@@ -126,8 +135,8 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
     let isolated: Vec<&str> = graph
         .nodes()
         .filter(|(id, attrs)| {
-            sections::node_degree(graph, id) <= 1
-                && !sections::is_file_node(graph, id)
+            degrees.get(id.as_str()).copied().unwrap_or(0) <= 1
+                && !sections::is_file_node(graph, id, &degrees)
                 && !sections::is_concept_node(graph, id)
                 && attrs.get("file_type").and_then(Value::as_str) != Some("rationale")
         })
@@ -139,7 +148,7 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         .filter(|(_, nodes)| {
             let real = nodes
                 .iter()
-                .filter(|n| !sections::is_file_node(graph, n))
+                .filter(|n| !sections::is_file_node(graph, n, &degrees))
                 .count();
             real > 0 && real < 3
         })
@@ -192,6 +201,7 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         &community_labels,
         thin_count_summary,
         min_community_size,
+        &degrees,
     );
     render_ambiguous(&mut lines, graph);
     render_gaps(

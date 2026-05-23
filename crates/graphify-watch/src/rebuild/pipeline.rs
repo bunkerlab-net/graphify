@@ -60,7 +60,15 @@ pub(crate) fn rebuild_code_inner(
 
     // We currently only use the `code_files` list; the full `DetectResult`
     // will be threaded into the report once analysis carries detection stats.
+    let t_detect = std::time::Instant::now();
     let (detected, code_files) = detect_code_files(watch_path, false);
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] detect: {:.2}s ({} files)",
+            t_detect.elapsed().as_secs_f64(),
+            code_files.len()
+        );
+    }
 
     if code_files.is_empty() {
         println!("[graphify watch] No code files found - nothing to rebuild.");
@@ -108,6 +116,7 @@ pub(crate) fn rebuild_code_inner(
     let commit = git_head(&watch_root);
 
     // Extract AST nodes.
+    let t_extract = std::time::Instant::now();
     let mut result = if extract_targets.is_empty() {
         json!({
             "nodes": [],
@@ -126,6 +135,14 @@ pub(crate) fn rebuild_code_inner(
             "output_tokens": output.output_tokens,
         })
     };
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] extract: {:.2}s ({} targets)",
+            t_extract.elapsed().as_secs_f64(),
+            extract_targets.len()
+        );
+    }
+    let t_post = std::time::Instant::now();
 
     // Preserve nodes/edges from a prior run, evicting stale entries.
     let existing_graph_path = out.join("graph.json");
@@ -276,10 +293,23 @@ pub(crate) fn rebuild_code_inner(
             false
         };
 
+        if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+            eprintln!(
+                "[perf] post-extract canonicalize+compare: {:.2}s",
+                t_post.elapsed().as_secs_f64()
+            );
+        }
+        let t_write = std::time::Instant::now();
         if !same_graph {
             check_shrink(force, &existing_graph_data, &candidate_data, None)?;
             std::fs::write(&existing_graph_path, json_text(&candidate_data).as_bytes())
                 .map_err(WatchError::Io)?;
+        }
+        if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+            eprintln!(
+                "[perf] write graph.json: {:.2}s",
+                t_write.elapsed().as_secs_f64()
+            );
         }
 
         // Clear stale needs_update flag.
@@ -310,8 +340,17 @@ pub(crate) fn rebuild_code_inner(
 
     // ── full cluster + report path ────────────────────────────────────────────
 
+    let t_build = std::time::Instant::now();
     let graph = build_from_json(result.clone(), true, Some(watch_path))
         .map_err(|e| WatchError::Pipeline(e.to_string()))?;
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] build_from_json: {:.2}s ({} nodes, {} edges)",
+            t_build.elapsed().as_secs_f64(),
+            graph.node_count(),
+            graph.edge_count()
+        );
+    }
 
     // Topology comparison: skip full rebuild if structure hasn't changed.
     if !existing_graph_data.is_null() {
@@ -333,12 +372,27 @@ pub(crate) fn rebuild_code_inner(
         }
     }
 
+    let t_cluster = std::time::Instant::now();
     let previous_community_map = node_community_map(&existing_graph_data);
     let mut communities = cluster(&graph, 1.0, None);
     if !previous_community_map.is_empty() {
         communities = remap_communities_to_previous(&communities, &previous_community_map);
     }
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] cluster: {:.2}s ({} communities)",
+            t_cluster.elapsed().as_secs_f64(),
+            communities.len()
+        );
+    }
+    let t_cohesion = std::time::Instant::now();
     let _cohesion = score_all(&graph, &communities);
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] score_all: {:.2}s",
+            t_cohesion.elapsed().as_secs_f64()
+        );
+    }
 
     // Labels: start from persistent labels file, fill gaps with defaults.
     let labels_file = out.join(".graphify_labels.json");
@@ -362,11 +416,18 @@ pub(crate) fn rebuild_code_inner(
             .or_insert_with(|| format!("Community {cid}"));
     }
 
+    let t_analysis = std::time::Instant::now();
     let mut analysis = build_analysis(&graph, &communities, watch_path);
     // Override the auto-derived "root" with the human-readable label so the
     // report header reads `# Graph Report - {label}` instead of an absolute path.
     if let Some(obj) = analysis.as_object_mut() {
         obj.insert("root".to_string(), Value::String(report_root.clone()));
+    }
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] build_analysis: {:.2}s",
+            t_analysis.elapsed().as_secs_f64()
+        );
     }
 
     // Write graph to a temp file first, then atomically replace.
@@ -378,6 +439,7 @@ pub(crate) fn rebuild_code_inner(
         attach_hyperedges(&mut graph_with_hyper, hyper);
     }
 
+    let t_to_json = std::time::Instant::now();
     let json_written = to_json(
         &graph_with_hyper,
         &communities,
@@ -386,6 +448,9 @@ pub(crate) fn rebuild_code_inner(
         commit.as_deref(),
     )
     .map_err(|e| WatchError::Pipeline(e.to_string()))?;
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!("[perf] to_json: {:.2}s", t_to_json.elapsed().as_secs_f64());
+    }
 
     if !json_written {
         return Ok(false);
@@ -418,7 +483,14 @@ pub(crate) fn rebuild_code_inner(
     };
 
     let report_path = out.join("GRAPH_REPORT.md");
+    let t_report = std::time::Instant::now();
     let report_content = graphify_report::render_report(&graph_with_hyper, &analysis);
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf] render_report: {:.2}s",
+            t_report.elapsed().as_secs_f64()
+        );
+    }
     let same_report = if report_path.exists() {
         if let Ok(old) = std::fs::read_to_string(&report_path) {
             report_for_compare(&old) == report_for_compare(&report_content)
@@ -485,14 +557,19 @@ pub(crate) fn rebuild_code_inner(
     if !no_change {
         let labels_for_html: IndexMap<i64, String> = labels.clone();
         let html_path = out.join("graph.html");
-        match to_html(
+        let t_html = std::time::Instant::now();
+        let html_result = to_html(
             &graph_with_hyper,
             &communities,
             &html_path,
             Some(&labels_for_html),
             None,
             None,
-        ) {
+        );
+        if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+            eprintln!("[perf] to_html: {:.2}s", t_html.elapsed().as_secs_f64());
+        }
+        match html_result {
             Ok(()) => html_written = true,
             Err(e) => {
                 println!("[graphify watch] Skipped graph.html: {e}");

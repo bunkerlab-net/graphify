@@ -232,29 +232,60 @@ fn path_to_forward_slash(path: &Path) -> String {
 }
 
 /// Returns `true` if `rel` (forward-slash relative path) or any of its prefix segments matches pattern `p`.
+///
+/// Optimised to avoid per-segment allocations: instead of joining
+/// `parts[..=i]` into a new `String` to form a prefix, we slice into the
+/// existing `rel` string using `/` offsets. This is the hottest function
+/// inside the per-file `is_ignored` check on large corpora.
 fn rel_matches(rel: &str, target_name: &str, p: &str) -> bool {
-    let parts: Vec<&str> = rel.split('/').collect();
     if fnmatch(rel, p) {
         return true;
     }
     if fnmatch(target_name, p) {
         return true;
     }
-    for i in 0..parts.len() {
-        if fnmatch(parts[i], p) {
-            return true;
-        }
-        let prefix = parts[..=i].join("/");
-        if fnmatch(&prefix, p) {
-            return true;
+    // Walk segments by byte offset; each iteration considers both the
+    // standalone segment and the `rel[..end]` prefix containing it.
+    let bytes = rel.as_bytes();
+    let mut seg_start = 0usize;
+    for i in 0..=bytes.len() {
+        let at_end = i == bytes.len();
+        if at_end || bytes[i] == b'/' {
+            // Segment is rel[seg_start..i]; prefix is rel[..i].
+            let segment = &rel[seg_start..i];
+            if fnmatch(segment, p) {
+                return true;
+            }
+            let prefix = &rel[..i];
+            if fnmatch(prefix, p) {
+                return true;
+            }
+            seg_start = i + 1;
         }
     }
     false
 }
 
 /// Evaluates all patterns against `target` using last-match-wins, returning the final ignored state.
+///
+/// Optimised hot path: relative-path strings are computed once per unique
+/// anchor instead of once per pattern. The original implementation re-ran
+/// `target.strip_prefix(anchor)` + `path_to_forward_slash` for every pattern
+/// even when many patterns share the same anchor. Patterns are loaded
+/// outer-first (all patterns from one `.gitignore` are contiguous), so a
+/// single-element cache keyed on the last-seen anchor pointer is sufficient.
 fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    // Precompute `target` relative to `root` once — every non-anchored
+    // pattern reuses it.
+    let root_rel: Option<String> = target.strip_prefix(root).ok().map(path_to_forward_slash);
+
+    // Tracks the last-seen anchor pointer and its cached relativised path.
+    // Patterns are loaded outer-first, so consecutive runs of patterns from
+    // the same `.gitignore` file all share an anchor.
+    let mut last_anchor: *const PathBuf = std::ptr::null();
+    let mut last_anchor_rel: Option<String> = None;
 
     let mut result = false;
     for (anchor, pattern) in patterns {
@@ -270,23 +301,27 @@ fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
             continue;
         }
 
+        let need_anchor_rel = anchored || anchor != root;
+        let anchor_ptr = std::ptr::from_ref::<PathBuf>(anchor);
+        if need_anchor_rel && !std::ptr::eq(last_anchor, anchor_ptr) {
+            last_anchor = anchor_ptr;
+            last_anchor_rel = target.strip_prefix(anchor).ok().map(path_to_forward_slash);
+        }
+
         let matched = if anchored {
-            target.strip_prefix(anchor).ok().is_some_and(|rel| {
-                let rel_str = path_to_forward_slash(rel);
-                rel_matches(&rel_str, target_name, p)
-            })
+            last_anchor_rel
+                .as_deref()
+                .is_some_and(|rel| rel_matches(rel, target_name, p))
         } else {
-            let root_matched = target.strip_prefix(root).ok().is_some_and(|rel| {
-                let rel_str = path_to_forward_slash(rel);
-                rel_matches(&rel_str, target_name, p)
-            });
+            let root_matched = root_rel
+                .as_deref()
+                .is_some_and(|rel| rel_matches(rel, target_name, p));
 
             let anchor_matched = !root_matched
                 && anchor != root
-                && target.strip_prefix(anchor).ok().is_some_and(|rel| {
-                    let rel_str = path_to_forward_slash(rel);
-                    rel_matches(&rel_str, target_name, p)
-                });
+                && last_anchor_rel
+                    .as_deref()
+                    .is_some_and(|rel| rel_matches(rel, target_name, p));
 
             root_matched || anchor_matched
         };

@@ -7,9 +7,14 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DetectError;
+
+/// File-count threshold above which manifest hashing is dispatched to Rayon.
+/// Below this, the sequential path avoids thread-pool overhead.
+const PARALLEL_HASH_THRESHOLD: usize = 16;
 
 /// Typed result from [`detect_incremental_with_manifest`].
 pub type IncrementalResult = (Vec<PathBuf>, Vec<PathBuf>, IndexMap<String, ManifestEntry>);
@@ -169,42 +174,66 @@ pub fn save_manifest_to_path(
         }
     }
 
-    for file_list in files.values() {
-        for f in file_list {
-            let p = Path::new(f);
-            let Some(mtime) = file_mtime(p) else {
-                continue;
-            };
-            let h = md5_file(p);
-            if h.is_empty() {
-                continue;
-            }
+    // Flatten the per-type file lists into a single ordered Vec so the
+    // hashing pass can fan out across Rayon threads in one shot.
+    let all_files: Vec<&String> = files.values().flatten().collect();
 
-            let prev = existing.get(f).cloned().unwrap_or(ManifestEntry {
-                mtime: 0.0,
-                ast_hash: String::new(),
-                semantic_hash: String::new(),
-            });
+    // Hash the files (md5 + mtime stat). Per-file work is fully independent,
+    // so parallelism is safe; the merging step runs sequentially below so the
+    // resulting IndexMap retains insertion order.
+    let hashed: Vec<(String, f64, String)> = if all_files.len() >= PARALLEL_HASH_THRESHOLD {
+        all_files
+            .par_iter()
+            .filter_map(|f| {
+                let p = Path::new(f.as_str());
+                let mtime = file_mtime(p)?;
+                let h = md5_file(p);
+                if h.is_empty() {
+                    return None;
+                }
+                Some(((*f).clone(), mtime, h))
+            })
+            .collect()
+    } else {
+        all_files
+            .iter()
+            .filter_map(|f| {
+                let p = Path::new(f.as_str());
+                let mtime = file_mtime(p)?;
+                let h = md5_file(p);
+                if h.is_empty() {
+                    return None;
+                }
+                Some(((*f).clone(), mtime, h))
+            })
+            .collect()
+    };
 
-            let entry = match kind {
-                "ast" => ManifestEntry {
-                    mtime,
-                    ast_hash: h,
-                    semantic_hash: prev.semantic_hash,
-                },
-                "semantic" => ManifestEntry {
-                    mtime,
-                    ast_hash: prev.ast_hash,
-                    semantic_hash: h,
-                },
-                _ => ManifestEntry {
-                    mtime,
-                    ast_hash: h.clone(),
-                    semantic_hash: h,
-                },
-            };
-            manifest.insert(f.clone(), entry);
-        }
+    for (f, mtime, h) in hashed {
+        let prev = existing.get(&f).cloned().unwrap_or(ManifestEntry {
+            mtime: 0.0,
+            ast_hash: String::new(),
+            semantic_hash: String::new(),
+        });
+
+        let entry = match kind {
+            "ast" => ManifestEntry {
+                mtime,
+                ast_hash: h,
+                semantic_hash: prev.semantic_hash,
+            },
+            "semantic" => ManifestEntry {
+                mtime,
+                ast_hash: prev.ast_hash,
+                semantic_hash: h,
+            },
+            _ => ManifestEntry {
+                mtime,
+                ast_hash: h.clone(),
+                semantic_hash: h,
+            },
+        };
+        manifest.insert(f, entry);
     }
 
     if let Some(parent) = manifest_path.parent() {
@@ -239,9 +268,9 @@ pub fn detect_incremental_with_manifest(
 
     let all_current: Vec<String> = full.files.values().flatten().cloned().collect();
 
-    let mut changed: Vec<PathBuf> = Vec::new();
-
-    for f in &all_current {
+    // Fan out the per-file change check across Rayon threads. Each file's
+    // mtime/hash comparison is independent and dominated by I/O.
+    let change_check = |f: &String| -> Option<PathBuf> {
         let p = Path::new(f);
         let stored = manifest.get(f);
         let current_mtime: f64 = file_mtime(p).unwrap_or(0.0);
@@ -257,7 +286,6 @@ pub fn detect_incremental_with_manifest(
                 if stored_hash.is_empty() {
                     true
                 } else if (current_mtime - entry.mtime).abs() > f64::EPSILON {
-                    // mtime bumped — verify with content hash
                     md5_file(p) != *stored_hash
                 } else {
                     false
@@ -266,9 +294,17 @@ pub fn detect_incremental_with_manifest(
         };
 
         if file_changed {
-            changed.push(PathBuf::from(f));
+            Some(PathBuf::from(f))
+        } else {
+            None
         }
-    }
+    };
+
+    let changed: Vec<PathBuf> = if all_current.len() >= PARALLEL_HASH_THRESHOLD {
+        all_current.par_iter().filter_map(change_check).collect()
+    } else {
+        all_current.iter().filter_map(change_check).collect()
+    };
 
     // Files in manifest that no longer exist → deleted
     let current_set: std::collections::HashSet<&str> =
@@ -279,20 +315,37 @@ pub fn detect_incremental_with_manifest(
         .map(PathBuf::from)
         .collect();
 
-    // Build updated manifest from current state.
+    // Hash changed files in parallel; merge into the updated map sequentially
+    // afterwards so entry insertion order matches the input.
+    let rehashed: Vec<(String, f64, String)> = if changed.len() >= PARALLEL_HASH_THRESHOLD {
+        changed
+            .par_iter()
+            .map(|f| {
+                let p = f.as_path();
+                let mtime = file_mtime(p).unwrap_or(0.0);
+                let h = md5_file(p);
+                (f.to_string_lossy().into_owned(), mtime, h)
+            })
+            .collect()
+    } else {
+        changed
+            .iter()
+            .map(|f| {
+                let p = f.as_path();
+                let mtime = file_mtime(p).unwrap_or(0.0);
+                let h = md5_file(p);
+                (f.to_string_lossy().into_owned(), mtime, h)
+            })
+            .collect()
+    };
+
     let mut updated: IndexMap<String, ManifestEntry> = manifest.clone();
-    for f in &changed {
-        let p = f.as_path();
-        let mtime = file_mtime(p).unwrap_or(0.0);
-        let h = md5_file(p);
-        let prev = updated
-            .get(f.to_string_lossy().as_ref())
-            .cloned()
-            .unwrap_or(ManifestEntry {
-                mtime: 0.0,
-                ast_hash: String::new(),
-                semantic_hash: String::new(),
-            });
+    for (key, mtime, h) in rehashed {
+        let prev = updated.get(&key).cloned().unwrap_or(ManifestEntry {
+            mtime: 0.0,
+            ast_hash: String::new(),
+            semantic_hash: String::new(),
+        });
         let entry = match kind {
             "semantic" => ManifestEntry {
                 mtime,
@@ -310,7 +363,7 @@ pub fn detect_incremental_with_manifest(
                 semantic_hash: h,
             },
         };
-        updated.insert(f.to_string_lossy().into_owned(), entry);
+        updated.insert(key, entry);
     }
     // Remove deleted files from updated manifest
     for d in &deleted {

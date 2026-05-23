@@ -5,6 +5,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use ignore_walk::{WalkBuilder, WalkState};
+use rayon::prelude::*;
 
 use crate::extensions::{FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
 use crate::ignore::{
@@ -13,6 +17,60 @@ use crate::ignore::{
 };
 use crate::office::{convert_office_file, xlsx_to_markdown};
 use crate::sensitive::{SKIP_FILES, is_noise_dir, is_sensitive};
+
+/// File-count threshold above which word counting is dispatched to Rayon.
+const PARALLEL_COUNT_THRESHOLD: usize = 64;
+
+/// Classification verdict for one file, produced by the parallel Phase 1a
+/// scan in [`detect`]. The downstream serial merge dispatches each variant
+/// without touching shared mutable state until that point.
+enum FileDecision {
+    /// File is filtered out (ignored, converted sidecar, unclassifiable).
+    Skip,
+    /// File is sensitive — record its display string in `skipped_sensitive`.
+    Sensitive(String),
+    /// File classifies directly as `ftype`; word count is deferred to Phase 2.
+    Direct(FileType),
+    /// Google Workspace shortcut (`.gdoc`/`.gsheet`/...) — needs conversion.
+    GoogleWorkspace(String, FileType),
+    /// Office document (`.docx`/`.xlsx`) — needs conversion.
+    Office(FileType),
+}
+
+/// Pure per-file classification used by [`detect`]'s Phase 1a Rayon scan.
+fn classify_one(
+    p: &Path,
+    root: &Path,
+    memory_dir: &Path,
+    converted_dir: &Path,
+    ignore_patterns: &IgnorePatterns,
+) -> FileDecision {
+    let in_memory = memory_dir.exists() && p.starts_with(memory_dir);
+    if !in_memory && p.starts_with(converted_dir) {
+        return FileDecision::Skip;
+    }
+    if is_ignored(p, root, ignore_patterns) {
+        return FileDecision::Skip;
+    }
+    if is_sensitive(p) {
+        return FileDecision::Sensitive(p.to_string_lossy().into_owned());
+    }
+    let Some(ftype) = classify_file(p) else {
+        return FileDecision::Skip;
+    };
+    let ext_lower = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+    if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext_lower.as_str()) {
+        return FileDecision::GoogleWorkspace(ext_lower, ftype);
+    }
+    if ext_lower == "docx" || ext_lower == "xlsx" {
+        return FileDecision::Office(ftype);
+    }
+    FileDecision::Direct(ftype)
+}
 
 /// Convertible Google Workspace extensions (matches
 /// `graphify_google::GOOGLE_WORKSPACE_EXTENSIONS`, with leading dots stripped).
@@ -69,6 +127,112 @@ struct WalkCtx<'a> {
     follow_symlinks: bool,
     ignore_patterns: &'a IgnorePatterns,
     include_patterns: &'a IgnorePatterns,
+}
+
+/// Per-thread collector for the parallel walker. Each Rayon worker owns one
+/// of these; on drop the local buffer is appended to the shared `Vec` under
+/// a single mutex acquisition per thread instead of per file.
+struct LocalBuffer {
+    local: Vec<PathBuf>,
+    shared: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl Drop for LocalBuffer {
+    fn drop(&mut self) {
+        if self.local.is_empty() {
+            return;
+        }
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        shared.append(&mut self.local);
+    }
+}
+
+/// Parallel directory walker using `ignore::WalkBuilder::build_parallel`.
+///
+/// Standard `ignore` filters (hidden, gitignore, etc.) are disabled — graphify
+/// applies its own `ignore_patterns` via `filter_entry`. Returns files in
+/// non-deterministic order; callers that depend on stable ordering must sort
+/// the result. Empty `Vec` on filesystem errors during the walk.
+fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> Vec<PathBuf> {
+    let shared: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let mut builder = WalkBuilder::new(dir);
+    builder
+        .standard_filters(false) // graphify applies its own ignore logic
+        .follow_links(ctx.follow_symlinks)
+        .threads(0); // 0 → ignore::walk picks rayon's default thread count
+
+    let root = ctx.root.to_path_buf();
+    let ignore_patterns = ctx.ignore_patterns.clone();
+    let include_patterns = ctx.include_patterns.clone();
+    builder.filter_entry(move |entry| {
+        let file_type = entry.file_type();
+        let is_dir = file_type.is_some_and(|ft| ft.is_dir());
+        if !is_dir {
+            // Per-file pruning is handled in `classify_one` later; let the
+            // walker emit the file so we can decide there. Returning true
+            // would still emit but we'd lose the noise-dir pruning of
+            // sibling subdirs underneath this entry — which doesn't apply
+            // to non-dirs anyway.
+            return true;
+        }
+        let path = entry.path();
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if is_noise_dir(dir_name) {
+            return false;
+        }
+        let has_negation = ignore_patterns.iter().any(|(_, p)| p.starts_with('!'));
+        if !has_negation
+            && is_ignored(path, &root, &ignore_patterns)
+            && !could_contain_included_path(path, &root, &include_patterns)
+        {
+            return false;
+        }
+        true
+    });
+
+    let walker = builder.build_parallel();
+    walker.run(|| {
+        let mut buf = LocalBuffer {
+            local: Vec::new(),
+            shared: Arc::clone(&shared),
+        };
+        Box::new(move |result| {
+            let Ok(entry) = result else {
+                return WalkState::Continue;
+            };
+            let Some(ft) = entry.file_type() else {
+                return WalkState::Continue;
+            };
+            // The walker emits both files and symlinks; treat symlinks-to-files
+            // the same way the sequential walker did.
+            let path = entry.path();
+            let is_regular_file = ft.is_file();
+            let is_symlink_to_file = ft.is_symlink()
+                && !ctx.follow_symlinks
+                && std::fs::metadata(path).is_ok_and(|m| m.is_file());
+            if !is_regular_file && !is_symlink_to_file {
+                return WalkState::Continue;
+            }
+            let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if SKIP_FILES.contains(fname) {
+                return WalkState::Continue;
+            }
+            buf.local.push(path.to_path_buf());
+            WalkState::Continue
+        })
+    });
+
+    // walker.run is synchronous; by the time it returns, every per-worker
+    // Box (and its captured LocalBuffer) has been dropped, so no other Arc
+    // clones remain. We take the inner Vec under the lock to avoid a clone.
+    let mut guard = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::mem::take(&mut *guard)
 }
 
 /// Recursively collect all files under `dir`, respecting ignore/include patterns and noise-dir pruning.
@@ -203,6 +367,7 @@ fn build_warning(total_words: u64, total_files: usize) -> Option<String> {
 ///
 /// Mirrors Python's `detect()` function.
 #[must_use]
+#[allow(clippy::too_many_lines)] // single-pass walk + classify; splitting would obscure flow.
 pub fn detect(
     root: &Path,
     follow_symlinks: Option<bool>,
@@ -245,8 +410,30 @@ pub fn detect(
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut all_files: Vec<PathBuf> = Vec::new();
 
+    let t_walk = std::time::Instant::now();
     for (scan_root, in_memory) in &scan_paths {
-        walk_dir(&ctx, scan_root, *in_memory, &mut seen, &mut all_files);
+        if *in_memory {
+            // The in-memory sidecar tree disables noise-dir and ignore filtering;
+            // the existing sequential walker carries those rules.
+            walk_dir(&ctx, scan_root, *in_memory, &mut seen, &mut all_files);
+        } else {
+            // Main project tree: dispatch to the parallel walker. Deduplication
+            // against `seen` runs once after the parallel scan to keep the
+            // critical section cheap inside the workers.
+            let found = walk_dir_parallel(&ctx, scan_root);
+            for p in found {
+                if seen.insert(p.clone()) {
+                    all_files.push(p);
+                }
+            }
+        }
+    }
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf]   walk_dir: {:.2}s ({} files)",
+            t_walk.elapsed().as_secs_f64(),
+            all_files.len()
+        );
     }
 
     let mut files: HashMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
@@ -257,56 +444,92 @@ pub fn detect(
     let mut total_words: u64 = 0;
     let mut skipped_sensitive: Vec<String> = Vec::new();
 
-    for p in &all_files {
-        let in_memory = memory_dir.exists() && p.starts_with(&memory_dir);
+    let t_phase1 = std::time::Instant::now();
+    // Phase 1a (parallel): classify + filter each file. This is the hot path
+    // because gitignore matching runs against potentially hundreds of
+    // patterns per file, and on a large corpus the walk surfaces 100k+ files.
+    // The classification produces an owned `FileDecision` enum with no
+    // shared mutable state, so it fans out cleanly across Rayon.
+    let decisions: Vec<FileDecision> = if all_files.len() >= PARALLEL_COUNT_THRESHOLD {
+        all_files
+            .par_iter()
+            .map(|p| classify_one(p, &root, &memory_dir, &converted_dir, &ignore_patterns))
+            .collect()
+    } else {
+        all_files
+            .iter()
+            .map(|p| classify_one(p, &root, &memory_dir, &converted_dir, &ignore_patterns))
+            .collect()
+    };
 
-        if !in_memory && p.starts_with(&converted_dir) {
-            continue;
+    // Phase 1b (sequential): consume decisions in order, dispatch sidecar
+    // conversions, and assemble the per-type file map. Sidecar writes are
+    // kept serial to avoid races on shared output directories.
+    let mut to_count: Vec<(PathBuf, FileType)> = Vec::new();
+    for (p, decision) in all_files.iter().zip(decisions) {
+        match decision {
+            FileDecision::Skip => {}
+            FileDecision::Sensitive(rendered) => skipped_sensitive.push(rendered),
+            FileDecision::Direct(ftype) => {
+                files
+                    .entry(ftype.as_str().to_string())
+                    .or_default()
+                    .push(p.to_string_lossy().into_owned());
+                to_count.push((p.clone(), ftype));
+            }
+            FileDecision::GoogleWorkspace(ext_lower, ftype) => {
+                let mut convert_ctx = ConvertCtx {
+                    root: &root,
+                    converted_dir: &converted_dir,
+                    ignore_patterns: &ignore_patterns,
+                    files: &mut files,
+                    to_count: &mut to_count,
+                    skipped_sensitive: &mut skipped_sensitive,
+                };
+                convert_google_workspace(&mut convert_ctx, p, &ext_lower, ftype, google_workspace);
+            }
+            FileDecision::Office(ftype) => {
+                let mut convert_ctx = ConvertCtx {
+                    root: &root,
+                    converted_dir: &converted_dir,
+                    ignore_patterns: &ignore_patterns,
+                    files: &mut files,
+                    to_count: &mut to_count,
+                    skipped_sensitive: &mut skipped_sensitive,
+                };
+                convert_office(&mut convert_ctx, p, ftype);
+            }
         }
-
-        if is_ignored(p, &root, &ignore_patterns) {
-            continue;
-        }
-
-        if is_sensitive(p) {
-            skipped_sensitive.push(p.to_string_lossy().into_owned());
-            continue;
-        }
-
-        let Some(ftype) = classify_file(p) else {
-            continue;
-        };
-
-        let ext_lower = p
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase)
-            .unwrap_or_default();
-        let mut convert_ctx = ConvertCtx {
-            root: &root,
-            converted_dir: &converted_dir,
-            ignore_patterns: &ignore_patterns,
-            files: &mut files,
-            total_words: &mut total_words,
-            skipped_sensitive: &mut skipped_sensitive,
-        };
-        if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext_lower.as_str()) {
-            convert_google_workspace(&mut convert_ctx, p, &ext_lower, ftype, google_workspace);
-            continue;
-        }
-        if ext_lower == "docx" || ext_lower == "xlsx" {
-            convert_office(&mut convert_ctx, p, ftype);
-            continue;
-        }
-
-        let ftype_key = ftype.as_str().to_string();
-        total_words += count_words(p, ftype);
-        files
-            .entry(ftype_key)
-            .or_default()
-            .push(p.to_string_lossy().into_owned());
     }
 
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf]   walk Phase 1 (classify+convert): {:.2}s ({} to_count)",
+            t_phase1.elapsed().as_secs_f64(),
+            to_count.len()
+        );
+    }
+    let t_phase2 = std::time::Instant::now();
+    // Phase 2 (parallel): word counting is pure I/O + UTF-8 split. Order of
+    // accumulation doesn't matter — we only sum the result.
+    total_words += if to_count.len() >= PARALLEL_COUNT_THRESHOLD {
+        to_count
+            .par_iter()
+            .map(|(p, ftype)| count_words(p, *ftype))
+            .sum::<u64>()
+    } else {
+        to_count
+            .iter()
+            .map(|(p, ftype)| count_words(p, *ftype))
+            .sum::<u64>()
+    };
+
+    if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
+        eprintln!(
+            "[perf]   walk Phase 2 (word counts): {:.2}s",
+            t_phase2.elapsed().as_secs_f64()
+        );
+    }
     let total_files: usize = files.values().map(Vec::len).sum();
     let needs_graph = total_words >= CORPUS_WARN_THRESHOLD;
     let warning = build_warning(total_words, total_files);
@@ -343,21 +566,22 @@ struct ConvertCtx<'a> {
     converted_dir: &'a Path,
     ignore_patterns: &'a IgnorePatterns,
     files: &'a mut HashMap<String, Vec<String>>,
-    total_words: &'a mut u64,
+    to_count: &'a mut Vec<(PathBuf, FileType)>,
     skipped_sensitive: &'a mut Vec<String>,
 }
 
 impl ConvertCtx<'_> {
-    /// Register a converted sidecar file, counting its words and adding it to the file map.
+    /// Register a converted sidecar file. Word counting is deferred to a
+    /// parallel pass after all conversions have completed.
     fn record(&mut self, md_path: &Path, ftype: FileType) {
         if is_ignored(md_path, self.root, self.ignore_patterns) {
             return;
         }
-        *self.total_words += count_words(md_path, ftype);
         self.files
             .entry(ftype.as_str().to_string())
             .or_default()
             .push(md_path.to_string_lossy().into_owned());
+        self.to_count.push((md_path.to_path_buf(), ftype));
     }
 }
 

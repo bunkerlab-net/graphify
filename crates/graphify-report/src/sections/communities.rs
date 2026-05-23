@@ -31,6 +31,7 @@ pub(crate) fn render_nav_hubs(
 }
 
 /// Render the per-community detail blocks.
+#[allow(clippy::too_many_arguments)] // adding `degrees` is required to avoid recomputing per call.
 pub(crate) fn render_communities(
     lines: &mut Vec<String>,
     graph: &Graph,
@@ -39,6 +40,7 @@ pub(crate) fn render_communities(
     community_labels: &HashMap<i64, &str>,
     thin_count_summary: usize,
     min_community_size: usize,
+    degrees: &HashMap<String, usize>,
 ) {
     lines.push(String::new());
     lines.push(format!(
@@ -51,7 +53,10 @@ pub(crate) fn render_communities(
             .copied()
             .map_or_else(|| format!("Community {cid}"), ToString::to_string);
         let score = cohesion_scores.get(cid).copied().unwrap_or(0.0);
-        let real_nodes: Vec<&&str> = nodes.iter().filter(|n| !is_file_node(graph, n)).collect();
+        let real_nodes: Vec<&&str> = nodes
+            .iter()
+            .filter(|n| !is_file_node(graph, n, degrees))
+            .collect();
         if real_nodes.is_empty() || real_nodes.len() < min_community_size {
             continue;
         }

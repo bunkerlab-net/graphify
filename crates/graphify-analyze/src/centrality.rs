@@ -5,7 +5,7 @@
 //! `build_neighbor_indices`, and `cohesion_score`.
 
 use graphify_build::Graph;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 
 /// Compute degree (count of incident edges) for every node.
 ///
@@ -257,48 +257,4 @@ pub(crate) fn edge_betweenness_centrality(graph: &Graph) -> Vec<((String, String
         .into_iter()
         .map(|((u, v), b)| ((idx_to_node[u].clone(), idx_to_node[v].clone()), b * scale))
         .collect()
-}
-
-/// Compute cohesion score for a community.
-///
-/// Ratio of actual intra-community edges to maximum possible.
-/// Inlined from `graphify-cluster/src/cohesion.rs` since the cluster crate
-/// is still a stub and doesn't expose this function.
-#[allow(clippy::cast_precision_loss)] // community sizes fit well within f64 mantissa in practice
-pub(crate) fn cohesion_score(graph: &Graph, community_nodes: &[String]) -> f64 {
-    let n = community_nodes.len();
-    if n <= 1 {
-        return 1.0;
-    }
-    let node_set: IndexSet<&str> = community_nodes.iter().map(String::as_str).collect();
-    let directed = graph.kind.is_directed();
-    let mut actual: usize = 0;
-    if directed {
-        use std::collections::HashSet;
-        let mut seen: HashSet<(String, String)> = HashSet::new();
-        for edge in graph.edges() {
-            if node_set.contains(edge.source.as_str()) && node_set.contains(edge.target.as_str()) {
-                let key = if edge.source <= edge.target {
-                    (edge.source.clone(), edge.target.clone())
-                } else {
-                    (edge.target.clone(), edge.source.clone())
-                };
-                if seen.insert(key) {
-                    actual += 1;
-                }
-            }
-        }
-    } else {
-        for edge in graph.edges() {
-            if node_set.contains(edge.source.as_str()) && node_set.contains(edge.target.as_str()) {
-                actual += 1;
-            }
-        }
-    }
-    let possible = (n * (n - 1)) as f64 / 2.0;
-    if possible > 0.0 {
-        actual as f64 / possible
-    } else {
-        0.0
-    }
 }

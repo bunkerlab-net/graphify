@@ -10,8 +10,6 @@ use indexmap::{IndexMap, IndexSet};
 use serde_json::Value;
 use std::path::Path;
 
-use crate::centrality::all_degrees;
-
 // ── Language family table ─────────────────────────────────────────────────────
 
 /// Extension → language family, for cross-language suppression logic.
@@ -75,8 +73,17 @@ pub(crate) static JSON_NOISE_LABELS: std::sync::LazyLock<IndexSet<&'static str>>
 
 /// Return true if a node is a file-level hub or AST method stub.
 ///
+/// Requires a precomputed `degrees` map (use [`crate::centrality::all_degrees`]).
+/// The previous version recomputed `all_degrees(graph)` *inside this function*
+/// every time it was called — at 25k callers per build, that O(C × (N+E))
+/// shape dominated the entire `update` pipeline.
+///
 /// Mirrors Python `_is_file_node`.
-pub(crate) fn is_file_node(graph: &Graph, node_id: &str) -> bool {
+pub(crate) fn is_file_node(
+    graph: &Graph,
+    node_id: &str,
+    degrees: &indexmap::IndexMap<String, usize>,
+) -> bool {
     let Some(attrs) = graph.node_data(node_id) else {
         return false;
     };
@@ -103,11 +110,8 @@ pub(crate) fn is_file_node(graph: &Graph, node_id: &str) -> bool {
         return true;
     }
     // Module-level function stub: "function_name()" with degree <= 1
-    if label.ends_with("()") {
-        let deg = all_degrees(graph);
-        if deg.get(node_id).copied().unwrap_or(0) <= 1 {
-            return true;
-        }
+    if label.ends_with("()") && degrees.get(node_id).copied().unwrap_or(0) <= 1 {
+        return true;
     }
     false
 }

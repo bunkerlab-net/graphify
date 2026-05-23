@@ -13,6 +13,7 @@ graphify-cluster = { workspace = true }
 graphify-detect = { workspace = true }
 indexmap = { workspace = true }
 petgraph = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

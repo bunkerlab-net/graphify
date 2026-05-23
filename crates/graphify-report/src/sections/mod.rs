@@ -11,6 +11,8 @@ pub mod suggestions;
 pub mod surprises;
 pub mod tokens;
 
+use std::collections::HashMap;
+
 use graphify_build::Graph;
 use serde_json::Value;
 
@@ -20,12 +22,33 @@ use serde_json::Value;
 // and `report.py` calls them directly on `G`.
 // ---------------------------------------------------------------------------
 
+/// Precomputed per-node degree map. Building it is `O(E)`; every consumer
+/// (`is_file_node`, isolated-node detection, etc.) then runs in `O(1)` per
+/// lookup. The previous shape called `node_degree(graph, id)` inside hot
+/// loops — `O(N × E)` total — which on a 25k-node / 36k-edge corpus added
+/// ~2s of pure waste to every report render.
+#[must_use]
+pub(crate) fn compute_degrees(graph: &Graph) -> HashMap<String, usize> {
+    let mut degrees: HashMap<String, usize> = HashMap::with_capacity(graph.node_count());
+    for edge in graph.edges() {
+        *degrees.entry(edge.source.clone()).or_insert(0) += 1;
+        if edge.target != edge.source {
+            *degrees.entry(edge.target.clone()).or_insert(0) += 1;
+        }
+    }
+    degrees
+}
+
 /// Return `true` if `node_id` is a structural file hub, method stub, or
 /// low-degree function stub — rather than a real semantic entity.
 ///
+/// Requires a precomputed `degrees` map (see [`compute_degrees`]). The
+/// previous version called `node_degree(graph, node_id)` inline, which on
+/// large graphs was the dominant cost of report generation.
+///
 /// These nodes are excluded from god-node lists, surprise scores, and community
 /// displays.  Mirrors `graphify-py/graphify/analyze.py` `_is_file_node`.
-pub(crate) fn is_file_node(graph: &Graph, node_id: &str) -> bool {
+pub(crate) fn is_file_node(graph: &Graph, node_id: &str, degrees: &HashMap<String, usize>) -> bool {
     let Some(attrs) = graph.node_data(node_id) else {
         return false;
     };
@@ -52,7 +75,7 @@ pub(crate) fn is_file_node(graph: &Graph, node_id: &str) -> bool {
         return true;
     }
     // Module-level function stub: `name()` with degree <= 1.
-    if label.ends_with("()") && node_degree(graph, node_id) <= 1 {
+    if label.ends_with("()") && degrees.get(node_id).copied().unwrap_or(0) <= 1 {
         return true;
     }
     false
@@ -78,12 +101,4 @@ pub(crate) fn is_concept_node(graph: &Graph, node_id: &str) -> bool {
     // No file extension in the last path component → concept label, not a real file.
     let last = source.rsplit('/').next().unwrap_or(source);
     !last.contains('.')
-}
-
-/// Count how many edges involve `node_id` (undirected degree).
-pub(crate) fn node_degree(graph: &Graph, node_id: &str) -> usize {
-    graph
-        .edges()
-        .filter(|e| e.source == node_id || e.target == node_id)
-        .count()
 }

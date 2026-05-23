@@ -480,10 +480,17 @@ fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf])
         }
     }
 
-    // Pass 2: for each Python file, find from-imports and resolve
-    let mut new_edges: Vec<Edge> = Vec::new();
+    // Pass 2: for each Python file, find from-imports and resolve. Per-file
+    // work is independent and I/O-bound (read + tree-sitter parse), so fan
+    // out across Rayon. The seed `parser` above is dropped here; each
+    // worker thread gets its own parser via `par_iter().map_init`, since
+    // `tree_sitter::Parser` is `Send` but not cheaply clonable.
+    drop(parser);
 
-    for (result, path) in per_file.iter().zip(paths.iter()) {
+    let work: Vec<(&FileResult, &PathBuf)> = per_file.iter().zip(paths.iter()).collect();
+
+    let per_file_edges = |result: &FileResult, path: &PathBuf, parser: &mut tree_sitter::Parser| {
+        let mut local_edges: Vec<Edge> = Vec::new();
         let str_path = path.to_string_lossy().into_owned();
         let this_stem = file_stem(path);
         let this_file_nid = make_id1(&str_path);
@@ -503,17 +510,16 @@ fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf])
             .collect();
 
         if local_classes.is_empty() {
-            continue;
+            return local_edges;
         }
 
         let Ok(source) = std::fs::read(path) else {
-            continue;
+            return local_edges;
         };
         let Some(tree) = parser.parse(&source, None) else {
-            continue;
+            return local_edges;
         };
 
-        // Walk for import_from_statement nodes
         walk_imports(
             tree.root_node(),
             &source,
@@ -522,11 +528,32 @@ fn resolve_cross_file_python_imports(per_file: &[FileResult], paths: &[PathBuf])
             &bare_to_qualified,
             &local_classes,
             &str_path,
-            &mut new_edges,
+            &mut local_edges,
         );
-    }
+        local_edges
+    };
 
-    new_edges
+    let init_parser = || -> tree_sitter::Parser {
+        let mut p = tree_sitter::Parser::new();
+        let _ = p.set_language(&tree_sitter_python::LANGUAGE.into());
+        p
+    };
+
+    if work.len() >= PARALLEL_THRESHOLD {
+        work.par_iter()
+            .map_init(init_parser, |parser, (result, path)| {
+                per_file_edges(result, path, parser)
+            })
+            .reduce(Vec::new, |mut a, b| {
+                a.extend(b);
+                a
+            })
+    } else {
+        let mut parser = init_parser();
+        work.iter()
+            .flat_map(|(result, path)| per_file_edges(result, path, &mut parser))
+            .collect()
+    }
 }
 
 // ── Cross-file Java import resolution ────────────────────────────────────────
@@ -572,31 +599,72 @@ fn resolve_cross_file_java_imports(per_file: &[FileResult], paths: &[PathBuf]) -
         }
     }
 
-    // Pass 2: resolve imports
-    let mut new_edges: Vec<Edge> = Vec::new();
-    let mut seen_pairs: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
+    // Pass 2: resolve imports — fan out across Rayon. Per-file work is
+    // independent; we drop the seed parser and give each worker its own.
+    // `seen_pairs` is partitioned per-file (each thread accumulates its
+    // own pairs); the final dedupe runs sequentially after the parallel
+    // reduce so edge ordering matches the sequential implementation
+    // wherever it would have been preserved.
+    drop(parser);
 
-    for path in paths {
+    let init_parser = || -> tree_sitter::Parser {
+        let mut p = tree_sitter::Parser::new();
+        let _ = p.set_language(&tree_sitter_java::LANGUAGE.into());
+        p
+    };
+
+    let per_file_edges = |path: &PathBuf, parser: &mut tree_sitter::Parser| -> Vec<Edge> {
         let file_nid = make_id1(&path.to_string_lossy());
         let Ok(source) = std::fs::read(path) else {
-            continue;
+            return Vec::new();
         };
         let Some(tree) = parser.parse(&source, None) else {
-            continue;
+            return Vec::new();
         };
-
+        let mut local_edges = Vec::new();
+        let mut local_seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
         walk_java(
             tree.root_node(),
             &source,
             &file_nid,
             path,
             &name_to_ids,
-            &mut new_edges,
-            &mut seen_pairs,
+            &mut local_edges,
+            &mut local_seen,
         );
-    }
+        local_edges
+    };
 
+    let collected: Vec<Edge> = if paths.len() >= PARALLEL_THRESHOLD {
+        paths
+            .par_iter()
+            .map_init(init_parser, |parser, path| per_file_edges(path, parser))
+            .reduce(Vec::new, |mut a, b| {
+                a.extend(b);
+                a
+            })
+    } else {
+        let mut parser = init_parser();
+        paths
+            .iter()
+            .flat_map(|p| per_file_edges(p, &mut parser))
+            .collect()
+    };
+
+    // Global dedupe: per-file `local_seen` only guards within a single
+    // file, but the original sequential code shared `seen_pairs` across
+    // every file. Recreate that property with a final pass over the
+    // merged Vec to drop later duplicates.
+    let mut new_edges: Vec<Edge> = Vec::with_capacity(collected.len());
+    let mut seen_pairs: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    for e in collected {
+        let key = (e.source.clone(), e.target.clone());
+        if seen_pairs.insert(key) {
+            new_edges.push(e);
+        }
+    }
     new_edges
 }
 
@@ -875,31 +943,40 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         }
     }
 
-    // Convert to IndexMap for ordered serialisation
-    let nodes_out: Vec<indexmap::IndexMap<String, Value>> = all_nodes
-        .into_iter()
-        .filter_map(|n| {
-            serde_json::to_value(n).ok().and_then(|v| {
-                if let Value::Object(m) = v {
-                    Some(m.into_iter().collect())
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
-    let edges_out: Vec<indexmap::IndexMap<String, Value>> = all_edges
-        .into_iter()
-        .filter_map(|e| {
-            serde_json::to_value(e).ok().and_then(|v| {
-                if let Value::Object(m) = v {
-                    Some(m.into_iter().collect())
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+    // Convert to IndexMap for ordered serialisation. The per-item serde
+    // conversion is independent and dominates wall time on large corpora,
+    // so fan out via Rayon above the per-file threshold.
+    let to_indexmap = |v: Value| -> Option<indexmap::IndexMap<String, Value>> {
+        if let Value::Object(m) = v {
+            Some(m.into_iter().collect())
+        } else {
+            None
+        }
+    };
+    let nodes_out: Vec<indexmap::IndexMap<String, Value>> = if all_nodes.len() >= PARALLEL_THRESHOLD
+    {
+        all_nodes
+            .into_par_iter()
+            .filter_map(|n| serde_json::to_value(n).ok().and_then(to_indexmap))
+            .collect()
+    } else {
+        all_nodes
+            .into_iter()
+            .filter_map(|n| serde_json::to_value(n).ok().and_then(to_indexmap))
+            .collect()
+    };
+    let edges_out: Vec<indexmap::IndexMap<String, Value>> = if all_edges.len() >= PARALLEL_THRESHOLD
+    {
+        all_edges
+            .into_par_iter()
+            .filter_map(|e| serde_json::to_value(e).ok().and_then(to_indexmap))
+            .collect()
+    } else {
+        all_edges
+            .into_iter()
+            .filter_map(|e| serde_json::to_value(e).ok().and_then(to_indexmap))
+            .collect()
+    };
 
     ExtractOutput {
         nodes: nodes_out,
