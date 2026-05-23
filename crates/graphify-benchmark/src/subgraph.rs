@@ -43,6 +43,21 @@ pub fn query_subgraph_tokens(graph: &Graph, question: &str, depth: usize) -> usi
         return 0;
     }
 
+    // Build an adjacency map once (`O(|edges|)`) so BFS is `O(edges_traversed)`
+    // per depth iteration rather than re-scanning every edge for every
+    // frontier node.
+    let mut adjacency: indexmap::IndexMap<&str, Vec<&str>> = indexmap::IndexMap::new();
+    for edge in graph.edges() {
+        adjacency
+            .entry(edge.source.as_str())
+            .or_default()
+            .push(edge.target.as_str());
+        adjacency
+            .entry(edge.target.as_str())
+            .or_default()
+            .push(edge.source.as_str());
+    }
+
     let mut visited: indexmap::IndexSet<&str> = start_nodes.iter().copied().collect();
     let mut frontier: indexmap::IndexSet<&str> = start_nodes.iter().copied().collect();
     let mut edges_seen: Vec<(&str, &str)> = Vec::new();
@@ -50,17 +65,11 @@ pub fn query_subgraph_tokens(graph: &Graph, question: &str, depth: usize) -> usi
     for _ in 0..depth {
         let mut next_frontier: indexmap::IndexSet<&str> = indexmap::IndexSet::new();
         for &n in &frontier {
-            for edge in graph.edges() {
-                let neighbor = if edge.source == n {
-                    Some(edge.target.as_str())
-                } else if edge.target == n {
-                    Some(edge.source.as_str())
-                } else {
-                    None
-                };
-                if let Some(nb) = neighbor
-                    && !visited.contains(nb)
-                {
+            let Some(neighbors) = adjacency.get(n) else {
+                continue;
+            };
+            for &nb in neighbors {
+                if !visited.contains(nb) {
                     next_frontier.insert(nb);
                     edges_seen.push((n, nb));
                 }

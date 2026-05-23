@@ -24,7 +24,8 @@ pub struct QuestionResult {
 /// Successful benchmark result.
 #[derive(Debug, Clone)]
 pub struct BenchmarkResult {
-    /// Approximate corpus token count (`corpus_words` ≈ 100 → 133 tokens).
+    /// Approximate corpus token count; see `crate::tokens::estimate_tokens`
+    /// for the word-to-token conversion used.
     pub corpus_tokens: usize,
     /// Word count of the corpus (provided or estimated).
     pub corpus_words: usize,

@@ -54,11 +54,7 @@ pub fn format_benchmark(result: Option<&BenchmarkResult>) -> String {
     );
     out.push_str("\n  Per question:\n");
     for p in &r.per_question {
-        let truncated = if p.question.len() > 55 {
-            &p.question[..55]
-        } else {
-            &p.question
-        };
+        let truncated: String = p.question.chars().take(55).collect();
         let _ = writeln!(out, "    [{}x] {truncated}", p.reduction);
     }
     out.push('\n');
