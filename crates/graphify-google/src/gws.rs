@@ -54,7 +54,12 @@ where
             || PathBuf::from("."),
             |p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()),
         );
-        parent.join(output.file_name().unwrap_or_default())
+        // When `output` is something like `..` it has no file_name; in that
+        // case fall back to the resolved parent so we never construct a path
+        // that ends in an empty component.
+        output
+            .file_name()
+            .map_or_else(|| parent.clone(), |name| parent.join(name))
     });
 
     let cwd = output_resolved
@@ -124,9 +129,10 @@ where
 ///
 /// Returns `None` if the binary cannot be found.
 fn which_gws() -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) { "gws.exe" } else { "gws" };
     std::env::var_os("PATH").and_then(|path_var| {
         std::env::split_paths(&path_var).find_map(|dir| {
-            let candidate = dir.join("gws");
+            let candidate = dir.join(exe_name);
             if candidate.is_file() {
                 Some(candidate)
             } else {

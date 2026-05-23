@@ -51,4 +51,18 @@ pub enum GoogleError {
         pip install graphifyy[office,google]"
     )]
     XlsxCallbackMissing,
+
+    /// The `xlsx_to_markdown` callback failed when converting a `.gsheet`
+    /// shortcut. Carries both the original shortcut path and the temp
+    /// `.xlsx` file we tried to convert.
+    #[error("xlsx-to-markdown conversion failed for {shortcut} (via {tmp}): {source}")]
+    XlsxConversion {
+        /// Path of the original `.gsheet` shortcut.
+        shortcut: PathBuf,
+        /// Path of the temporary `.xlsx` file we exported and tried to read.
+        tmp: PathBuf,
+        /// The underlying conversion error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }

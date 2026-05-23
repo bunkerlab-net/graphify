@@ -101,8 +101,9 @@ where
                 let _ = std::fs::remove_file(&tmp_path);
                 return Err(e);
             }
-            let body = cb(&tmp_path).map_err(|e| GoogleError::ReadShortcut {
-                path: tmp_path.clone(),
+            let body = cb(&tmp_path).map_err(|e| GoogleError::XlsxConversion {
+                shortcut: path.to_path_buf(),
+                tmp: tmp_path.clone(),
                 source: Box::new(e),
             })?;
             let _ = std::fs::remove_file(&tmp_path);
