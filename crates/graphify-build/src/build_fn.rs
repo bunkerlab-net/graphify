@@ -1,6 +1,7 @@
 //! Top-level [`build_from_json`] and [`build`] drivers.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use serde_json::Value;
 
@@ -8,6 +9,8 @@ use crate::dedup_label::deduplicate_by_label;
 use crate::error::BuildError;
 use crate::graph::{Graph, GraphKind};
 use crate::ingest::{add_edges, add_nodes, canonicalise_nodes};
+
+static PERF_LOG: LazyLock<bool> = LazyLock::new(|| std::env::var("GRAPHIFY_PERF_LOG").is_ok());
 
 /// Build a graph from a single extraction dict.
 ///
@@ -54,7 +57,7 @@ pub fn build_from_json(
         obj.insert("edges".into(), links);
     }
 
-    let perf = std::env::var("GRAPHIFY_PERF_LOG").is_ok();
+    let perf = *PERF_LOG;
     let t = std::time::Instant::now();
     canonicalise_nodes(&mut extraction);
     if perf {

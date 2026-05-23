@@ -62,7 +62,12 @@ pub fn deduplicate_by_label(nodes: &[Value], edges: &[Value]) -> (Vec<Value>, Ve
                 .to_string();
             let has_suffix = CHUNK_SUFFIX.is_match(&new_id);
             let existing_has_suffix = CHUNK_SUFFIX.is_match(&existing_id);
-            let new_wins = (existing_has_suffix && !has_suffix) || new_id.len() < existing_id.len();
+            // Match Python's branching: suffix presence dominates length.
+            let new_wins = if has_suffix == existing_has_suffix {
+                new_id.len() < existing_id.len()
+            } else {
+                !has_suffix
+            };
             if new_wins {
                 remap.insert(existing_id, new_id);
                 canonical.insert(key, node.clone());

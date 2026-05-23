@@ -20,6 +20,9 @@ pub fn prefix_graph_for_global(graph: &Graph, repo_tag: &str) -> Graph {
     let mut out = graph.clone();
     out.relabel_nodes(&relabel);
     for (id, attrs) in out.nodes_mut() {
+        // `repo` must always reflect the current prefix; `local_id` is
+        // preserved if a prior `prefix_graph_for_global` call already set
+        // it so the original (pre-prefix) ID is never lost on re-prefix.
         attrs.insert("repo".to_string(), Value::String(repo_tag.to_string()));
         let local = id
             .split_once("::")

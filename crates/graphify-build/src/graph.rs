@@ -83,13 +83,7 @@ impl Graph {
         if !self.kind.is_multi() {
             let directed = self.kind.is_directed();
             for edge in &mut self.edge_list {
-                let matches = if directed {
-                    edge.source == src && edge.target == tgt
-                } else {
-                    (edge.source == src && edge.target == tgt)
-                        || (edge.source == tgt && edge.target == src)
-                };
-                if matches {
+                if Self::edge_matches(directed, edge, src, tgt) {
                     edge.attrs = attrs;
                     return;
                 }
@@ -100,6 +94,15 @@ impl Graph {
             target: tgt.to_string(),
             attrs,
         });
+    }
+
+    /// `true` if `edge` connects `u` and `v` under the given directedness.
+    fn edge_matches(directed: bool, edge: &Edge, u: &str, v: &str) -> bool {
+        if directed {
+            edge.source == u && edge.target == v
+        } else {
+            (edge.source == u && edge.target == v) || (edge.source == v && edge.target == u)
+        }
     }
 
     /// Bulk insert a batch of edges, deduplicating in `O(N + E)` instead of
@@ -207,35 +210,21 @@ impl Graph {
     #[must_use]
     pub fn edge_data(&self, u: &str, v: &str) -> Option<&IndexMap<String, Value>> {
         let directed = self.kind.is_directed();
-        for edge in &self.edge_list {
-            let m = if directed {
-                edge.source == u && edge.target == v
-            } else {
-                (edge.source == u && edge.target == v) || (edge.source == v && edge.target == u)
-            };
-            if m {
-                return Some(&edge.attrs);
-            }
-        }
-        None
+        self.edge_list
+            .iter()
+            .find(|edge| Self::edge_matches(directed, edge, u, v))
+            .map(|edge| &edge.attrs)
     }
 
     /// Every edge attribute dict for `(u, v)`.
     #[must_use]
     pub fn edge_datas(&self, u: &str, v: &str) -> Vec<&IndexMap<String, Value>> {
         let directed = self.kind.is_directed();
-        let mut out = Vec::new();
-        for edge in &self.edge_list {
-            let m = if directed {
-                edge.source == u && edge.target == v
-            } else {
-                (edge.source == u && edge.target == v) || (edge.source == v && edge.target == u)
-            };
-            if m {
-                out.push(&edge.attrs);
-            }
-        }
-        out
+        self.edge_list
+            .iter()
+            .filter(|edge| Self::edge_matches(directed, edge, u, v))
+            .map(|edge| &edge.attrs)
+            .collect()
     }
 
     /// Relabel nodes in place via `mapping` (`old_id` → `new_id`).
@@ -280,14 +269,9 @@ impl Graph {
             .map(|(u, v)| (u.to_string(), v.to_string()))
             .collect();
         self.edge_list.retain(|edge| {
-            !pairs.iter().any(|(u, v)| {
-                if directed {
-                    edge.source == *u && edge.target == *v
-                } else {
-                    (edge.source == *u && edge.target == *v)
-                        || (edge.source == *v && edge.target == *u)
-                }
-            })
+            !pairs
+                .iter()
+                .any(|(u, v)| Self::edge_matches(directed, edge, u, v))
         });
     }
 }
