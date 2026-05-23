@@ -147,7 +147,25 @@ pub fn install_gemini_hook(project_dir: &Path) -> Result<String, HooksError> {
         .entry("BeforeTool")
         .or_insert_with(|| Value::Array(Vec::new()));
     if let Value::Array(arr) = before_tool {
-        arr.retain(|h| !h.to_string().contains("graphify"));
+        // Inspect the structured command strings rather than serialising the
+        // whole entry; that avoids brittle whole-object substring matches.
+        arr.retain(|h| {
+            let has_graphify = h.get("hooks").and_then(Value::as_array).map_or_else(
+                || {
+                    h.get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|c| c.contains("graphify"))
+                },
+                |inner| {
+                    inner.iter().any(|step| {
+                        step.get("command")
+                            .and_then(Value::as_str)
+                            .is_some_and(|c| c.contains("graphify"))
+                    })
+                },
+            );
+            !has_graphify
+        });
         arr.push(gemini_hook());
     }
 

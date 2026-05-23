@@ -154,10 +154,13 @@ pub(in crate::platform) fn remove_skill(skill_dst: &Path) {
 /// caller's shell perform path resolution.
 #[must_use]
 pub fn resolve_graphify_exe() -> String {
-    if let Ok(output) = std::process::Command::new("which").arg("graphify").output()
+    let cmd = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = std::process::Command::new(cmd).arg("graphify").output()
         && output.status.success()
     {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // `where` on Windows may return multiple lines; take the first.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let path = stdout.lines().next().unwrap_or("").trim().to_string();
         if !path.is_empty() {
             return path;
         }

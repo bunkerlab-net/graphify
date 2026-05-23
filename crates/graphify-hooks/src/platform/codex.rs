@@ -44,7 +44,13 @@ pub fn install_codex_hook(project_dir: &Path) -> Result<String, HooksError> {
         .ok_or_else(|| HooksError::Json("PreToolUse is not valid".to_string()))?;
 
     if let Value::Array(arr) = pre_tool {
-        arr.retain(|h| !h.to_string().contains("graphify"));
+        // Match by the structured `command` field instead of the whole
+        // serialised entry; that avoids accidental hits on unrelated fields.
+        arr.retain(|h| {
+            !h.get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|c| c.contains("graphify"))
+        });
         arr.push(hook_entry);
     }
 

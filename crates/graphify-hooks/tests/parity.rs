@@ -22,6 +22,7 @@ use graphify_hooks::{
     CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT, PYTHON_DETECT, hooks_dir_with,
     install, status, uninstall,
 };
+use serial_test::serial;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -477,6 +478,7 @@ fn test_install_settings_json_idempotent() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_uninstall_removes_settings_hook() {
     let dir = tempfile::tempdir().unwrap();
     claude_install(dir.path()).unwrap();
@@ -515,6 +517,7 @@ fn install_skill_to(tmp_path: &Path, platform: &str) -> String {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_default_claude() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "claude");
@@ -522,6 +525,7 @@ fn test_install_default_claude() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_codex() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "codex");
@@ -529,6 +533,7 @@ fn test_install_codex() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_opencode() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "opencode");
@@ -540,6 +545,7 @@ fn test_install_opencode() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_claw() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "claw");
@@ -551,6 +557,7 @@ fn test_install_claw() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_droid() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "droid");
@@ -562,6 +569,7 @@ fn test_install_droid() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_trae() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "trae");
@@ -569,6 +577,7 @@ fn test_install_trae() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_trae_cn() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "trae-cn");
@@ -580,6 +589,7 @@ fn test_install_trae_cn() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_windows() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "windows");
@@ -587,6 +597,7 @@ fn test_install_windows() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_install_unknown_platform_errors() {
     let result = install_platform_skill("unknown");
     assert!(result.is_err());
@@ -594,6 +605,7 @@ fn test_install_unknown_platform_errors() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_claude_install_registers_claude_md() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "claude");
@@ -601,6 +613,7 @@ fn test_claude_install_registers_claude_md() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_codex_install_does_not_write_claude_md() {
     let dir = tempfile::tempdir().unwrap();
     install_skill_to(dir.path(), "codex");
@@ -789,6 +802,7 @@ fn test_cursor_install_writes_rule() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_cursor_install_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     cursor_install(dir.path()).unwrap();
@@ -799,6 +813,7 @@ fn test_cursor_install_idempotent() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_cursor_uninstall_removes_rule() {
     let dir = tempfile::tempdir().unwrap();
     cursor_install(dir.path()).unwrap();
@@ -807,6 +822,7 @@ fn test_cursor_uninstall_removes_rule() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_cursor_uninstall_noop_if_not_installed() {
     let dir = tempfile::tempdir().unwrap();
     cursor_uninstall(dir.path()).unwrap(); // should not error
@@ -846,6 +862,7 @@ fn gemini_uninstall_to(project_dir: &Path, skill_home: &Path) {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_install_writes_gemini_md() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -859,6 +876,7 @@ fn test_gemini_install_writes_gemini_md() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_install_writes_hook() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -871,6 +889,7 @@ fn test_gemini_install_writes_hook() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_install_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -881,6 +900,7 @@ fn test_gemini_install_idempotent() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_install_merges_existing_gemini_md() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -892,6 +912,7 @@ fn test_gemini_install_merges_existing_gemini_md() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_uninstall_removes_section() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -901,6 +922,7 @@ fn test_gemini_uninstall_removes_section() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_uninstall_removes_hook() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -1115,6 +1137,7 @@ fn test_claude_install_upgrades_stale_hook_payload() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_agents_install_upgrades_stale_section() {
     let dir = tempfile::tempdir().unwrap();
     let agents_md = dir.path().join("AGENTS.md");
@@ -1131,6 +1154,7 @@ fn test_agents_install_upgrades_stale_section() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_gemini_install_upgrades_stale_section() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();

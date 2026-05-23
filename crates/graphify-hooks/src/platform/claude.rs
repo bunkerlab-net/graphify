@@ -119,7 +119,19 @@ pub fn install_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
         arr.retain(|h| {
             let matcher = h.get("matcher").and_then(Value::as_str).unwrap_or("");
             let is_stale_matcher = matcher == "Glob|Grep" || matcher == SETTINGS_HOOK_MATCHER;
-            let has_graphify = h.to_string().contains("graphify");
+            // Inspect nested `hooks[].command` strings instead of stringifying
+            // the whole entry, so unrelated fields can't accidentally trigger
+            // the "stale graphify hook" branch.
+            let has_graphify = h
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|inner| {
+                    inner.iter().any(|step| {
+                        step.get("command")
+                            .and_then(Value::as_str)
+                            .is_some_and(|c| c.contains("graphify"))
+                    })
+                });
             !(is_stale_matcher && has_graphify)
         });
         arr.push(settings_hook());

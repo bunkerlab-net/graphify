@@ -33,6 +33,9 @@ pub(crate) fn install_hook(
         }
         let new_content = content.trim_end().to_string() + "\n\n" + script;
         fs::write(&hook_path, new_content.as_bytes())?;
+        // Re-assert executable bits in case the existing file was created
+        // by hand without `chmod +x`.
+        set_executable(&hook_path)?;
         return Ok(format!(
             "appended to existing {name} hook at {}",
             hook_path.display()
