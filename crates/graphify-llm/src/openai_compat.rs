@@ -141,16 +141,20 @@ fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
     if let Some(re) = req.reasoning_effort {
         body["reasoning_effort"] = json!(re);
     }
+    // Build `extra_body` incrementally so disable_thinking and ollama
+    // options can coexist (assigning each one separately would overwrite
+    // the prior value).
+    let mut extra_body = serde_json::Map::new();
     if req.disable_thinking {
         // Kimi-k2.6 — disable thinking so content isn't empty.
-        body["extra_body"] = json!({"thinking": {"type": "disabled"}});
+        extra_body.insert("thinking".to_string(), json!({"type": "disabled"}));
     }
     if let Some(opts) = &req.ollama_options {
-        // Ollama — inject num_ctx + keep_alive.
-        body["extra_body"] = json!({
-            "options": {"num_ctx": opts.num_ctx},
-            "keep_alive": opts.keep_alive,
-        });
+        extra_body.insert("options".to_string(), json!({"num_ctx": opts.num_ctx}));
+        extra_body.insert("keep_alive".to_string(), json!(opts.keep_alive));
+    }
+    if !extra_body.is_empty() {
+        body["extra_body"] = Value::Object(extra_body);
     }
     body
 }

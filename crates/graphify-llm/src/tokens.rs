@@ -35,7 +35,9 @@ pub fn pack_chunks_by_tokens(
     token_budget: usize,
 ) -> Result<Vec<Vec<PathBuf>>, LlmError> {
     if token_budget == 0 {
-        return Err(LlmError::Http("token_budget must be positive".to_string()));
+        return Err(LlmError::InvalidInput(
+            "token_budget must be positive".to_string(),
+        ));
     }
 
     // Group by parent directory (preserving order).

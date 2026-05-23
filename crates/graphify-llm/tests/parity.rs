@@ -657,5 +657,5 @@ fn test_pack_chunks_by_tokens_single_chunk_for_small_files()
 fn test_pack_chunks_by_tokens_rejects_zero_budget() {
     let paths: Vec<std::path::PathBuf> = vec![];
     let err = graphify_llm::pack_chunks_by_tokens(&paths, 0).expect_err("zero budget should fail");
-    assert!(matches!(err, LlmError::Http(..)));
+    assert!(matches!(err, LlmError::InvalidInput(..)));
 }

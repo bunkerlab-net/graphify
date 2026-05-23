@@ -45,7 +45,17 @@ impl ClaudeRunner for RealClaudeRunner {
         if let Some(stdin) = child.stdin.take() {
             use std::io::Write;
             let mut w = stdin;
-            let _ = w.write_all(user_message.as_bytes());
+            if let Err(e) = w.write_all(user_message.as_bytes()) {
+                // Surface a write failure rather than letting `claude` see
+                // an empty prompt; reap the child first so we don't leak it.
+                let _ = child.kill();
+                let _ = child.wait();
+                return (
+                    String::new(),
+                    format!("write to claude stdin failed: {e}"),
+                    1,
+                );
+            }
         }
 
         match child.wait_with_output() {
@@ -95,7 +105,12 @@ impl<R: ClaudeRunner + 'static> LlmBackend for ClaudeCliBackend<R> {
         "claude-cli"
     }
 
-    /// Extracts the last user message and calls the CLI runner via [`call_claude_cli_with_runner`].
+    /// Extracts the last user message and calls the CLI runner via
+    /// [`call_claude_cli_with_runner`].
+    ///
+    /// `model` and `max_tokens` are intentionally ignored: the `claude -p`
+    /// CLI does not expose either as a flag, so the underlying runner uses
+    /// its own subscription defaults.
     fn call(
         &self,
         messages: &[serde_json::Value],

@@ -71,6 +71,8 @@ pub(crate) fn merge_responses(
     edges.extend_from_slice(&right.edges);
     let mut hyperedges = left.hyperedges.clone();
     hyperedges.extend_from_slice(&right.hyperedges);
+    let mut failed_chunk_indices = left.failed_chunk_indices.clone();
+    failed_chunk_indices.extend_from_slice(&right.failed_chunk_indices);
     LlmResponse {
         nodes,
         edges,
@@ -79,9 +81,9 @@ pub(crate) fn merge_responses(
         output_tokens: left.output_tokens + right.output_tokens,
         model: model.map_or_else(|| left.model.clone(), str::to_string),
         finish_reason: "stop".to_string(),
-        // Merge: sum elapsed, concatenate failed indices.
+        // Merge: sum elapsed, concatenate failed indices from both halves.
         elapsed_seconds: left.elapsed_seconds + right.elapsed_seconds,
-        failed_chunk_indices: vec![],
+        failed_chunk_indices,
     }
 }
 

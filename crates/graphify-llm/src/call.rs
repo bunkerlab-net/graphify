@@ -32,11 +32,15 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
 
     let key = get_backend_api_key(backend);
 
+    // Resolve once and reuse below — `OLLAMA_BASE_URL` may be needed both
+    // for the missing-key validation hook and for the actual `ollama`
+    // dispatch arm.
+    let ollama_base_url = std::env::var("OLLAMA_BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
+
     // Ollama: accept missing key, use sentinel.
     let key = if key.is_empty() && backend == "ollama" {
-        let ollama_url = std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-        ollama::validate_ollama_base_url(&ollama_url);
+        ollama::validate_ollama_base_url(&ollama_base_url);
         "ollama".to_string()
     } else {
         key
@@ -105,11 +109,7 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
         "gemini" => gemini::call_gemini_plain(&key, mdl, prompt, max_tokens_u32),
         "openai" => openai::call_openai_plain(&key, mdl, prompt, max_tokens_u32),
         "deepseek" => deepseek::call_deepseek_plain(&key, mdl, prompt, max_tokens_u32),
-        "ollama" => {
-            let base_url = std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-            ollama::call_ollama_plain(&key, &base_url, mdl, prompt, max_tokens_u32)
-        }
+        "ollama" => ollama::call_ollama_plain(&key, &ollama_base_url, mdl, prompt, max_tokens_u32),
         _ => unreachable!("backend_config already validated backend name"),
     }
 }

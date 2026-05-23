@@ -41,4 +41,8 @@ pub enum LlmError {
     /// Unknown backend name.
     #[error("Unknown backend {0:?}. Available: {1}")]
     UnknownBackend(String, String),
+
+    /// Caller-supplied input was rejected (e.g. zero token budget).
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
