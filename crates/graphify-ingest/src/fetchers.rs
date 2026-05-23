@@ -37,7 +37,18 @@ pub(crate) fn download_binary(
     target_dir: &Path,
 ) -> Result<PathBuf, IngestError> {
     let filename = safe_filename(url, suffix);
-    let out_path = target_dir.join(&filename);
+    // Apply the same `_N` collision suffix loop used by the text fetchers so
+    // binary downloads can't silently overwrite an existing file with the
+    // same slug.
+    let mut out_path = target_dir.join(&filename);
+    let mut counter: u32 = 1;
+    while out_path.exists() && counter < 1000 {
+        let stem = Path::new(&filename)
+            .file_stem()
+            .map_or_else(|| filename.clone(), |s| s.to_string_lossy().into_owned());
+        out_path = target_dir.join(format!("{stem}_{counter}{suffix}"));
+        counter += 1;
+    }
     let bytes =
         safe_fetch(url, MAX_FETCH_BYTES, FETCH_TIMEOUT).map_err(|e| IngestError::FetchFailed {
             url: url.to_string(),

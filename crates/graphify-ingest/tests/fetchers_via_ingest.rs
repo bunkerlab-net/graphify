@@ -4,6 +4,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, unsafe_code)]
 
 use graphify_ingest::ingest;
+use serial_test::serial;
 
 struct EnvGuard {
     saved: Vec<(String, Option<String>)>,
@@ -33,6 +34,7 @@ impl Drop for EnvGuard {
 }
 
 #[test]
+#[serial(graphify_test_allow_private_ips)]
 fn ingest_webpage_via_fetcher() {
     let mut server = mockito::Server::new();
     let _m = server
@@ -51,6 +53,7 @@ fn ingest_webpage_via_fetcher() {
 }
 
 #[test]
+#[serial(graphify_test_allow_private_ips)]
 fn ingest_pdf_url_downloads_binary() {
     let mut server = mockito::Server::new();
     let _m = server
@@ -68,6 +71,7 @@ fn ingest_pdf_url_downloads_binary() {
 }
 
 #[test]
+#[serial(graphify_test_allow_private_ips)]
 fn ingest_image_url_downloads_with_inferred_extension() {
     let mut server = mockito::Server::new();
     let _m = server
@@ -82,9 +86,11 @@ fn ingest_image_url_downloads_with_inferred_extension() {
     let url = format!("{}/pic.png", server.url());
     let out = ingest(&url, tmp.path(), None, None).unwrap();
     assert!(out.exists());
+    assert!(out.extension().is_some_and(|e| e == "png"));
 }
 
 #[test]
+#[serial(graphify_test_allow_private_ips)]
 fn ingest_youtube_url_errors() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
@@ -99,6 +105,7 @@ fn ingest_youtube_url_errors() {
 }
 
 #[test]
+#[serial(graphify_test_allow_private_ips)]
 fn ingest_with_existing_filename_dedups() {
     let mut server = mockito::Server::new();
     server
@@ -118,6 +125,7 @@ fn ingest_with_existing_filename_dedups() {
 }
 
 #[test]
+#[serial(graphify_test_allow_private_ips)]
 fn ingest_tweet_url_via_fetch_tweet() {
     let mut server = mockito::Server::new();
     // The fetch_tweet function calls https://publish.twitter.com/oembed?...

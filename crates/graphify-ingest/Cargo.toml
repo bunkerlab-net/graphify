@@ -23,6 +23,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 mockito = "1"
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

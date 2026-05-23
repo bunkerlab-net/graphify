@@ -27,7 +27,8 @@ pub enum IngestError {
     #[error("ingest: I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Filename collision counter exhausted after 999 attempts.
-    #[error("ingest: could not find a free filename after 999 attempts for {0:?}")]
+    /// Filename collision counter exhausted after 1000 attempts (original
+    /// filename plus `_1` through `_999`).
+    #[error("ingest: could not find a free filename after 1000 attempts for {0:?}")]
     FilenameFull(PathBuf),
 }

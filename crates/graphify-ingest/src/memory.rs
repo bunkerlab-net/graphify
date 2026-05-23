@@ -37,13 +37,18 @@ pub fn save_query_result(
         let lower = question.to_lowercase();
         let replaced = RE_NON_WORD.replace_all(&lower, "_");
         let trimmed: String = replaced.trim_matches('_').chars().take(50).collect();
-        trimmed.trim_matches('_').to_string()
+        let final_slug = trimmed.trim_matches('_');
+        if final_slug.is_empty() {
+            "query".to_string()
+        } else {
+            final_slug.to_string()
+        }
     };
     let filename = format!("query_{}_{slug}.md", now.format("%Y%m%d_%H%M%S"));
 
     let mut frontmatter_lines: Vec<String> = vec![
         "---".to_string(),
-        format!("type: \"{query_type}\""),
+        format!("type: \"{}\"", yaml_str(query_type)),
         format!("date: \"{}\"", now.to_rfc3339()),
         format!("question: \"{}\"", yaml_str(question)),
         "contributor: \"graphify\"".to_string(),
@@ -53,7 +58,7 @@ pub fn save_query_result(
         let nodes_str = nodes
             .iter()
             .take(10)
-            .map(|n| format!("\"{n}\""))
+            .map(|n| format!("\"{}\"", yaml_str(n)))
             .collect::<Vec<_>>()
             .join(", ");
         frontmatter_lines.push(format!("source_nodes: [{nodes_str}]"));
@@ -74,7 +79,9 @@ pub fn save_query_result(
         body_lines.push(String::new());
         body_lines.push("## Source Nodes".to_string());
         body_lines.push(String::new());
-        for n in nodes {
+        // Mirror the cap applied to the frontmatter list so the rendered
+        // body never drifts above the documented 10-node limit.
+        for n in nodes.iter().take(10) {
             body_lines.push(format!("- {n}"));
         }
     }
