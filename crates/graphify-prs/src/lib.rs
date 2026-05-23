@@ -146,6 +146,7 @@ pub struct PrsArgs {
 }
 
 impl Default for PrsArgs {
+    /// Returns `PrsArgs` with all options unset and a default limit of 50.
     fn default() -> Self {
         Self {
             base: None,

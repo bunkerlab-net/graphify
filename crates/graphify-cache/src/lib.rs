@@ -49,15 +49,18 @@ struct StatIndexState {
     dirty: bool,
 }
 
+/// Acquires the global stat-index mutex, panicking if the mutex is poisoned.
 fn lock_index() -> std::sync::MutexGuard<'static, StatIndexState> {
     #[allow(clippy::expect_used)] // mutex poisoning here is unrecoverable; surface the panic loudly
     STAT_INDEX.lock().expect("STAT_INDEX mutex poisoned")
 }
 
+/// Returns the output directory name, defaulting to `"graphify-out"` or the `GRAPHIFY_OUT` env override.
 fn graphify_out() -> String {
     std::env::var("GRAPHIFY_OUT").unwrap_or_else(|_| "graphify-out".to_string())
 }
 
+/// Resolves the absolute path to the graphify output directory relative to `root`.
 fn out_base(root: &Path) -> PathBuf {
     let out = PathBuf::from(graphify_out());
     if out.is_absolute() {
@@ -68,10 +71,12 @@ fn out_base(root: &Path) -> PathBuf {
     }
 }
 
+/// Returns the path to the `stat-index.json` file under the cache directory for `root`.
 fn stat_index_file(root: &Path) -> PathBuf {
     out_base(root).join("cache").join("stat-index.json")
 }
 
+/// Loads the stat index from disk into the global state if it has not already been initialised for `root`.
 fn ensure_stat_index(root: &Path) {
     let mut state = lock_index();
     if state.root.is_some() {
@@ -133,6 +138,7 @@ pub fn flush_stat_index() -> Result<(), CacheError> {
 struct FlushSentinel;
 
 impl Drop for FlushSentinel {
+    /// Flushes the stat index to disk on drop, discarding any error silently.
     fn drop(&mut self) {
         let _ = flush_stat_index();
     }
@@ -178,6 +184,7 @@ pub fn body_content(content: &[u8]) -> Vec<u8> {
     content.to_vec()
 }
 
+/// Normalises a path for cache-key consistency; lowercases and strips the `\\?\` prefix on Windows, no-ops on Unix.
 fn normalize_path(path: &Path) -> PathBuf {
     // Python's _normalize_path only does work on Windows. On Unix we return the
     // path unchanged.
@@ -264,6 +271,7 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
     Ok(digest)
 }
 
+/// Converts a `Path` to a POSIX-style forward-slash string for cross-platform hash stability.
 fn posix_string(path: &Path) -> String {
     let mut out = String::new();
     let mut first = true;

@@ -55,6 +55,12 @@ pub trait GhClient {
 pub struct ProcessGhClient;
 
 impl GhClient for ProcessGhClient {
+    /// Invokes `gh pr list --json …` and returns raw JSON bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(PrsError)` when `gh` is not found, not authenticated, or
+    /// returns a non-zero exit code.
     fn pr_list(&self, repo: Option<&str>, limit: usize) -> Result<Vec<u8>, PrsError> {
         let mut cmd = Command::new("gh");
         cmd.args([
@@ -82,6 +88,7 @@ impl GhClient for ProcessGhClient {
         Ok(out.stdout)
     }
 
+    /// Invokes `gh repo view --json defaultBranchRef` and returns the branch name.
     fn repo_default_branch(&self, repo: Option<&str>) -> Option<String> {
         let mut cmd = Command::new("gh");
         cmd.args(["repo", "view", "--json", "defaultBranchRef"]);
@@ -100,6 +107,7 @@ impl GhClient for ProcessGhClient {
             .map(str::to_string)
     }
 
+    /// Invokes `gh pr diff --name-only` and returns the list of changed file paths.
     fn pr_files(&self, number: u64, repo: Option<&str>) -> Vec<String> {
         let mut cmd = Command::new("gh");
         cmd.args(["pr", "diff", &number.to_string(), "--name-only"]);

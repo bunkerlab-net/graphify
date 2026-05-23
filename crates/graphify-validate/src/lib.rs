@@ -19,12 +19,14 @@ pub const REQUIRED_NODE_FIELDS: &[&str] = &["id", "label", "file_type", "source_
 pub const REQUIRED_EDGE_FIELDS: &[&str] =
     &["source", "target", "relation", "confidence", "source_file"];
 
+/// Returns a sorted `Vec<String>` copy of a string-slice list.
 fn sorted(set: &[&str]) -> Vec<String> {
     let mut v: Vec<String> = set.iter().map(|s| (*s).to_string()).collect();
     v.sort();
     v
 }
 
+/// Formats a JSON `Value` as a human-readable repr, wrapping strings in single quotes.
 fn repr(value: &Value) -> String {
     match value {
         Value::String(s) => format!("'{s}'"),

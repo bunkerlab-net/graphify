@@ -27,7 +27,7 @@ pub struct ManifestEntry {
     pub semantic_hash: String,
 }
 
-/// Normalise a legacy manifest entry value to a `ManifestEntry`.
+/// Normalises a raw JSON value from the manifest into a `ManifestEntry`, handling both legacy `{mtime, hash}` and current `{mtime, ast_hash, semantic_hash}` shapes.
 fn normalise_entry(v: &serde_json::Value) -> Option<ManifestEntry> {
     match v {
         serde_json::Value::Number(n) => Some(ManifestEntry {
@@ -98,7 +98,7 @@ pub fn md5_file(path: &Path) -> String {
 
 // ── mtime helper ─────────────────────────────────────────────────────────────
 
-/// Get file mtime as an `f64` (seconds + fractional nanoseconds).
+/// Returns the file's modification time as seconds since the Unix epoch, with nanosecond precision in the fractional part.
 fn file_mtime(path: &Path) -> Option<f64> {
     use std::os::unix::fs::MetadataExt;
     let meta = path.metadata().ok()?;

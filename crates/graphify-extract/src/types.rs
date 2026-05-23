@@ -54,6 +54,7 @@ pub struct FileResult {
 }
 
 impl FileResult {
+    /// Construct a `FileResult` carrying only an error message, with all other fields empty.
     #[must_use]
     pub fn error(msg: impl Into<String>) -> Self {
         Self {

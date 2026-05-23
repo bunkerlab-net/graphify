@@ -19,10 +19,12 @@ pub enum GraphKind {
 }
 
 impl GraphKind {
+    /// Returns `true` if this graph kind models directed edges.
     #[must_use]
     pub fn is_directed(self) -> bool {
         matches!(self, GraphKind::DiGraph | GraphKind::MultiDiGraph)
     }
+    /// Returns `true` if this graph kind allows parallel edges between the same node pair.
     #[must_use]
     pub fn is_multi(self) -> bool {
         matches!(self, GraphKind::MultiGraph | GraphKind::MultiDiGraph)
@@ -51,6 +53,7 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Creates an empty graph of the given `kind`.
     #[must_use]
     pub fn new(kind: GraphKind) -> Self {
         Self {
@@ -61,6 +64,7 @@ impl Graph {
         }
     }
 
+    /// Inserts or replaces the node with the given `id`, overwriting any existing attribute map.
     pub fn add_node(&mut self, id: &str, attrs: IndexMap<String, Value>) {
         // NetworkX add_node is idempotent — repeated calls *overwrite* the
         // attribute map with the new one. We replicate that exactly.
@@ -93,37 +97,45 @@ impl Graph {
         });
     }
 
+    /// Returns `true` if a node with the given `id` exists in the graph.
     #[must_use]
     pub fn contains_node(&self, id: &str) -> bool {
         self.node_map.contains_key(id)
     }
 
+    /// Returns a shared reference to the attribute map for node `id`, or `None` if absent.
     #[must_use]
     pub fn node_data(&self, id: &str) -> Option<&IndexMap<String, Value>> {
         self.node_map.get(id)
     }
 
+    /// Returns a mutable reference to the attribute map for node `id`, or `None` if absent.
     pub fn node_data_mut(&mut self, id: &str) -> Option<&mut IndexMap<String, Value>> {
         self.node_map.get_mut(id)
     }
 
+    /// Returns an iterator over `(id, attrs)` pairs in insertion order.
     pub fn nodes(&self) -> impl Iterator<Item = (&String, &IndexMap<String, Value>)> {
         self.node_map.iter()
     }
 
+    /// Returns a mutable iterator over `(id, attrs)` pairs in insertion order.
     pub fn nodes_mut(&mut self) -> impl Iterator<Item = (&String, &mut IndexMap<String, Value>)> {
         self.node_map.iter_mut()
     }
 
+    /// Returns the number of nodes in the graph.
     #[must_use]
     pub fn node_count(&self) -> usize {
         self.node_map.len()
     }
 
+    /// Returns an iterator over all edges in insertion order.
     pub fn edges(&self) -> impl Iterator<Item = &Edge> {
         self.edge_list.iter()
     }
 
+    /// Returns the number of edges in the graph.
     #[must_use]
     pub fn edge_count(&self) -> usize {
         self.edge_list.len()
@@ -183,6 +195,7 @@ impl Graph {
         }
     }
 
+    /// Removes all nodes in `ids` and any edges incident to them.
     pub fn remove_nodes_from<'a, I>(&mut self, ids: I)
     where
         I: IntoIterator<Item = &'a str>,
@@ -195,6 +208,7 @@ impl Graph {
             .retain(|e| !removed.contains(&e.source) && !removed.contains(&e.target));
     }
 
+    /// Removes all edges matching the given `(source, target)` pairs.
     pub fn remove_edges_from<'a, I>(&mut self, pairs: I)
     where
         I: IntoIterator<Item = (&'a str, &'a str)>,

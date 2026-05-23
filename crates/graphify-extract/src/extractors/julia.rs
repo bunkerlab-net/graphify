@@ -765,6 +765,7 @@ fn walk_calls_julia_children(
     seen_ids: &HashSet<String>,
 ) {
     // Find the function_definition node by byte range
+    /// Search the subtree rooted at `n` for a `function_definition` node matching `start`/`end` byte offsets.
     fn find_node(
         n: tree_sitter::Node<'_>,
         start: usize,

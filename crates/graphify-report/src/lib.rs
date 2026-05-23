@@ -95,6 +95,7 @@ pub(crate) fn safe_community_name(label: &str) -> String {
 
 type Communities<'a> = Vec<(i64, Vec<&'a str>)>;
 
+/// Extracts the community membership list from the analysis object.
 fn extract_communities(obj: &serde_json::Map<String, Value>) -> Communities<'_> {
     obj.get("communities")
         .and_then(Value::as_object)
@@ -110,6 +111,7 @@ fn extract_communities(obj: &serde_json::Map<String, Value>) -> Communities<'_> 
         .unwrap_or_default()
 }
 
+/// Extracts per-community cohesion scores from the analysis object.
 fn extract_cohesion(obj: &serde_json::Map<String, Value>) -> HashMap<i64, f64> {
     obj.get("cohesion_scores")
         .and_then(Value::as_object)
@@ -121,6 +123,7 @@ fn extract_cohesion(obj: &serde_json::Map<String, Value>) -> HashMap<i64, f64> {
         .unwrap_or_default()
 }
 
+/// Extracts per-community display labels from the analysis object.
 fn extract_labels(obj: &serde_json::Map<String, Value>) -> HashMap<i64, &str> {
     obj.get("community_labels")
         .and_then(Value::as_object)

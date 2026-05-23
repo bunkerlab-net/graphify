@@ -263,7 +263,7 @@ pub enum HooksError {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Walk upward from `path` to find the nearest `.git` directory.
+/// Walks upward from `path` until a directory containing `.git` is found, returning that directory.
 fn git_root(path: &Path) -> Option<PathBuf> {
     let current = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut candidate = current.as_path();
@@ -340,7 +340,7 @@ pub fn hooks_dir_with(
     Ok(d.canonicalize().unwrap_or(d))
 }
 
-/// Default `rev_parse_fn` that shells out to git.
+/// Shells out to `git -C <root> rev-parse --git-path hooks` and returns stdout on success.
 fn default_rev_parse(root: &Path) -> Option<String> {
     let res = Command::new("git")
         .args([

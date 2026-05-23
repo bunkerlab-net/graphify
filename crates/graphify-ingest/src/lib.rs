@@ -204,6 +204,7 @@ pub fn html_to_markdown(html: &str) -> String {
 // Internal fetch helpers
 // ---------------------------------------------------------------------------
 
+/// Fetch the raw HTML body of a URL as a string.
 fn fetch_html(url: &str) -> Result<String, IngestError> {
     safe_fetch_text(url, MAX_TEXT_BYTES, FETCH_TIMEOUT).map_err(|e| IngestError::FetchFailed {
         url: url.to_string(),
@@ -211,6 +212,7 @@ fn fetch_html(url: &str) -> Result<String, IngestError> {
     })
 }
 
+/// Download a binary resource from `url` and write it to `target_dir` with the given `suffix`.
 fn download_binary(url: &str, suffix: &str, target_dir: &Path) -> Result<PathBuf, IngestError> {
     let filename = safe_filename(url, suffix);
     let out_path = target_dir.join(&filename);
@@ -280,6 +282,7 @@ fn fetch_tweet(url: &str, author: Option<&str>, contributor: Option<&str>) -> (S
 // _fetch_webpage
 // ---------------------------------------------------------------------------
 
+/// Fetch a generic webpage and return its rendered markdown content alongside a safe filename.
 fn fetch_webpage(
     url: &str,
     author: Option<&str>,
@@ -320,6 +323,8 @@ fn fetch_webpage(
 // _fetch_arxiv
 // ---------------------------------------------------------------------------
 
+/// Fetch an arXiv paper page and return its structured markdown content alongside a safe filename.
+/// Falls back to `fetch_webpage` if no arXiv ID can be extracted from the URL.
 fn fetch_arxiv(
     url: &str,
     author: Option<&str>,

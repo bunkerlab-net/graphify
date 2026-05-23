@@ -48,8 +48,7 @@ pub fn attach_hyperedges(graph: &mut Graph, hyperedges: &[Value]) {
         .insert("hyperedges".to_string(), Value::Array(merged));
 }
 
-/// Run `git rev-parse HEAD`, returning `None` if not in a git repo.
-/// Run `git rev-parse HEAD`, returning `None` if not in a git repo or on failure.
+/// Runs `git rev-parse HEAD`, returning `None` if not in a git repo or on failure.
 fn git_head() -> Option<String> {
     let r = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])

@@ -43,6 +43,7 @@ pub fn parse_gitignore_line(raw: &str) -> String {
 }
 
 /// Remove trailing space characters that are not escaped with `\`.
+/// Strip trailing space characters that are not preceded by a backslash escape.
 fn trim_unescaped_trailing_spaces(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut end = bytes.len();
@@ -84,6 +85,7 @@ pub fn find_vcs_root(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Returns the user's home directory from `$HOME`, or `None` if unset.
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
@@ -150,7 +152,7 @@ pub fn load_graphifyinclude(root: &Path) -> IgnorePatterns {
     patterns
 }
 
-/// Build the ancestor directory list from ceiling down to root (outer → inner).
+/// Builds the ancestor directory list from `ceiling` down to `root` (outer-first) for ordered pattern loading.
 fn build_dir_list(root: &Path, ceiling: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut current = root.to_path_buf();
@@ -170,6 +172,7 @@ fn build_dir_list(root: &Path, ceiling: &Path) -> Vec<PathBuf> {
 
 // ── Matching helpers ─────────────────────────────────────────────────────────
 
+/// Returns `true` if `name` matches shell-style glob `pattern`.
 fn fnmatch(name: &str, pattern: &str) -> bool {
     glob_match(name, pattern)
 }
@@ -182,6 +185,7 @@ fn glob_match(text: &str, pat: &str) -> bool {
     glob_match_inner(text.as_bytes(), pat.as_bytes())
 }
 
+/// Recursive byte-level glob matcher backing [`glob_match`].
 fn glob_match_inner(text: &[u8], pat: &[u8]) -> bool {
     match (text, pat) {
         (_, []) => text.is_empty(),
@@ -221,12 +225,13 @@ fn glob_match_inner(text: &[u8], pat: &[u8]) -> bool {
     }
 }
 
+/// Converts a path to a forward-slash string for portable pattern matching.
 fn path_to_forward_slash(path: &Path) -> String {
     path.to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
-/// Check whether `rel` matches pattern `p`, including partial path segment matching.
+/// Returns `true` if `rel` (forward-slash relative path) or any of its prefix segments matches pattern `p`.
 fn rel_matches(rel: &str, target_name: &str, p: &str) -> bool {
     let parts: Vec<&str> = rel.split('/').collect();
     if fnmatch(rel, p) {
@@ -247,7 +252,7 @@ fn rel_matches(rel: &str, target_name: &str, p: &str) -> bool {
     false
 }
 
-/// Apply last-match-wins to a single target path.
+/// Evaluates all patterns against `target` using last-match-wins, returning the final ignored state.
 fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
 

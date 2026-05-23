@@ -35,10 +35,12 @@ impl DeepSeekBackend {
 }
 
 impl LlmBackend for DeepSeekBackend {
+    /// Returns the backend identifier string.
     fn name(&self) -> &'static str {
         "deepseek"
     }
 
+    /// Dispatches to [`call_deepseek`] using the stored API key.
     fn call(
         &self,
         messages: &[serde_json::Value],
@@ -48,6 +50,7 @@ impl LlmBackend for DeepSeekBackend {
         call_deepseek(&self.api_key, model, messages, max_tokens)
     }
 
+    /// Delegates to the shared tiktoken-based estimator.
     fn estimate_tokens(&self, text: &str) -> usize {
         crate::tokenizer::estimate_tokens(text)
     }

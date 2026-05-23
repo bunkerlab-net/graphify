@@ -24,6 +24,7 @@ pub trait GitClient {
 pub struct ProcessGitClient;
 
 impl GitClient for ProcessGitClient {
+    /// Invokes `git worktree list --porcelain` and returns raw output.
     fn worktree_list_porcelain(&self) -> Option<String> {
         let out = Command::new("git")
             .args(["worktree", "list", "--porcelain"])
@@ -35,6 +36,7 @@ impl GitClient for ProcessGitClient {
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Invokes `git symbolic-ref refs/remotes/origin/HEAD` and returns trimmed output.
     fn symbolic_ref_origin_head(&self) -> Option<String> {
         let out = Command::new("git")
             .args(["symbolic-ref", "refs/remotes/origin/HEAD"])

@@ -637,6 +637,7 @@ fn community_name_for(cid: i64, community_labels: Option<&IndexMap<i64, String>>
         .unwrap_or_else(|| format!("Community {cid}"))
 }
 
+/// Returns the Obsidian-safe tag string for a community, derived from its display name.
 // Suppress dead-code — helper will be wired up by the CLI once src/main.rs is ported.
 #[allow(dead_code)]
 fn community_tag(cid: i64, community_labels: Option<&IndexMap<i64, String>>) -> String {

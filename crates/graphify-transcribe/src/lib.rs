@@ -85,6 +85,7 @@ pub trait WhisperRunner {
 pub struct WhisperCliRunner;
 
 impl WhisperRunner for WhisperCliRunner {
+    /// Invokes `whisper-cli` on `audio` and returns the transcript text from the generated `.txt` file.
     fn run(&self, audio: &Path, prompt: &str, model: &str) -> Result<String, TranscribeError> {
         let mut cmd = Command::new("whisper-cli");
         cmd.arg("--model")
@@ -155,6 +156,7 @@ pub trait YtDlpRunner {
 pub struct YtDlpCliRunner;
 
 impl YtDlpRunner for YtDlpCliRunner {
+    /// Invokes `yt-dlp` to download audio from `url` and returns the path to the downloaded file.
     fn download(
         &self,
         url: &str,

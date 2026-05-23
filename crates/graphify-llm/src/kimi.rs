@@ -53,10 +53,12 @@ impl KimiBackend {
 }
 
 impl LlmBackend for KimiBackend {
+    /// Returns the backend identifier string.
     fn name(&self) -> &'static str {
         "kimi"
     }
 
+    /// Dispatches to [`call_kimi`] using the stored API key.
     fn call(
         &self,
         messages: &[serde_json::Value],
@@ -66,6 +68,7 @@ impl LlmBackend for KimiBackend {
         call_kimi(&self.api_key, model, messages, max_tokens)
     }
 
+    /// Delegates to the shared tiktoken-based estimator.
     fn estimate_tokens(&self, text: &str) -> usize {
         crate::tokenizer::estimate_tokens(text)
     }

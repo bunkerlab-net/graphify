@@ -54,6 +54,8 @@ pub struct CallflowOptions {
 }
 
 impl Default for CallflowOptions {
+    /// Returns a `CallflowOptions` with sensible defaults: auto language detection,
+    /// up to 15 sections, and diagram scale of 1.0.
     fn default() -> Self {
         Self {
             project: None,

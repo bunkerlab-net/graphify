@@ -29,6 +29,7 @@ pub trait TriageBackend {
 pub struct NoOpTriageBackend;
 
 impl TriageBackend for NoOpTriageBackend {
+    /// Always succeeds without performing any triage.
     fn triage(&self, _candidates: &[&PrInfo], _prompt: &str) -> Result<(), String> {
         Ok(())
     }

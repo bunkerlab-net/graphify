@@ -27,8 +27,8 @@ use crate::{ReloadState, ServeError};
 
 // ── Tool schema ───────────────────────────────────────────────────────────────
 
-/// Static list of MCP tool descriptors broadcast on the `tools/list` request.
 // too_many_lines: the PR tool schemas are large JSON objects; splitting would harm readability.
+/// Returns the static list of MCP tool descriptors broadcast on the `tools/list` request.
 #[allow(clippy::too_many_lines)]
 fn tools_list() -> Vec<Value> {
     vec![

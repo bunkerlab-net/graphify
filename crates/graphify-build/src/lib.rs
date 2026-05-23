@@ -35,7 +35,7 @@ pub enum BuildError {
     Json(#[from] serde_json::Error),
 }
 
-/// Map of known invalid `file_type` values that LLM subagents commonly emit.
+/// Maps known invalid `file_type` values emitted by LLM subagents to their canonical equivalents.
 fn file_type_synonym(s: &str) -> Option<&'static str> {
     match s {
         "markdown" | "text" => Some("document"),
@@ -48,6 +48,7 @@ fn file_type_synonym(s: &str) -> Option<&'static str> {
 
 const VALID_FILE_TYPES: &[&str] = &["code", "document", "paper", "image", "rationale", "concept"];
 
+/// Coerces a raw `file_type` attribute value to a valid canonical string, returning `None` if no change is needed.
 fn coerce_file_type(value: Option<&Value>) -> Option<String> {
     match value {
         Some(Value::String(s)) => {
@@ -63,6 +64,7 @@ fn coerce_file_type(value: Option<&Value>) -> Option<String> {
     }
 }
 
+/// Normalises node objects inside an extraction dict in place, renaming `source` → `source_file` and coercing `file_type` values.
 fn canonicalise_nodes(extraction: &mut Value) {
     let Some(nodes) = extraction
         .as_object_mut()
@@ -85,6 +87,7 @@ fn canonicalise_nodes(extraction: &mut Value) {
     }
 }
 
+/// Inserts all nodes from an extraction dict into `graph`, normalising `source_file` paths relative to `root_str`.
 fn add_nodes(graph: &mut Graph, extraction: &mut Value, root_str: Option<&str>) {
     let Some(nodes) = extraction
         .as_object_mut()
@@ -114,6 +117,7 @@ fn add_nodes(graph: &mut Graph, extraction: &mut Value, root_str: Option<&str>) 
     }
 }
 
+/// Resolves a raw edge endpoint string to an exact node ID, falling back to the normalised-ID lookup table.
 fn resolve_edge_id(
     raw: &str,
     node_ids: &indexmap::IndexSet<String>,
@@ -128,6 +132,7 @@ fn resolve_edge_id(
         .unwrap_or_else(|| raw.to_string())
 }
 
+/// Inserts all edges from an extraction dict into `graph`, resolving endpoint IDs and normalising `source_file` paths.
 fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<&str>) {
     let Some(edges) = extraction
         .as_object()

@@ -40,10 +40,12 @@ impl BedrockBackend {
 }
 
 impl LlmBackend for BedrockBackend {
+    /// Returns the backend identifier string.
     fn name(&self) -> &'static str {
         "bedrock"
     }
 
+    /// Dispatches to [`call_bedrock`] using the stored region.
     fn call(
         &self,
         messages: &[serde_json::Value],
@@ -53,6 +55,7 @@ impl LlmBackend for BedrockBackend {
         call_bedrock(model, &self.region, messages, max_tokens)
     }
 
+    /// Delegates to the shared tiktoken-based estimator.
     fn estimate_tokens(&self, text: &str) -> usize {
         crate::tokenizer::estimate_tokens(text)
     }
@@ -289,6 +292,7 @@ struct SignInput<'a> {
     date_str: &'a str,
 }
 
+/// Produce AWS Signature V4 authorization and extra headers for a Bedrock request.
 fn sign_request(inp: &SignInput<'_>) -> Result<SignResult, LlmError> {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
@@ -355,6 +359,7 @@ fn sign_request(inp: &SignInput<'_>) -> Result<SignResult, LlmError> {
     })
 }
 
+/// Computes HMAC-SHA256 of `msg` under `key` and returns the raw digest bytes.
 fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
@@ -366,10 +371,12 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
+/// Returns the lowercase hex-encoded HMAC-SHA256 of `msg` under `key`.
 fn hmac_sha256_hex(key: &[u8], msg: &[u8]) -> String {
     hex::encode(hmac_sha256(key, msg))
 }
 
+/// Derives the AWS `SigV4` signing key from the secret key, date, region, and service.
 fn derive_signing_key(secret_key: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let k_secret = format!("AWS4{secret_key}");
     let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
@@ -388,6 +395,7 @@ fn chrono_now_utc() -> String {
     format!("{year:04}{month:02}{day:02}T{hour:02}{min:02}{sec:02}Z")
 }
 
+/// Converts a Unix timestamp (seconds since epoch) to `(year, month, day, hour, min, sec)`.
 fn unix_to_datetime(ts: u64) -> (u64, u64, u64, u64, u64, u64) {
     let secs_per_day = 86_400_u64;
     let days_since_epoch = ts / secs_per_day;
@@ -422,6 +430,7 @@ fn unix_to_datetime(ts: u64) -> (u64, u64, u64, u64, u64, u64) {
     (y, mo, d + 1, hh, mm, ss)
 }
 
+/// Returns `true` if `year` is a Gregorian leap year.
 fn is_leap(year: u64) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }

@@ -141,6 +141,8 @@ pub fn compute_idf<'a>(
         .collect()
 }
 
+/// Return the pre-computed normalised label for a node, falling back to a
+/// diacritic-stripped lowercase version of the raw `label` attribute.
 fn get_norm_label(attrs: &IndexMap<String, Value>) -> String {
     if let Some(Value::String(s)) = attrs.get("norm_label")
         && !s.is_empty()

@@ -209,7 +209,7 @@ with `skill: \"graphify\"` before doing anything else.\n";
 // Hook value builders
 // ---------------------------------------------------------------------------
 
-/// Build the Claude `PreToolUse` hook entry (byte-identical to Python's `_SETTINGS_HOOK`).
+/// Builds the Claude Code `PreToolUse` hook JSON entry that injects a knowledge-graph reminder before grep/find tool calls.
 pub(super) fn settings_hook() -> Value {
     serde_json::json!({
         "matcher": "Bash",
@@ -232,7 +232,7 @@ pub(super) fn settings_hook() -> Value {
     })
 }
 
-/// Build the Gemini `BeforeTool` hook entry (byte-identical to Python's `_GEMINI_HOOK`).
+/// Builds the Gemini CLI `BeforeTool` hook JSON entry that injects a knowledge-graph reminder before file-read tool calls.
 pub(super) fn gemini_hook() -> Value {
     serde_json::json!({
         "matcher": "read_file|list_directory",
@@ -328,7 +328,11 @@ pub(super) fn remove_graphify_section(content: &str) -> String {
     format!("{head}{tail}").trim_end().to_string()
 }
 
-/// Write `content` to `path` atomically (tmp then rename).
+/// Writes `content` to `path` atomically by writing to a sibling `.tmp` file then renaming it.
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` on write or rename failure.
 pub(super) fn write_atomic(path: &Path, content: &str) -> Result<(), HooksError> {
     let tmp = path.with_extension(path.extension().map_or_else(
         || "tmp".to_string(),
@@ -352,7 +356,7 @@ pub(super) fn install_skill(skill_content: &str, dst: &Path) -> Result<PathBuf, 
     Ok(dst.to_path_buf())
 }
 
-/// Remove a skill file and attempt to prune empty parent directories (up to 3 levels).
+/// Removes a skill file, its sibling `.graphify_version` file, and up to three empty ancestor directories.
 pub(super) fn remove_skill(skill_dst: &Path) {
     if skill_dst.exists() {
         let _ = fs::remove_file(skill_dst);
@@ -394,7 +398,7 @@ pub fn resolve_graphify_exe() -> String {
     "graphify".to_string()
 }
 
-/// Read a JSON file, returning an empty object on parse failure.
+/// Reads a JSON file from `path`, returning an empty JSON object if the file is missing or unparseable.
 pub(super) fn read_json_or_empty(path: &Path) -> Value {
     if !path.exists() {
         return Value::Object(serde_json::Map::new());
@@ -405,7 +409,11 @@ pub(super) fn read_json_or_empty(path: &Path) -> Value {
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
 }
 
-/// Write a `serde_json::Value` to `path` with 2-space indentation.
+/// Serialises `value` to `path` with 2-space indentation, creating parent directories as needed.
+///
+/// # Errors
+///
+/// Returns `HooksError::Json` on serialisation failure or `HooksError::Io` on filesystem failure.
 pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), HooksError> {
     let json = serde_json::to_string_pretty(value).map_err(|e| HooksError::Json(e.to_string()))?;
     if let Some(parent) = path.parent() {

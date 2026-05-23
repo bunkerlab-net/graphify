@@ -57,6 +57,7 @@ pub enum GlobalError {
 // Default paths  (mirrors Python's `_GLOBAL_DIR / …`)
 // ---------------------------------------------------------------------------
 
+/// Returns the default `~/.graphify` directory path used for global storage.
 fn default_global_dir() -> PathBuf {
     // `home_dir` is deprecated in 1.85+ but `std::env::home_dir` is the only
     // stable way to get HOME without a third-party crate.
@@ -99,6 +100,7 @@ pub struct Manifest {
 }
 
 impl Default for Manifest {
+    /// Returns a version-1 manifest with an empty repo map.
     fn default() -> Self {
         Self {
             version: 1,
@@ -107,6 +109,7 @@ impl Default for Manifest {
     }
 }
 
+/// Reads the manifest from `path`, returning a default empty manifest on any read or parse failure.
 fn load_manifest(path: &Path) -> Manifest {
     if path.exists()
         && let Ok(text) = std::fs::read_to_string(path)
@@ -117,6 +120,7 @@ fn load_manifest(path: &Path) -> Manifest {
     Manifest::default()
 }
 
+/// Serialises `manifest` to pretty-printed JSON and writes it to `path`, creating parent directories as needed.
 fn save_manifest(path: &Path, manifest: &Manifest) -> Result<(), GlobalError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -235,6 +239,7 @@ pub fn file_hash(path: &Path) -> Result<String, GlobalError> {
 // Timestamp helper
 // ---------------------------------------------------------------------------
 
+/// Returns the current UTC time as an RFC 3339 string.
 fn utc_now_iso8601() -> String {
     use chrono::Utc;
     Utc::now().to_rfc3339()

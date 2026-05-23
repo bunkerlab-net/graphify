@@ -62,6 +62,7 @@ pub trait DedupLlmBackend {
 pub struct NoOpBackend;
 
 impl DedupLlmBackend for NoOpBackend {
+    /// Always returns [`JudgeResult::Distinct`], effectively disabling LLM-assisted merges.
     fn judge(&self, _a: &str, _b: &str) -> JudgeResult {
         JudgeResult::Distinct
     }

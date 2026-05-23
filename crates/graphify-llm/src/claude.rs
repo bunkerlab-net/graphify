@@ -58,10 +58,12 @@ impl ClaudeBackend {
 }
 
 impl LlmBackend for ClaudeBackend {
+    /// Returns the backend identifier string.
     fn name(&self) -> &'static str {
         "claude"
     }
 
+    /// Dispatches to [`call_claude`] using the stored API key.
     fn call(
         &self,
         messages: &[serde_json::Value],
@@ -71,6 +73,7 @@ impl LlmBackend for ClaudeBackend {
         call_claude(&self.api_key, model, messages, max_tokens)
     }
 
+    /// Delegates to the shared tiktoken-based estimator.
     fn estimate_tokens(&self, text: &str) -> usize {
         crate::tokenizer::estimate_tokens(text)
     }

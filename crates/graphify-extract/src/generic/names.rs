@@ -26,6 +26,10 @@ pub(super) fn read_text_owned(node: Node<'_>, source: &[u8]) -> String {
 
 // ── C function-name resolver ──────────────────────────────────────────────────
 
+/// Recursively extract the function name from a C declarator subtree.
+///
+/// Descends through nested `declarator` fields and sibling `identifier` nodes
+/// to handle pointer and array declarators that wrap the actual name.
 #[must_use]
 pub fn get_c_func_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     if node.kind() == "identifier" {
@@ -51,6 +55,10 @@ pub fn get_c_func_name(node: Node<'_>, source: &[u8]) -> Option<String> {
 
 // ── C++ function-name resolver ────────────────────────────────────────────────
 
+/// Recursively extract the function name from a C++ declarator subtree.
+///
+/// Handles qualified identifiers, destructors, operator overloads, and nested
+/// `declarator` chains in addition to the simpler C cases.
 #[must_use]
 pub fn get_cpp_func_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     match node.kind() {

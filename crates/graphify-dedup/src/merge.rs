@@ -34,6 +34,7 @@ impl Default for UnionFind {
 }
 
 impl UnionFind {
+    /// Creates a new, empty `UnionFind`.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -41,6 +42,7 @@ impl UnionFind {
         }
     }
 
+    /// Returns the root representative of `x`, inserting it if absent, with path compression.
     pub fn find(&mut self, x: &str) -> String {
         // Ensure x has an entry.
         self.parent
@@ -64,6 +66,7 @@ impl UnionFind {
         current
     }
 
+    /// Merges the sets containing `x` and `y`.
     pub fn union(&mut self, x: &str, y: &str) {
         self.parent
             .entry(x.to_string())
@@ -116,6 +119,7 @@ pub fn pick_winner<'a>(nodes: &'a [&'a Value]) -> Result<&'a Value, DedupError> 
 /// Naive LSH: for each candidate pair whose Jaccard estimate >= `threshold`,
 /// yield `(i, j)`. O(n²) on candidates that pass the entropy gate; in practice
 /// the candidate list is much smaller than the full node list.
+/// Returns index pairs `(i, j)` from `minhashes` whose estimated Jaccard similarity meets `threshold`.
 fn lsh_pairs(minhashes: &[(usize, MinHash)], threshold: f64) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
     for (pos_a, (idx_a, mh_a)) in minhashes.iter().enumerate() {
@@ -134,6 +138,7 @@ fn lsh_pairs(minhashes: &[(usize, MinHash)], threshold: f64) -> Vec<(usize, usiz
 const LLM_LOW: f64 = 75.0;
 const LLM_HIGH: f64 = 92.0;
 
+/// Runs LLM-assisted disambiguation on `candidates`, unioning pairs in the 75–92 score band that the backend confirms as duplicates.
 #[allow(clippy::too_many_lines)] // mirrors the python reference implementation structure
 pub fn llm_tiebreak(
     candidates: &[&Value],
@@ -185,7 +190,7 @@ pub fn llm_tiebreak(
 
 // ── helpers used by `run` ─────────────────────────────────────────────────────
 
-/// Extract the `"label"` field, falling back to `"id"`, from a node value.
+/// Extracts the `"label"` field from a node value, falling back to `"id"` if absent.
 fn node_label(node: &Value) -> &str {
     node.get("label")
         .and_then(Value::as_str)
@@ -193,13 +198,14 @@ fn node_label(node: &Value) -> &str {
         .unwrap_or("")
 }
 
-/// Extract the `"id"` field from a node value.
+/// Extracts the `"id"` field from a node value, returning an empty string if absent.
 fn node_id(node: &Value) -> &str {
     node.get("id").and_then(Value::as_str).unwrap_or("")
 }
 
 // ── pass 1: exact normalisation ───────────────────────────────────────────────
 
+/// Groups nodes with identical normalised labels within the same source file and unions them in the returned `UnionFind`.
 fn pass1_exact(
     unique_nodes: &[&Value],
 ) -> Result<(UnionFind, IndexMap<String, Vec<usize>>), DedupError> {
@@ -244,6 +250,7 @@ fn pass1_exact(
 
 // ── pass 2: fuzzy matching ────────────────────────────────────────────────────
 
+/// Performs MinHash/LSH blocking followed by Jaro-Winkler verification to union near-duplicate node pairs.
 fn pass2_fuzzy(
     unique_nodes: &[&Value],
     uf: &mut UnionFind,
@@ -447,6 +454,7 @@ pub fn run(
 
 // ── edge rewriting ────────────────────────────────────────────────────────────
 
+/// Rewrites edge `source`/`target` fields according to `remap`, dropping self-loops produced by merges.
 fn rewrite_edges(edges: &[Value], remap: &IndexMap<String, String>) -> Vec<Value> {
     let mut out = Vec::with_capacity(edges.len());
     for edge in edges {

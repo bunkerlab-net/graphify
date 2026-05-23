@@ -201,6 +201,7 @@ pub async fn push_to_neo4j(
     Ok((nodes_written, rels_written))
 }
 
+/// Streams node rows to Neo4j in batches using MERGE, returning the count written.
 async fn push_nodes(db: &Neo4jGraph, rows: &[NodeRow]) -> Result<usize, Neo4jError> {
     let mut written = 0usize;
     for chunk in rows.chunks(BATCH_SIZE) {
@@ -226,6 +227,7 @@ async fn push_nodes(db: &Neo4jGraph, rows: &[NodeRow]) -> Result<usize, Neo4jErr
     Ok(written)
 }
 
+/// Streams edge rows to Neo4j in batches using MERGE, returning the count written.
 async fn push_edges(db: &Neo4jGraph, rows: &[EdgeRow]) -> Result<usize, Neo4jError> {
     let mut written = 0usize;
     for chunk in rows.chunks(BATCH_SIZE) {

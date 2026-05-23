@@ -71,6 +71,9 @@ struct WalkCtx<'a> {
     include_patterns: &'a IgnorePatterns,
 }
 
+/// Recursively collect all files under `dir`, respecting ignore/include patterns and noise-dir pruning.
+///
+/// `in_memory_tree` disables noise-dir and ignore filtering, used when scanning the `graphify-out/memory` sidecar directory.
 fn walk_dir(
     ctx: &WalkCtx<'_>,
     dir: &Path,
@@ -177,6 +180,7 @@ fn format_number(n: u64) -> String {
     out
 }
 
+/// Build a corpus-size advisory message, or `None` when the graph is strongly recommended and no caveat is needed.
 fn build_warning(total_words: u64, total_files: usize) -> Option<String> {
     let needs_graph = total_words >= CORPUS_WARN_THRESHOLD;
     if !needs_graph {
@@ -344,6 +348,7 @@ struct ConvertCtx<'a> {
 }
 
 impl ConvertCtx<'_> {
+    /// Register a converted sidecar file, counting its words and adding it to the file map.
     fn record(&mut self, md_path: &Path, ftype: FileType) {
         if is_ignored(md_path, self.root, self.ignore_patterns) {
             return;

@@ -81,6 +81,7 @@ pub enum SecurityError {
     GraphFileMissing(PathBuf),
 }
 
+/// Returns `true` if `ip` must not be contacted, guarding against SSRF to private/reserved addresses.
 fn ip_is_blocked(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => ipv4_is_blocked(v4),
@@ -96,6 +97,7 @@ fn ip_is_blocked(ip: IpAddr) -> bool {
     }
 }
 
+/// Returns `true` for IPv4 addresses that are private, loopback, link-local, CGN, or otherwise reserved, guarding against SSRF.
 fn ipv4_is_blocked(v4: Ipv4Addr) -> bool {
     if v4.is_private()
         || v4.is_loopback()
@@ -125,6 +127,7 @@ fn ipv4_is_blocked(v4: Ipv4Addr) -> bool {
     false
 }
 
+/// Returns `true` for IPv6 addresses that are loopback, unique-local, link-local, IPv4-mapped private, or documentation-only, guarding against SSRF.
 fn ipv6_is_blocked(v6: Ipv6Addr) -> bool {
     if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
         return true;
@@ -169,8 +172,7 @@ pub fn validate_url(url: &str) -> Result<String, SecurityError> {
     validate_url_with(url, false)
 }
 
-/// Inner validator. `allow_private_ips` is used only by inline tests that need
-/// to talk to localhost mock HTTP servers.
+/// Validates `url` scheme, metadata-host blocklist, and resolved IP, optionally bypassing private-IP rejection for test servers.
 fn validate_url_with(url: &str, allow_private_ips: bool) -> Result<String, SecurityError> {
     let parsed = Url::parse(url)?;
     let scheme = parsed.scheme().to_ascii_lowercase();
@@ -259,6 +261,7 @@ pub fn safe_fetch(
     fetch_with(url, max_bytes, timeout, false)
 }
 
+/// Validates `url` and issues an HTTP GET with manual redirect handling, optionally bypassing private-IP rejection for tests.
 fn fetch_with(
     url: &str,
     max_bytes: usize,
@@ -279,6 +282,7 @@ fn fetch_with(
     fetch_inner(&agent, url, max_bytes, 10, allow_private_ips)
 }
 
+/// Executes a single GET request and recursively follows redirects after re-validating each redirect target against the SSRF guard.
 fn fetch_inner(
     agent: &ureq::Agent,
     url: &str,
@@ -342,6 +346,7 @@ fn fetch_inner(
     read_response(resp, url, max_bytes)
 }
 
+/// Reads a 2xx response body up to `max_bytes`, returning `SizeLimitExceeded` if the body exceeds the cap.
 fn read_response(
     resp: ureq::http::Response<ureq::Body>,
     url: &str,
@@ -480,6 +485,7 @@ pub fn validate_graph_path<P: AsRef<Path>>(
     Ok(resolved)
 }
 
+/// Resolves `path` to an absolute path by collapsing `.` and `..` components without requiring the full path to exist, then canonicalizes the deepest existing prefix to follow symlinks.
 fn resolve_logical(path: &Path) -> PathBuf {
     use std::path::Component;
     let absolute = if path.is_absolute() {

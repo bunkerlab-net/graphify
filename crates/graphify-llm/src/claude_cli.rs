@@ -23,6 +23,7 @@ pub trait ClaudeRunner: Send + Sync {
 pub struct RealClaudeRunner;
 
 impl ClaudeRunner for RealClaudeRunner {
+    /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, and returns stdout/stderr/exit-code.
     fn run(&self, user_message: &str, append_system_prompt: bool) -> (String, String, i32) {
         let mut cmd = std::process::Command::new("claude");
         cmd.arg("-p")
@@ -89,10 +90,12 @@ impl<R: ClaudeRunner> ClaudeCliBackend<R> {
 }
 
 impl<R: ClaudeRunner + 'static> LlmBackend for ClaudeCliBackend<R> {
+    /// Returns the backend identifier string.
     fn name(&self) -> &'static str {
         "claude-cli"
     }
 
+    /// Extracts the last user message and calls the CLI runner via [`call_claude_cli_with_runner`].
     fn call(
         &self,
         messages: &[serde_json::Value],
@@ -115,6 +118,7 @@ impl<R: ClaudeRunner + 'static> LlmBackend for ClaudeCliBackend<R> {
         call_claude_cli_with_runner(&self.runner, user_message, 8192)
     }
 
+    /// Delegates to the shared tiktoken-based estimator.
     fn estimate_tokens(&self, text: &str) -> usize {
         crate::tokenizer::estimate_tokens(text)
     }
@@ -126,6 +130,7 @@ pub fn claude_is_on_path() -> bool {
     which_claude().is_some()
 }
 
+/// Searches `$PATH` for a `claude` executable and returns its path if found.
 fn which_claude() -> Option<std::path::PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {

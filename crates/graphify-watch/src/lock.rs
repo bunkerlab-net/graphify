@@ -139,6 +139,7 @@ impl RebuildLock {
 }
 
 impl Drop for RebuildLock {
+    /// Releases the advisory lock and unlinks the lock file.
     fn drop(&mut self) {
         if !self.acquired {
             return;

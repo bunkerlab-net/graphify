@@ -12,6 +12,7 @@ use graphify_prs::triage::TriageBackend;
 struct LlmTriageBackend;
 
 impl TriageBackend for LlmTriageBackend {
+    /// Call the detected LLM backend to triage `candidates` and print the response.
     fn triage(
         &self,
         candidates: &[&graphify_prs::model::PrInfo],

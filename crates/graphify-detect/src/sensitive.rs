@@ -104,12 +104,14 @@ fn word_boundary_match(text: &str, keyword: &str) -> bool {
     false
 }
 
+/// Returns `true` if `name` contains a credential-related keyword at a word boundary.
 fn has_credential_keyword(name: &str) -> bool {
     CREDENTIAL_KEYWORDS
         .iter()
         .any(|kw| word_boundary_match(name, kw))
 }
 
+/// Returns `true` if `name` contains a token-related keyword at a word boundary, excluding compound words like "tokenizer".
 fn has_token_keyword(name: &str) -> bool {
     TOKEN_KEYWORDS
         .iter()

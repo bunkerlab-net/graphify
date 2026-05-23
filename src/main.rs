@@ -487,6 +487,7 @@ pub(crate) enum PlatformCmd {
     Uninstall,
 }
 
+/// Entry point: initialises tracing, registers the cache flush atexit handler, and dispatches to the selected subcommand.
 fn main() -> Result<()> {
     // Register a best-effort stat-index flush on process exit.
     graphify_cache::ensure_atexit_flush_registered();
@@ -506,6 +507,7 @@ fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)]
+/// Dispatch a parsed [`Command`] to its handler function.
 fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Validate { path } => cli::validate::cmd_validate(&path),

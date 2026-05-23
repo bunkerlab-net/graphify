@@ -14,10 +14,12 @@ use crate::generic::resolve_js_import_target;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::Edge;
 
+/// Return the source bytes covered by `node` as an owned `String` (lossy UTF-8).
 fn read_text_owned(node: Node<'_>, source: &[u8]) -> String {
     String::from_utf8_lossy(&source[node.start_byte()..node.end_byte()]).into_owned()
 }
 
+/// Construct an `Edge` with standard extraction defaults (confidence `"EXTRACTED"`, weight `1.0`).
 fn make_edge(
     source: &str,
     target: &str,
@@ -41,6 +43,7 @@ fn make_edge(
 
 // ── Python ────────────────────────────────────────────────────────────────────
 
+/// Emit `imports` / `imports_from` edges for a Python `import_statement` or `import_from_statement` node.
 pub fn import_python(
     source: &[u8],
     node: Node<'_>,
@@ -115,6 +118,7 @@ pub fn import_python(
 
 // ── JavaScript / TypeScript ───────────────────────────────────────────────────
 
+/// Emit `imports_from` and named-symbol `imports` edges for a JS/TS `import_statement` node.
 pub fn import_js(
     source: &[u8],
     node: Node<'_>,
@@ -211,6 +215,7 @@ pub fn import_js(
 
 // ── Java ──────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a Java `import_declaration` node.
 pub fn import_java(
     source: &[u8],
     node: Node<'_>,
@@ -257,6 +262,7 @@ pub fn import_java(
     }
 }
 
+/// Flatten a Java `scoped_identifier` chain into a dot-separated string (e.g. `"com.example.Foo"`).
 fn walk_scoped_java(node: Node<'_>, source: &[u8]) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut cur = node;
@@ -283,6 +289,10 @@ fn walk_scoped_java(node: Node<'_>, source: &[u8]) -> String {
 
 // ── C/C++ ─────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a C/C++ `#include` preprocessor node.
+///
+/// Resolves quoted includes to their canonical filesystem path when possible;
+/// falls back to the bare filename stem for system and unresolvable headers.
 pub fn import_c(
     source: &[u8],
     node: Node<'_>,
@@ -346,6 +356,7 @@ pub fn import_c(
     }
 }
 
+/// Resolve a quoted C `#include` path relative to the including file, returning the canonical path if it exists.
 fn resolve_c_include_path(raw: &str, str_path: &str) -> Option<std::path::PathBuf> {
     if raw.is_empty() {
         return None;
@@ -364,6 +375,7 @@ fn resolve_c_include_path(raw: &str, str_path: &str) -> Option<std::path::PathBu
 
 // ── C# ────────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a C# `using_directive` node.
 pub fn import_csharp(
     source: &[u8],
     node: Node<'_>,
@@ -406,6 +418,7 @@ pub fn import_csharp(
 
 // ── Kotlin ───────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a Kotlin `import_header` node.
 pub fn import_kotlin(
     source: &[u8],
     node: Node<'_>,
@@ -458,6 +471,7 @@ pub fn import_kotlin(
 
 // ── Scala ─────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a Scala `import_declaration` node.
 pub fn import_scala(
     source: &[u8],
     node: Node<'_>,
@@ -503,6 +517,7 @@ pub fn import_scala(
 
 // ── PHP ───────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a PHP `use_declaration` node.
 pub fn import_php(
     source: &[u8],
     node: Node<'_>,
@@ -542,6 +557,7 @@ pub fn import_php(
 
 // ── Lua ───────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a Lua `require` call expression node.
 pub fn import_lua(
     source: &[u8],
     node: Node<'_>,
@@ -571,6 +587,7 @@ pub fn import_lua(
     }
 }
 
+/// Extract the module string from a `require(...)` call in `text`, returning `None` if not found.
 fn find_require_module(text: &str) -> Option<String> {
     // require\s*[\('"]\s*['"]?([^'")\s]+)
     let start = text.find("require")?;
@@ -590,6 +607,7 @@ fn find_require_module(text: &str) -> Option<String> {
 
 // ── Swift ─────────────────────────────────────────────────────────────────────
 
+/// Emit an `imports` edge for a Swift `import_declaration` node.
 pub fn import_swift(
     source: &[u8],
     node: Node<'_>,

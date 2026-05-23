@@ -45,10 +45,12 @@ impl OllamaBackend {
 }
 
 impl LlmBackend for OllamaBackend {
+    /// Returns the backend identifier string.
     fn name(&self) -> &'static str {
         "ollama"
     }
 
+    /// Extracts the last user message for `num_ctx` estimation, then calls [`call_ollama`].
     fn call(
         &self,
         messages: &[serde_json::Value],
@@ -78,6 +80,7 @@ impl LlmBackend for OllamaBackend {
         )
     }
 
+    /// Delegates to the shared tiktoken-based estimator.
     fn estimate_tokens(&self, text: &str) -> usize {
         crate::tokenizer::estimate_tokens(text)
     }
