@@ -238,7 +238,7 @@ pub(super) fn section_keywords(nodes: &[&Node], limit: usize) -> Vec<String> {
             let word: String = raw
                 .chars()
                 .filter(|c| c.is_alphanumeric())
-                .map(|c| c.to_lowercase().next().unwrap_or(c))
+                .flat_map(char::to_lowercase)
                 .collect();
             if word.len() >= 3 && !stopwords.contains(word.as_str()) {
                 *counts.entry(word).or_insert(0) += 1;

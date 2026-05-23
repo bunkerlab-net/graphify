@@ -401,10 +401,14 @@ fn write_hyperedges_section(html: &mut String, hyperedges: &[serde_json::Value])
             hnodes.len()
         );
         for hn in hnodes.iter().take(5) {
+            // `to_string` on a JSON string would emit surrounding `"` —
+            // prefer the underlying primitive when available so the rendered
+            // node IDs don't show quotes in the HTML.
+            let raw = hn.as_str().map_or_else(|| hn.to_string(), str::to_owned);
             let _ = write!(
                 html,
                 "\n      <li><code>{}</code></li>",
-                htmlescape::encode_minimal(&hn.to_string())
+                htmlescape::encode_minimal(&raw)
             );
         }
         if hnodes.len() > 5 {

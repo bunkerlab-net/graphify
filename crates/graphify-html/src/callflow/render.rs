@@ -51,7 +51,6 @@ pub(super) fn generate_call_table_rows(
     if nodes.is_empty() {
         return String::new();
     }
-    let node_by_id: HashMap<&str, &Node> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut upstream: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut downstream: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in section_edges {
@@ -114,8 +113,6 @@ pub(super) fn generate_call_table_rows(
             pick_text(lang, "无直接出边", "No direct outbound edge"),
             3,
         );
-        let _ = node_by_id.get(nid); // suppress potential dead_code note
-
         let _ = write!(
             rows,
             "<tr>\n  <td>{}</td>\n  <td><code>{}</code><br><small style=\"color:var(--muted)\">{}</small></td>\n  <td>{}</td>\n  <td>{}</td>\n  <td>{}</td>\n  <td>{}</td>\n</tr>\n",
@@ -257,9 +254,13 @@ fn derive_flow_chain(
 }
 
 /// Render the overview section cards (one per architecture section) plus the flow chain.
+///
+/// `_meta` and `_report_text` are accepted for API symmetry with the Python
+/// reference and reserved for future enrichment; they are intentionally
+/// unused in the current implementation.
 pub(super) fn generate_overview_cards(
-    meta: &IndexMap<String, serde_json::Value>,
-    report_text: &str,
+    _meta: &IndexMap<String, serde_json::Value>,
+    _report_text: &str,
     sections: &[Section],
     section_nodes_map: &IndexMap<String, Vec<usize>>,
     classified: &ClassifiedEdges,
@@ -293,7 +294,6 @@ pub(super) fn generate_overview_cards(
         "<tr><th>Layer</th><th>Nodes</th><th>Communities</th></tr>",
     );
     let flow_title = pick_text(lang, "核心数据流", "Core Flow");
-    let _ = (meta, report_text); // used by caller
     format!(
         r#"<div class="grid">
   <div class="card">
@@ -378,8 +378,11 @@ pub(super) fn generate_section_intro(
 }
 
 /// Render the stats, design-note, and call-detail cards for a single section.
+///
+/// `_sec` is currently unused but retained for API symmetry with the Python
+/// reference (sections may eventually drive additional copy here).
 pub(super) fn generate_section_cards(
-    sec: &Section,
+    _sec: &Section,
     nodes: &[Node],
     section_edges: &[CfEdge],
     lang: &str,
@@ -447,7 +450,6 @@ pub(super) fn generate_section_cards(
             "This section comes from graphify community clustering. Relationship summary: {relation_text}. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory."
         )
     };
-    let _ = sec;
     let key_files = pick_text(lang, "关键文件", "Key Files");
     let role = pick_text(lang, "覆盖节点", "Coverage");
     let design_notes = pick_text(lang, "设计备注", "Design Notes");

@@ -54,18 +54,28 @@ fn single_node_appears_in_tree() {
 fn emit_tree_html_escapes_title_and_header() {
     let tree = serde_json::json!({"name": "x", "total_count": 1, "children": []});
     let html = emit_tree_html(&tree, "<evil>", "<also evil>", 100, 100);
-    assert!(html.contains("&lt;evil&gt;"));
-    assert!(!html.contains("<evil>"));
+    assert!(html.contains("&lt;evil&gt;"), "title not escaped");
+    assert!(html.contains("&lt;also evil&gt;"), "header not escaped");
+    assert!(!html.contains("<evil>"), "raw title found");
+    assert!(!html.contains("<also evil>"), "raw header found");
 }
 
-/// `</script>` sequences inside JSON data would break the inline data island.
-/// `emit_tree_html` must neutralise them.
+/// `</script>` sequences inside the inline JSON data island would close
+/// the surrounding `<script>` block early, so `emit_tree_html` neutralises
+/// them. The full HTML still contains `</script>` as the legitimate close
+/// tag for the data block itself, so the assertion only checks the
+/// JSON-quoted form that would only appear if neutralisation failed, and
+/// also asserts the escaped form is present.
 #[test]
 fn emit_tree_html_neutralises_script_close() {
     let tree = serde_json::json!({"name": "</script>", "total_count": 1, "children": []});
     let html = emit_tree_html(&tree, "t", "h", 100, 100);
     assert!(
         !html.contains("\"</script>\""),
-        "raw </script> in JSON data"
+        "raw </script> survived in JSON string literal"
+    );
+    assert!(
+        html.contains("<\\/script>"),
+        "expected neutralised <\\/script> in JSON"
     );
 }

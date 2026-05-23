@@ -379,7 +379,7 @@ pub fn html_comment_text(text: &str) -> String {
     text.replace("--", "- -").replace('\n', " ")
 }
 
-/// Build a Mermaid-safe ASCII identifier with a sha1 hash suffix.
+/// Build a Mermaid-safe ASCII identifier with a SHA-256 (truncated) hash suffix.
 #[must_use]
 pub fn stable_ascii_id(raw: &str, prefix: &str, limit: usize) -> String {
     let digest = {
