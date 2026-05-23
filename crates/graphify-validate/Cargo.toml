@@ -8,12 +8,8 @@ repository.workspace = true
 description = "Schema validation for graphify extraction JSON"
 
 [dependencies]
-indexmap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

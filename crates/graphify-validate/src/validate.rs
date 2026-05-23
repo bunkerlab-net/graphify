@@ -1,6 +1,7 @@
 //! The [`validate_extraction`] and [`assert_valid`] entry points.
 
-use indexmap::IndexSet;
+use std::collections::HashSet;
+
 use serde_json::Value;
 
 use crate::error::ValidationError;
@@ -37,7 +38,7 @@ pub fn validate_extraction(data: &Value) -> Vec<String> {
     let mut errors: Vec<String> = Vec::new();
 
     let nodes_value = obj.get("nodes");
-    let mut node_ids: IndexSet<String> = IndexSet::new();
+    let mut node_ids: HashSet<String> = HashSet::new();
     match nodes_value {
         None => errors.push("Missing required key 'nodes'".to_string()),
         Some(Value::Array(nodes)) => {
