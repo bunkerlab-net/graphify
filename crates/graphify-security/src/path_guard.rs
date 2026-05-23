@@ -43,12 +43,11 @@ pub fn validate_graph_path<P: AsRef<Path>>(
         })
     };
 
+    // `canonicalize` already fails when the path doesn't exist, so the
+    // separate `exists()` check that used to follow is redundant.
     let Ok(base_resolved) = base_path.canonicalize() else {
         return Err(SecurityError::BaseMissing(base_path));
     };
-    if !base_resolved.exists() {
-        return Err(SecurityError::BaseMissing(base_resolved));
-    }
 
     let resolved = resolve_logical(path);
 

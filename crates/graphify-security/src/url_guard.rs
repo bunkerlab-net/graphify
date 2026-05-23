@@ -10,7 +10,14 @@ use crate::ip::ip_is_blocked;
 
 const ALLOWED_SCHEMES: &[&str] = &["http", "https"];
 
-const BLOCKED_HOSTS: &[&str] = &["metadata.google.internal", "metadata.google.com"];
+// GCP + Azure cloud-metadata hostnames. The 169.254.169.254 IMDS address
+// itself is already covered by the link-local IPv4 block.
+const BLOCKED_HOSTS: &[&str] = &[
+    "metadata.google.internal",
+    "metadata.google.com",
+    "metadata.azure.com",
+    "169.254.169.254",
+];
 
 /// Validate that `url` is http/https and does not resolve to a
 /// private/reserved IP.
@@ -54,10 +61,7 @@ pub(crate) fn validate_url_with(
         });
     }
     let Some(host) = parsed.host() else {
-        return Err(SecurityError::BlockedScheme {
-            scheme,
-            url: url.to_string(),
-        });
+        return Err(SecurityError::MissingHost(url.to_string()));
     };
 
     let host_repr = match &host {

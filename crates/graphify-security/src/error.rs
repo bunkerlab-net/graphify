@@ -97,4 +97,8 @@ pub enum SecurityError {
     /// The validated graph file does not exist.
     #[error("Graph file not found: {0}")]
     GraphFileMissing(PathBuf),
+
+    /// URL parsed successfully but has no host (e.g. `http:///foo`).
+    #[error("URL is missing a host. Got: '{0}'")]
+    MissingHost(String),
 }

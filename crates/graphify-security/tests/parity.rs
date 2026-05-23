@@ -66,7 +66,13 @@ fn validate_url_rejects_loopback_ipv4_literal() {
 #[test]
 fn validate_url_rejects_link_local_ipv4_literal() {
     let err = validate_url("http://169.254.169.254/").expect_err("link-local should be blocked");
-    assert!(matches!(err, SecurityError::BlockedPrivateIp { .. }));
+    // The IMDS literal is in both the metadata-host allowlist and the
+    // link-local CIDR, so either error is acceptable as long as the URL
+    // is rejected.
+    assert!(matches!(
+        err,
+        SecurityError::BlockedPrivateIp { .. } | SecurityError::BlockedMetadataHost { .. }
+    ));
 }
 
 #[test]

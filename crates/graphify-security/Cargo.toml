@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Security helpers: URL validation, safe fetch, path guards, label sanitisation"
 
 [dependencies]
-htmlescape = { workspace = true }
 ipnet = "2"
 regex = { workspace = true }
 thiserror = { workspace = true }

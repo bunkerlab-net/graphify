@@ -53,6 +53,11 @@ fn ipv4_is_blocked(v4: Ipv4Addr) -> bool {
         return true;
     }
     let o = v4.octets();
+    // RFC 1122: 0.0.0.0/8 "this network". `is_unspecified` only flags the
+    // exact `0.0.0.0`; the rest of the range is still reserved.
+    if o[0] == 0 {
+        return true;
+    }
     if o[0] == 192 && o[1] == 0 && o[2] == 0 {
         return true;
     }
@@ -89,6 +94,21 @@ fn ipv6_is_blocked(v6: Ipv6Addr) -> bool {
     }
     if segments[0] == 0x2001 && segments[1] == 0xdb8 {
         return true;
+    }
+    // RFC 4380: Teredo (2001:0000::/32) tunnels IPv4 over IPv6.
+    if segments[0] == 0x2001 && segments[1] == 0x0000 {
+        return true;
+    }
+    // RFC 3056: 6to4 (2002::/16) embeds an IPv4 address in segments[1..3].
+    // Recurse into the embedded IPv4 so a private source v4 is also blocked.
+    if segments[0] == 0x2002 {
+        let embedded = Ipv4Addr::new(
+            (segments[1] >> 8) as u8,
+            (segments[1] & 0xff) as u8,
+            (segments[2] >> 8) as u8,
+            (segments[2] & 0xff) as u8,
+        );
+        return ipv4_is_blocked(embedded);
     }
     false
 }
