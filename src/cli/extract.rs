@@ -177,6 +177,7 @@ fn run_detect_phase(
                     "      {new_total} new/changed, {unchanged_total} unchanged, {} deleted",
                     inc.deleted_files.len()
                 );
+                return detect_result_from_incremental(path, &inc);
             }
             Err(e) => eprintln!("      incremental scan failed ({e}); falling back to full scan"),
         }
@@ -184,6 +185,34 @@ fn run_detect_phase(
     } else {
         eprintln!("[1/6] detecting files in {} ...", path.display());
         graphify_detect::detect(path, None, extra_excludes)
+    }
+}
+
+/// Convert an [`IncrementalDetectResult`] back into a [`DetectResult`] using
+/// the union of changed + unchanged files. Saves the redundant `detect`
+/// walk that used to follow every successful incremental scan.
+fn detect_result_from_incremental(
+    path: &std::path::Path,
+    inc: &graphify_detect::IncrementalDetectResult,
+) -> graphify_detect::DetectResult {
+    let mut files: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (kind, paths) in &inc.changed_files {
+        files.entry(kind.clone()).or_default().extend(paths.clone());
+    }
+    for (kind, paths) in &inc.unchanged_files {
+        files.entry(kind.clone()).or_default().extend(paths.clone());
+    }
+    let total_files = files.values().map(Vec::len).sum();
+    graphify_detect::DetectResult {
+        files,
+        total_files,
+        total_words: 0,
+        needs_graph: true,
+        warning: None,
+        skipped_sensitive: Vec::new(),
+        graphifyignore_patterns: 0,
+        scan_root: path.to_string_lossy().into_owned(),
     }
 }
 

@@ -1,7 +1,7 @@
 //! `cluster-only` command — rerun clustering on an existing graph.json and
 //! regenerate the community report.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::cli::{build_analysis, load_graph};
 
@@ -13,6 +13,7 @@ use crate::cli::{build_analysis, load_graph};
 /// `min_community_size` is honoured by filtering communities from the analysis
 /// JSON that the report renderer reads; `graphify_cluster::cluster` itself does
 /// not accept a minimum-size parameter.
+#[allow(clippy::too_many_lines)] // CLI entry point: linear orchestration is clearer than splitting.
 pub(crate) fn cmd_cluster_only(
     path: &std::path::Path,
     no_viz: bool,
@@ -41,7 +42,17 @@ pub(crate) fn cmd_cluster_only(
     let cluster_start = std::time::Instant::now();
     // Forward exclude_hubs directly; convert 0.0–1.0 fraction to 0.0–100.0 percentile
     // as expected by graphify_cluster (mirroring Python's `--exclude-hubs` semantics).
-    let hubs_pct = exclude_hubs.map(|p| p * 100.0);
+    // Anything outside [0.0, 1.0] is rejected so a stray `--exclude-hubs 95`
+    // doesn't silently become an absurd 9500% percentile.
+    let hubs_pct = match exclude_hubs {
+        Some(p) if (0.0..=1.0).contains(&p) => Some(p * 100.0),
+        Some(p) => {
+            return Err(anyhow!(
+                "--exclude-hubs must be a fraction in [0.0, 1.0]; got {p}"
+            ));
+        }
+        None => None,
+    };
     let communities = graphify_cluster::cluster(&g, resolution, hubs_pct);
     eprintln!(
         "      found {} communities in {:.1}s",
@@ -116,7 +127,7 @@ pub(crate) fn cmd_cluster_only(
     let html_path = graph_path.with_file_name("graph.html");
     if no_viz {
         if html_path.exists() {
-            let _ = std::fs::remove_file(&html_path);
+            std::fs::remove_file(&html_path)?;
         }
         eprintln!("[4/4] HTML viz: skipped (--no-viz; graph.html removed)");
     } else {

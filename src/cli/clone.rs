@@ -39,7 +39,9 @@ pub(crate) fn cmd_clone(
         let mut cmd = Proc::new("git");
         cmd.arg("-C").arg(&target).arg("pull");
         if let Some(b) = branch {
-            cmd.arg("origin").arg("--").arg(b);
+            // `git pull origin <ref>` — no `--`, which would otherwise be
+            // interpreted as a separator for pathspecs and break the pull.
+            cmd.arg("origin").arg(b);
         }
         let status = cmd.status()?;
         if !status.success() {
