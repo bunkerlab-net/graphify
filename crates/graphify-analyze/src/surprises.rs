@@ -34,9 +34,6 @@ pub struct SurpriseScoreInput<'a> {
     pub degrees: Option<&'a IndexMap<String, usize>>,
 }
 
-/// # Errors
-///
-/// This function is infallible; it returns a plain `(i32, Vec<String>)`.
 #[must_use]
 pub fn surprise_score(input: &SurpriseScoreInput<'_>) -> (i32, Vec<String>) {
     let SurpriseScoreInput {

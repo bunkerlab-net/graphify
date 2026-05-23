@@ -44,8 +44,7 @@ fn graph_diff_removed_nodes() {
     let g_new = graph(json!([{"id": "a", "label": "A"}]), json!([]));
     let v = graph_diff(&g_old, &g_new);
     let s = v["summary"].as_str().unwrap();
-    assert!(s.contains("node") || s.contains("edge"));
-    assert!(s.contains("removed"));
+    assert!(s.contains("node removed") || s.contains("edge removed"));
 }
 
 #[test]
