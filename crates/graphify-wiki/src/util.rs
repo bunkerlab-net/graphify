@@ -14,22 +14,21 @@ use graphify_build::Graph;
 /// Falls back to `"unnamed"` for empty results and caps length at 200 chars.
 #[must_use]
 pub(crate) fn safe_filename(name: &str) -> String {
-    let s = name.replace('/', "-").replace(' ', "_").replace(':', "-");
-    let s: String = s
+    let s: String = name
         .chars()
-        .map(|c| {
-            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
-                '_'
-            } else {
-                c
-            }
+        .map(|c| match c {
+            '/' | ':' => '-',
+            ' ' | '<' | '>' | '"' | '\\' | '|' | '?' | '*' => '_',
+            other => other,
         })
         .collect();
-    let s = s.trim_matches(|c| c == '.' || c == ' ').to_string();
+    let s = s.trim_matches(|c: char| c == '.' || c == ' ').to_string();
     if s.is_empty() {
         "unnamed".to_string()
-    } else if s.len() > 200 {
-        s[..200].to_string()
+    } else if s.chars().count() > 200 {
+        // Truncate by character count, not bytes, so multi-byte UTF-8
+        // characters never split mid-codepoint.
+        s.chars().take(200).collect()
     } else {
         s
     }
