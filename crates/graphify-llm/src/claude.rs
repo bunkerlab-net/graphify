@@ -16,8 +16,19 @@ pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 pub const ENV_KEY: &str = "ANTHROPIC_API_KEY";
 /// Model override environment variable.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_CLAUDE_MODEL";
+/// Base URL override environment variable.
+pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_CLAUDE_BASE_URL";
 
-const BASE_URL: &str = "https://api.anthropic.com";
+const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+
+/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+#[must_use]
+pub fn base_url() -> String {
+    std::env::var(BASE_URL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
 
 #[derive(Deserialize)]
 struct AnthropicResponse {
@@ -90,9 +101,10 @@ pub fn call_claude(
     messages: &[serde_json::Value],
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
-    graphify_security::validate_url(BASE_URL)?;
+    let base = base_url();
+    graphify_security::validate_url(&base)?;
 
-    let endpoint = format!("{BASE_URL}/v1/messages");
+    let endpoint = format!("{base}/v1/messages");
     let timeout = crate::openai_compat::api_timeout();
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))

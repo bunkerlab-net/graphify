@@ -18,6 +18,17 @@ use crate::{
 pub const DEFAULT_MODEL: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
 /// Model override env var.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_BEDROCK_MODEL";
+/// Endpoint override env var (overrides the entire `https://bedrock-runtime.<region>.amazonaws.com` URL).
+pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_BEDROCK_BASE_URL";
+
+/// Effective base URL — defaults to AWS's regional endpoint, overrideable via env.
+#[must_use]
+pub fn base_url(region: &str) -> String {
+    std::env::var(BASE_URL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("https://bedrock-runtime.{region}.amazonaws.com"))
+}
 
 /// Bedrock backend.
 pub struct BedrockBackend {
@@ -132,7 +143,7 @@ pub fn call_bedrock(
         ));
     }
 
-    let endpoint = format!("https://bedrock-runtime.{region}.amazonaws.com/model/{model}/converse");
+    let endpoint = format!("{}/model/{model}/converse", base_url(region));
     graphify_security::validate_url(&endpoint)?;
 
     let body = json!({

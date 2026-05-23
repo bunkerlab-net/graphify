@@ -6,7 +6,7 @@
 
 use crate::LlmError;
 use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
-use crate::{bedrock, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat};
+use crate::{bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat};
 
 /// Send a plain-text `prompt` to the named `backend` and return the text reply.
 ///
@@ -56,8 +56,9 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
         "claude" => {
             // Call Anthropic API without the extraction system prompt.
             let timeout = openai_compat::api_timeout();
-            graphify_security::validate_url("https://api.anthropic.com")?;
-            let endpoint = "https://api.anthropic.com/v1/messages";
+            let claude_base = claude::base_url();
+            graphify_security::validate_url(&claude_base)?;
+            let endpoint = format!("{claude_base}/v1/messages");
             let body = serde_json::json!({
                 "model": mdl,
                 "max_tokens": max_tokens_u32,
@@ -68,7 +69,7 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
                 .build()
                 .into();
             let http_resp = agent
-                .post(endpoint)
+                .post(&endpoint)
                 .header("x-api-key", &key)
                 .header("anthropic-version", "2023-06-01")
                 .header("Content-Type", "application/json")
@@ -92,7 +93,7 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
             bedrock::call_bedrock_plain(mdl, &region, prompt, max_tokens_u32)
         }
         "kimi" => kimi::call_plain_openai_compat(&kimi::PlainOpenAiRequest {
-            base_url: "https://api.moonshot.ai/v1",
+            base_url: &kimi::base_url(),
             api_key: &key,
             model: mdl,
             prompt,

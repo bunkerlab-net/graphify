@@ -909,7 +909,7 @@ pub fn extract_delphi_form(path: &Path) -> FileResult {
 
 /// Extract package metadata from a Lazarus `.lpk` package file (XML).
 #[must_use]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 pub fn extract_lazarus_package(path: &Path) -> FileResult {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,

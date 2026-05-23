@@ -1,0 +1,14 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Card from '../components/Card.astro';
+
+const title = 'Welcome';
+const items = ['a', 'b', 'c'];
+---
+
+<Layout title={title}>
+  <main>
+    <h1>{title}</h1>
+    {items.map(item => <Card name={item} />)}
+  </main>
+</Layout>

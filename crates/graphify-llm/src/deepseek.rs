@@ -12,7 +12,18 @@ pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 pub const ENV_KEY: &str = "DEEPSEEK_API_KEY";
 /// Model override env var.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_DEEPSEEK_MODEL";
-const BASE_URL: &str = "https://api.deepseek.com";
+/// Base URL override env var.
+pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_DEEPSEEK_BASE_URL";
+const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
+
+/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+#[must_use]
+pub fn base_url() -> String {
+    std::env::var(BASE_URL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
 
 /// `DeepSeek` backend.
 pub struct DeepSeekBackend {
@@ -68,7 +79,7 @@ pub fn call_deepseek(
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
     let req = OpenAiRequest {
-        base_url: BASE_URL,
+        base_url: &base_url(),
         api_key,
         model,
         messages: messages.to_vec(),
@@ -95,7 +106,7 @@ pub fn call_deepseek_plain(
     max_tokens: u32,
 ) -> Result<String, LlmError> {
     call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
-        base_url: BASE_URL,
+        base_url: &base_url(),
         api_key,
         model,
         prompt,

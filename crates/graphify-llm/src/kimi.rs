@@ -14,7 +14,18 @@ use crate::{LlmBackend, LlmError, LlmResponse};
 pub const DEFAULT_MODEL: &str = "kimi-k2.6";
 /// API key env var.
 pub const ENV_KEY: &str = "MOONSHOT_API_KEY";
-const BASE_URL: &str = "https://api.moonshot.ai/v1";
+/// Base URL override env var.
+pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_KIMI_BASE_URL";
+const DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+
+/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+#[must_use]
+pub fn base_url() -> String {
+    std::env::var(BASE_URL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
 
 // Response types for plain calls — defined at module scope (not inside fn).
 #[derive(Deserialize)]
@@ -86,7 +97,7 @@ pub fn call_kimi(
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
     let req = OpenAiRequest {
-        base_url: BASE_URL,
+        base_url: &base_url(),
         api_key,
         model,
         messages: messages.to_vec(),

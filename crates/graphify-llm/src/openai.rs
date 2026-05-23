@@ -12,7 +12,18 @@ pub const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 pub const ENV_KEY: &str = "OPENAI_API_KEY";
 /// Model override env var.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_OPENAI_MODEL";
-const BASE_URL: &str = "https://api.openai.com/v1";
+/// Base URL override env var (defaults to `https://api.openai.com/v1`).
+pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_OPENAI_BASE_URL";
+const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
+/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+#[must_use]
+pub fn base_url() -> String {
+    std::env::var(BASE_URL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
 
 /// `OpenAI` backend.
 pub struct OpenAiBackend {
@@ -67,8 +78,9 @@ pub fn call_openai(
     messages: &[serde_json::Value],
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
+    let base = base_url();
     let req = OpenAiRequest {
-        base_url: BASE_URL,
+        base_url: &base,
         api_key,
         model,
         messages: messages.to_vec(),
@@ -94,8 +106,9 @@ pub fn call_openai_plain(
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String, LlmError> {
+    let base = base_url();
     call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
-        base_url: BASE_URL,
+        base_url: &base,
         api_key,
         model,
         prompt,

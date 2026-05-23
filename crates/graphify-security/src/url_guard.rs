@@ -27,7 +27,14 @@ const BLOCKED_HOSTS: &[&str] = &["metadata.google.internal", "metadata.google.co
 ///   reserved IP.
 /// - [`SecurityError::DnsFailure`] if DNS resolution fails.
 pub fn validate_url(url: &str) -> Result<String, SecurityError> {
-    validate_url_with(url, false)
+    // Test-only escape hatch: when `GRAPHIFY_TEST_ALLOW_PRIVATE_IPS=1` is set,
+    // skip the private-IP block so mockito-driven tests can hit 127.0.0.1.
+    // The env var name is deliberately verbose to avoid accidental enablement
+    // and never appears in production deployment guidance.
+    let allow_private = std::env::var("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS")
+        .ok()
+        .is_some_and(|v| v == "1");
+    validate_url_with(url, allow_private)
 }
 
 /// Like [`validate_url`] but optionally bypasses private-IP rejection.

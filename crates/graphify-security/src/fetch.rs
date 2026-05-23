@@ -30,7 +30,11 @@ pub fn safe_fetch(
     max_bytes: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, SecurityError> {
-    fetch_with(url, max_bytes, timeout, false)
+    // Test-only env-var bypass — see `validate_url` in `url_guard.rs`.
+    let allow_private = std::env::var("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS")
+        .ok()
+        .is_some_and(|v| v == "1");
+    fetch_with(url, max_bytes, timeout, allow_private)
 }
 
 /// Like [`safe_fetch`] but exposes the `allow_private_ips` knob used by the

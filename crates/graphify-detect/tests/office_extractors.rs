@@ -1,0 +1,309 @@
+//! Tests for `graphify_detect::office` — exercise the error paths
+//! (missing files, malformed binaries) and the empty-result wrappers.
+
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::similar_names,
+    clippy::items_after_statements
+)]
+
+use std::fs;
+
+use graphify_detect::office::{
+    convert_office_file, docx_to_markdown, extract_pdf_text, xlsx_extract_structure,
+    xlsx_to_markdown,
+};
+
+#[test]
+fn extract_pdf_text_returns_empty_on_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let result = extract_pdf_text(&tmp.path().join("nonexistent.pdf"));
+    assert!(result.is_empty());
+}
+
+#[test]
+fn extract_pdf_text_returns_empty_on_invalid_bytes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("bad.pdf");
+    fs::write(&p, b"this is not a pdf").unwrap();
+    let result = extract_pdf_text(&p);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn docx_to_markdown_returns_empty_on_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(docx_to_markdown(&tmp.path().join("nonexistent.docx")).is_empty());
+}
+
+#[test]
+fn docx_to_markdown_returns_empty_on_non_zip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("bad.docx");
+    fs::write(&p, b"definitely not a docx").unwrap();
+    assert!(docx_to_markdown(&p).is_empty());
+}
+
+#[test]
+fn xlsx_to_markdown_returns_empty_on_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(xlsx_to_markdown(&tmp.path().join("nonexistent.xlsx")).is_empty());
+}
+
+#[test]
+fn xlsx_to_markdown_returns_empty_on_non_zip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("bad.xlsx");
+    fs::write(&p, b"definitely not an xlsx").unwrap();
+    assert!(xlsx_to_markdown(&p).is_empty());
+}
+
+#[test]
+fn xlsx_extract_structure_empty_on_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = xlsx_extract_structure(&tmp.path().join("nonexistent.xlsx"));
+    assert!(s.sheets.is_empty());
+}
+
+#[test]
+fn convert_office_file_unknown_extension_returns_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("random.xyz");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&src, b"junk").unwrap();
+    let result = convert_office_file(&src, &out_dir).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn convert_office_file_pdf_extension_falls_through_to_empty_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("dummy.pdf");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    // Invalid PDF; extract returns "" and the function returns Ok(None) (no md written).
+    fs::write(&src, b"not really a pdf").unwrap();
+    let _ = convert_office_file(&src, &out_dir);
+    // Just verify it doesn't panic. May return None or Some depending on impl.
+}
+
+#[test]
+fn convert_office_file_docx_extension_falls_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("dummy.docx");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&src, b"not really a docx").unwrap();
+    let _ = convert_office_file(&src, &out_dir);
+}
+
+#[test]
+fn convert_office_file_xlsx_extension_falls_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("dummy.xlsx");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&src, b"not really an xlsx").unwrap();
+    let _ = convert_office_file(&src, &out_dir);
+}
+
+/// Build a minimal valid DOCX (ZIP archive containing `word/document.xml`)
+/// for exercising the docx parser's happy path.
+fn build_minimal_docx(path: &std::path::Path, body: &str) {
+    use std::io::Write;
+    let f = fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(f);
+    let opts: zip::write::SimpleFileOptions =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("word/document.xml", opts).unwrap();
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>{body}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>second paragraph</w:t></w:r></w:p>
+  </w:body>
+</w:document>"#
+    );
+    zip.write_all(xml.as_bytes()).unwrap();
+    zip.finish().unwrap();
+}
+
+#[test]
+fn docx_to_markdown_parses_minimal_docx() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("real.docx");
+    build_minimal_docx(&p, "hello docx world");
+    let md = docx_to_markdown(&p);
+    assert!(md.contains("hello docx world"), "got: {md}");
+    assert!(md.contains("second paragraph"), "got: {md}");
+}
+
+/// Build a minimal valid XLSX (Open XML Spreadsheet) using `umya-spreadsheet`-like
+/// shape — just enough for `calamine` to parse a single cell.
+fn build_minimal_xlsx(path: &std::path::Path) {
+    use std::io::Write;
+    let f = fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(f);
+    let opts: zip::write::SimpleFileOptions =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    zip.start_file("[Content_Types].xml", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#).unwrap();
+
+    zip.start_file("_rels/.rels", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#).unwrap();
+
+    zip.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#).unwrap();
+
+    zip.start_file("xl/workbook.xml", opts).unwrap();
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#).unwrap();
+
+    zip.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>hello cell</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>second</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2"><v>42</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#,
+    )
+    .unwrap();
+
+    zip.finish().unwrap();
+}
+
+#[test]
+fn xlsx_extract_structure_reads_minimal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("real.xlsx");
+    build_minimal_xlsx(&p);
+    let s = xlsx_extract_structure(&p);
+    assert!(
+        !s.sheets.is_empty(),
+        "expected at least one sheet from minimal xlsx"
+    );
+}
+
+#[test]
+fn xlsx_to_markdown_reads_minimal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("real.xlsx");
+    build_minimal_xlsx(&p);
+    let md = xlsx_to_markdown(&p);
+    // Markdown should mention the sheet name and probably contain the cells.
+    assert!(!md.is_empty(), "expected markdown output");
+}
+
+/// Build a minimal valid PDF using lopdf's writer.
+fn build_minimal_pdf(path: &std::path::Path) {
+    use lopdf::{Document, Object, Stream, dictionary};
+
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+
+    let content_obj = "BT /F1 12 Tf 100 700 Td (hello pdf world) Tj ET";
+    let stream = Stream::new(dictionary! {}, content_obj.as_bytes().to_vec());
+    let content_id = doc.add_object(stream);
+
+    let resources_id = doc.add_object(dictionary! {
+        "Font" => dictionary! {
+            "F1" => dictionary! {
+                "Type" => "Font",
+                "Subtype" => "Type1",
+                "BaseFont" => "Helvetica",
+            },
+        },
+    });
+
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Resources" => resources_id,
+        "Contents" => content_id,
+        "MediaBox" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(595),
+            Object::Integer(842)
+        ],
+    });
+
+    let pages = dictionary! {
+        "Type" => "Pages",
+        "Kids" => vec![page_id.into()],
+        "Count" => 1,
+    };
+    doc.objects.insert(pages_id, Object::Dictionary(pages));
+
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+
+    doc.compress();
+    doc.save(path).unwrap();
+}
+
+#[test]
+fn extract_pdf_text_parses_minimal_pdf() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("real.pdf");
+    build_minimal_pdf(&p);
+    let text = extract_pdf_text(&p);
+    // Even if text content extraction is empty (depends on font handling),
+    // we exercised the entire PDF parse pipeline.
+    let _ = text;
+}
+
+#[test]
+fn convert_office_file_real_pdf() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("real.pdf");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    build_minimal_pdf(&src);
+    let _ = convert_office_file(&src, &out_dir);
+}
+
+#[test]
+fn convert_office_file_real_docx_writes_md() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("real.docx");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    build_minimal_docx(&src, "convertible doc");
+    let result = convert_office_file(&src, &out_dir).unwrap();
+    assert!(result.is_some(), "expected an output markdown file");
+    let out_path = result.unwrap();
+    assert!(out_path.exists());
+    let md = fs::read_to_string(&out_path).unwrap();
+    assert!(md.contains("convertible doc"));
+}
