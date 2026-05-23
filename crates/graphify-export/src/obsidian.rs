@@ -176,7 +176,7 @@ fn write_node_note(
             neighbor_ids.push(&edge.source);
         }
     }
-    neighbor_ids.dedup();
+    // `Vec::dedup` only collapses *adjacent* duplicates, so sort first.
     neighbor_ids.sort_by_key(|nb| {
         graph
             .node_data(nb)
@@ -184,6 +184,7 @@ fn write_node_note(
             .and_then(Value::as_str)
             .unwrap_or(nb)
     });
+    neighbor_ids.dedup();
 
     if !neighbor_ids.is_empty() {
         lines.push("## Connections".to_string());

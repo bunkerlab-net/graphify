@@ -12,6 +12,7 @@ use graphify_export::{
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
+use serial_test::serial;
 use tempfile::tempdir;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -247,12 +248,14 @@ fn test_to_canvas_file_paths_relative_to_vault() {
 // ── backup_if_protected ───────────────────────────────────────────────────────
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_no_graph_json() {
     let tmp = tempdir().unwrap();
     assert!(backup_if_protected(tmp.path()).is_none());
 }
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_no_markers() {
     let tmp = tempdir().unwrap();
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
@@ -260,6 +263,7 @@ fn test_backup_no_markers() {
 }
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_semantic_marker() {
     let tmp = tempdir().unwrap();
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
@@ -279,6 +283,7 @@ fn test_backup_semantic_marker() {
 }
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_curated_labels() {
     let tmp = tempdir().unwrap();
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
@@ -292,6 +297,7 @@ fn test_backup_curated_labels() {
 }
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_default_labels_only() {
     let tmp = tempdir().unwrap();
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
@@ -304,6 +310,7 @@ fn test_backup_default_labels_only() {
 }
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_same_day_collision() {
     let tmp = tempdir().unwrap();
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
@@ -319,11 +326,11 @@ fn test_backup_same_day_collision() {
 }
 
 #[test]
+#[serial(backup_env)]
 fn test_backup_env_disable() {
     let tmp = tempdir().unwrap();
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
     std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").unwrap();
-    // Safety: tests run in isolated processes in nextest; env mutation is safe.
     // SAFETY: nextest runs each test in a separate process, so env mutation is safe.
     unsafe {
         std::env::set_var("GRAPHIFY_NO_BACKUP", "1");

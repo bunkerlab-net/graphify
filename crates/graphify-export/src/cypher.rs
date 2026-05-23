@@ -44,6 +44,15 @@ pub fn cypher_label(raw: &str, fallback: &str) -> String {
     cleaned.into_owned()
 }
 
+/// Escape a Cypher property-name identifier by wrapping in backticks and
+/// doubling any embedded backticks. Use this anywhere a user-supplied
+/// property name is interpolated into a Cypher statement; without it,
+/// names like `` foo` SET n.x = 'evil'-- `` would be injected as syntax.
+#[must_use]
+pub fn cypher_escape_identifier(s: &str) -> String {
+    format!("`{}`", s.replace('`', "``"))
+}
+
 /// Export graph as a Neo4j Cypher import script.
 ///
 /// Mirrors Python `to_cypher`.

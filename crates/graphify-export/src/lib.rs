@@ -15,7 +15,7 @@ pub mod svg;
 mod util;
 
 pub use canvas::to_canvas;
-pub use cypher::{cypher_escape, cypher_label, to_cypher};
+pub use cypher::{cypher_escape, cypher_escape_identifier, cypher_label, to_cypher};
 pub use error::ExportError;
 pub use graphml::to_graphml;
 pub use html::to_html;

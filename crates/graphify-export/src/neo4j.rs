@@ -16,7 +16,7 @@ use neo4rs::{ConfigBuilder, Graph as Neo4jGraph, query};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{cypher_escape, cypher_label, node_community_map};
+use crate::{cypher_escape, cypher_escape_identifier, cypher_label, node_community_map};
 
 const BATCH_SIZE: usize = 200;
 
@@ -206,10 +206,16 @@ async fn push_nodes(db: &Neo4jGraph, rows: &[NodeRow]) -> Result<usize, Neo4jErr
     let mut written = 0usize;
     for chunk in rows.chunks(BATCH_SIZE) {
         for row in chunk {
-            // Build a Cypher SET clause from props + community.
+            // Build a Cypher SET clause from props + community. Identifier
+            // names are wrapped via `cypher_escape_identifier` so a hostile
+            // property key cannot break out of the SET clause.
             let mut set_parts: Vec<String> = vec![format!("n.id = '{}'", cypher_escape(&row.id))];
             for (k, v) in &row.props {
-                set_parts.push(format!("{k} = '{}'", cypher_escape(v)));
+                set_parts.push(format!(
+                    "n.{} = '{}'",
+                    cypher_escape_identifier(k),
+                    cypher_escape(v)
+                ));
             }
             if let Some(cid) = row.community {
                 set_parts.push(format!("n.community = {cid}"));
@@ -234,7 +240,11 @@ async fn push_edges(db: &Neo4jGraph, rows: &[EdgeRow]) -> Result<usize, Neo4jErr
         for row in chunk {
             let mut set_parts: Vec<String> = vec![];
             for (k, v) in &row.props {
-                set_parts.push(format!("r.{k} = '{}'", cypher_escape(v)));
+                set_parts.push(format!(
+                    "r.{} = '{}'",
+                    cypher_escape_identifier(k),
+                    cypher_escape(v)
+                ));
             }
             let set_clause = if set_parts.is_empty() {
                 String::new()

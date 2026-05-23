@@ -137,11 +137,15 @@ fn obsidian_handles_duplicate_node_labels() {
         .collect();
 
     // Should have two distinct files for "Foo" (one base + one suffixed).
+    let foo_files: Vec<&String> = names.iter().filter(|n| n.starts_with("Foo")).collect();
+    assert_eq!(
+        foo_files.len(),
+        2,
+        "expected 2 distinct files for duplicate label 'Foo', got: {names:?}"
+    );
     assert!(
-        names
-            .iter()
-            .any(|n| n.starts_with("Foo.md") || n == "Foo.md"),
-        "missing Foo.md (got: {names:?})"
+        foo_files.iter().any(|n| n.as_str() == "Foo.md"),
+        "expected one of the duplicates to keep the base 'Foo.md' (got: {names:?})"
     );
 }
 

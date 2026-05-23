@@ -20,6 +20,10 @@ use serde_json::Value;
 
 use crate::{COMMUNITY_COLORS, ExportError, node_community_map};
 
+fn svg_text_escape(s: &str) -> String {
+    htmlescape::encode_minimal(s)
+}
+
 // ── Spring layout (Fruchterman-Reingold, seeded deterministically) ────────────
 
 /// Compute a spring-layout for the graph nodes.
@@ -359,11 +363,7 @@ fn draw_node_labels(
             .get("label")
             .and_then(Value::as_str)
             .unwrap_or(node_id);
-        let label_esc = label
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;");
+        let label_esc = svg_text_escape(label);
         let _ = writeln!(
             svg,
             "  <text x=\"{:.1}\" y=\"{:.1}\" fill=\"white\" font-size=\"7\" text-anchor=\"middle\">{label_esc}</text>",
@@ -384,10 +384,7 @@ fn draw_legend(
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let color = COMMUNITY_COLORS[(cid.unsigned_abs() as usize) % COMMUNITY_COLORS.len()];
         let n = communities.get(cid).map_or(0, Vec::len);
-        let label_esc = label
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
+        let label_esc = svg_text_escape(label);
         let _ = writeln!(
             svg,
             "  <rect x=\"{legend_x}\" y=\"{legend_y}\" width=\"12\" height=\"12\" fill=\"{color}\" rx=\"6\"/>"
