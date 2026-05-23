@@ -8,9 +8,8 @@ use std::path::PathBuf;
 /// should not happen in normal operation but avoids a panic in degenerate
 /// environments.
 fn default_global_dir() -> PathBuf {
-    // `home_dir` is deprecated in 1.85+ but `std::env::home_dir` is the only
-    // stable way to get HOME without a third-party crate.
-    #[allow(deprecated)] // reason: std::env::home_dir is the only stable approach
+    // `std::env::home_dir` was un-deprecated in Rust 1.86 and now returns
+    // the correct value on Windows, so no third-party crate is needed.
     let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".graphify")
 }

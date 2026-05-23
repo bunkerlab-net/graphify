@@ -113,9 +113,11 @@ pub fn global_add(
             global.add_node(id, attrs.clone());
         }
     }
+    let mut edges_added: usize = 0;
     for edge in prefixed.edges() {
         if !nodes_to_skip.contains(&edge.source) && !nodes_to_skip.contains(&edge.target) {
             global.add_edge(&edge.source, &edge.target, edge.attrs.clone());
+            edges_added += 1;
         }
     }
 
@@ -128,7 +130,7 @@ pub fn global_add(
             added_at: utc_now_iso8601(),
             source_path: canonical_source.to_string_lossy().into_owned(),
             node_count: added,
-            edge_count: prefixed.edge_count(),
+            edge_count: edges_added,
             source_hash: src_hash,
         },
     );
