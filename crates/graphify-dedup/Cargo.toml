@@ -18,7 +18,6 @@ thiserror = { workspace = true }
 twox-hash = "2"
 
 [dev-dependencies]
-strsim = "0.11"
 tempfile = { workspace = true }
 
 [lints]

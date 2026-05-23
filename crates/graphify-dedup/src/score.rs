@@ -175,7 +175,7 @@ fn damerau_levenshtein(a: &str, b: &str) -> usize {
                 .min(dp[i][j - 1] + 1)
                 .min(dp[i - 1][j - 1] + cost);
             if i > 1 && j > 1 && ac[i - 1] == bc[j - 2] && ac[i - 2] == bc[j - 1] {
-                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + cost);
+                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + 1);
             }
         }
     }

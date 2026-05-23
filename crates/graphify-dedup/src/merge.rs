@@ -175,7 +175,7 @@ pub fn llm_tiebreak(
         let id_a = node_a.get("id").and_then(Value::as_str).unwrap_or("");
         let norm_a = norm(node_a.get("label").and_then(Value::as_str).unwrap_or(id_a));
         for node_b in candidates.iter().skip(i + 1) {
-            consider_tiebreak_pair(uf, communities, backend, id_a, &norm_a, node_b);
+            consider_tiebreak_pair(uf, communities, backend, node_a, id_a, &norm_a, node_b);
         }
     }
 }
@@ -186,6 +186,7 @@ fn consider_tiebreak_pair(
     uf: &mut UnionFind,
     communities: &IndexMap<String, i64>,
     backend: &dyn DedupLlmBackend,
+    node_a: &Value,
     id_a: &str,
     norm_a: &str,
     node_b: &Value,
@@ -210,11 +211,17 @@ fn consider_tiebreak_pair(
     if (LLM_LOW..LLM_HIGH).contains(&score)
         && let JudgeResult::Merge = backend.judge(norm_a, &norm_b)
     {
-        let winner_id = if id_a.len() <= id_b.len() {
-            id_a.to_string()
-        } else {
-            id_b.to_string()
+        // Reuse `pick_winner` so the chunk-suffix preference matches the
+        // other merge paths instead of using a shorter-id-only fallback.
+        let pair: [&Value; 2] = [node_a, node_b];
+        let Ok(winner) = pick_winner(&pair) else {
+            return;
         };
+        let winner_id = winner
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         uf.union(&winner_id, id_a);
         uf.union(&winner_id, id_b);
     }

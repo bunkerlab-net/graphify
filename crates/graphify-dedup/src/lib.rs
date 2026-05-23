@@ -1,7 +1,7 @@
 //! Entity deduplication pipeline for graphify knowledge graphs.
 //!
 //! Pipeline:
-//! 1. Exact normalisation (same label in same file → merge)
+//! 1. Exact normalization (same label in same file → merge)
 //! 2. MinHash/LSH blocking → Jaro-Winkler verification → community
 //!    boost
 //! 3. Optional LLM tiebreaker for the 75–92 score zone

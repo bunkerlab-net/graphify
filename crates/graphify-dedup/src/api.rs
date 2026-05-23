@@ -13,8 +13,9 @@ use crate::merge;
 ///
 /// * `nodes` — list of node objects, each with at minimum
 ///   `{"id": str, "label": str}`.
-/// * `edges` — list of edge objects with
-///   `{"source": str, "target": str, ...}`.
+/// * `edges` — list of edge objects with either
+///   `{"source": str, "target": str, ...}` or
+///   `{"from": str, "to": str, ...}` endpoint keys (both are accepted).
 /// * `communities` — mapping of `node_id → community_id` (from the
 ///   cluster step).
 /// * `dedup_llm_backend` — optional LLM backend for ambiguous-pair

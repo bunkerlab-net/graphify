@@ -8,7 +8,7 @@ pub enum DedupError {
     /// Nodes span more than one repository; cross-project dedup is
     /// disabled.
     #[error(
-        "deduplicate_entities: nodes span multiple repos {0:?}. \
+        "deduplicate_entities: nodes span multiple repos {0}. \
          Cross-project dedup is disabled — run dedup per-repo before merging."
     )]
     MultipleRepos(String),
