@@ -157,3 +157,7 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
