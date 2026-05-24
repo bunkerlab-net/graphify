@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "graphify",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("GIT_SHORT_SHA")),
     about = "Turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
 )]
 pub(crate) struct Cli {
