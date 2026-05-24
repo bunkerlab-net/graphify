@@ -54,7 +54,7 @@ impl Drop for EnvGuard {
 fn api_timeout_default_is_600s() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_API_TIMEOUT");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
 }
 
 #[test]
@@ -75,16 +75,16 @@ fn api_timeout_accepts_float() {
 fn api_timeout_ignores_invalid_value() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "not-a-number");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
 }
 
 #[test]
 fn api_timeout_ignores_zero_or_negative() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "0");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
     g.set("GRAPHIFY_API_TIMEOUT", "-1");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
 }
 
 // ── resolve_max_tokens ──────────────────────────────────────────────────────
