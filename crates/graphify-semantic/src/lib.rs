@@ -329,12 +329,16 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
         }
     }
 
-    // Pass 3: drop edges referencing removed nodes.
+    // Pass 3: drop edges referencing removed nodes, and drop malformed
+    // non-object edges entirely. The previous `return true` for
+    // non-objects preserved garbage that would only blow up downstream
+    // validation; treating malformed edges as removable is the more
+    // honest behaviour.
     let keep_edges: Vec<Value> = edges
         .into_iter()
         .filter(|e| {
             let Some(map) = e.as_object() else {
-                return true;
+                return false;
             };
             let src = map.get("source").and_then(Value::as_str).unwrap_or("");
             let tgt = map.get("target").and_then(Value::as_str).unwrap_or("");

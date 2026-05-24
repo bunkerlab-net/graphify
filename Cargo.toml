@@ -40,7 +40,7 @@ exclude = [
 [workspace.package]
 version = "0.8.17"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/bunkerlab-net/graphify"
 publish = false

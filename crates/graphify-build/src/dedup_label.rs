@@ -29,8 +29,8 @@ static CHUNK_SUFFIX: LazyLock<Regex> =
 /// sigma fold identically across the two languages.
 #[must_use]
 pub fn norm_label(label: &str) -> String {
-    let nfkc: String = label.nfkc().collect();
-    let folded: String = caseless::default_case_fold_str(&nfkc);
+    let nfkc = label.nfkc().collect::<String>();
+    let folded = caseless::default_case_fold_str(&nfkc);
     let cleaned = NON_WORD.replace_all(&folded, " ");
     cleaned.trim().to_string()
 }

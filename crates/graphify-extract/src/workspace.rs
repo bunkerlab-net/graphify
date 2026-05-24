@@ -183,16 +183,22 @@ fn glob_workspace_pattern(root: &Path, pattern: &str) -> Vec<PathBuf> {
     if p.is_dir() { vec![p] } else { Vec::new() }
 }
 
+/// Iterative directory walker for the `packages: - "dir/**"` recursive
+/// glob. Uses an explicit work stack so a pathologically-deep workspace
+/// (symlinked or otherwise) can't blow the call stack.
 fn walk_subdirs(base: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(base) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_dir() {
-            out.push(path.clone());
-            walk_subdirs(&path, out);
+    let mut stack: Vec<PathBuf> = vec![base.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                out.push(path.clone());
+                stack.push(path);
+            }
         }
     }
 }
@@ -251,21 +257,37 @@ pub fn package_entry_candidates(package_dir: &Path, subpath: &str) -> Vec<PathBu
 /// matching it against the workspace package map and probing the
 /// package's entry-point candidates with the standard file-extension
 /// resolver. Returns the first candidate that exists on disk.
+///
+/// `raw` is matched in two stages so large monorepos (hundreds of
+/// packages) don't pay an O(n) string-prefix scan per import resolve:
+///
+/// 1. Exact-name `O(1)` lookup against the package map.
+/// 2. Linear scan for prefix matches (`raw == pkg/subpath`), which is
+///    only entered when stage 1 misses.
 #[must_use]
 pub fn resolve_workspace_import(raw: &str, start_dir: &Path) -> Option<PathBuf> {
     let packages = load_workspace_packages(start_dir);
-    for (package_name, package_dir) in &packages {
-        let subpath = if raw == package_name {
-            String::new()
-        } else {
-            let with_slash = format!("{package_name}/");
-            if let Some(rest) = raw.strip_prefix(&with_slash) {
-                rest.to_string()
-            } else {
-                continue;
+
+    // Stage 1: exact package-name match (no subpath).
+    if let Some(package_dir) = packages.get(raw) {
+        for candidate in package_entry_candidates(package_dir, "") {
+            let resolved = crate::tsconfig::resolve_js_module_path(&candidate);
+            if resolved.is_file() {
+                return Some(resolved);
             }
+        }
+    }
+
+    // Stage 2: `raw == "<pkg>/<subpath>"`. Linear scan is unavoidable
+    // here because the package boundary can be anywhere in `raw` — but
+    // we already filtered exact matches above, so this branch only runs
+    // when stage 1 missed.
+    for (package_name, package_dir) in &packages {
+        let with_slash = format!("{package_name}/");
+        let Some(rest) = raw.strip_prefix(&with_slash) else {
+            continue;
         };
-        for candidate in package_entry_candidates(package_dir, &subpath) {
+        for candidate in package_entry_candidates(package_dir, rest) {
             let resolved = crate::tsconfig::resolve_js_module_path(&candidate);
             if resolved.is_file() {
                 return Some(resolved);

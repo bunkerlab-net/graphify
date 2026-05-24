@@ -77,18 +77,20 @@ pub fn ingest_scip_json(doc: &Value, source_file: &str, language: &str) -> Value
         }
     }
 
-    // Pass 2: emit nodes + relationships.
+    // Pass 2: emit nodes + relationships. Wrap the four mutable scratch
+    // buffers in a single `EmitContext` so `emit_relationships`'s
+    // signature isn't the long tuple it used to be — the borrow checker
+    // is happy because we still pass `ctx` by `&mut` and field access is
+    // disjoint.
+    let mut ctx = EmitContext {
+        nodes: &mut nodes,
+        edges: &mut edges,
+        seen_node_ids: &mut seen_node_ids,
+        seen_edges: &mut seen_edges,
+    };
     for record in &symbol_records {
-        emit_symbol_node(record, &mut nodes, &mut seen_node_ids);
-        emit_relationships(
-            record,
-            &per_doc_index,
-            &global_index,
-            &mut nodes,
-            &mut edges,
-            &mut seen_node_ids,
-            &mut seen_edges,
-        );
+        emit_symbol_node(record, ctx.nodes, ctx.seen_node_ids);
+        emit_relationships(record, &per_doc_index, &global_index, &mut ctx);
     }
 
     json!({"nodes": nodes, "edges": edges})
@@ -151,22 +153,23 @@ fn emit_symbol_node(
     }));
 }
 
-// `emit_relationships` deliberately takes its scratch state by `&mut` rather
-// than bundling it into a context struct. The scratch fields (`nodes`,
-// `edges`, `seen_node_ids`, `seen_edges`) are all distinct types with
-// distinct lifetimes and the borrow checker is happier with separate
-// `&mut`s than with a single `&mut Context` whose fields would need to be
-// re-borrowed inside the function. Wrapping them obscures the disjoint
-// access pattern without paying any indirection cost worth measuring.
-#[allow(clippy::too_many_arguments)]
+/// Mutable scratch buffers shared by the Pass-2 emit loop. Grouped into
+/// one struct so `emit_relationships` doesn't need a seven-argument
+/// signature. The fields are intentionally `&mut` references rather than
+/// owned values so the caller keeps the underlying allocations and can
+/// move them into the final `json!` payload.
+struct EmitContext<'a> {
+    nodes: &'a mut Vec<Value>,
+    edges: &'a mut Vec<Value>,
+    seen_node_ids: &'a mut HashSet<String>,
+    seen_edges: &'a mut HashSet<(String, String, String, String)>,
+}
+
 fn emit_relationships(
     record: &SymbolRecord,
     per_doc_index: &IndexMap<(String, String), String>,
     global_index: &IndexMap<String, Vec<String>>,
-    nodes: &mut Vec<Value>,
-    edges: &mut Vec<Value>,
-    seen_node_ids: &mut HashSet<String>,
-    seen_edges: &mut HashSet<(String, String, String, String)>,
+    ctx: &mut EmitContext<'_>,
 ) {
     let source_node_id = record.node_id.clone();
     let doc_path = record.doc_path.clone();
@@ -186,8 +189,8 @@ fn emit_relationships(
             resolve_relationship_target(&target_symbol, &doc_path, per_doc_index, global_index);
         if target_node_id.is_none() {
             let stub_id = make_scip_node_id(&target_symbol, &doc_path);
-            if !seen_node_ids.contains(&stub_id) {
-                seen_node_ids.insert(stub_id.clone());
+            if !ctx.seen_node_ids.contains(&stub_id) {
+                ctx.seen_node_ids.insert(stub_id.clone());
                 let suffix = target_symbol
                     .split('#')
                     .next_back()
@@ -198,7 +201,7 @@ fn emit_relationships(
                     suffix.to_string()
                 };
                 let stub_meta = build_scip_metadata(&target_symbol, "external", "");
-                nodes.push(json!({
+                ctx.nodes.push(json!({
                     "id": stub_id,
                     "label": label,
                     "file_type": "code",
@@ -228,16 +231,16 @@ fn emit_relationships(
             relation.clone(),
             source_location.clone(),
         );
-        if seen_edges.contains(&key) {
+        if ctx.seen_edges.contains(&key) {
             continue;
         }
-        seen_edges.insert(key);
+        ctx.seen_edges.insert(key);
         let mut edge_meta = Map::new();
         edge_meta.insert(
             "scip_relationship".to_string(),
             Value::Object(rel_obj.clone()),
         );
-        edges.push(json!({
+        ctx.edges.push(json!({
             "source": source_node_id,
             "target": target_node_id,
             "relation": relation,
