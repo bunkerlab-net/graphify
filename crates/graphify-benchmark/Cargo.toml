@@ -9,9 +9,7 @@ description = "Corpus-vs-subgraph token benchmark"
 
 [dependencies]
 graphify-build = { workspace = true }
-graphify-security = { workspace = true }
 indexmap = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 

@@ -11,14 +11,10 @@ description = "MinHash + fuzzy-string deduplication of similar nodes"
 indexmap = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 strsim = "0.11"
 thiserror = { workspace = true }
 twox-hash = "2"
-
-[dev-dependencies]
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Semantic cache for extraction results"
 
 [dependencies]
-anyhow = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }

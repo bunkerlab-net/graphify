@@ -10,14 +10,10 @@ description = "GitHub PR analysis"
 [dependencies]
 chrono = { workspace = true }
 indexmap = { workspace = true }
-once_cell = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

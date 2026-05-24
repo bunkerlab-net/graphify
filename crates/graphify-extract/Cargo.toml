@@ -8,18 +8,13 @@ repository.workspace = true
 description = "Tree-sitter extraction for 26+ programming languages"
 
 [dependencies]
-anyhow = { workspace = true }
-graphify-build = { workspace = true }
 graphify-cache = { workspace = true }
-graphify-detect = { workspace = true }
-graphify-validate = { workspace = true }
 indexmap = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 unicode-normalization = { workspace = true }
 walkdir = { workspace = true }
 

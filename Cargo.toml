@@ -132,24 +132,19 @@ graphify-detect = { workspace = true }
 graphify-export = { workspace = true }
 graphify-extract = { workspace = true }
 graphify-global = { workspace = true }
-graphify-google = { workspace = true }
 graphify-hooks = { workspace = true }
 graphify-html = { workspace = true }
 graphify-ingest = { workspace = true }
 graphify-llm = { workspace = true }
-graphify-manifest = { workspace = true }
 graphify-prs = { workspace = true }
 graphify-report = { workspace = true }
-graphify-security = { workspace = true }
 graphify-serve = { workspace = true }
-graphify-transcribe = { workspace = true }
 graphify-validate = { workspace = true }
 graphify-watch = { workspace = true }
 graphify-wiki = { workspace = true }
 indexmap = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt"] }
-tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]

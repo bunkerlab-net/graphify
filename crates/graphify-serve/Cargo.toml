@@ -8,13 +8,11 @@ repository.workspace = true
 description = "MCP stdio server"
 
 [dependencies]
-anyhow = { workspace = true }
 graphify-analyze = { workspace = true }
 graphify-build = { workspace = true }
 graphify-prs = { workspace = true }
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { version = "1", features = [

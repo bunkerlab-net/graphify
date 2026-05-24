@@ -8,12 +8,10 @@ repository.workspace = true
 description = "LLM router (Kimi, Ollama, Bedrock, Gemini, OpenAI, Claude CLI)"
 
 [dependencies]
-anyhow = { workspace = true }
 graphify-security = { workspace = true }
 hex = { workspace = true }
 hmac = "0.13"
 indexmap = { workspace = true }
-once_cell = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

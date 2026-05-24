@@ -8,15 +8,11 @@ repository.workspace = true
 description = "URL / PDF / Office document ingestion into corpus"
 
 [dependencies]
-anyhow = { workspace = true }
 chrono = { workspace = true }
 graphify-security = { workspace = true }
 html2md = "0.2"
-indexmap = { workspace = true }
-once_cell = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }

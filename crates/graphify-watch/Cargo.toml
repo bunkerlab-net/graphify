@@ -8,8 +8,6 @@ repository.workspace = true
 description = "Filesystem watcher"
 
 [dependencies]
-anyhow = { workspace = true }
-chrono = { workspace = true }
 graphify-analyze = { workspace = true }
 graphify-build = { workspace = true }
 graphify-cluster = { workspace = true }
@@ -20,13 +18,11 @@ graphify-report = { workspace = true }
 indexmap = { workspace = true }
 notify = "8"
 notify-debouncer-full = "0.7"
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-rustix = { version = "1", features = ["fs", "process"] }
 
 [dev-dependencies]
 serial_test = { workspace = true }
