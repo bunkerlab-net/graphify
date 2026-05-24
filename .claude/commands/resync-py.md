@@ -119,7 +119,7 @@ After all units are complete, run the full workspace gates:
 ```bash
 cargo fmt
 cargo clippy --all-targets --all-features --workspace
-cargo nextest run
+cargo nextest run --workspace
 hk check
 ```
 

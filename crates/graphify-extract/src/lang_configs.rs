@@ -50,6 +50,10 @@ pub static JAVASCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_javascript::LANGUAGE.into(),
     class_types: &["class_declaration"],
     function_types: &["function_declaration", "method_definition"],
+    // `export_statement` is intentionally treated as import-like so the JS
+    // import handler can resolve re-exports — both `export { x } from '...'`
+    // and `export * from '...'` reach module specifiers that need cross-file
+    // edge creation, just like a regular `import`.
     import_types: &["import_statement", "export_statement"],
     call_types: &["call_expression", "new_expression"],
     static_prop_types: &[],
@@ -85,6 +89,10 @@ pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
         "type_alias_declaration",
     ],
     function_types: &["function_declaration", "method_definition"],
+    // `export_statement` is intentionally treated as import-like so the JS
+    // import handler can resolve re-exports — both `export { x } from '...'`
+    // and `export * from '...'` reach module specifiers that need cross-file
+    // edge creation, just like a regular `import`.
     import_types: &["import_statement", "export_statement"],
     call_types: &["call_expression", "new_expression"],
     static_prop_types: &[],
@@ -120,6 +128,10 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
         "type_alias_declaration",
     ],
     function_types: &["function_declaration", "method_definition"],
+    // `export_statement` is intentionally treated as import-like so the JS
+    // import handler can resolve re-exports — both `export { x } from '...'`
+    // and `export * from '...'` reach module specifiers that need cross-file
+    // edge creation, just like a regular `import`.
     import_types: &["import_statement", "export_statement"],
     call_types: &["call_expression", "new_expression"],
     static_prop_types: &[],

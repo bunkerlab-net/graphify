@@ -342,6 +342,7 @@ impl Drop for BackendGuard {
 }
 
 #[test]
+#[serial_test::serial]
 fn leiden_backend_covers_all_nodes() {
     let _g = BackendGuard::set("leiden");
     let graph = make_graph();
@@ -354,6 +355,7 @@ fn leiden_backend_covers_all_nodes() {
 }
 
 #[test]
+#[serial_test::serial]
 fn louvain_backend_still_selectable_via_env() {
     let _g = BackendGuard::set("louvain");
     let graph = make_graph();
@@ -369,6 +371,7 @@ fn louvain_backend_still_selectable_via_env() {
 }
 
 #[test]
+#[serial_test::serial]
 fn unknown_backend_value_falls_back_to_leiden() {
     let _g = BackendGuard::set("not-a-real-backend");
     let graph = make_graph();

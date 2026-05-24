@@ -94,6 +94,12 @@ pub(crate) fn run_partition(
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "leiden".to_string());
+    if !matches!(backend.as_str(), "leiden" | "louvain") {
+        eprintln!(
+            "[graphify] cluster: unknown GRAPHIFY_CLUSTER_BACKEND={backend:?}; \
+             falling back to leiden"
+        );
+    }
     let raw = match backend.as_str() {
         "louvain" => crate::louvain::partition(nodes, edges, resolution),
         _ => crate::leiden::partition(nodes, edges, resolution),

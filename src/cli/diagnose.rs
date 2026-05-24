@@ -36,7 +36,7 @@ fn cmd_diagnose_multigraph(
     undirected: bool,
     extract_path: Option<&Path>,
 ) -> Result<()> {
-    let graph_path = graph.map_or_else(default_graph_path, std::path::Path::to_path_buf);
+    let graph_path = graph.map_or_else(default_graph_path, Path::to_path_buf);
     let directed_override = if directed {
         Some(true)
     } else if undirected {

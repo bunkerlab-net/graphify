@@ -1538,6 +1538,7 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "serde_json",
+ "serial_test",
 ]
 
 [[package]]
