@@ -396,7 +396,8 @@ the LLM spend.
 | `GRAPHIFY_GOOGLE_WORKSPACE` | Truthy value enables `.gdoc/.gsheet/.gslides` export by default. |
 | `GRAPHIFY_BEDROCK_MODEL`    | Override the default model for the Bedrock backend.              |
 | `GRAPHIFY_BEDROCK_BASE_URL` | Override the Bedrock Runtime endpoint URL (mainly for tests).    |
-| `GRAPHIFY_CLUSTER_PROGRESS` | Truthy value prints per-level Louvain progress to stderr.        |
+| `GRAPHIFY_CLUSTER_PROGRESS` | Truthy value prints per-level cluster progress to stderr.        |
+| `GRAPHIFY_CLUSTER_BACKEND`  | `leiden` (default) or `louvain` to force the fallback.           |
 
 ### LLM backends
 
