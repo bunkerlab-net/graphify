@@ -104,12 +104,8 @@ fn node_ids(extraction: &Map<String, Value>) -> IndexSet<String> {
         .filter_map(|n| n.as_object())
         .filter_map(|m| m.get("id"))
         .filter(|v| !v.is_null())
-        .map(safe_text_owned)
+        .map(|v| safe_text(Some(v)))
         .collect()
-}
-
-fn safe_text_owned(value: &Value) -> String {
-    safe_text(Some(value))
 }
 
 fn exact_signature(edge: &Value) -> String {

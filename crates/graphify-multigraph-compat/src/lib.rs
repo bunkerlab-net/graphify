@@ -141,36 +141,37 @@ fn run_check(name: &'static str, probe: fn() -> ProbeResult) -> CapabilityCheck 
 // shape is preserved so a future regression (e.g. an accidental dedup pass
 // in `Graph::add_edge`) is detected before `--multigraph` is enabled.
 
+#[allow(clippy::similar_names)] // distinct per-node/per-edge attribute maps; renaming further would only obscure intent
 fn build_probe_graph() -> graphify_build::Graph {
     use graphify_build::{Graph, GraphKind};
     use indexmap::IndexMap;
     use serde_json::Value;
 
     let mut graph = Graph::new(GraphKind::MultiDiGraph);
-    let mut empty: IndexMap<String, Value> = IndexMap::new();
-    empty.insert("label".to_string(), Value::String("A".to_string()));
-    graph.add_node("a", empty);
-    let mut empty: IndexMap<String, Value> = IndexMap::new();
-    empty.insert("label".to_string(), Value::String("B".to_string()));
-    graph.add_node("b", empty);
+    let mut node_a_attrs: IndexMap<String, Value> = IndexMap::new();
+    node_a_attrs.insert("label".to_string(), Value::String("A".to_string()));
+    graph.add_node("a", node_a_attrs);
+    let mut node_b_attrs: IndexMap<String, Value> = IndexMap::new();
+    node_b_attrs.insert("label".to_string(), Value::String("B".to_string()));
+    graph.add_node("b", node_b_attrs);
 
-    let mut e1: IndexMap<String, Value> = IndexMap::new();
-    e1.insert(
+    let mut edge_calls_attrs: IndexMap<String, Value> = IndexMap::new();
+    edge_calls_attrs.insert(
         "key".to_string(),
         Value::String("calls:a.py:L1".to_string()),
     );
-    e1.insert("relation".to_string(), Value::String("calls".to_string()));
-    e1.insert("source_file".to_string(), Value::String("a.py".to_string()));
-    graph.add_edge("a", "b", e1);
+    edge_calls_attrs.insert("relation".to_string(), Value::String("calls".to_string()));
+    edge_calls_attrs.insert("source_file".to_string(), Value::String("a.py".to_string()));
+    graph.add_edge("a", "b", edge_calls_attrs);
 
-    let mut e2: IndexMap<String, Value> = IndexMap::new();
-    e2.insert(
+    let mut edge_imports_attrs: IndexMap<String, Value> = IndexMap::new();
+    edge_imports_attrs.insert(
         "key".to_string(),
         Value::String("imports:a.py:L2".to_string()),
     );
-    e2.insert("relation".to_string(), Value::String("imports".to_string()));
-    e2.insert("source_file".to_string(), Value::String("a.py".to_string()));
-    graph.add_edge("a", "b", e2);
+    edge_imports_attrs.insert("relation".to_string(), Value::String("imports".to_string()));
+    edge_imports_attrs.insert("source_file".to_string(), Value::String("a.py".to_string()));
+    graph.add_edge("a", "b", edge_imports_attrs);
 
     graph
 }

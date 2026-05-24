@@ -13,6 +13,7 @@ fn probe_passes_on_current_runtime() {
 fn probe_runs_all_six_checks() {
     let result = probe_multigraph_capabilities();
     let names: Vec<&str> = result.checks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names.len(), 6, "expected exactly 6 probes, got {names:?}");
     assert!(names.contains(&"keyed_parallel_edges"));
     assert!(names.contains(&"node_link_edges_links_round_trip"));
     assert!(names.contains(&"duplicate_key_overwrite_semantics"));

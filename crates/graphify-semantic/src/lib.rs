@@ -193,13 +193,15 @@ pub fn validate_semantic_fragment(fragment: &Value) -> Vec<String> {
     errors
 }
 
-/// Sanitise a fragment in place — strip invalid `file_type` nodes, convert
-/// sentence-like `rationale_for` source nodes to attributes on their targets,
-/// drop edges pointing at removed nodes, and filter hyperedges to surviving
-/// members.
+/// Sanitise a fragment in place by mutating the provided [`Map`].
 ///
-/// Returns a copy of the input with the same shape (mutating an owned
-/// [`Map`] would be borrow-clumsier than recreating it here).
+/// Runs four discrete cleanup passes:
+/// 1. Strip nodes with invalid `file_type` (`"rationale"` / `"concept"`).
+/// 2. Convert sentence-like `rationale_for` source nodes into `rationale`
+///    attributes on their targets.
+/// 3. Drop edges that reference removed nodes.
+/// 4. Filter hyperedges to their surviving members (drop the hyperedge
+///    entirely when fewer than two members survive).
 #[allow(clippy::too_many_lines)] // four discrete cleanup passes — split would obscure their order
 pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
     let invalid_ft = ["rationale", "concept"];
@@ -220,8 +222,10 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
         .cloned()
         .unwrap_or_default();
 
-    // Build lookup map by ID for surviving target lookups.
-    let mut node_by_id: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+    // Build the ID set for surviving target lookups. Only `contains`
+    // is needed downstream, so an IndexSet avoids cloning each entire
+    // node value.
+    let mut node_ids: indexmap::IndexSet<String> = indexmap::IndexSet::new();
     for n in &nodes {
         let id = n
             .as_object()
@@ -230,7 +234,7 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
             .unwrap_or_default()
             .to_string();
         if !id.is_empty() {
-            node_by_id.insert(id, n.clone());
+            node_ids.insert(id);
         }
     }
 
@@ -301,7 +305,7 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
             let Some(target_id) = em.get("target").and_then(Value::as_str) else {
                 continue;
             };
-            if !node_by_id.contains_key(target_id) || remove_ids.contains(target_id) {
+            if !node_ids.contains(target_id) || remove_ids.contains(target_id) {
                 continue;
             }
             rationale_attrs

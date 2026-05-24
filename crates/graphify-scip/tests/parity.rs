@@ -419,7 +419,13 @@ fn node_id_carries_safe_suffix() {
 
 #[test]
 fn node_id_empty_suffix_falls_back() {
-    let id = make_scip_node_id("scip-python `unnamed`", "a.py");
+    // A symbol whose last `#` segment contains no identifier characters
+    // (e.g. `scip foo#` — trailing `#` leaves the suffix empty) collapses
+    // to the bare `scip_<12hex>` form. Verify the exact format so a
+    // refactor that changes the digest length or prefix is caught
+    // immediately.
+    let id = make_scip_node_id("scip foo#", "a.py");
     assert!(id.starts_with("scip_"));
-    // No alphanumeric suffix should produce just `scip_<12hex>`.
+    assert_eq!(id.len(), 17, "expected scip_ + 12 hex chars, got {id}");
+    assert!(id.chars().skip(5).all(|c| c.is_ascii_hexdigit()));
 }

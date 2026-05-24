@@ -239,8 +239,6 @@ fn is_type_like_definition(node: &Node) -> bool {
 ///
 /// Mirrors `_merge_swift_extensions` in graphify-py `extract.py`.
 pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
-    use std::collections::HashMap;
-
     // Collect (nid, label) for every Swift class_declaration whose body
     // contains the `extension` keyword. Re-parsing each Swift file once
     // here is cheaper than threading a sidecar through the generic walker.

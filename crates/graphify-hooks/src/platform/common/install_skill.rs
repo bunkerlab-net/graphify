@@ -147,10 +147,14 @@ pub fn install_platform_skill_project(
             format!("\n\n## graphify\n\nFollow `{rel}` when working in this project.\n");
         if claude_md.exists() {
             let content = fs::read_to_string(&claude_md)?;
-            // Look for the exact section header we'd write, not just any
-            // mention of "graphify" — a project doc that talks about
-            // graphify without registering it should not block install.
-            if content.contains("## graphify") {
+            // Look for the exact registration heading on its own line, not
+            // just any prefix match — a docs heading like
+            // `## graphify internals` is not a registration entry and must
+            // not block install.
+            if content
+                .lines()
+                .any(|line| line.trim_start() == "## graphify")
+            {
                 msgs.push("  .claude/CLAUDE.md->  already registered (no change)".to_string());
             } else {
                 let new = format!("{}{registration}", content.trim_end());
@@ -257,7 +261,7 @@ fn strip_graphify_section(content: &str) -> String {
             // Mirror the install side's exact-header check: only an
             // `## graphify` line opens a removable section. A docs
             // heading like `## How graphify works` must NOT be stripped.
-            in_section = trimmed.starts_with("## graphify");
+            in_section = trimmed == "## graphify";
             if in_section {
                 continue;
             }
