@@ -8,6 +8,9 @@ CLAUDE.local.md
 # regenerated on every run and shouldn't be tracked.
 crates/graphify-extract/tests/fixtures/graphify-out/cache/
 
+# Graphify Output
+graphify-out/
+
 # Created by https://www.toptal.com/developers/gitignore/api/linux,macos,windows,sublimetext,intellij+all,visualstudio,visualstudiocode,rust,rust-analyzer
 # Edit at https://www.toptal.com/developers/gitignore?templates=linux,macos,windows,sublimetext,intellij+all,visualstudio,visualstudiocode,rust,rust-analyzer
 
