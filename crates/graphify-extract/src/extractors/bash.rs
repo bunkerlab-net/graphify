@@ -129,7 +129,20 @@ pub fn extract_bash(path: &Path) -> FileResult {
         walk_bash(&mut walk_ctx, root, &source);
     }
 
-    // Second pass: cross-function calls
+    // Second pass: cross-function calls. The top-level walk seeds `entry_nid`
+    // so commands outside any function body get attributed to the entrypoint
+    // (mirrors `walk_calls(root, entry_nid, ...)` in graphify-py).
+    {
+        let mut top_seen: HashSet<(String, String)> = HashSet::new();
+        let mut top_ctx = BashCallCtx {
+            str_path: &str_path,
+            stem: &stem,
+            defined_functions: &defined_functions,
+            edges: &mut edges,
+            seen_calls: &mut top_seen,
+        };
+        walk_calls_top_level_bash(&mut top_ctx, tree.root_node(), &source, &entry_nid);
+    }
     for (fn_nid, body_start, body_end) in &function_bodies {
         let mut seen_calls: HashSet<(String, String)> = HashSet::new();
         let mut call_ctx = BashCallCtx {
@@ -558,6 +571,77 @@ fn walk_calls_bash(
     if cur.goto_first_child() {
         loop {
             walk_calls_bash(ctx, cur.node(), source, func_nid, body_start, body_end);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Walk the Bash AST and attribute every literal command call to `entry_nid`,
+/// **except** those that live inside a `function_definition` subtree (which
+/// already get attributed to the enclosing function via [`walk_calls_bash`]).
+///
+/// Mirrors `walk_calls(root, entry_nid, top_seen)` in graphify-py — the
+/// structural skip of `function_definition` children is what isolates the
+/// top-level scope from per-function scopes.
+fn walk_calls_top_level_bash(
+    ctx: &mut BashCallCtx<'_>,
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    entry_nid: &str,
+) {
+    let str_path = ctx.str_path;
+    let stem = ctx.stem;
+    let defined_functions = ctx.defined_functions;
+    let edges = &mut *ctx.edges;
+    let seen_calls = &mut *ctx.seen_calls;
+
+    if node.kind() == "command" && !is_inside_expansion(node) {
+        let cmd_name_node = node.child_by_field_name("name").or_else(|| {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                Some(cur.node())
+            } else {
+                None
+            }
+        });
+        if let Some(cnn) = cmd_name_node {
+            let name = read_text(cnn, source).trim().to_string();
+            if !name.is_empty()
+                && is_literal_command_name(&name)
+                && !BASH_SKIP.contains(name.as_str())
+                && defined_functions.contains(&name)
+            {
+                let tgt = make_id(&[stem, &name]);
+                let key = (entry_nid.to_string(), tgt.clone());
+                if !tgt.is_empty() && !seen_calls.contains(&key) {
+                    seen_calls.insert(key);
+                    let line = node.start_position().row + 1;
+                    edges.push(Edge {
+                        source: entry_nid.to_string(),
+                        target: tgt,
+                        relation: "calls".to_string(),
+                        confidence: "EXTRACTED".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        weight: 1.0,
+                        context: Some("call".to_string()),
+                        confidence_score: None,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            // Skip `function_definition` subtrees — calls inside them belong
+            // to that function, not the top-level entrypoint.
+            if cur.node().kind() != "function_definition" {
+                walk_calls_top_level_bash(ctx, cur.node(), source, entry_nid);
+            }
             if !cur.goto_next_sibling() {
                 break;
             }

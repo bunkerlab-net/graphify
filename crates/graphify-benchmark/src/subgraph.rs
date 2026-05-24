@@ -9,10 +9,12 @@ use crate::tokens::estimate_tokens;
 /// Run BFS from the best-matching nodes and return the estimated token
 /// count for the resulting subgraph context.
 ///
-/// Terms come from [`graphify_serve::query_terms`], which keeps short
-/// non-English tokens (e.g. CJK) searchable while dropping short English
-/// stop-words. The top-3 scoring nodes seed the BFS; `depth` controls how
-/// many hops to expand. Returns 0 when no nodes match the query terms.
+/// Terms come from [`graphify_serve::query_terms`], which lowercases each
+/// token and keeps short non-English tokens (e.g. CJK) searchable while
+/// dropping short English stop-words. Node labels are likewise lowercased
+/// before the substring match, so seeding is case-insensitive. The top-3
+/// scoring nodes seed the BFS; `depth` controls how many hops to expand.
+/// Returns 0 when no nodes match the query terms.
 #[must_use]
 pub fn query_subgraph_tokens(graph: &Graph, question: &str, depth: usize) -> usize {
     let terms: Vec<String> = graphify_serve::query_terms(question);

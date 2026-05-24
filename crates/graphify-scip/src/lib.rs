@@ -18,13 +18,15 @@ use graphify_security::sanitize_metadata;
 
 /// Convert a SCIP-style JSON document into a graphify extraction blob.
 ///
-/// `source_file` and `language` are fallbacks used when a document inside
-/// `doc` doesn't carry its own `relative_path` / `language` value. Returns
+/// `source_file` is the fallback used when a document inside `doc` doesn't
+/// carry its own `relative_path`. `_language` is accepted for parity with
+/// the Python signature but currently ignored — the Python reference also
+/// stores it on every symbol record without reading it back. Returns
 /// `{"nodes": [], "edges": []}` on any structural mismatch — the function
 /// never raises.
 #[must_use]
 #[allow(clippy::too_many_lines)] // two-pass walker matching the Python layout
-pub fn ingest_scip_json(doc: &Value, source_file: &str, language: &str) -> Value {
+pub fn ingest_scip_json(doc: &Value, source_file: &str, _language: &str) -> Value {
     let mut nodes: Vec<Value> = Vec::new();
     let mut edges: Vec<Value> = Vec::new();
     let mut seen_node_ids: HashSet<String> = HashSet::new();
@@ -47,7 +49,6 @@ pub fn ingest_scip_json(doc: &Value, source_file: &str, language: &str) -> Value
             continue;
         };
         let doc_path = coerce_str(doc_obj.get("relative_path"), source_file);
-        let doc_language = coerce_str(doc_obj.get("language"), language);
         let Some(symbols) = doc_obj.get("symbols").and_then(Value::as_array) else {
             continue;
         };
@@ -71,7 +72,6 @@ pub fn ingest_scip_json(doc: &Value, source_file: &str, language: &str) -> Value
                 node_id,
                 symbol_id,
                 doc_path: doc_path.clone(),
-                language: doc_language.clone(),
                 raw: sym_obj.clone(),
             });
         }
@@ -100,7 +100,6 @@ struct SymbolRecord {
     node_id: String,
     symbol_id: String,
     doc_path: String,
-    language: String,
     raw: Map<String, Value>,
 }
 
@@ -142,7 +141,6 @@ fn emit_symbol_node(
     };
     let meta_map: Map<String, Value> = build_scip_metadata(&record.symbol_id, &kind, &description);
     seen_node_ids.insert(record.node_id.clone());
-    let _ = record.language; // language is captured for symmetry with Python; not emitted yet
     nodes.push(json!({
         "id": record.node_id,
         "label": label,

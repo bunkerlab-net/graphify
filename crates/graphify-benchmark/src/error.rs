@@ -17,7 +17,7 @@ pub enum BenchmarkError {
     #[error(transparent)]
     Build(#[from] graphify_build::BuildError),
 
-    /// Graph file exceeds the memory-bomb size cap.
+    /// Security policy violation (e.g. graph-file size cap, SSRF guard).
     #[error(transparent)]
     Security(#[from] graphify_security::SecurityError),
 }

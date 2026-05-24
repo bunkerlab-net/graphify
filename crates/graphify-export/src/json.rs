@@ -121,9 +121,18 @@ fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
     if !output_path.exists() {
         return false;
     }
-    // Reject oversized existing files before reading them into memory.
+    // Reject oversized existing files before reading them into memory. Fail
+    // *closed*: if the existing file blows the memory-bomb cap, refuse the
+    // overwrite (treat it as a shrink). Otherwise an attacker could plant a
+    // 600 MiB graph.json and we'd silently overwrite it with a normal one.
     if graphify_security::check_graph_file_size_cap(output_path).is_err() {
-        return false;
+        eprintln!(
+            "[graphify] WARNING: existing graph.json at {} exceeds the \
+             memory-bomb size cap and cannot be inspected for shrink \
+             protection. Refusing to overwrite. Pass force=True to override.",
+            output_path.display()
+        );
+        return true;
     }
     let Ok(text) = std::fs::read_to_string(output_path) else {
         return false;

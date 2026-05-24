@@ -438,6 +438,7 @@ fn test_detect_backend_bedrock_via_ecs_relative_uri() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_env_override() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_OLLAMA_NUM_CTX", "65536");
@@ -447,6 +448,7 @@ fn test_resolve_num_ctx_env_override() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_auto_at_least_floor() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_OLLAMA_NUM_CTX");
@@ -456,6 +458,7 @@ fn test_resolve_num_ctx_auto_at_least_floor() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_scales_with_small_budget() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_OLLAMA_NUM_CTX");
@@ -472,6 +475,7 @@ fn test_resolve_num_ctx_scales_with_small_budget() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_invalid_env_falls_back_to_auto() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_OLLAMA_NUM_CTX", "not-a-number");

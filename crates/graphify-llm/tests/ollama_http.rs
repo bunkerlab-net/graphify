@@ -41,6 +41,7 @@ fn validate_ollama_base_url_doesnt_panic() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_via_mock() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -73,6 +74,7 @@ fn call_ollama_via_mock() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_plain_via_mock() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -96,6 +98,7 @@ fn call_ollama_plain_via_mock() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_low_token_warning_path() {
     // When output_tokens < 50, the helper emits a stderr warning.
     let mut server = mockito::Server::new();
@@ -128,6 +131,7 @@ fn call_ollama_low_token_warning_path() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_http_error() {
     let mut server = mockito::Server::new();
     let _m = server
