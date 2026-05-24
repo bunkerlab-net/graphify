@@ -38,6 +38,7 @@ edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
 repository = "https://github.com/bunkerlab-net/graphify"
+publish = false
 
 [workspace.dependencies]
 anyhow = "1"
@@ -113,6 +114,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
 
 [[bin]]

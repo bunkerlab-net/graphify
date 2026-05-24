@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "LLM router (Kimi, Ollama, Bedrock, Gemini, OpenAI, Claude CLI)"
 
 [dependencies]
