@@ -218,7 +218,7 @@ pub fn import_js(
 
 /// Walk a `named_imports` (for `import_clause`) or the `export_specifier`
 /// children directly (for `export_clause`), emitting one edge per specifier.
-#[allow(clippy::too_many_arguments)] // mirrors Python signature; each arg is load-bearing
+#[allow(clippy::too_many_arguments)] // each arg is load-bearing with distinct lifetime/ownership; an options struct would obscure call-site flow
 fn walk_specifiers(
     source: &[u8],
     clause: Node<'_>,

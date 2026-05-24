@@ -60,7 +60,18 @@ pub fn validate_semantic_fragment(fragment: &Value) -> Vec<String> {
 
     let mut errors: Vec<String> = Vec::new();
 
-    let payload_len = serde_json::to_vec(fragment).map_or(0, |b| b.len());
+    // Compute the encoded payload size to enforce
+    // `MAX_SEMANTIC_FRAGMENT_BYTES`. Serialisation failure must be
+    // surfaced as a validation error rather than silently treated as a
+    // zero-byte payload (the latter would let a malformed fragment that
+    // re-serialises poorly slip through the size cap).
+    let payload_len = match serde_json::to_vec(fragment) {
+        Ok(b) => b.len(),
+        Err(err) => {
+            errors.push(format!("failed to compute payload size: {err}"));
+            return errors;
+        }
+    };
     if (payload_len as u64) > MAX_SEMANTIC_FRAGMENT_BYTES {
         errors.push(format!(
             "payload is {payload_len} bytes; max is {MAX_SEMANTIC_FRAGMENT_BYTES}"

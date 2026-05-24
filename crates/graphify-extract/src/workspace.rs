@@ -85,14 +85,11 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
     let Some(root) = find_workspace_root(start_dir) else {
         return IndexMap::new();
     };
+    if let Ok(guard) = WORKSPACE_PACKAGE_CACHE.lock()
+        && let Some(map) = guard.as_ref()
+        && let Some(packages) = map.get(&root)
     {
-        let cache = WORKSPACE_PACKAGE_CACHE.lock().ok();
-        if let Some(guard) = cache.as_ref()
-            && let Some(map) = guard.as_ref()
-            && let Some(packages) = map.get(&root)
-        {
-            return packages.clone();
-        }
+        return packages.clone();
     }
 
     let mut packages: IndexMap<String, PathBuf> = IndexMap::new();

@@ -496,3 +496,25 @@ fn build_keeps_inferred_uses_edge_across_languages() {
     let g = build_from_json(ext, true, None).expect("build");
     assert_eq!(g.edge_count(), 1);
 }
+
+#[test]
+fn build_drops_inferred_calls_when_one_side_has_unknown_extension() {
+    // Mirrors Python `_LANG_FAMILY.get(src_ext) != _LANG_FAMILY.get(tgt_ext)`:
+    // an unknown extension maps to `None`, and `Some("py") != None` is true,
+    // so the INFERRED `calls` edge is dropped. Document this explicitly so
+    // a future refactor doesn't accidentally start treating unknown
+    // extensions as "matches everything" (which would diverge from
+    // Python's behaviour).
+    let ext = json!({
+        "nodes": [
+            {"id": "py", "label": "parse", "file_type": "code", "source_file": "src/a.py"},
+            {"id": "unk", "label": "parse", "file_type": "code", "source_file": "src/b.unknown"},
+        ],
+        "edges": [
+            {"source": "py", "target": "unk", "relation": "calls",
+             "confidence": "INFERRED", "source_file": "src/a.py"},
+        ],
+    });
+    let g = build_from_json(ext, true, None).expect("build");
+    assert_eq!(g.edge_count(), 0);
+}

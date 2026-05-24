@@ -109,7 +109,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         extraction_json,
         sem_input_tokens,
         sem_output_tokens,
-    } = run_semantic_phase(path, &files, &extraction, &cfg);
+    } = run_semantic_phase(path, &files, &extraction, &cfg)?;
 
     std::fs::create_dir_all(&out_dir)?;
     write_scan_breadcrumb(path, &out_dir);
@@ -285,18 +285,18 @@ fn run_semantic_phase(
     files: &[std::path::PathBuf],
     extraction: &graphify_extract::ExtractOutput,
     cfg: &SemanticConfig<'_>,
-) -> SemanticOutcome {
+) -> Result<SemanticOutcome> {
     let Some(b) = cfg.backend else {
         let extraction_json = serde_json::json!({
             "nodes": extraction.nodes,
             "edges": extraction.edges,
             "hyperedges": [],
         });
-        return SemanticOutcome {
+        return Ok(SemanticOutcome {
             extraction_json,
             sem_input_tokens: 0,
             sem_output_tokens: 0,
-        };
+        });
     };
 
     // Semantic cache check — skip files already extracted to avoid re-spending
@@ -353,16 +353,16 @@ fn run_semantic_phase(
         sem_result.edges.len(),
     );
 
-    // When every chunk failed, exit non-zero rather than silently writing
+    // When every chunk failed, return an error rather than silently writing
     // an AST-only graph. Mirrors graphify-py `__main__.py:_chunk_stats`
-    // ("all semantic chunks failed ... claude" exit path).
+    // ("all semantic chunks failed ... claude" exit path). The CLI top
+    // level translates the error to a non-zero process exit.
     if !uncached_files.is_empty() && total_chunks > 0 && failed >= total_chunks {
-        eprintln!(
-            "error: all semantic chunks failed (backend={b}). \
+        anyhow::bail!(
+            "all semantic chunks failed (backend={b}). \
              Check your API key and that `pip install \"graphifyy[mcp]\"` (or the equivalent \
              Cargo install) is up to date."
         );
-        std::process::exit(1);
     }
 
     save_semantic_cache_safe(&sem_result, path);
@@ -372,11 +372,11 @@ fn run_semantic_phase(
         "edges": sem_result.edges,
         "hyperedges": sem_result.hyperedges,
     });
-    SemanticOutcome {
+    Ok(SemanticOutcome {
         extraction_json,
         sem_input_tokens,
         sem_output_tokens,
-    }
+    })
 }
 
 /// Best-effort persistence of fresh semantic results into the cache. Warns on

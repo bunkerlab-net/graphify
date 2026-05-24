@@ -102,15 +102,11 @@ fn html_escape_with_quotes(text: &str) -> String {
 }
 
 /// Truncate `text` to at most `max_chars` code points (Python `len(str)`
-/// semantics, not graphemes).
+/// semantics, not graphemes). Always returns the built `String` (whether
+/// or not truncation actually occurred) so the function never needs to
+/// allocate a second time.
 fn cap_chars(text: &str, max_chars: usize) -> String {
-    let mut iter = text.chars();
-    let truncated: String = iter.by_ref().take(max_chars).collect();
-    if iter.next().is_some() {
-        truncated
-    } else {
-        text.to_owned()
-    }
+    text.chars().take(max_chars).collect()
 }
 
 #[cfg(test)]

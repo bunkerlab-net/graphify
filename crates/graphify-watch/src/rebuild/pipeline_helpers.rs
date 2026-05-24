@@ -124,6 +124,7 @@ pub(crate) fn extract_phase(extract_targets: &[PathBuf], watch_root: &Path) -> V
 ///
 /// Returns the existing graph JSON (or `Value::Null` when absent) so the caller can
 /// reuse it for downstream comparisons.
+#[allow(clippy::too_many_lines)] // single-pass merge — splitting would obscure ordering
 pub(crate) fn merge_with_existing_graph(
     result: &mut Value,
     existing_graph_path: &Path,
@@ -133,8 +134,13 @@ pub(crate) fn merge_with_existing_graph(
     project_root: &Path,
 ) -> Value {
     // Reject oversized graph files before reading them into memory — mirrors
-    // the size-cap guard added in `graphify-py/graphify/watch.py`.
-    if graphify_security::check_graph_file_size_cap(existing_graph_path).is_err() {
+    // the size-cap guard added in `graphify-py/graphify/watch.py`. Surface
+    // the rejection on stderr so the user knows we skipped the merge.
+    if let Err(err) = graphify_security::check_graph_file_size_cap(existing_graph_path) {
+        eprintln!(
+            "[graphify watch] skipping merge with existing graph at {}: {err}",
+            existing_graph_path.display()
+        );
         return Value::Null;
     }
     let Ok(text) = std::fs::read_to_string(existing_graph_path) else {
@@ -455,7 +461,11 @@ pub(crate) fn write_graph_tmp(
 
 /// Returns `true` when the candidate graph data matches what's already on disk.
 pub(crate) fn compare_existing_graph(existing_graph_path: &Path, candidate_data: &Value) -> bool {
-    if graphify_security::check_graph_file_size_cap(existing_graph_path).is_err() {
+    if let Err(err) = graphify_security::check_graph_file_size_cap(existing_graph_path) {
+        eprintln!(
+            "[graphify watch] skipping graph comparison at {}: {err}",
+            existing_graph_path.display()
+        );
         return false;
     }
     let Ok(text) = std::fs::read_to_string(existing_graph_path) else {

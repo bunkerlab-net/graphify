@@ -26,7 +26,10 @@ pub struct CapabilityCheck {
 pub struct MultigraphCapabilityResult {
     /// Rust toolchain version this binary was built with.
     pub rust_version: String,
-    /// `graphify-build` crate version of the in-tree graph implementation.
+    /// Workspace version of the probe and the graph crate it tests. Every
+    /// graphify-workspace crate inherits the same version via
+    /// `version.workspace = true`, so the value here is also the version of
+    /// `graphify-build` whose `Graph` is being probed.
     pub graph_runtime_version: String,
     /// All probe results, in execution order.
     pub checks: Vec<CapabilityCheck>,

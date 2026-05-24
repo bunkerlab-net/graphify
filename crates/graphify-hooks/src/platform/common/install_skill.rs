@@ -29,33 +29,7 @@ use super::skills::{
 /// Returns `HooksError::UnknownPlatform` for unrecognised names,
 /// `HooksError::Io` on filesystem failures.
 pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
-    let (skill_content, home_rel): (&str, &str) = match platform {
-        "claude" | "windows" => {
-            let skill = if platform == "windows" {
-                SKILL_WINDOWS_MD
-            } else {
-                SKILL_MD
-            };
-            (skill, ".claude/skills/graphify/SKILL.md")
-        }
-        "codex" => (SKILL_CODEX_MD, ".agents/skills/graphify/SKILL.md"),
-        "opencode" => (
-            SKILL_OPENCODE_MD,
-            ".config/opencode/skills/graphify/SKILL.md",
-        ),
-        "aider" => (SKILL_AIDER_MD, ".aider/graphify/SKILL.md"),
-        "copilot" => (SKILL_COPILOT_MD, ".copilot/skills/graphify/SKILL.md"),
-        "claw" => (SKILL_CLAW_MD, ".openclaw/skills/graphify/SKILL.md"),
-        "droid" => (SKILL_DROID_MD, ".factory/skills/graphify/SKILL.md"),
-        "trae" => (SKILL_TRAE_MD, ".trae/skills/graphify/SKILL.md"),
-        "trae-cn" => (SKILL_TRAE_MD, ".trae-cn/skills/graphify/SKILL.md"),
-        "hermes" => (SKILL_CLAW_MD, ".hermes/skills/graphify/SKILL.md"),
-        "kiro" => (SKILL_KIRO_MD, ".kiro/skills/graphify/SKILL.md"),
-        "pi" => (SKILL_PI_MD, ".pi/agent/skills/graphify/SKILL.md"),
-        "antigravity" => (SKILL_MD, ".agents/skills/graphify/SKILL.md"),
-        "antigravity-windows" => (SKILL_WINDOWS_MD, ".agents/skills/graphify/SKILL.md"),
-        other => return Err(HooksError::UnknownPlatform(other.to_string())),
-    };
+    let (skill_content, home_rel) = skill_for(platform)?;
 
     let skill_dst = if matches!(platform, "claude" | "windows") {
         if let Ok(cfg_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
@@ -173,7 +147,10 @@ pub fn install_platform_skill_project(
             format!("\n\n## graphify\n\nFollow `{rel}` when working in this project.\n");
         if claude_md.exists() {
             let content = fs::read_to_string(&claude_md)?;
-            if content.contains("graphify") {
+            // Look for the exact section header we'd write, not just any
+            // mention of "graphify" — a project doc that talks about
+            // graphify without registering it should not block install.
+            if content.contains("## graphify") {
                 msgs.push("  .claude/CLAUDE.md->  already registered (no change)".to_string());
             } else {
                 let new = format!("{}{registration}", content.trim_end());
@@ -220,11 +197,19 @@ pub fn uninstall_platform_skill_project(
     if skill_dst.exists() {
         fs::remove_file(&skill_dst)?;
         msgs.push(format!("  removed  {}", skill_dst.display()));
-        // Best-effort: prune empty ancestor dirs up to the scope root.
+        // Best-effort: prune empty ancestor directories on the way up to
+        // (and including) the platform scope root (e.g. `.claude/`). The
+        // walk stops at either the scope root or the project root itself,
+        // and any error before that boundary (non-empty dir, permission
+        // failure) breaks out of the loop. Errors are intentionally
+        // ignored — leaving a non-empty dir behind is the correct
+        // outcome, not a failure mode to surface.
         let scope_root = project_dir.join(scope_root_for(rel));
         let mut p = skill_dst.parent().map(std::path::Path::to_path_buf);
         while let Some(dir) = p {
             if dir == scope_root || dir == project_dir {
+                // Try one last best-effort removal at the scope boundary,
+                // then stop regardless of outcome.
                 let _ = fs::remove_dir(&dir);
                 break;
             }
@@ -261,7 +246,8 @@ fn scope_root_for(rel: &str) -> &str {
 
 /// Remove the auto-registered `## graphify` section from a CLAUDE.md
 /// blob, returning the cleaned text. Tolerates either form (multi-line
-/// section after the heading, or single-line registration).
+/// section after the heading, or single-line registration). Preserves
+/// the original trailing newline so well-formed files stay well-formed.
 fn strip_graphify_section(content: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut in_section = false;
@@ -277,5 +263,10 @@ fn strip_graphify_section(content: &str) -> String {
         }
         out.push(line);
     }
-    out.join("\n")
+    let result = out.join("\n");
+    if content.ends_with('\n') && !result.is_empty() {
+        format!("{result}\n")
+    } else {
+        result
+    }
 }

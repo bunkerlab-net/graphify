@@ -764,14 +764,14 @@ fn query_terms_lowercases() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_load_graph_rejects_oversized_file() {
+fn test_load_graph_accepts_under_cap() {
+    // Smoke test of the happy path: a tiny well-formed graph round-trips
+    // through the size-cap-guarded loader. Boundary testing with a tiny
+    // cap lives in graphify-security's parity suite where the
+    // `_with(cap)` variant lets us trigger the error explicitly.
     let dir = tempdir().expect("tempdir");
     let graph_path = dir.path().join("graph.json");
-    // Write a "large" file. We rely on the cap being 512 MiB by default,
-    // which we cannot exceed in a unit test. Instead we use a private symbol
-    // by exercising the function with a file that does pass — the boundary
-    // test lives in graphify-security's parity suite where the
-    // `_with(cap)` variant lets us trigger the error with tiny files.
     std::fs::write(&graph_path, br#"{"nodes": [], "edges": []}"#).expect("write");
-    let _ = load_graph(graph_path.to_str().expect("utf-8"));
+    let result = load_graph(graph_path.to_str().expect("utf-8"));
+    assert!(result.is_ok(), "small graph should load: {result:?}");
 }
