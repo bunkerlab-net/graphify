@@ -317,7 +317,14 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                 .trim_matches(|c| c == '\'' || c == '"')
                                 .to_string();
                             let line = node.start_position().row + 1;
-                            if raw.starts_with('.') || raw.starts_with('/') {
+                            // Only `./foo` / `../foo` / `/abs` are file paths;
+                            // a plain dotted token like `.helpers` is a module
+                            // name and must fall through to the `imports`
+                            // branch instead of being canonicalised as a path.
+                            if raw.starts_with("./")
+                                || raw.starts_with("../")
+                                || raw.starts_with('/')
+                            {
                                 let resolved = path
                                     .parent()
                                     .map(|p| p.join(&raw))

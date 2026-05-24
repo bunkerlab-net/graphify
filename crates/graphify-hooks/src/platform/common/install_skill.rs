@@ -252,8 +252,12 @@ fn strip_graphify_section(content: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut in_section = false;
     for line in content.lines() {
-        if line.trim_start().starts_with("## ") {
-            in_section = line.contains("graphify");
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("## ") {
+            // Mirror the install side's exact-header check: only an
+            // `## graphify` line opens a removable section. A docs
+            // heading like `## How graphify works` must NOT be stripped.
+            in_section = trimmed.starts_with("## graphify");
             if in_section {
                 continue;
             }
