@@ -84,7 +84,7 @@ fn llm_response_to_value_emits_expected_keys() {
     assert_eq!(v["output_tokens"], 20);
     assert_eq!(v["finish_reason"], "stop");
     assert_eq!(v["model"], "test-model");
-    assert!(v["nodes"].as_array().unwrap().len() == 1);
+    assert_eq!(v["nodes"].as_array().unwrap().len(), 1);
 }
 
 // ── read_files chunk variants ──────────────────────────────────────────────
