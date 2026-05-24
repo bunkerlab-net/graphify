@@ -1,7 +1,7 @@
 //! Parity tests for file classification.
 //!
 //! Mirrors `graphify-py/tests/test_detect.py` — classification tests.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_detect::{FileType, classify_file};
 use std::path::Path;
@@ -139,7 +139,7 @@ fn classify_google_workspace_gslides() {
 
 #[test]
 fn classify_md_paper_by_signals() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let paper = tmp.path().join("paper.md");
     std::fs::write(
         &paper,
@@ -147,18 +147,18 @@ fn classify_md_paper_by_signals() {
          This work was published in the Journal of AI. ArXiv preprint.\n\
          See Equation 3 for details. \\cite{vaswani2017}.\n",
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(classify_file(&paper), Some(FileType::Paper));
 }
 
 #[test]
 fn classify_md_doc_without_signals() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let doc = tmp.path().join("notes.md");
     std::fs::write(
         &doc,
         "# My Notes\n\nHere are some notes about the project.\n",
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(classify_file(&doc), Some(FileType::Document));
 }

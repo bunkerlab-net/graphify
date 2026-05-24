@@ -3,7 +3,7 @@
 //! All test cases from the Python test suite are ported here. We use
 //! `graphify_build::build_from_json` to construct `Graph` objects rather than
 //! the Python `networkx` constructors.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -639,8 +639,9 @@ fn make_fake_gh() -> FakeGhClient {
 #[test]
 fn test_tool_list_prs_returns_pr_descriptors() {
     let gh = make_fake_gh();
-    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
-    let prs = result["prs"].as_array().unwrap();
+    let result =
+        tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
+    let prs = result["prs"].as_array().expect("array field");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0]["number"], 42);
     assert_eq!(prs[0]["title"], "Add feature X");
@@ -650,7 +651,8 @@ fn test_tool_list_prs_returns_pr_descriptors() {
 #[test]
 fn test_tool_list_prs_includes_count() {
     let gh = make_fake_gh();
-    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    let result =
+        tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
     assert_eq!(result["count"], 1);
 }
 
@@ -661,8 +663,9 @@ fn test_tool_list_prs_handles_empty() {
         files: vec![],
         default_branch: Some("main".to_string()),
     };
-    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
-    let prs = result["prs"].as_array().unwrap();
+    let result =
+        tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
+    let prs = result["prs"].as_array().expect("array field");
     assert!(prs.is_empty());
     assert_eq!(result["count"], 0);
 }
@@ -687,9 +690,9 @@ fn test_tool_get_pr_impact_lists_affected_nodes() {
     let gh = make_fake_gh();
     let graph = make_impact_graph();
     let args = json!({"pr_number": 42});
-    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).unwrap();
+    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).expect("test invariant");
     assert!(
-        result["affected_nodes"].as_u64().unwrap() > 0,
+        result["affected_nodes"].as_u64().expect("u64 field") > 0,
         "must report affected nodes when file matches"
     );
 }
@@ -703,9 +706,9 @@ fn test_tool_get_pr_impact_empty_when_no_match() {
     };
     let graph = make_impact_graph();
     let args = json!({"pr_number": 42});
-    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).unwrap();
+    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).expect("test invariant");
     assert_eq!(
-        result["affected_nodes"].as_u64().unwrap(),
+        result["affected_nodes"].as_u64().expect("u64 field"),
         0,
         "no overlap → zero affected nodes"
     );
@@ -714,7 +717,8 @@ fn test_tool_get_pr_impact_empty_when_no_match() {
 #[test]
 fn test_tool_triage_prs_returns_structured_output() {
     let gh = make_fake_gh();
-    let result = tool_triage_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    let result =
+        tool_triage_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
     assert!(result.is_array(), "triage output must be a JSON array");
 }
 
@@ -724,8 +728,8 @@ fn test_tool_triage_prs_respects_limit() {
     // field must be respected (no more than `limit` items returned).
     let gh = make_fake_gh();
     let args = json!({"limit": 1});
-    let result = tool_triage_prs_with_clients(&args, &gh, &FakeGitClient).unwrap();
-    let items = result.as_array().unwrap();
+    let result = tool_triage_prs_with_clients(&args, &gh, &FakeGitClient).expect("test invariant");
+    let items = result.as_array().expect("array field");
     assert!(
         items.len() <= 1,
         "limit=1 must cap the result length; got {}",

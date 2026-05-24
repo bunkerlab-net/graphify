@@ -24,7 +24,7 @@
 //! - `test_rebuild_lock_non_blocking_does_not_clobber_holder` — see inline
 //!   comment for rationale.
 
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::doc_markdown)]
+#![allow(clippy::expect_used, clippy::doc_markdown)]
 
 use std::fs;
 use std::path::Path;
@@ -38,8 +38,8 @@ use graphify_watch::{RebuildLock, WATCHED_EXTENSIONS, check_update, notify_only}
 /// Create the graphify-out dir and a pre-existing flag file.
 fn write_flag(root: &Path) {
     let out = root.join("graphify-out");
-    fs::create_dir_all(&out).unwrap();
-    fs::write(out.join("needs_update"), "1").unwrap();
+    fs::create_dir_all(&out).expect("create_dir_all");
+    fs::write(out.join("needs_update"), "1").expect("test invariant");
 }
 
 // ---------------------------------------------------------------------------
@@ -49,31 +49,31 @@ fn write_flag(root: &Path) {
 /// Python: `test_notify_only_creates_flag`
 #[test]
 fn test_notify_only_creates_flag() {
-    let dir = tempfile::tempdir().unwrap();
-    notify_only(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    notify_only(dir.path()).expect("test invariant");
     let flag = dir.path().join("graphify-out").join("needs_update");
     assert!(flag.exists());
-    assert_eq!(fs::read_to_string(&flag).unwrap(), "1");
+    assert_eq!(fs::read_to_string(&flag).expect("read fixture"), "1");
 }
 
 /// Python: `test_notify_only_creates_flag_dir`
 #[test]
 fn test_notify_only_creates_flag_dir() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     // graphify-out dir must not exist yet
     assert!(!dir.path().join("graphify-out").exists());
-    notify_only(dir.path()).unwrap();
+    notify_only(dir.path()).expect("test invariant");
     assert!(dir.path().join("graphify-out").is_dir());
 }
 
 /// Python: `test_notify_only_idempotent`
 #[test]
 fn test_notify_only_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    notify_only(dir.path()).unwrap();
-    notify_only(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    notify_only(dir.path()).expect("test invariant");
+    notify_only(dir.path()).expect("test invariant");
     let flag = dir.path().join("graphify-out").join("needs_update");
-    assert_eq!(fs::read_to_string(&flag).unwrap(), "1");
+    assert_eq!(fs::read_to_string(&flag).expect("read fixture"), "1");
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ fn test_watched_extensions_excludes_noise() {
 /// Python: `test_check_update_no_flag_returns_true`
 #[test]
 fn test_check_update_no_flag_returns_true() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     assert!(check_update(dir.path()));
 }
 
@@ -145,7 +145,7 @@ fn test_check_update_no_flag_returns_true() {
 /// (return value + flag persistence) which is sufficient for parity.
 #[test]
 fn test_check_update_with_flag_returns_true_and_prints() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     write_flag(dir.path());
     let result = check_update(dir.path());
     assert!(
@@ -157,7 +157,7 @@ fn test_check_update_with_flag_returns_true_and_prints() {
 /// Python: `test_check_update_does_not_clear_flag`
 #[test]
 fn test_check_update_does_not_clear_flag() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     write_flag(dir.path());
     let _ = check_update(dir.path());
     let flag = dir.path().join("graphify-out").join("needs_update");
@@ -176,14 +176,14 @@ fn test_check_update_does_not_clear_flag() {
 #[test]
 #[cfg(unix)]
 fn test_rebuild_lock_writes_pid_with_newline() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("graphify-out");
     let lock_path = out.join(".rebuild.lock");
 
-    let guard = RebuildLock::acquire(&out, false).unwrap();
+    let guard = RebuildLock::acquire(&out, false).expect("test invariant");
     assert!(guard.acquired(), "lock should be acquired");
     assert!(lock_path.exists(), "lock file must exist while held");
-    let contents = fs::read_to_string(&lock_path).unwrap();
+    let contents = fs::read_to_string(&lock_path).expect("read fixture");
     let expected = format!("{}\n", std::process::id());
     assert_eq!(contents, expected, "lock file must contain PID + newline");
 
@@ -197,11 +197,11 @@ fn test_rebuild_lock_writes_pid_with_newline() {
 #[test]
 #[cfg(unix)]
 fn test_rebuild_lock_removed_after_release() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("graphify-out");
     let lock_path = out.join(".rebuild.lock");
 
-    let guard = RebuildLock::acquire(&out, false).unwrap();
+    let guard = RebuildLock::acquire(&out, false).expect("test invariant");
     assert!(guard.acquired());
     assert!(lock_path.exists());
     drop(guard);
@@ -218,15 +218,15 @@ fn test_rebuild_lock_removed_after_release() {
 #[test]
 #[cfg(unix)]
 fn test_rebuild_lock_does_not_accumulate_pids_across_runs() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("graphify-out");
     let lock_path = out.join(".rebuild.lock");
     let expected = format!("{}\n", std::process::id());
 
     for _ in 0..5 {
-        let guard = RebuildLock::acquire(&out, false).unwrap();
+        let guard = RebuildLock::acquire(&out, false).expect("test invariant");
         assert!(guard.acquired());
-        let contents = fs::read_to_string(&lock_path).unwrap();
+        let contents = fs::read_to_string(&lock_path).expect("read fixture");
         assert_eq!(
             contents, expected,
             "PID line must not accumulate across runs"
@@ -259,15 +259,15 @@ fn test_rebuild_lock_non_blocking_does_not_clobber_holder() {
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("graphify-out");
-    fs::create_dir_all(&out).unwrap();
+    fs::create_dir_all(&out).expect("create_dir_all");
 
     // Set up a Unix socket pair so child and parent can synchronise.
-    let (mut parent_sock, child_sock) = UnixStream::pair().unwrap();
+    let (mut parent_sock, child_sock) = UnixStream::pair().expect("test invariant");
     parent_sock
         .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+        .expect("test invariant");
 
     // SAFETY: fork is safe here — we call only async-signal-safe functions in the
     // child and exec nothing. The child writes its PID into the lock, signals
@@ -282,10 +282,10 @@ fn test_rebuild_lock_non_blocking_does_not_clobber_holder() {
         let mut sock = child_sock;
 
         // Acquire the blocking lock.
-        let _guard = RebuildLock::acquire(&out, true).unwrap();
+        let _guard = RebuildLock::acquire(&out, true).expect("test invariant");
 
         // Signal parent: lock is held.
-        sock.write_all(b"1").unwrap();
+        sock.write_all(b"1").expect("test invariant");
 
         // Wait for parent to signal it is done testing.
         let mut buf = [0u8; 1];
@@ -310,21 +310,21 @@ fn test_rebuild_lock_non_blocking_does_not_clobber_holder() {
 
     let lock_path = out.join(".rebuild.lock");
     // Child wrote its PID into the file.
-    let held_contents = fs::read_to_string(&lock_path).unwrap();
+    let held_contents = fs::read_to_string(&lock_path).expect("read fixture");
     assert!(
         !held_contents.is_empty(),
         "holder's PID must be present in lock file"
     );
 
     // Parent attempts a non-blocking acquire — must fail because child holds it.
-    let guard = RebuildLock::acquire(&out, false).unwrap();
+    let guard = RebuildLock::acquire(&out, false).expect("test invariant");
     assert!(
         !guard.acquired(),
         "non-blocking acquire must fail while child holds lock"
     );
 
     // The holder's PID line must still be intact.
-    let after_attempt = fs::read_to_string(&lock_path).unwrap();
+    let after_attempt = fs::read_to_string(&lock_path).expect("read fixture");
     assert_eq!(
         after_attempt, held_contents,
         "non-blocking caller must not truncate the holder's PID"

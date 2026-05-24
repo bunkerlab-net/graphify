@@ -1,5 +1,5 @@
 //! Parity tests against `graphify-py/tests/test_security.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::time::Duration;
 
@@ -371,7 +371,14 @@ fn metadata_string_caps_length() {
 #[test]
 fn metadata_value_preserves_simple_types() {
     assert_eq!(sanitize_metadata_value(&json!(42)), json!(42));
-    assert!((sanitize_metadata_value(&json!(2.5)).as_f64().unwrap() - 2.5).abs() < 1e-9);
+    assert!(
+        (sanitize_metadata_value(&json!(2.5))
+            .as_f64()
+            .expect("f64 field")
+            - 2.5)
+            .abs()
+            < 1e-9
+    );
     assert_eq!(sanitize_metadata_value(&json!(true)), json!(true));
     assert_eq!(sanitize_metadata_value(&json!(false)), json!(false));
     assert_eq!(sanitize_metadata_value(&Value::Null), Value::Null);
@@ -391,7 +398,10 @@ fn metadata_value_recurses_into_list() {
     let input = json!(["<a>", "<b>", "<c>"]);
     let out = sanitize_metadata_value(&input);
     let arr = out.as_array().expect("array");
-    assert!(arr.iter().all(|v| v.as_str().unwrap().contains("&lt;")));
+    assert!(
+        arr.iter()
+            .all(|v| v.as_str().expect("string field").contains("&lt;"))
+    );
 }
 
 #[test]
@@ -443,7 +453,7 @@ fn metadata_recursive_nested() {
     assert!(inner.contains("&lt;"));
     let items = outer.get("list").expect("list").as_array().expect("arr");
     assert_eq!(items[0], json!("a"));
-    assert!(items[1].as_str().unwrap().contains("&lt;"));
+    assert!(items[1].as_str().expect("string field").contains("&lt;"));
     assert_eq!(items[2], json!(99));
     assert_eq!(items[3], Value::Null);
     assert_eq!(items[4], json!(true));

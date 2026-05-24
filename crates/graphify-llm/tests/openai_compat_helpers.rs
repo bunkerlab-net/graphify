@@ -1,11 +1,6 @@
 //! Coverage tests for the pure helper functions in `openai_compat`.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::openai_compat::{
     OpenAiRequest, api_timeout, call_openai_compat, derive_ollama_num_ctx, extraction_messages,
@@ -173,15 +168,15 @@ fn safe_parse_response_returns_empty_on_oversized() {
     big.push_str(&"\"x\":".repeat(1_000_000));
     big.push_str("\"end\"}");
     let v = safe_parse_response(&big);
-    assert!(v["nodes"].as_array().unwrap().is_empty());
-    assert!(v["edges"].as_array().unwrap().is_empty());
-    assert!(v["hyperedges"].as_array().unwrap().is_empty());
+    assert!(v["nodes"].as_array().expect("array field").is_empty());
+    assert!(v["edges"].as_array().expect("array field").is_empty());
+    assert!(v["hyperedges"].as_array().expect("array field").is_empty());
 }
 
 #[test]
 fn safe_parse_response_handles_markdown_fences() {
     let v = safe_parse_response("```json\n{\"nodes\":[],\"edges\":[]}\n```");
-    assert!(v["nodes"].as_array().unwrap().is_empty());
+    assert!(v["nodes"].as_array().expect("array field").is_empty());
 }
 
 // ── call_openai_compat with bad URL hits SSRF guard ────────────────────────

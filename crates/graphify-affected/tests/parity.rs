@@ -1,7 +1,7 @@
 //! Parity tests against `graphify-py/tests/test_affected_cli.py` and
 //! the affected-helper unit tests embedded in
 //! `graphify-py/graphify/affected.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 

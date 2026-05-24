@@ -1,14 +1,14 @@
 //! Parity tests against `graphify-py/tests/test_scip_ingest.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_scip::{ingest_scip_json, make_scip_node_id};
 use serde_json::{Value, json};
 
 fn nodes(result: &Value) -> &Vec<Value> {
-    result["nodes"].as_array().unwrap()
+    result["nodes"].as_array().expect("array field")
 }
 fn edges(result: &Value) -> &Vec<Value> {
-    result["edges"].as_array().unwrap()
+    result["edges"].as_array().expect("array field")
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +197,9 @@ fn relationship_creates_stub_node_when_target_unresolved() {
     );
     // src + stub for external-tgt.
     assert_eq!(nodes(&result).len(), 2);
-    let stub_kind = nodes(&result)[1]["metadata"]["scip_kind"].as_str().unwrap();
+    let stub_kind = nodes(&result)[1]["metadata"]["scip_kind"]
+        .as_str()
+        .expect("string field");
     assert_eq!(stub_kind, "external");
 }
 

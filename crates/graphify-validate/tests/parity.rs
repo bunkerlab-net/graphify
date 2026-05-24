@@ -1,6 +1,6 @@
 //! Parity tests against `graphify-py/tests/test_validate.py`.
 // reason: tests intentionally panic on broken invariants so failures surface loudly
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_validate::{assert_valid, validate_extraction};
 use serde_json::json;
@@ -114,7 +114,7 @@ fn missing_node_field() {
 #[test]
 fn assert_valid_raises_on_errors() {
     let result = assert_valid(&json!({"nodes": "bad", "edges": []}));
-    let err = result.unwrap_err();
+    let err = result.expect_err("expected Err");
     assert!(format!("{err}").contains("error"));
 }
 

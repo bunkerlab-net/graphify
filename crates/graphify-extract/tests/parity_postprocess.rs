@@ -1,6 +1,6 @@
 //! Parity tests for the corpus-level post-processing passes
 //! (`disambiguate_colliding_node_ids`, `rewire_unique_stub_nodes`).
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::path::Path;
 

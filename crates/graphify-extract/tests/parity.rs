@@ -3,7 +3,7 @@
 //! 1:1 ports of `graphify-py/tests/test_extract.py` and
 //! `graphify-py/tests/test_astro_extraction.py`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
 
@@ -187,7 +187,7 @@ fn run_analysis_calls_compute_score() {
     assert!(src.is_some(), "run_analysis node not found");
     assert!(tgt.is_some(), "compute_score node not found");
     assert!(
-        calls.contains(&(src.unwrap(), tgt.unwrap())),
+        calls.contains(&(src.expect("test invariant"), tgt.expect("test invariant"))),
         "run_analysis -> compute_score not found in {calls:?}"
     );
 }
@@ -209,7 +209,7 @@ fn run_analysis_calls_normalize() {
     let src = node_by_label.get("run_analysis()").copied();
     let tgt = node_by_label.get("normalize()").copied();
     assert!(src.is_some() && tgt.is_some());
-    assert!(calls.contains(&(src.unwrap(), tgt.unwrap())));
+    assert!(calls.contains(&(src.expect("test invariant"), tgt.expect("test invariant"))));
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn method_calls_module_function() {
     let src = node_by_label.get(".process()").copied();
     let tgt = node_by_label.get("run_analysis()").copied();
     assert!(src.is_some() && tgt.is_some());
-    assert!(calls.contains(&(src.unwrap(), tgt.unwrap())));
+    assert!(calls.contains(&(src.expect("test invariant"), tgt.expect("test invariant"))));
 }
 
 #[test]
@@ -255,9 +255,9 @@ fn cross_file_calls_skip_ambiguous_duplicate_labels() {
     let caller = tmp.path().join("caller.py");
     let helper_a = tmp.path().join("a.py");
     let helper_b = tmp.path().join("b.py");
-    std::fs::write(&caller, "def run():\n    log()\n").unwrap();
-    std::fs::write(&helper_a, "def log():\n    return 'a'\n").unwrap();
-    std::fs::write(&helper_b, "def log():\n    return 'b'\n").unwrap();
+    std::fs::write(&caller, "def run():\n    log()\n").expect("test invariant");
+    std::fs::write(&helper_a, "def log():\n    return 'a'\n").expect("test invariant");
+    std::fs::write(&helper_b, "def log():\n    return 'b'\n").expect("test invariant");
 
     let result = extract(&[caller, helper_a, helper_b], Some(tmp.path()));
     let nodes: std::collections::HashMap<String, String> = result
@@ -358,7 +358,8 @@ fn extract_js_member_require_emits_property_symbol() {
 fn extract_js_arrow_function_still_extracted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let arrow_fixture = tmp.path().join("_arrow_only.js");
-    std::fs::write(&arrow_fixture, "const greet = () => console.log('hi');\n").unwrap();
+    std::fs::write(&arrow_fixture, "const greet = () => console.log('hi');\n")
+        .expect("test invariant");
     let result = extract_js(&arrow_fixture);
     let labels: Vec<_> = result.nodes.iter().map(|n| n.label.as_str()).collect();
     assert!(labels.contains(&"greet()"), "labels: {labels:?}");
@@ -373,12 +374,12 @@ fn cross_file_call_promoted_to_extracted_with_import_evidence() {
         &caller_path,
         "const { doWork } = require('./lib');\nfunction run() { doWork(); }\n",
     )
-    .unwrap();
+    .expect("test invariant");
     std::fs::write(
         &callee_path,
         "function doWork() { return 1; }\nmodule.exports = { doWork };\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = extract(&[caller_path, callee_path], Some(tmp.path()));
     let nodes: std::collections::HashMap<String, String> = result
         .nodes
@@ -426,12 +427,12 @@ fn cross_file_call_remains_inferred_without_import_evidence() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let caller_path = tmp.path().join("caller.js");
     let callee_path = tmp.path().join("lib.js");
-    std::fs::write(&caller_path, "function run() { doUnique(); }\n").unwrap();
+    std::fs::write(&caller_path, "function run() { doUnique(); }\n").expect("test invariant");
     std::fs::write(
         &callee_path,
         "function doUnique() { return 1; }\nmodule.exports = { doUnique };\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = extract(&[caller_path, callee_path], Some(tmp.path()));
     let nodes: std::collections::HashMap<String, String> = result
         .nodes
@@ -567,12 +568,12 @@ fn extract_bash_emits_source_imports_from() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let helpers = tmp.path().join("helpers.sh");
     let script = tmp.path().join("deploy.sh");
-    std::fs::write(&helpers, "# helper\n").unwrap();
+    std::fs::write(&helpers, "# helper\n").expect("write fixture");
     std::fs::write(
         &script,
         "#!/bin/bash\nsource ./helpers.sh\nfoo() { echo hi; }\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = extract_bash(&script);
     let import_edges: Vec<_> = result
         .edges
@@ -592,7 +593,7 @@ fn extract_bash_creates_entrypoint_node() {
     // file via `contains`. Mirrors the change in graphify-py `extract_bash`.
     let tmp = tempfile::tempdir().expect("tempdir");
     let script = tmp.path().join("entry.sh");
-    std::fs::write(&script, "#!/bin/bash\necho top\n").unwrap();
+    std::fs::write(&script, "#!/bin/bash\necho top\n").expect("write fixture");
     let result = extract_bash(&script);
     let entry_node = result
         .nodes
@@ -618,7 +619,7 @@ fn extract_bash_entrypoint_no_collision_with_function_named_script() {
     // any function named `script` even when the file is `script.sh`.
     let tmp = tempfile::tempdir().expect("tempdir");
     let script = tmp.path().join("script.sh");
-    std::fs::write(&script, "#!/bin/bash\nscript() { echo s; }\n").unwrap();
+    std::fs::write(&script, "#!/bin/bash\nscript() { echo s; }\n").expect("test invariant");
     let result = extract_bash(&script);
     let mut ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
     ids.sort_unstable();
@@ -638,7 +639,7 @@ fn extract_bash_rejects_command_substitution_as_call() {
         &script,
         "#!/bin/bash\nbuild() { echo b; }\ndeploy() { x=$(build); }\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = extract_bash(&script);
     let calls: Vec<_> = result
         .edges
@@ -661,7 +662,7 @@ fn extract_bash_process_substitution_not_recorded() {
         &script,
         "#!/bin/bash\nhelper() { echo h; }\nrun() { diff <(helper) /dev/null; }\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = extract_bash(&script);
     let calls: Vec<_> = result
         .edges
@@ -684,9 +685,9 @@ fn extract_js_barrel_reexport_emits_re_exports_edges() {
         tmp.path().join("mod.ts"),
         "export const Foo = 1;\nexport const Bar = 2;\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let barrel = tmp.path().join("index.ts");
-    std::fs::write(&barrel, "export { Foo, Bar } from './mod';\n").unwrap();
+    std::fs::write(&barrel, "export { Foo, Bar } from './mod';\n").expect("write fixture");
     let result = extract_js(&barrel);
     let re_exports: Vec<&graphify_extract::types::Edge> = result
         .edges
@@ -726,21 +727,21 @@ fn extract_js_resolves_pnpm_workspace_package() {
         root.join("pnpm-workspace.yaml"),
         "packages:\n  - 'packages/*'\n",
     )
-    .unwrap();
-    std::fs::create_dir_all(root.join("packages/utils/src")).unwrap();
-    std::fs::create_dir_all(root.join("apps/api")).unwrap();
+    .expect("test invariant");
+    std::fs::create_dir_all(root.join("packages/utils/src")).expect("test invariant");
+    std::fs::create_dir_all(root.join("apps/api")).expect("test invariant");
     std::fs::write(
         root.join("packages/utils/package.json"),
         r#"{"name": "@scope/utils", "main": "src/index.ts"}"#,
     )
-    .unwrap();
+    .expect("test invariant");
     std::fs::write(
         root.join("packages/utils/src/index.ts"),
         "export const helper = 1;\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let consumer = root.join("apps/api/main.ts");
-    std::fs::write(&consumer, "import { helper } from '@scope/utils';\n").unwrap();
+    std::fs::write(&consumer, "import { helper } from '@scope/utils';\n").expect("write fixture");
     let result = extract_js(&consumer);
     let imports_from: Vec<&graphify_extract::types::Edge> = result
         .edges
@@ -769,7 +770,7 @@ fn extract_js_pure_export_no_from_not_treated_as_reexport() {
     // emit a re_exports edge.
     let tmp = tempfile::tempdir().expect("tempdir");
     let file = tmp.path().join("local.ts");
-    std::fs::write(&file, "const x = 1;\nexport { x };\n").unwrap();
+    std::fs::write(&file, "const x = 1;\nexport { x };\n").expect("write fixture");
     let result = extract_js(&file);
     let re_exports: Vec<_> = result
         .edges
@@ -789,8 +790,8 @@ fn extract_swift_merges_extension_across_files() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let canonical = tmp.path().join("Foo.swift");
     let extension = tmp.path().join("Foo+Ext.swift");
-    std::fs::write(&canonical, "class Foo {\n    func bar() {}\n}\n").unwrap();
-    std::fs::write(&extension, "extension Foo {\n    func baz() {}\n}\n").unwrap();
+    std::fs::write(&canonical, "class Foo {\n    func bar() {}\n}\n").expect("test invariant");
+    std::fs::write(&extension, "extension Foo {\n    func baz() {}\n}\n").expect("test invariant");
     let result = extract(&[canonical.clone(), extension.clone()], None);
     let foo_nodes: Vec<_> = result
         .nodes
@@ -817,7 +818,7 @@ fn extract_bash_source_user_defined_emits_calls_not_imports_from() {
         &script,
         "#!/bin/bash\nsource ./helpers.sh\nsource() { echo custom; }\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = extract_bash(&script);
     let imports_from: Vec<_> = result
         .edges
@@ -974,7 +975,7 @@ fn extract_json_large_file_skipped() {
     let mut content = b"{\"x\": \"".to_vec();
     content.extend(vec![b'a'; 1_048_576]);
     content.extend(b"\"}");
-    std::fs::write(&big, &content).unwrap();
+    std::fs::write(&big, &content).expect("write fixture");
     let result = extract_json(&big);
     assert!(result.error.is_some(), "Expected error for large file");
     assert!(result.nodes.is_empty());
@@ -984,7 +985,7 @@ fn extract_json_large_file_skipped() {
 fn extract_json_handles_invalid_json() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let bad = tmp.path().join("broken.json");
-    std::fs::write(&bad, "{this is not: valid json!!!").unwrap();
+    std::fs::write(&bad, "{this is not: valid json!!!").expect("write fixture");
     let result = extract_json(&bad);
     // Must not crash — error or empty result is acceptable
     let _ = result; // just verify no panic

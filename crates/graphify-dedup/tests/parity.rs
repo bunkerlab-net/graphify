@@ -2,7 +2,7 @@
 //!
 //! Ports every test in `graphify-py/tests/test_dedup.py`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::float_cmp)] // test file
+#![allow(clippy::expect_used, clippy::float_cmp)] // test file
 
 use graphify_dedup::{
     DedupLlmBackend, JudgeResult, NoOpBackend, deduplicate_entities, entropy, is_variant_pair,
@@ -325,7 +325,7 @@ fn test_multiple_repos_error() {
     ];
     let result = deduplicate_entities(&nodes, &[], &empty_communities(), None);
     assert!(result.is_err());
-    let err = result.unwrap_err();
+    let err = result.expect_err("expected Err");
     let msg = err.to_string();
     assert!(msg.contains("multiple repos"), "error message was: {msg}");
 }

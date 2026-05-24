@@ -2,7 +2,7 @@
 //!
 //! Mirrors the `_shebang_interpreter` / shebang-driven `classify_file`
 //! tests added in `graphify-py/tests/test_detect.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 

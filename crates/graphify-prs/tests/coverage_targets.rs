@@ -1,6 +1,6 @@
 //! Coverage tests for the smaller modules of `graphify-prs`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -88,39 +88,39 @@ fn args_parse_base_short() {
 
 #[test]
 fn args_parse_repo_long_and_short() {
-    let a = PrsArgs::parse(&["--repo", "owner/repo"]).unwrap();
+    let a = PrsArgs::parse(&["--repo", "owner/repo"]).expect("test invariant");
     assert_eq!(a.repo.as_deref(), Some("owner/repo"));
-    let b = PrsArgs::parse(&["-R", "owner/repo"]).unwrap();
+    let b = PrsArgs::parse(&["-R", "owner/repo"]).expect("test invariant");
     assert_eq!(b.repo.as_deref(), Some("owner/repo"));
 }
 
 #[test]
 fn args_parse_graph_paths() {
-    let a = PrsArgs::parse(&["--graph", "/tmp/g.json"]).unwrap();
+    let a = PrsArgs::parse(&["--graph", "/tmp/g.json"]).expect("test invariant");
     assert_eq!(a.graph_path, Some(PathBuf::from("/tmp/g.json")));
-    let b = PrsArgs::parse(&["--graph=/tmp/g.json"]).unwrap();
+    let b = PrsArgs::parse(&["--graph=/tmp/g.json"]).expect("test invariant");
     assert_eq!(b.graph_path, Some(PathBuf::from("/tmp/g.json")));
 }
 
 #[test]
 fn args_parse_limit() {
-    let a = PrsArgs::parse(&["--limit", "100"]).unwrap();
+    let a = PrsArgs::parse(&["--limit", "100"]).expect("test invariant");
     assert_eq!(a.limit, 100);
-    let b = PrsArgs::parse(&["--limit=25"]).unwrap();
+    let b = PrsArgs::parse(&["--limit=25"]).expect("test invariant");
     assert_eq!(b.limit, 25);
     // Invalid limit silently ignored.
-    let c = PrsArgs::parse(&["--limit", "not-a-num"]).unwrap();
+    let c = PrsArgs::parse(&["--limit", "not-a-num"]).expect("test invariant");
     assert_eq!(c.limit, 50);
 }
 
 #[test]
 fn args_parse_pr_number_bareword() {
-    let a = PrsArgs::parse(&["42"]).unwrap();
+    let a = PrsArgs::parse(&["42"]).expect("test invariant");
     assert_eq!(a.pr_number, Some(42));
-    let b = PrsArgs::parse(&["#42"]).unwrap();
+    let b = PrsArgs::parse(&["#42"]).expect("test invariant");
     assert_eq!(b.pr_number, Some(42));
     // Non-numeric does not set pr_number.
-    let c = PrsArgs::parse(&["abc"]).unwrap();
+    let c = PrsArgs::parse(&["abc"]).expect("test invariant");
     assert!(c.pr_number.is_none());
 }
 
@@ -390,7 +390,7 @@ fn run_cmd_prs_worktrees_view() {
         do_worktrees: true,
         ..PrsArgs::default()
     };
-    run_cmd_prs(&gh, &git, &triage, &args).unwrap();
+    run_cmd_prs(&gh, &git, &triage, &args).expect("test invariant");
 }
 
 #[test]
@@ -409,7 +409,7 @@ fn run_cmd_prs_conflicts_view() {
         do_conflicts: true,
         ..PrsArgs::default()
     };
-    run_cmd_prs(&gh, &git, &triage, &args).unwrap();
+    run_cmd_prs(&gh, &git, &triage, &args).expect("test invariant");
 }
 
 #[test]
@@ -428,7 +428,7 @@ fn run_cmd_prs_triage_view() {
         do_triage: true,
         ..PrsArgs::default()
     };
-    run_cmd_prs(&gh, &git, &triage, &args).unwrap();
+    run_cmd_prs(&gh, &git, &triage, &args).expect("test invariant");
 }
 
 #[test]
@@ -467,5 +467,5 @@ fn run_cmd_prs_with_base_override() {
         base: Some("v8".into()),
         ..PrsArgs::default()
     };
-    run_cmd_prs(&gh, &git, &triage, &args).unwrap();
+    run_cmd_prs(&gh, &git, &triage, &args).expect("test invariant");
 }

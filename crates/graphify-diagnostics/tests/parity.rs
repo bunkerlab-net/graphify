@@ -1,5 +1,5 @@
 //! Parity tests against `graphify-py/tests/test_multigraph_diagnostics.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_diagnostics::{
     DiagnoseOptions, diagnose_extraction, diagnose_file, format_diagnostic_json,
@@ -12,7 +12,7 @@ use tempfile::tempdir;
 fn extraction(nodes: Value, edges: Value) -> Map<String, Value> {
     json!({"nodes": nodes, "edges": edges})
         .as_object()
-        .unwrap()
+        .expect("test invariant")
         .clone()
 }
 
@@ -117,7 +117,7 @@ fn diagnose_accepts_links_alias_for_edges() {
         "links": [{"source": "a", "target": "b", "relation": "calls"}],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     let summary = diagnose_extraction(&ext, &DiagnoseOptions::default());
     assert_eq!(summary["valid_candidate_edges"], json!(1));
@@ -134,7 +134,7 @@ fn diagnose_examples_lists_high_multiplicity_pairs() {
         ]),
     );
     let summary = diagnose_extraction(&ext, &DiagnoseOptions::default());
-    let examples = summary["examples"].as_array().unwrap();
+    let examples = summary["examples"].as_array().expect("array field");
     assert_eq!(examples.len(), 1);
     assert_eq!(examples[0]["source"], json!("a"));
     assert_eq!(examples[0]["target"], json!("b"));
@@ -157,7 +157,10 @@ fn diagnose_examples_capped_by_max_examples() {
         ..DiagnoseOptions::default()
     };
     let summary = diagnose_extraction(&ext, &opts);
-    assert_eq!(summary["examples"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        summary["examples"].as_array().expect("array field").len(),
+        1
+    );
 }
 
 #[test]
@@ -174,7 +177,10 @@ fn diagnose_examples_disabled_when_max_examples_zero() {
         ..DiagnoseOptions::default()
     };
     let summary = diagnose_extraction(&ext, &opts);
-    assert_eq!(summary["examples"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        summary["examples"].as_array().expect("array field").len(),
+        0
+    );
 }
 
 #[test]
@@ -204,7 +210,7 @@ fn diagnose_does_not_mutate_input() {
 
 #[test]
 fn diagnose_file_reads_directed_flag_from_json() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("g.json");
     std::fs::write(
         &path,
@@ -215,14 +221,14 @@ fn diagnose_file_reads_directed_flag_from_json() {
         })
         .to_string(),
     )
-    .unwrap();
+    .expect("test invariant");
     let summary = diagnose_file(&path, None, 5, None).expect("diagnose");
     assert_eq!(summary["effective_directed"], json!(false));
 }
 
 #[test]
 fn diagnose_file_directed_override_wins() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("g.json");
     std::fs::write(
         &path,
@@ -233,16 +239,16 @@ fn diagnose_file_directed_override_wins() {
         })
         .to_string(),
     )
-    .unwrap();
+    .expect("test invariant");
     let summary = diagnose_file(&path, Some(true), 5, None).expect("diagnose");
     assert_eq!(summary["effective_directed"], json!(true));
 }
 
 #[test]
 fn diagnose_file_rejects_non_object_input() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("g.json");
-    std::fs::write(&path, "[1, 2, 3]").unwrap();
+    std::fs::write(&path, "[1, 2, 3]").expect("write fixture");
     assert!(diagnose_file(&path, None, 5, None).is_err());
 }
 
@@ -281,7 +287,7 @@ fn format_diagnostic_report_includes_node_and_edge_counts() {
 
 #[test]
 fn scan_producer_suppression_sites_returns_file_not_found_for_missing_path() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let result = scan_producer_suppression_sites(&dir.path().join("missing.py"));
     assert_eq!(result["total_sites"], json!(0));
     assert_eq!(result["error"], json!("file not found"));
@@ -289,20 +295,20 @@ fn scan_producer_suppression_sites_returns_file_not_found_for_missing_path() {
 
 #[test]
 fn scan_producer_suppression_sites_picks_up_seen_decl() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("extract.py");
     std::fs::write(
         &path,
         "seen_calls: set[tuple[str, str]] = set()\nseen_other = set()\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let result = scan_producer_suppression_sites(&path);
-    let sites = result["sites"].as_array().unwrap();
+    let sites = result["sites"].as_array().expect("array field");
     assert!(sites.iter().any(|s| s["name"] == json!("seen_calls")));
     assert!(sites.iter().any(|s| s["name"] == json!("seen_other")));
     let calls_site = sites
         .iter()
         .find(|s| s["name"] == json!("seen_calls"))
-        .unwrap();
+        .expect("test invariant");
     assert_eq!(calls_site["tuple_arity"], json!(2));
 }

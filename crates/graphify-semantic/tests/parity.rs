@@ -1,5 +1,5 @@
 //! Parity tests against `graphify-py/tests/test_semantic_cleanup.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_semantic::{
     MAX_SEMANTIC_FRAGMENT_BYTES, MAX_SEMANTIC_HYPEREDGE_NODES, load_validated_semantic_fragment,
@@ -114,13 +114,21 @@ fn sanitize_drops_rationale_file_type_node() {
         "hyperedges": [],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
-    let nodes = frag.get("nodes").unwrap().as_array().unwrap();
+    let nodes = frag
+        .get("nodes")
+        .expect("key present")
+        .as_array()
+        .expect("array field");
     assert_eq!(nodes.len(), 1);
     assert_eq!(
-        nodes[0].as_object().unwrap().get("id").unwrap(),
+        nodes[0]
+            .as_object()
+            .expect("object field")
+            .get("id")
+            .expect("key present"),
         &json!("x")
     );
 }
@@ -138,17 +146,21 @@ fn sanitize_converts_sentence_rationale_to_attribute() {
         "hyperedges": [],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
-    let nodes = frag.get("nodes").unwrap().as_array().unwrap();
+    let nodes = frag
+        .get("nodes")
+        .expect("key present")
+        .as_array()
+        .expect("array field");
     let target = nodes
         .iter()
         .find(|n| n.as_object().and_then(|m| m.get("id")) == Some(&json!("target")))
         .expect("target node");
     let rationale = target
         .as_object()
-        .unwrap()
+        .expect("test invariant")
         .get("rationale")
         .and_then(Value::as_str)
         .expect("rationale attr");
@@ -169,14 +181,14 @@ fn sanitize_preserves_short_concept_nodes() {
         "hyperedges": [],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
     let ids: Vec<&str> = frag
         .get("nodes")
-        .unwrap()
+        .expect("test invariant")
         .as_array()
-        .unwrap()
+        .expect("test invariant")
         .iter()
         .filter_map(|n| {
             n.as_object()
@@ -200,10 +212,17 @@ fn sanitize_drops_edges_pointing_at_removed_nodes() {
         "hyperedges": [],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
-    assert_eq!(frag.get("edges").unwrap().as_array().unwrap().len(), 0);
+    assert_eq!(
+        frag.get("edges")
+            .expect("key present")
+            .as_array()
+            .expect("array field")
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -220,18 +239,22 @@ fn sanitize_filters_hyperedge_members_to_survivors() {
         ],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
-    let hyperedges = frag.get("hyperedges").unwrap().as_array().unwrap();
+    let hyperedges = frag
+        .get("hyperedges")
+        .expect("key present")
+        .as_array()
+        .expect("array field");
     assert_eq!(hyperedges.len(), 1);
     let members: Vec<&str> = hyperedges[0]
         .as_object()
-        .unwrap()
+        .expect("test invariant")
         .get("nodes")
-        .unwrap()
+        .expect("test invariant")
         .as_array()
-        .unwrap()
+        .expect("test invariant")
         .iter()
         .filter_map(Value::as_str)
         .collect();
@@ -251,10 +274,17 @@ fn sanitize_drops_hyperedge_when_under_two_survivors() {
         ],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
-    assert_eq!(frag.get("hyperedges").unwrap().as_array().unwrap().len(), 0);
+    assert_eq!(
+        frag.get("hyperedges")
+            .expect("key present")
+            .as_array()
+            .expect("array field")
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -268,10 +298,17 @@ fn sanitize_drops_nodes_without_id() {
         "hyperedges": [],
     })
     .as_object()
-    .unwrap()
+    .expect("test invariant")
     .clone();
     sanitize_semantic_fragment(&mut frag);
-    assert_eq!(frag.get("nodes").unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(
+        frag.get("nodes")
+            .expect("key present")
+            .as_array()
+            .expect("array field")
+            .len(),
+        1
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -280,13 +317,13 @@ fn sanitize_drops_nodes_without_id() {
 
 #[test]
 fn load_validated_valid_file() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("ok.json");
     std::fs::write(
         &path,
         json!({"nodes": [], "edges": [], "hyperedges": []}).to_string(),
     )
-    .unwrap();
+    .expect("test invariant");
     let (fragment, errors) = load_validated_semantic_fragment(&path);
     assert!(errors.is_empty(), "errors: {errors:?}");
     assert!(fragment.is_some());
@@ -294,9 +331,9 @@ fn load_validated_valid_file() {
 
 #[test]
 fn load_validated_rejects_invalid_json() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("bad.json");
-    std::fs::write(&path, "{not json").unwrap();
+    std::fs::write(&path, "{not json").expect("write fixture");
     let (fragment, errors) = load_validated_semantic_fragment(&path);
     assert!(fragment.is_none());
     assert!(errors.iter().any(|e| e.contains("invalid JSON")));
@@ -304,10 +341,11 @@ fn load_validated_rejects_invalid_json() {
 
 #[test]
 fn load_validated_rejects_oversize_before_parse() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("big.json");
-    let huge = "x".repeat(usize::try_from(MAX_SEMANTIC_FRAGMENT_BYTES + 100).unwrap());
-    std::fs::write(&path, huge).unwrap();
+    let huge =
+        "x".repeat(usize::try_from(MAX_SEMANTIC_FRAGMENT_BYTES + 100).expect("test invariant"));
+    std::fs::write(&path, huge).expect("write fixture");
     let (fragment, errors) = load_validated_semantic_fragment(&path);
     assert!(fragment.is_none());
     assert!(errors.iter().any(|e| e.contains("max is")));
@@ -315,9 +353,9 @@ fn load_validated_rejects_oversize_before_parse() {
 
 #[test]
 fn load_validated_returns_errors_for_invalid_shape() {
-    let dir = tempdir().unwrap();
+    let dir = tempdir().expect("tempdir");
     let path = dir.path().join("invalid.json");
-    std::fs::write(&path, json!({"nodes": "x"}).to_string()).unwrap();
+    std::fs::write(&path, json!({"nodes": "x"}).to_string()).expect("test invariant");
     let (fragment, errors) = load_validated_semantic_fragment(&path);
     assert!(fragment.is_none());
     assert!(!errors.is_empty());

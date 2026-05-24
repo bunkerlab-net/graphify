@@ -10,7 +10,7 @@
 //! this test reads `docs/how-it-works.md` from the Python submodule and is not
 //! related to the Rust install module.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 // `std::env::set_var` is unsafe in edition 2024 — allow it in test code only.
 #![allow(unsafe_code)]
 
@@ -42,66 +42,69 @@ fn make_git_repo(path: &Path) -> PathBuf {
 
 #[test]
 fn test_install_creates_hook() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    let result = install(&repo).unwrap();
+    let result = install(&repo).expect("test invariant");
     let hook = repo.join(".git").join("hooks").join("post-commit");
     assert!(hook.exists());
-    let content = fs::read_to_string(&hook).unwrap();
+    let content = fs::read_to_string(&hook).expect("read fixture");
     assert!(content.contains(HOOK_MARKER));
     assert!(result.contains("installed"));
 }
 
 #[test]
 fn test_install_is_executable() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
+    install(&repo).expect("test invariant");
     let hook = repo.join(".git").join("hooks").join("post-commit");
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(&hook).unwrap().permissions().mode();
+        let mode = fs::metadata(&hook)
+            .expect("fixture metadata")
+            .permissions()
+            .mode();
         assert!(mode & 0o111 != 0, "executable bit should be set");
     }
     #[cfg(not(unix))]
     {
-        let content = fs::read_to_string(&hook).unwrap();
+        let content = fs::read_to_string(&hook).expect("read fixture");
         assert!(content.starts_with("#!/bin/sh\n"));
     }
 }
 
 #[test]
 fn test_install_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
-    let result = install(&repo).unwrap();
+    install(&repo).expect("test invariant");
+    let result = install(&repo).expect("test invariant");
     assert!(result.contains("already installed"));
     // marker appears only once
     let hook = repo.join(".git").join("hooks").join("post-commit");
-    let content = fs::read_to_string(&hook).unwrap();
+    let content = fs::read_to_string(&hook).expect("read fixture");
     assert_eq!(content.matches(HOOK_MARKER).count(), 1);
 }
 
 #[test]
 fn test_install_appends_to_existing_hook() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
     let hook = repo.join(".git").join("hooks").join("post-commit");
     // Create hooks dir first
-    fs::create_dir_all(hook.parent().unwrap()).unwrap();
-    fs::write(&hook, b"#!/bin/bash\necho existing\n").unwrap();
+    fs::create_dir_all(hook.parent().expect("create_dir_all")).expect("test invariant");
+    fs::write(&hook, b"#!/bin/bash\necho existing\n").expect("write fixture");
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("test invariant");
     }
 
-    install(&repo).unwrap();
-    let content = fs::read_to_string(&hook).unwrap();
+    install(&repo).expect("test invariant");
+    let content = fs::read_to_string(&hook).expect("read fixture");
     assert!(content.contains("existing"));
     assert!(content.contains(HOOK_MARKER));
 }
@@ -112,10 +115,10 @@ fn test_install_appends_to_existing_hook() {
 
 #[test]
 fn test_uninstall_removes_hook() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
-    let result = uninstall(&repo).unwrap();
+    install(&repo).expect("test invariant");
+    let result = uninstall(&repo).expect("test invariant");
     let hook = repo.join(".git").join("hooks").join("post-commit");
     assert!(!hook.exists());
     assert!(result.to_lowercase().contains("removed"));
@@ -123,9 +126,9 @@ fn test_uninstall_removes_hook() {
 
 #[test]
 fn test_uninstall_no_hook() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    let result = uninstall(&repo).unwrap();
+    let result = uninstall(&repo).expect("test invariant");
     assert!(result.contains("nothing to remove"));
 }
 
@@ -135,16 +138,16 @@ fn test_uninstall_no_hook() {
 
 #[test]
 fn test_status_installed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
+    install(&repo).expect("test invariant");
     let result = status(&repo);
     assert!(result.contains("installed"));
 }
 
 #[test]
 fn test_status_not_installed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
     let result = status(&repo);
     assert!(result.contains("not installed"));
@@ -156,10 +159,10 @@ fn test_status_not_installed() {
 
 #[test]
 fn test_no_git_repo_raises() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let not_a_repo = dir.path().join("not_a_repo");
-    fs::create_dir_all(&not_a_repo).unwrap();
-    let err = install(&not_a_repo).unwrap_err();
+    fs::create_dir_all(&not_a_repo).expect("create_dir_all");
+    let err = install(&not_a_repo).expect_err("expected Err");
     assert!(format!("{err}").contains("No git repository"));
 }
 
@@ -169,21 +172,21 @@ fn test_no_git_repo_raises() {
 
 #[test]
 fn user_hooks_dir_strips_husky_underscore() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let husky_under = dir.path().join(".husky").join("_");
     assert_eq!(user_hooks_dir(&husky_under), dir.path().join(".husky"));
 }
 
 #[test]
 fn user_hooks_dir_passthrough_for_plain_dir() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let plain = dir.path().join(".git").join("hooks");
     assert_eq!(user_hooks_dir(&plain), plain);
 }
 
 #[test]
 fn user_hooks_dir_does_not_strip_underscore_in_other_names() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let custom = dir.path().join(".git").join("_hooks");
     assert_eq!(user_hooks_dir(&custom), custom);
 }
@@ -194,50 +197,53 @@ fn user_hooks_dir_does_not_strip_underscore_in_other_names() {
 
 #[test]
 fn test_install_creates_post_checkout_hook() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
+    install(&repo).expect("test invariant");
     let hook = repo.join(".git").join("hooks").join("post-checkout");
     assert!(hook.exists());
-    let content = fs::read_to_string(&hook).unwrap();
+    let content = fs::read_to_string(&hook).expect("read fixture");
     assert!(content.contains(CHECKOUT_MARKER));
 }
 
 #[test]
 fn test_install_post_checkout_is_executable() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
+    install(&repo).expect("test invariant");
     let hook = repo.join(".git").join("hooks").join("post-checkout");
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(&hook).unwrap().permissions().mode();
+        let mode = fs::metadata(&hook)
+            .expect("fixture metadata")
+            .permissions()
+            .mode();
         assert!(mode & 0o111 != 0, "executable bit should be set");
     }
     #[cfg(not(unix))]
     {
-        let content = fs::read_to_string(&hook).unwrap();
+        let content = fs::read_to_string(&hook).expect("read fixture");
         assert!(content.starts_with("#!/bin/sh\n"));
     }
 }
 
 #[test]
 fn test_uninstall_removes_post_checkout_hook() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
-    uninstall(&repo).unwrap();
+    install(&repo).expect("test invariant");
+    uninstall(&repo).expect("test invariant");
     let hook = repo.join(".git").join("hooks").join("post-checkout");
     assert!(!hook.exists());
 }
 
 #[test]
 fn test_status_shows_both_hooks() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
-    install(&repo).unwrap();
+    install(&repo).expect("test invariant");
     let result = status(&repo);
     assert!(result.contains("post-commit"));
     assert!(result.contains("post-checkout"));
@@ -250,17 +256,22 @@ fn test_status_shows_both_hooks() {
 
 #[test]
 fn test_hooks_dir_resolves_relative_git_hooks_path() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
 
-    let result = hooks_dir_with(&repo, &|_root| Some(".git/hooks\n".to_string())).unwrap();
-    let expected = repo.join(".git").join("hooks").canonicalize().unwrap();
+    let result =
+        hooks_dir_with(&repo, &|_root| Some(".git/hooks\n".to_string())).expect("test invariant");
+    let expected = repo
+        .join(".git")
+        .join("hooks")
+        .canonicalize()
+        .expect("test invariant");
     assert_eq!(result, expected);
 }
 
 #[test]
 fn test_hooks_dir_rejects_multiline_git_output() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
 
     // The multiline output (e.g., old git echoing back unrecognised flags)
@@ -268,7 +279,7 @@ fn test_hooks_dir_rejects_multiline_git_output() {
     let result = hooks_dir_with(&repo, &|_root| {
         Some("--path-format=absolute\n.git/hooks\n".to_string())
     })
-    .unwrap();
+    .expect("test invariant");
 
     // Should fall back to default .git/hooks (canonicalized — macOS /var → /private/var).
     let expected = repo.join(".git").join("hooks");
@@ -280,12 +291,13 @@ fn test_hooks_dir_rejects_multiline_git_output() {
 
 #[test]
 fn test_hooks_dir_accepts_absolute_git_hooks_path() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
     let hooks = dir.path().join("actual-hooks");
 
     let hooks_str = hooks.to_string_lossy().to_string();
-    let result = hooks_dir_with(&repo, &move |_root| Some(format!("{hooks_str}\n"))).unwrap();
+    let result = hooks_dir_with(&repo, &move |_root| Some(format!("{hooks_str}\n")))
+        .expect("test invariant");
     assert_eq!(result, hooks.canonicalize().unwrap_or(hooks));
 }
 
@@ -384,8 +396,8 @@ fn test_replace_or_append_idempotent() {
 
 #[test]
 fn test_install_creates_claude_md() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
     let target = dir.path().join("CLAUDE.md");
     assert!(target.exists());
     assert!(target.read_to_string_unwrap().contains(CLAUDE_MD_MARKER));
@@ -393,8 +405,8 @@ fn test_install_creates_claude_md() {
 
 #[test]
 fn test_install_contains_expected_rules() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
     let content = dir.path().join("CLAUDE.md").read_to_string_unwrap();
     assert!(content.contains("GRAPH_REPORT.md"));
     assert!(content.contains("wiki/index.md"));
@@ -403,10 +415,10 @@ fn test_install_contains_expected_rules() {
 
 #[test]
 fn test_install_appends_to_existing_claude_md() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("CLAUDE.md");
-    fs::write(&target, "# Existing content\n\nSome rules here.\n").unwrap();
-    claude_install(dir.path()).unwrap();
+    fs::write(&target, "# Existing content\n\nSome rules here.\n").expect("write fixture");
+    claude_install(dir.path()).expect("test invariant");
     let content = target.read_to_string_unwrap();
     assert!(content.contains("Existing content"));
     assert!(content.contains(CLAUDE_MD_MARKER));
@@ -414,9 +426,9 @@ fn test_install_appends_to_existing_claude_md() {
 
 #[test]
 fn test_install_is_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
-    let msg = claude_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
+    let msg = claude_install(dir.path()).expect("test invariant");
     let content = dir.path().join("CLAUDE.md").read_to_string_unwrap();
     assert_eq!(content.matches(CLAUDE_MD_MARKER).count(), 1);
     assert!(msg.contains("already configured"));
@@ -424,9 +436,9 @@ fn test_install_is_idempotent() {
 
 #[test]
 fn test_uninstall_removes_section() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
-    claude_uninstall(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
+    claude_uninstall(dir.path()).expect("test invariant");
     let target = dir.path().join("CLAUDE.md");
     if target.exists() {
         assert!(!target.read_to_string_unwrap().contains(CLAUDE_MD_MARKER));
@@ -435,11 +447,11 @@ fn test_uninstall_removes_section() {
 
 #[test]
 fn test_uninstall_preserves_other_content() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("CLAUDE.md");
-    fs::write(&target, "# My Project\n\nSome rules.\n").unwrap();
-    claude_install(dir.path()).unwrap();
-    claude_uninstall(dir.path()).unwrap();
+    fs::write(&target, "# My Project\n\nSome rules.\n").expect("write fixture");
+    claude_install(dir.path()).expect("test invariant");
+    claude_uninstall(dir.path()).expect("test invariant");
     assert!(target.exists());
     let content = target.read_to_string_unwrap();
     assert!(content.contains("My Project"));
@@ -449,17 +461,17 @@ fn test_uninstall_preserves_other_content() {
 
 #[test]
 fn test_uninstall_no_op_when_not_installed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("CLAUDE.md");
-    fs::write(&target, "# Other stuff\n").unwrap();
-    let msg = claude_uninstall(dir.path()).unwrap();
+    fs::write(&target, "# Other stuff\n").expect("write fixture");
+    let msg = claude_uninstall(dir.path()).expect("test invariant");
     assert!(msg.contains("not found") || msg.contains("nothing to do"));
 }
 
 #[test]
 fn test_uninstall_no_op_when_no_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let msg = claude_uninstall(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let msg = claude_uninstall(dir.path()).expect("test invariant");
     assert!(msg.contains("No CLAUDE.md") || msg.contains("nothing to do"));
 }
 
@@ -469,13 +481,15 @@ fn test_uninstall_no_op_when_no_file() {
 
 #[test]
 fn test_install_creates_settings_json() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
     let settings_path = dir.path().join(".claude").join("settings.json");
     assert!(settings_path.exists());
     let settings: serde_json::Value =
-        serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
-    let hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+    let hooks = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("array field");
     assert!(
         hooks
             .iter()
@@ -485,13 +499,15 @@ fn test_install_creates_settings_json() {
 
 #[test]
 fn test_install_settings_json_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
-    claude_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
+    claude_install(dir.path()).expect("test invariant");
     let settings_path = dir.path().join(".claude").join("settings.json");
     let settings: serde_json::Value =
-        serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
-    let hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+    let hooks = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("array field");
     let bash_hooks: Vec<_> = hooks
         .iter()
         .filter(|h| {
@@ -505,14 +521,16 @@ fn test_install_settings_json_idempotent() {
 #[test]
 #[serial(home_env)]
 fn test_uninstall_removes_settings_hook() {
-    let dir = tempfile::tempdir().unwrap();
-    claude_install(dir.path()).unwrap();
-    claude_uninstall(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    claude_install(dir.path()).expect("test invariant");
+    claude_uninstall(dir.path()).expect("test invariant");
     let settings_path = dir.path().join(".claude").join("settings.json");
     if settings_path.exists() {
         let settings: serde_json::Value =
-            serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
-        let hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
+            serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+        let hooks = settings["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("array field");
         assert!(!hooks.iter().any(|h| {
             h.get("matcher").and_then(|v| v.as_str()) == Some("Bash")
                 && h.to_string().contains("graphify")
@@ -532,7 +550,7 @@ fn install_skill_to(tmp_path: &Path, platform: &str) -> String {
     unsafe {
         std::env::set_var("HOME", tmp_path);
     }
-    let result = install_platform_skill(platform).unwrap();
+    let result = install_platform_skill(platform).expect("test invariant");
     // SAFETY: test-only cleanup.
     #[allow(unused_unsafe)]
     unsafe {
@@ -544,7 +562,7 @@ fn install_skill_to(tmp_path: &Path, platform: &str) -> String {
 #[test]
 #[serial(home_env)]
 fn test_install_default_claude() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "claude");
     assert!(dir.path().join(".claude/skills/graphify/SKILL.md").exists());
 }
@@ -552,7 +570,7 @@ fn test_install_default_claude() {
 #[test]
 #[serial(home_env)]
 fn test_install_codex() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "codex");
     assert!(dir.path().join(".agents/skills/graphify/SKILL.md").exists());
 }
@@ -560,7 +578,7 @@ fn test_install_codex() {
 #[test]
 #[serial(home_env)]
 fn test_install_opencode() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "opencode");
     assert!(
         dir.path()
@@ -572,7 +590,7 @@ fn test_install_opencode() {
 #[test]
 #[serial(home_env)]
 fn test_install_claw() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "claw");
     assert!(
         dir.path()
@@ -584,7 +602,7 @@ fn test_install_claw() {
 #[test]
 #[serial(home_env)]
 fn test_install_droid() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "droid");
     assert!(
         dir.path()
@@ -596,7 +614,7 @@ fn test_install_droid() {
 #[test]
 #[serial(home_env)]
 fn test_install_trae() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "trae");
     assert!(dir.path().join(".trae/skills/graphify/SKILL.md").exists());
 }
@@ -604,7 +622,7 @@ fn test_install_trae() {
 #[test]
 #[serial(home_env)]
 fn test_install_trae_cn() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "trae-cn");
     assert!(
         dir.path()
@@ -616,7 +634,7 @@ fn test_install_trae_cn() {
 #[test]
 #[serial(home_env)]
 fn test_install_windows() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "windows");
     assert!(dir.path().join(".claude/skills/graphify/SKILL.md").exists());
 }
@@ -626,13 +644,18 @@ fn test_install_windows() {
 fn test_install_unknown_platform_errors() {
     let result = install_platform_skill("unknown");
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("unknown platform"));
+    assert!(
+        result
+            .expect_err("expected Err")
+            .to_string()
+            .contains("unknown platform")
+    );
 }
 
 #[test]
 #[serial(home_env)]
 fn test_claude_install_registers_claude_md() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "claude");
     assert!(dir.path().join(".claude/CLAUDE.md").exists());
 }
@@ -640,7 +663,7 @@ fn test_claude_install_registers_claude_md() {
 #[test]
 #[serial(home_env)]
 fn test_codex_install_does_not_write_claude_md() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "codex");
     assert!(!dir.path().join(".claude/CLAUDE.md").exists());
 }
@@ -651,8 +674,8 @@ fn test_codex_install_does_not_write_claude_md() {
 
 #[test]
 fn test_codex_agents_install_writes_agents_md() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "codex").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "codex").expect("test invariant");
     let agents_md = dir.path().join("AGENTS.md");
     assert!(agents_md.exists());
     let content = agents_md.read_to_string_unwrap();
@@ -662,8 +685,8 @@ fn test_codex_agents_install_writes_agents_md() {
 
 #[test]
 fn test_codex_agents_install_mentions_dirty_graph_output() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "codex").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "codex").expect("test invariant");
     let content = dir.path().join("AGENTS.md").read_to_string_unwrap();
     assert!(content.contains("Dirty graphify-out/ files are expected"));
     assert!(content.contains("not a reason to skip graphify"));
@@ -671,33 +694,33 @@ fn test_codex_agents_install_mentions_dirty_graph_output() {
 
 #[test]
 fn test_opencode_agents_install_writes_agents_md() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "opencode").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "opencode").expect("test invariant");
     assert!(dir.path().join("AGENTS.md").exists());
 }
 
 #[test]
 fn test_claw_agents_install_writes_agents_md() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "claw").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "claw").expect("test invariant");
     assert!(dir.path().join("AGENTS.md").exists());
 }
 
 #[test]
 fn test_agents_install_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "codex").unwrap();
-    agents_install(dir.path(), "codex").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "codex").expect("test invariant");
+    agents_install(dir.path(), "codex").expect("test invariant");
     let content = dir.path().join("AGENTS.md").read_to_string_unwrap();
     assert_eq!(content.matches("## graphify").count(), 1);
 }
 
 #[test]
 fn test_agents_install_appends_to_existing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let agents_md = dir.path().join("AGENTS.md");
-    fs::write(&agents_md, "# Existing rules\n\nDo not break things.\n").unwrap();
-    agents_install(dir.path(), "codex").unwrap();
+    fs::write(&agents_md, "# Existing rules\n\nDo not break things.\n").expect("write fixture");
+    agents_install(dir.path(), "codex").expect("test invariant");
     let content = agents_md.read_to_string_unwrap();
     assert!(content.contains("Do not break things."));
     assert!(content.contains("## graphify"));
@@ -705,19 +728,19 @@ fn test_agents_install_appends_to_existing() {
 
 #[test]
 fn test_agents_uninstall_removes_section() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "codex").unwrap();
-    agents_uninstall(dir.path(), "").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "codex").expect("test invariant");
+    agents_uninstall(dir.path(), "").expect("test invariant");
     assert!(!dir.path().join("AGENTS.md").exists());
 }
 
 #[test]
 fn test_agents_uninstall_preserves_other_content() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let agents_md = dir.path().join("AGENTS.md");
-    fs::write(&agents_md, "# Existing rules\n\nDo not break things.\n").unwrap();
-    agents_install(dir.path(), "codex").unwrap();
-    agents_uninstall(dir.path(), "").unwrap();
+    fs::write(&agents_md, "# Existing rules\n\nDo not break things.\n").expect("write fixture");
+    agents_install(dir.path(), "codex").expect("test invariant");
+    agents_uninstall(dir.path(), "").expect("test invariant");
     assert!(agents_md.exists());
     let content = agents_md.read_to_string_unwrap();
     assert!(content.contains("Do not break things."));
@@ -726,8 +749,8 @@ fn test_agents_uninstall_preserves_other_content() {
 
 #[test]
 fn test_agents_uninstall_no_op_when_not_installed() {
-    let dir = tempfile::tempdir().unwrap();
-    let msg = agents_uninstall(dir.path(), "").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let msg = agents_uninstall(dir.path(), "").expect("test invariant");
     assert!(msg.contains("nothing to do"));
 }
 
@@ -737,8 +760,8 @@ fn test_agents_uninstall_no_op_when_not_installed() {
 
 #[test]
 fn test_opencode_agents_install_writes_plugin() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "opencode").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "opencode").expect("test invariant");
     let plugin = dir.path().join(".opencode/plugins/graphify.js");
     assert!(plugin.exists());
     assert!(
@@ -750,13 +773,13 @@ fn test_opencode_agents_install_writes_plugin() {
 
 #[test]
 fn test_opencode_agents_install_registers_plugin_in_config() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "opencode").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "opencode").expect("test invariant");
     let config_file = dir.path().join(".opencode/opencode.json");
     assert!(config_file.exists());
     let config: serde_json::Value =
-        serde_json::from_str(&config_file.read_to_string_unwrap()).unwrap();
-    let plugins = config["plugin"].as_array().unwrap();
+        serde_json::from_str(&config_file.read_to_string_unwrap()).expect("test invariant");
+    let plugins = config["plugin"].as_array().expect("array field");
     assert!(
         plugins
             .iter()
@@ -766,22 +789,22 @@ fn test_opencode_agents_install_registers_plugin_in_config() {
 
 #[test]
 fn test_opencode_agents_install_merges_existing_config() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let config_file = dir.path().join(".opencode/opencode.json");
-    fs::create_dir_all(config_file.parent().unwrap()).unwrap();
+    fs::create_dir_all(config_file.parent().expect("create_dir_all")).expect("test invariant");
     fs::write(
         &config_file,
         serde_json::json!({"model": "claude-opus-4-5", "plugin": []}).to_string(),
     )
-    .unwrap();
-    agents_install(dir.path(), "opencode").unwrap();
+    .expect("test invariant");
+    agents_install(dir.path(), "opencode").expect("test invariant");
     let config: serde_json::Value =
-        serde_json::from_str(&config_file.read_to_string_unwrap()).unwrap();
+        serde_json::from_str(&config_file.read_to_string_unwrap()).expect("test invariant");
     assert_eq!(config["model"].as_str(), Some("claude-opus-4-5"));
     assert!(
         config["plugin"]
             .as_array()
-            .unwrap()
+            .expect("test invariant")
             .iter()
             .any(|p| p.as_str().is_some_and(|s| s.contains("graphify.js")))
     );
@@ -789,15 +812,15 @@ fn test_opencode_agents_install_merges_existing_config() {
 
 #[test]
 fn test_opencode_agents_uninstall_removes_plugin() {
-    let dir = tempfile::tempdir().unwrap();
-    agents_install(dir.path(), "opencode").unwrap();
-    agents_uninstall(dir.path(), "opencode").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    agents_install(dir.path(), "opencode").expect("test invariant");
+    agents_uninstall(dir.path(), "opencode").expect("test invariant");
     let plugin = dir.path().join(".opencode/plugins/graphify.js");
     assert!(!plugin.exists());
     let config_file = dir.path().join(".opencode/opencode.json");
     if config_file.exists() {
         let config: serde_json::Value =
-            serde_json::from_str(&config_file.read_to_string_unwrap()).unwrap();
+            serde_json::from_str(&config_file.read_to_string_unwrap()).expect("test invariant");
         let plugins = config
             .get("plugin")
             .and_then(|v| v.as_array())
@@ -817,8 +840,8 @@ fn test_opencode_agents_uninstall_removes_plugin() {
 
 #[test]
 fn test_cursor_install_writes_rule() {
-    let dir = tempfile::tempdir().unwrap();
-    cursor_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    cursor_install(dir.path()).expect("test invariant");
     let rule = dir.path().join(".cursor/rules/graphify.mdc");
     assert!(rule.exists());
     let content = rule.read_to_string_unwrap();
@@ -829,28 +852,28 @@ fn test_cursor_install_writes_rule() {
 #[test]
 #[serial(home_env)]
 fn test_cursor_install_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    cursor_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    cursor_install(dir.path()).expect("test invariant");
     let rule = dir.path().join(".cursor/rules/graphify.mdc");
     let original = rule.read_to_string_unwrap();
-    cursor_install(dir.path()).unwrap();
+    cursor_install(dir.path()).expect("test invariant");
     assert_eq!(rule.read_to_string_unwrap(), original);
 }
 
 #[test]
 #[serial(home_env)]
 fn test_cursor_uninstall_removes_rule() {
-    let dir = tempfile::tempdir().unwrap();
-    cursor_install(dir.path()).unwrap();
-    cursor_uninstall(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    cursor_install(dir.path()).expect("test invariant");
+    cursor_uninstall(dir.path()).expect("test invariant");
     assert!(!dir.path().join(".cursor/rules/graphify.mdc").exists());
 }
 
 #[test]
 #[serial(home_env)]
 fn test_cursor_uninstall_noop_if_not_installed() {
-    let dir = tempfile::tempdir().unwrap();
-    cursor_uninstall(dir.path()).unwrap(); // should not error
+    let dir = tempfile::tempdir().expect("tempdir");
+    cursor_uninstall(dir.path()).expect("test invariant"); // should not error
 }
 
 // ---------------------------------------------------------------------------
@@ -864,7 +887,7 @@ fn gemini_install_to(project_dir: &Path, skill_home: &Path) {
     unsafe {
         std::env::set_var("HOME", skill_home);
     }
-    gemini_install(project_dir).unwrap();
+    gemini_install(project_dir).expect("test invariant");
     // SAFETY: test-only cleanup.
     #[allow(unused_unsafe)]
     unsafe {
@@ -878,7 +901,7 @@ fn gemini_uninstall_to(project_dir: &Path, skill_home: &Path) {
     unsafe {
         std::env::set_var("HOME", skill_home);
     }
-    gemini_uninstall(project_dir).unwrap();
+    gemini_uninstall(project_dir).expect("test invariant");
     // SAFETY: test-only cleanup.
     #[allow(unused_unsafe)]
     unsafe {
@@ -889,8 +912,8 @@ fn gemini_uninstall_to(project_dir: &Path, skill_home: &Path) {
 #[test]
 #[serial(home_env)]
 fn test_gemini_install_writes_gemini_md() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     gemini_install_to(dir.path(), home.path());
     let md = dir.path().join("GEMINI.md");
     assert!(md.exists());
@@ -903,21 +926,23 @@ fn test_gemini_install_writes_gemini_md() {
 #[test]
 #[serial(home_env)]
 fn test_gemini_install_writes_hook() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     gemini_install_to(dir.path(), home.path());
     let settings_path = dir.path().join(".gemini/settings.json");
     let settings: serde_json::Value =
-        serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
-    let hooks = settings["hooks"]["BeforeTool"].as_array().unwrap();
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+    let hooks = settings["hooks"]["BeforeTool"]
+        .as_array()
+        .expect("array field");
     assert!(hooks.iter().any(|h| h.to_string().contains("graphify")));
 }
 
 #[test]
 #[serial(home_env)]
 fn test_gemini_install_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     gemini_install_to(dir.path(), home.path());
     gemini_install_to(dir.path(), home.path());
     let md = dir.path().join("GEMINI.md");
@@ -927,9 +952,9 @@ fn test_gemini_install_idempotent() {
 #[test]
 #[serial(home_env)]
 fn test_gemini_install_merges_existing_gemini_md() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("GEMINI.md"), "# My project rules\n").unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("GEMINI.md"), "# My project rules\n").expect("test invariant");
     gemini_install_to(dir.path(), home.path());
     let content = dir.path().join("GEMINI.md").read_to_string_unwrap();
     assert!(content.contains("# My project rules"));
@@ -939,8 +964,8 @@ fn test_gemini_install_merges_existing_gemini_md() {
 #[test]
 #[serial(home_env)]
 fn test_gemini_uninstall_removes_section() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     gemini_install_to(dir.path(), home.path());
     gemini_uninstall_to(dir.path(), home.path());
     assert!(!dir.path().join("GEMINI.md").exists());
@@ -949,14 +974,14 @@ fn test_gemini_uninstall_removes_section() {
 #[test]
 #[serial(home_env)]
 fn test_gemini_uninstall_removes_hook() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     gemini_install_to(dir.path(), home.path());
     gemini_uninstall_to(dir.path(), home.path());
     let settings_path = dir.path().join(".gemini/settings.json");
     if settings_path.exists() {
         let settings: serde_json::Value =
-            serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
+            serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
         let hooks = settings
             .pointer("/hooks/BeforeTool")
             .and_then(|v| v.as_array())
@@ -968,13 +993,13 @@ fn test_gemini_uninstall_removes_hook() {
 
 #[test]
 fn test_gemini_uninstall_noop_if_not_installed() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: test-only HOME override.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    gemini_uninstall(dir.path()).unwrap(); // should not error
+    gemini_uninstall(dir.path()).expect("test invariant"); // should not error
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1118,14 +1143,14 @@ fn assert_query_first(text: &str, ctx: &str) {
 
 #[test]
 fn test_claude_install_upgrades_stale_section() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let claude_md = dir.path().join("CLAUDE.md");
     fs::write(
         &claude_md,
         format!("# My Project\n\nSome description.\n\n{OLD_CLAUDE_SECTION}"),
     )
-    .unwrap();
-    claude_install(dir.path()).unwrap();
+    .expect("test invariant");
+    claude_install(dir.path()).expect("test invariant");
     let after = claude_md.read_to_string_unwrap();
     assert_no_report_first(&after, "CLAUDE.md");
     assert_query_first(&after, "CLAUDE.md");
@@ -1135,11 +1160,11 @@ fn test_claude_install_upgrades_stale_section() {
 
 #[test]
 fn test_claude_install_upgrades_stale_hook_payload() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let claude_md = dir.path().join("CLAUDE.md");
-    fs::write(&claude_md, OLD_CLAUDE_SECTION).unwrap();
+    fs::write(&claude_md, OLD_CLAUDE_SECTION).expect("write fixture");
     let settings = dir.path().join(".claude/settings.json");
-    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::create_dir_all(settings.parent().expect("create_dir_all")).expect("test invariant");
     let stale_settings = serde_json::json!({
         "hooks": {
             "PreToolUse": [{
@@ -1148,8 +1173,8 @@ fn test_claude_install_upgrades_stale_hook_payload() {
             }]
         }
     });
-    fs::write(&settings, stale_settings.to_string()).unwrap();
-    claude_install(dir.path()).unwrap();
+    fs::write(&settings, stale_settings.to_string()).expect("test invariant");
+    claude_install(dir.path()).expect("test invariant");
     let new_settings_text = settings.read_to_string_unwrap();
     assert!(
         !new_settings_text.contains("Read graphify-out/GRAPH_REPORT.md for god nodes and community structure before searching raw files"),
@@ -1164,14 +1189,14 @@ fn test_claude_install_upgrades_stale_hook_payload() {
 #[test]
 #[serial(home_env)]
 fn test_agents_install_upgrades_stale_section() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let agents_md = dir.path().join("AGENTS.md");
     fs::write(
         &agents_md,
         format!("# Project agents\n\n{OLD_CLAUDE_SECTION}"),
     )
-    .unwrap();
-    agents_install(dir.path(), "codex").unwrap();
+    .expect("test invariant");
+    agents_install(dir.path(), "codex").expect("test invariant");
     let after = agents_md.read_to_string_unwrap();
     assert_no_report_first(&after, "AGENTS.md");
     assert_query_first(&after, "AGENTS.md");
@@ -1181,10 +1206,10 @@ fn test_agents_install_upgrades_stale_section() {
 #[test]
 #[serial(home_env)]
 fn test_gemini_install_upgrades_stale_section() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     let gemini_md = dir.path().join("GEMINI.md");
-    fs::write(&gemini_md, OLD_CLAUDE_SECTION).unwrap();
+    fs::write(&gemini_md, OLD_CLAUDE_SECTION).expect("write fixture");
     gemini_install_to(dir.path(), home.path());
     let after = gemini_md.read_to_string_unwrap();
     assert_no_report_first(&after, "GEMINI.md");
@@ -1193,16 +1218,16 @@ fn test_gemini_install_upgrades_stale_section() {
 
 #[test]
 fn test_vscode_install_upgrades_stale_section() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     let instructions = dir.path().join(".github/copilot-instructions.md");
-    fs::create_dir_all(instructions.parent().unwrap()).unwrap();
-    fs::write(&instructions, OLD_VSCODE_SECTION).unwrap();
+    fs::create_dir_all(instructions.parent().expect("create_dir_all")).expect("test invariant");
+    fs::write(&instructions, OLD_VSCODE_SECTION).expect("write fixture");
     // SAFETY: test-only HOME override.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    vscode_install(dir.path()).unwrap();
+    vscode_install(dir.path()).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1214,11 +1239,11 @@ fn test_vscode_install_upgrades_stale_section() {
 
 #[test]
 fn test_cursor_install_upgrades_stale_rule() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let rule_path = dir.path().join(".cursor/rules/graphify.mdc");
-    fs::create_dir_all(rule_path.parent().unwrap()).unwrap();
-    fs::write(&rule_path, OLD_CURSOR_RULE).unwrap();
-    cursor_install(dir.path()).unwrap();
+    fs::create_dir_all(rule_path.parent().expect("create_dir_all")).expect("test invariant");
+    fs::write(&rule_path, OLD_CURSOR_RULE).expect("write fixture");
+    cursor_install(dir.path()).expect("test invariant");
     let after = rule_path.read_to_string_unwrap();
     assert!(
         !after.contains("read graphify-out/GRAPH_REPORT.md for god nodes"),
@@ -1230,11 +1255,11 @@ fn test_cursor_install_upgrades_stale_rule() {
 
 #[test]
 fn test_kiro_install_upgrades_stale_steering() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let steering = dir.path().join(".kiro/steering/graphify.md");
-    fs::create_dir_all(steering.parent().unwrap()).unwrap();
-    fs::write(&steering, OLD_KIRO_STEERING).unwrap();
-    kiro_install(dir.path()).unwrap();
+    fs::create_dir_all(steering.parent().expect("create_dir_all")).expect("test invariant");
+    fs::write(&steering, OLD_KIRO_STEERING).expect("write fixture");
+    kiro_install(dir.path()).expect("test invariant");
     let after = steering.read_to_string_unwrap();
     assert!(
         !after.contains("read it before answering architecture questions"),
@@ -1250,8 +1275,8 @@ fn test_kiro_install_upgrades_stale_steering() {
 
 #[test]
 fn test_kiro_install_writes_skill_and_steering() {
-    let dir = tempfile::tempdir().unwrap();
-    kiro_install(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    kiro_install(dir.path()).expect("test invariant");
     assert!(dir.path().join(".kiro/skills/graphify/SKILL.md").exists());
     let steering = dir.path().join(".kiro/steering/graphify.md");
     assert!(steering.exists());
@@ -1264,9 +1289,9 @@ fn test_kiro_install_writes_skill_and_steering() {
 
 #[test]
 fn test_kiro_uninstall_removes_files() {
-    let dir = tempfile::tempdir().unwrap();
-    kiro_install(dir.path()).unwrap();
-    kiro_uninstall(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    kiro_install(dir.path()).expect("test invariant");
+    kiro_uninstall(dir.path()).expect("test invariant");
     assert!(!dir.path().join(".kiro/skills/graphify/SKILL.md").exists());
     assert!(!dir.path().join(".kiro/steering/graphify.md").exists());
 }
@@ -1277,19 +1302,19 @@ fn test_kiro_uninstall_removes_files() {
 
 #[test]
 fn test_install_claude_hook_creates_settings() {
-    let dir = tempfile::tempdir().unwrap();
-    install_claude_hook(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_claude_hook(dir.path()).expect("test invariant");
     let settings_path = dir.path().join(".claude/settings.json");
     assert!(settings_path.exists());
     let v: serde_json::Value =
-        serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
     assert!(v["hooks"]["PreToolUse"].is_array());
 }
 
 #[test]
 fn test_uninstall_claude_hook_noop_when_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let msg = uninstall_claude_hook(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let msg = uninstall_claude_hook(dir.path()).expect("test invariant");
     assert!(msg.is_empty());
 }
 
@@ -1299,19 +1324,19 @@ fn test_uninstall_claude_hook_noop_when_absent() {
 
 #[test]
 fn test_install_gemini_hook_creates_settings() {
-    let dir = tempfile::tempdir().unwrap();
-    install_gemini_hook(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_gemini_hook(dir.path()).expect("test invariant");
     let settings_path = dir.path().join(".gemini/settings.json");
     assert!(settings_path.exists());
     let v: serde_json::Value =
-        serde_json::from_str(&settings_path.read_to_string_unwrap()).unwrap();
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
     assert!(v["hooks"]["BeforeTool"].is_array());
 }
 
 #[test]
 fn test_uninstall_gemini_hook_noop_when_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let msg = uninstall_gemini_hook(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let msg = uninstall_gemini_hook(dir.path()).expect("test invariant");
     assert!(msg.is_empty());
 }
 
@@ -1321,12 +1346,13 @@ fn test_uninstall_gemini_hook_noop_when_absent() {
 
 #[test]
 fn test_install_codex_hook_creates_hooks_json() {
-    let dir = tempfile::tempdir().unwrap();
-    install_codex_hook(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_codex_hook(dir.path()).expect("test invariant");
     let hooks_path = dir.path().join(".codex/hooks.json");
     assert!(hooks_path.exists());
-    let v: serde_json::Value = serde_json::from_str(&hooks_path.read_to_string_unwrap()).unwrap();
-    let pre_tool = v["hooks"]["PreToolUse"].as_array().unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&hooks_path.read_to_string_unwrap()).expect("test invariant");
+    let pre_tool = v["hooks"]["PreToolUse"].as_array().expect("array field");
     assert!(
         pre_tool
             .iter()
@@ -1336,8 +1362,8 @@ fn test_install_codex_hook_creates_hooks_json() {
 
 #[test]
 fn test_uninstall_codex_hook_noop_when_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let msg = uninstall_codex_hook(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let msg = uninstall_codex_hook(dir.path()).expect("test invariant");
     assert!(msg.is_empty());
 }
 
@@ -1347,8 +1373,8 @@ fn test_uninstall_codex_hook_noop_when_absent() {
 
 #[test]
 fn test_install_opencode_plugin_writes_js() {
-    let dir = tempfile::tempdir().unwrap();
-    install_opencode_plugin(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_opencode_plugin(dir.path()).expect("test invariant");
     let plugin = dir.path().join(".opencode/plugins/graphify.js");
     assert!(plugin.exists());
     assert!(
@@ -1360,8 +1386,8 @@ fn test_install_opencode_plugin_writes_js() {
 
 #[test]
 fn test_uninstall_opencode_plugin_noop_when_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let msg = uninstall_opencode_plugin(dir.path()).unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let msg = uninstall_opencode_plugin(dir.path()).expect("test invariant");
     assert!(msg.is_empty());
 }
 
@@ -1371,13 +1397,13 @@ fn test_uninstall_opencode_plugin_noop_when_absent() {
 
 #[test]
 fn test_antigravity_install_writes_rules_and_workflow() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: test-only HOME override.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    antigravity_install(dir.path()).unwrap();
+    antigravity_install(dir.path()).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1388,14 +1414,14 @@ fn test_antigravity_install_writes_rules_and_workflow() {
 
 #[test]
 fn test_antigravity_uninstall_removes_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: test-only HOME override.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    antigravity_install(dir.path()).unwrap();
-    antigravity_uninstall(dir.path()).unwrap();
+    antigravity_install(dir.path()).expect("test invariant");
+    antigravity_uninstall(dir.path()).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1410,13 +1436,13 @@ fn test_antigravity_uninstall_removes_files() {
 
 #[test]
 fn test_vscode_install_creates_copilot_instructions() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: test-only HOME override.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    vscode_install(dir.path()).unwrap();
+    vscode_install(dir.path()).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1432,14 +1458,14 @@ fn test_vscode_install_creates_copilot_instructions() {
 
 #[test]
 fn test_vscode_uninstall_removes_section() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: test-only HOME override.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    vscode_install(dir.path()).unwrap();
-    vscode_uninstall(dir.path()).unwrap();
+    vscode_install(dir.path()).expect("test invariant");
+    vscode_uninstall(dir.path()).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1457,9 +1483,9 @@ fn test_vscode_uninstall_removes_section() {
 
 #[test]
 fn install_platform_skill_project_claude_writes_skill_and_registers() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path();
-    let msg = install_platform_skill_project("claude", project).unwrap();
+    let msg = install_platform_skill_project("claude", project).expect("test invariant");
 
     let skill_path = project.join(".claude/skills/graphify/SKILL.md");
     assert!(skill_path.is_file(), "skill must be written to project dir");
@@ -1469,7 +1495,7 @@ fn install_platform_skill_project_claude_writes_skill_and_registers() {
         claude_md.is_file(),
         "CLAUDE.md must be created on first install"
     );
-    let content = fs::read_to_string(&claude_md).unwrap();
+    let content = fs::read_to_string(&claude_md).expect("read fixture");
     assert!(
         content
             .lines()
@@ -1485,21 +1511,21 @@ fn install_platform_skill_project_claude_writes_skill_and_registers() {
 
 #[test]
 fn install_platform_skill_project_idempotent_registration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path();
 
     // Seed CLAUDE.md with an existing registration so the install must
     // detect it and skip the append rather than duplicate it.
     let claude_md = project.join(".claude/CLAUDE.md");
-    fs::create_dir_all(claude_md.parent().unwrap()).unwrap();
+    fs::create_dir_all(claude_md.parent().expect("create_dir_all")).expect("test invariant");
     fs::write(
         &claude_md,
         "## graphify\n\nFollow `.claude/skills/graphify/SKILL.md` when working in this project.\n",
     )
-    .unwrap();
+    .expect("test invariant");
 
-    let msg = install_platform_skill_project("claude", project).unwrap();
-    let after = fs::read_to_string(&claude_md).unwrap();
+    let msg = install_platform_skill_project("claude", project).expect("test invariant");
+    let after = fs::read_to_string(&claude_md).expect("read fixture");
     let count = after
         .lines()
         .filter(|line| line.trim_start() == "## graphify")
@@ -1513,7 +1539,7 @@ fn install_platform_skill_project_idempotent_registration() {
 
 #[test]
 fn install_platform_skill_project_unknown_platform_errors() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let result = install_platform_skill_project("not-a-platform", dir.path());
     assert!(
         result.is_err(),
@@ -1523,16 +1549,16 @@ fn install_platform_skill_project_unknown_platform_errors() {
 
 #[test]
 fn uninstall_platform_skill_project_removes_skill_and_strips_section() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path();
-    install_platform_skill_project("claude", project).unwrap();
+    install_platform_skill_project("claude", project).expect("test invariant");
 
     let skill_path = project.join(".claude/skills/graphify/SKILL.md");
     let claude_md = project.join(".claude/CLAUDE.md");
     assert!(skill_path.is_file());
     assert!(claude_md.is_file());
 
-    uninstall_platform_skill_project("claude", project).unwrap();
+    uninstall_platform_skill_project("claude", project).expect("test invariant");
     assert!(
         !skill_path.exists(),
         "uninstall must remove the project skill file"
@@ -1541,7 +1567,7 @@ fn uninstall_platform_skill_project_removes_skill_and_strips_section() {
     // The CLAUDE.md should either be gone (if it was empty after stripping)
     // or no longer contain the `## graphify` heading.
     if claude_md.exists() {
-        let content = fs::read_to_string(&claude_md).unwrap();
+        let content = fs::read_to_string(&claude_md).expect("read fixture");
         assert!(
             !content
                 .lines()
@@ -1553,9 +1579,9 @@ fn uninstall_platform_skill_project_removes_skill_and_strips_section() {
 
 #[test]
 fn uninstall_platform_skill_project_when_not_installed_is_silent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
     // No prior install — uninstall must succeed and announce the no-op.
-    let msg = uninstall_platform_skill_project("claude", dir.path()).unwrap();
+    let msg = uninstall_platform_skill_project("claude", dir.path()).expect("test invariant");
     assert!(
         msg.contains("not installed"),
         "uninstall on clean dir must report the no-op: {msg}"
@@ -1572,6 +1598,6 @@ trait ReadToString {
 
 impl ReadToString for PathBuf {
     fn read_to_string_unwrap(&self) -> String {
-        fs::read_to_string(self).unwrap()
+        fs::read_to_string(self).expect("read fixture")
     }
 }

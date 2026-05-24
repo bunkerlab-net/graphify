@@ -1,7 +1,7 @@
 //! Parity tests for graphify-report, mirroring
 //! `graphify-py/tests/test_report.py`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_report::{render_report, write_report};
@@ -152,7 +152,7 @@ fn test_report_shows_raw_cohesion_scores() {
     let mut analysis = make_analysis();
     analysis
         .as_object_mut()
-        .unwrap()
+        .expect("test invariant")
         .insert("min_community_size".to_string(), json!(1));
     let report = render_report(&graph, &analysis);
     assert!(report.contains("Cohesion:"), "cohesion score missing");
@@ -182,7 +182,7 @@ fn test_write_report_creates_file() {
 fn test_report_with_warning_detection() {
     let graph = make_graph();
     let mut analysis = make_analysis();
-    analysis.as_object_mut().unwrap().insert(
+    analysis.as_object_mut().expect("test invariant").insert(
         "detection_result".to_string(),
         json!({ "warning": "Corpus is too small — graph structure may not add value." }),
     );
@@ -203,7 +203,7 @@ fn test_report_with_freshness_commit() {
     let mut analysis = make_analysis();
     analysis
         .as_object_mut()
-        .unwrap()
+        .expect("test invariant")
         .insert("built_at_commit".to_string(), json!("abcdef1234567890"));
     let report = render_report(&graph, &analysis);
     assert!(
@@ -223,7 +223,7 @@ fn test_report_community_navigation() {
     // Use min_community_size=1 so communities show up
     analysis
         .as_object_mut()
-        .unwrap()
+        .expect("test invariant")
         .insert("min_community_size".to_string(), json!(1));
     let report = render_report(&graph, &analysis);
     assert!(
@@ -290,7 +290,7 @@ fn test_report_hyperedges() {
 fn test_report_suggested_questions() {
     let graph = make_graph();
     let mut analysis = make_analysis();
-    analysis.as_object_mut().unwrap().insert(
+    analysis.as_object_mut().expect("test invariant").insert(
         "suggested_questions".to_string(),
         json!([
             {
@@ -315,7 +315,7 @@ fn test_report_suggested_questions() {
 fn test_report_no_signal_question() {
     let graph = make_graph();
     let mut analysis = make_analysis();
-    analysis.as_object_mut().unwrap().insert(
+    analysis.as_object_mut().expect("test invariant").insert(
         "suggested_questions".to_string(),
         json!([
             {
@@ -338,7 +338,7 @@ fn test_fmt_comma_values() {
     // Indirectly tested via token cost display — 1200 → "1,200"
     let graph = make_graph();
     let mut analysis = make_analysis();
-    analysis.as_object_mut().unwrap().insert(
+    analysis.as_object_mut().expect("test invariant").insert(
         "token_cost".to_string(),
         json!({ "input": 1_234_567u64, "output": 999 }),
     );

@@ -3,7 +3,7 @@
 //! Exercises every public `extract_<lang>` entry point on a small fixture so the
 //! tree-sitter walk paths in each language module are executed at least once.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
 

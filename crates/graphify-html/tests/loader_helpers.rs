@@ -1,7 +1,7 @@
 //! Coverage tests for the small loader/helper functions in
 //! `graphify_html::callflow::loader`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 
@@ -86,7 +86,7 @@ fn stable_ascii_id_respects_limit() {
     let s = stable_ascii_id("very_long_name_that_exceeds_the_limit_for_sure", "n", 8);
     // The non-hash portion shouldn't exceed limit.
     let parts: Vec<&str> = s.rsplitn(2, '_').collect();
-    let prefix = parts.last().unwrap();
+    let prefix = parts.last().expect("non-empty");
     assert!(prefix.len() <= 8, "prefix exceeded limit: {prefix}");
 }
 
@@ -138,7 +138,7 @@ fn normalize_node_extracts_fields() {
         "file_type": "code",
         "community": 0
     });
-    let m = raw.as_object().unwrap();
+    let m = raw.as_object().expect("object field");
     let n = normalize_node(m, 0);
     assert_eq!(n.id, "n1");
     assert_eq!(n.label, "A");
@@ -148,7 +148,7 @@ fn normalize_node_extracts_fields() {
 #[test]
 fn normalize_node_uses_index_when_missing_id() {
     let raw = json!({"label": "no_id_node"});
-    let m = raw.as_object().unwrap();
+    let m = raw.as_object().expect("object field");
     let n = normalize_node(m, 7);
     assert!(!n.id.is_empty());
 }
@@ -158,10 +158,10 @@ fn normalize_node_uses_index_when_missing_id() {
 #[test]
 fn normalize_edge_basic() {
     let raw = json!({"source": "a", "target": "b", "relation": "calls"});
-    let m = raw.as_object().unwrap();
+    let m = raw.as_object().expect("object field");
     let edge = normalize_edge(m, 0);
     assert!(edge.is_some());
-    let edge = edge.unwrap();
+    let edge = edge.expect("test invariant");
     assert_eq!(edge.source, "a");
     assert_eq!(edge.target, "b");
 }
@@ -169,7 +169,7 @@ fn normalize_edge_basic() {
 #[test]
 fn normalize_edge_returns_none_for_missing_endpoints() {
     let raw = json!({"relation": "calls"});
-    let m = raw.as_object().unwrap();
+    let m = raw.as_object().expect("object field");
     assert!(normalize_edge(m, 0).is_none());
 }
 
@@ -177,7 +177,7 @@ fn normalize_edge_returns_none_for_missing_endpoints() {
 
 #[test]
 fn load_graph_with_links() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("graph.json");
     fs::write(
         &path,
@@ -186,14 +186,14 @@ fn load_graph_with_links() {
             "links": [{"source": "a", "target": "a", "relation": "self"}]
         }"#,
     )
-    .unwrap();
+    .expect("test invariant");
     let g = load_graph(&path).expect("load_graph ok");
     assert_eq!(g.0.len(), 1);
 }
 
 #[test]
 fn load_graph_with_edges_key() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("graph.json");
     fs::write(
         &path,
@@ -202,22 +202,22 @@ fn load_graph_with_edges_key() {
             "edges": [{"source": "a", "target": "a", "relation": "self"}]
         }"#,
     )
-    .unwrap();
+    .expect("test invariant");
     let g = load_graph(&path).expect("load_graph ok");
     assert_eq!(g.0.len(), 1);
 }
 
 #[test]
 fn load_graph_missing_file_errors() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     assert!(load_graph(&tmp.path().join("nope.json")).is_err());
 }
 
 #[test]
 fn load_graph_bad_json_errors() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("graph.json");
-    fs::write(&path, "{ not valid").unwrap();
+    fs::write(&path, "{ not valid").expect("write fixture");
     assert!(load_graph(&path).is_err());
 }
 
@@ -230,9 +230,9 @@ fn load_labels_returns_empty_for_missing() {
 
 #[test]
 fn load_labels_reads_object() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let p = tmp.path().join("labels.json");
-    fs::write(&p, r#"{"0": "Foo", "1": "Bar"}"#).unwrap();
+    fs::write(&p, r#"{"0": "Foo", "1": "Bar"}"#).expect("write fixture");
     let labels = load_labels(Some(&p));
     assert_eq!(labels.get("0"), Some(&"Foo".to_string()));
 }
@@ -244,9 +244,9 @@ fn load_report_returns_empty_for_missing() {
 
 #[test]
 fn load_report_reads_text() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let p = tmp.path().join("report.md");
-    fs::write(&p, "# Report\nhello").unwrap();
+    fs::write(&p, "# Report\nhello").expect("write fixture");
     let r = load_report(Some(&p));
     assert!(r.contains("Report"));
 }

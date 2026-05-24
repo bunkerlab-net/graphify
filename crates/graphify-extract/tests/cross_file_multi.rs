@@ -1,7 +1,7 @@
 //! Cross-file extraction tests — exercise the multi-file import resolution
 //! paths in `extractors/multi.rs`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 
@@ -9,19 +9,19 @@ use graphify_extract::extract;
 
 #[test]
 fn java_cross_file_imports_resolve() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let pkg = tmp.path().join("com").join("example");
-    fs::create_dir_all(&pkg).unwrap();
+    fs::create_dir_all(&pkg).expect("create_dir_all");
     fs::write(
         pkg.join("Producer.java"),
         "package com.example;\n\nimport com.example.Consumer;\n\npublic class Producer {\n    public void send() {\n        Consumer c = new Consumer();\n        c.receive();\n    }\n}\n",
     )
-    .unwrap();
+    .expect("test invariant");
     fs::write(
         pkg.join("Consumer.java"),
         "package com.example;\n\npublic class Consumer {\n    public void receive() {}\n}\n",
     )
-    .unwrap();
+    .expect("test invariant");
 
     let result = extract(
         &[pkg.join("Producer.java"), pkg.join("Consumer.java")],
@@ -32,25 +32,25 @@ fn java_cross_file_imports_resolve() {
 
 #[test]
 fn python_cross_file_with_relative_imports() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let pkg = tmp.path().join("pkg");
-    fs::create_dir_all(&pkg).unwrap();
-    fs::write(pkg.join("__init__.py"), "").unwrap();
+    fs::create_dir_all(&pkg).expect("create_dir_all");
+    fs::write(pkg.join("__init__.py"), "").expect("test invariant");
     fs::write(
         pkg.join("models.py"),
         "class User:\n    pass\n\nclass Order:\n    pass\n",
     )
-    .unwrap();
+    .expect("test invariant");
     fs::write(
         pkg.join("service.py"),
         "from .models import User, Order\n\nclass UserService:\n    def find(self):\n        return User()\n\nclass OrderService:\n    def list(self):\n        return [Order()]\n",
     )
-    .unwrap();
+    .expect("test invariant");
     fs::write(
         pkg.join("main.py"),
         "from pkg.service import UserService, OrderService\n\ndef run():\n    s = UserService()\n    s.find()\n",
     )
-    .unwrap();
+    .expect("test invariant");
 
     let result = extract(
         &[
@@ -72,24 +72,24 @@ fn python_cross_file_with_relative_imports() {
 
 #[test]
 fn mixed_language_corpus() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let py = tmp.path().join("a.py");
     let rs = tmp.path().join("b.rs");
     let go = tmp.path().join("c.go");
     let md = tmp.path().join("d.md");
 
-    fs::write(&py, "def hello(): return 'py'\n").unwrap();
+    fs::write(&py, "def hello(): return 'py'\n").expect("test invariant");
     fs::write(
         &rs,
         "pub fn hello() -> &'static str { \"rs\" }\nstruct Foo;\n",
     )
-    .unwrap();
+    .expect("test invariant");
     fs::write(
         &go,
         "package main\n\nfunc Hello() string {\n    return \"go\"\n}\n",
     )
-    .unwrap();
-    fs::write(&md, "# Title\n\nContent.\n").unwrap();
+    .expect("test invariant");
+    fs::write(&md, "# Title\n\nContent.\n").expect("write fixture");
 
     let result = extract(&[py, rs, go, md], Some(tmp.path()));
     // Mixed corpus should produce nodes from each.
@@ -115,7 +115,7 @@ fn mixed_language_corpus() {
 
 #[test]
 fn extract_with_blade_and_fortran_and_unknown() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let blade = tmp.path().join("template.blade.php");
     let fortran = tmp.path().join("calc.f90");
     let unknown = tmp.path().join("random.xyz");
@@ -124,14 +124,14 @@ fn extract_with_blade_and_fortran_and_unknown() {
         &blade,
         "@extends('layout')\n@include('partial')\n<button wire:click=\"go\">x</button>\n",
     )
-    .unwrap();
+    .expect("test invariant");
     fs::write(
         &fortran,
         "module mymod\ncontains\n  subroutine sub_one()\n  end subroutine\nend module\n",
     )
-    .unwrap();
-    fs::write(&unknown, "ignored content").unwrap();
-    fs::write(&pascal_inc, "procedure Foo; begin end;\n").unwrap();
+    .expect("test invariant");
+    fs::write(&unknown, "ignored content").expect("write fixture");
+    fs::write(&pascal_inc, "procedure Foo; begin end;\n").expect("write fixture");
     let result = extract(&[blade, fortran, unknown, pascal_inc], Some(tmp.path()));
     assert!(!result.nodes.is_empty(), "expected nodes from mixed corpus");
 }
@@ -146,18 +146,18 @@ fn extract_empty_paths_returns_empty() {
 
 #[test]
 fn extract_single_file_uses_parent_as_root() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("solo.py");
-    fs::write(&path, "def x(): pass\n").unwrap();
+    fs::write(&path, "def x(): pass\n").expect("test invariant");
     let result = extract(&[path], None);
     assert!(!result.nodes.is_empty());
 }
 
 #[test]
 fn extract_with_cache_root_uses_provided_root() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("cached.py");
-    fs::write(&path, "def x(): pass\n").unwrap();
+    fs::write(&path, "def x(): pass\n").expect("test invariant");
     let result = extract(&[path], Some(tmp.path()));
     assert!(!result.nodes.is_empty());
 }

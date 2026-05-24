@@ -5,7 +5,7 @@
 //! matching) rather than specific community IDs, since Louvain is
 //! non-deterministic at the algorithm level and this port uses a different
 //! (but seeded) implementation.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_cluster::{cluster, cohesion_score, remap_communities_to_previous, score_all};

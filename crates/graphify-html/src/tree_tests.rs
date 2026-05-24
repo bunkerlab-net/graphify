@@ -3,7 +3,7 @@
 //! Focuses on the small, self-contained HTML-emission helpers; the full
 //! `write_tree_html` round-trip is exercised in `tests/parity.rs`.
 
-#![allow(clippy::unwrap_used)] // reason: test-only unwrap convenience
+ // reason: test-only unwrap convenience
 
 use super::*;
 use graphify_build::{Graph, GraphKind};
@@ -43,7 +43,7 @@ fn empty_graph_returns_placeholder() {
 fn single_node_appears_in_tree() {
     let g = graph_with_node("n1", "my_func", "/proj/src/foo.py");
     let tree = build_tree(&g, Some(Path::new("/proj")), DEFAULT_MAX_CHILDREN, None);
-    let s = serde_json::to_string(&tree).unwrap();
+    let s = serde_json::to_string(&tree).expect("serialise JSON");
     assert!(s.contains("foo.py"), "expected foo.py: {s}");
     assert!(s.contains("my_func"), "expected my_func: {s}");
 }

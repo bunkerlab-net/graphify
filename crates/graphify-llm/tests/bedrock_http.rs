@@ -1,7 +1,7 @@
 //! Bedrock mockito tests. Honours `GRAPHIFY_BEDROCK_BASE_URL` so the regional
 //! AWS endpoint can be replaced with a local mock server.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_llm::bedrock::{call_bedrock, call_bedrock_plain, resolve_region};
 use serde_json::json;
@@ -117,7 +117,7 @@ fn call_bedrock_via_mock() {
         &[json!({"role": "user", "content": [{"text": "hi"}]})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
     assert_eq!(resp.input_tokens, 3);
     assert_eq!(resp.output_tokens, 5);
@@ -155,7 +155,7 @@ fn call_bedrock_max_tokens_maps_to_length() {
         &[json!({"role": "user", "content": [{"text": "hi"}]})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.finish_reason, "length");
 }
 
@@ -186,7 +186,7 @@ fn call_bedrock_with_session_token() {
         &[json!({"role": "user", "content": [{"text": "hi"}]})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -210,7 +210,7 @@ fn call_bedrock_plain_via_mock() {
     g.set("AWS_ACCESS_KEY_ID", "fake");
     g.set("AWS_SECRET_ACCESS_KEY", "fake");
 
-    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32).unwrap();
+    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32).expect("test invariant");
     // call_bedrock_plain returns the first nodes[].label string, which may be
     // empty since the JSON we returned isn't extraction-shaped — just verify
     // the function runs without panicking.

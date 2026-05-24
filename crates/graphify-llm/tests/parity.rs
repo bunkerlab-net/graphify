@@ -10,12 +10,7 @@
 //! in Rust 2024; the `#![allow(unsafe_code)]` below permits their use in this
 //! test-only file (matching the convention in other `graphify-*` parity tests).
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::claude_cli::ClaudeRunner;
 use graphify_llm::ollama::resolve_num_ctx;
@@ -727,7 +722,7 @@ fn test_pack_chunks_by_tokens_single_chunk_for_small_files()
     let paths: Vec<std::path::PathBuf> = (0..3)
         .map(|i| {
             let p = dir.path().join(format!("f{i}.md"));
-            std::fs::write(&p, "hello").unwrap();
+            std::fs::write(&p, "hello").expect("write fixture");
             p
         })
         .collect();

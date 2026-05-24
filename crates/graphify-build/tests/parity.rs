@@ -5,7 +5,7 @@
 //! pipeline-independent behaviour of `build_from_json`, `build`,
 //! `edge_data`, `edge_datas`, `deduplicate_by_label`, `prefix_graph_for_global`,
 //! and `prune_repo_from_graph`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_build::{
     Graph, GraphKind, build, build_from_json, deduplicate_by_label, norm_label,

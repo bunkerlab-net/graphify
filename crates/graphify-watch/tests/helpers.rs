@@ -1,6 +1,6 @@
 //! Targeted tests for small helpers exposed by the watch crate.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 use std::process::Command;
@@ -52,20 +52,20 @@ fn apply_resource_limits_with_invalid_memory_env() {
 
 #[test]
 fn git_head_returns_none_outside_repo() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     assert!(git_head(tmp.path()).is_none());
 }
 
 #[test]
 fn git_head_returns_hash_in_repo() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path();
     // Initialise minimal git repo.
     let out = Command::new("git")
         .args(["init", "-q"])
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("test invariant");
     if !out.status.success() {
         // git not installed — skip.
         return;
@@ -76,24 +76,24 @@ fn git_head_returns_hash_in_repo() {
         .args(["config", "user.email", "t@example.com"])
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("test invariant");
     Command::new("git")
         .args(["config", "user.name", "t"])
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("test invariant");
 
-    fs::write(path.join("a.txt"), "hi\n").unwrap();
+    fs::write(path.join("a.txt"), "hi\n").expect("test invariant");
     Command::new("git")
         .args(["add", "a.txt"])
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("test invariant");
     Command::new("git")
         .args(["commit", "-qm", "init"])
         .current_dir(path)
         .output()
-        .unwrap();
+        .expect("test invariant");
 
     let head = git_head(path).expect("git_head should return a hash");
     assert_eq!(head.len(), 40, "expected 40-char SHA, got {head:?}");
@@ -103,11 +103,11 @@ fn git_head_returns_hash_in_repo() {
 
 #[test]
 fn relativize_rewrites_absolute_paths() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("test invariant");
     let file = root.join("sub").join("foo.py");
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(&file, "x = 1\n").unwrap();
+    fs::create_dir_all(file.parent().expect("create_dir_all")).expect("test invariant");
+    fs::write(&file, "x = 1\n").expect("write fixture");
 
     let mut payload = json!({
         "nodes": [{"id": "a", "source_file": file.to_string_lossy()}],
@@ -115,7 +115,9 @@ fn relativize_rewrites_absolute_paths() {
         "hyperedges": [],
     });
     relativize_source_files(&mut payload, &root);
-    let new_path = payload["nodes"][0]["source_file"].as_str().unwrap();
+    let new_path = payload["nodes"][0]["source_file"]
+        .as_str()
+        .expect("string field");
     assert!(
         new_path == "sub/foo.py" || new_path.ends_with("foo.py"),
         "expected relative path, got {new_path}"
@@ -128,7 +130,7 @@ fn relativize_leaves_relative_paths_alone() {
         "nodes": [{"id": "a", "source_file": "rel/path.py"}],
         "edges": [],
     });
-    let root = std::env::current_dir().unwrap();
+    let root = std::env::current_dir().expect("test invariant");
     relativize_source_files(&mut payload, &root);
     assert_eq!(payload["nodes"][0]["source_file"], "rel/path.py");
 }
@@ -139,7 +141,7 @@ fn relativize_handles_missing_source_file() {
         "nodes": [{"id": "a"}],
         "edges": [],
     });
-    let root = std::env::current_dir().unwrap();
+    let root = std::env::current_dir().expect("test invariant");
     relativize_source_files(&mut payload, &root);
     // Should remain unchanged.
     assert!(payload["nodes"][0].get("source_file").is_none());
@@ -148,7 +150,7 @@ fn relativize_handles_missing_source_file() {
 #[test]
 fn relativize_noop_on_non_object_payload() {
     let mut payload = json!([1, 2, 3]);
-    let root = std::env::current_dir().unwrap();
+    let root = std::env::current_dir().expect("test invariant");
     relativize_source_files(&mut payload, &root);
     assert_eq!(payload, json!([1, 2, 3]));
 }
@@ -192,9 +194,9 @@ fn check_shrink_no_existing_passes() {
 
 #[test]
 fn check_shrink_cleans_up_tmp_file_on_failure() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let tmp_path = tmp.path().join("graph.tmp.json");
-    fs::write(&tmp_path, "{}").unwrap();
+    fs::write(&tmp_path, "{}").expect("write fixture");
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
     assert!(check_shrink(false, &existing, &new, Some(&tmp_path)).is_err());

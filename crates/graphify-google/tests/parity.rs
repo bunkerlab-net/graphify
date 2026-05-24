@@ -1,6 +1,6 @@
 //! Parity tests for `graphify-google` — ports of
 //! `graphify-py/tests/test_google_workspace.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::path::PathBuf;
 
@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 fn write_shortcut(dir: &TempDir, name: &str, content: &str) -> PathBuf {
     let path = dir.path().join(name);
-    std::fs::write(&path, content).unwrap();
+    std::fs::write(&path, content).expect("write fixture");
     path
 }
 
@@ -28,14 +28,14 @@ type ExportHook = dyn Fn(&str, &str, &std::path::Path, Option<&str>) -> Result<(
 
 #[test]
 fn test_read_google_shortcut_doc_id() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let shortcut = write_shortcut(
         &tmp,
         "Planning.gdoc",
         r#"{"url":"https://docs.google.com/document/d/doc-123/edit","doc_id":"doc-123","email":"me@example.com"}"#,
     );
 
-    let metadata = read_google_shortcut(&shortcut).unwrap();
+    let metadata = read_google_shortcut(&shortcut).expect("test invariant");
 
     assert_eq!(metadata.file_id, "doc-123");
     assert_eq!(metadata.account.as_deref(), Some("me@example.com"));
@@ -47,14 +47,14 @@ fn test_read_google_shortcut_doc_id() {
 
 #[test]
 fn test_read_google_shortcut_extracts_id_from_url() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let shortcut = write_shortcut(
         &tmp,
         "Budget.gsheet",
         r#"{"url":"https://docs.google.com/spreadsheets/d/sheet-456/edit?resourcekey=key-1"}"#,
     );
 
-    let metadata = read_google_shortcut(&shortcut).unwrap();
+    let metadata = read_google_shortcut(&shortcut).expect("test invariant");
 
     assert_eq!(metadata.file_id, "sheet-456");
     assert_eq!(metadata.resource_key.as_deref(), Some("key-1"));
@@ -66,7 +66,7 @@ fn test_read_google_shortcut_extracts_id_from_url() {
 
 #[test]
 fn test_convert_gdoc_to_markdown_sidecar() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let shortcut = write_shortcut(
         &tmp,
         "Planning.gdoc",
@@ -87,12 +87,12 @@ fn test_convert_gdoc_to_markdown_sidecar() {
         None::<fn(&std::path::Path) -> Result<String, std::io::Error>>,
         Some(fake_export),
     )
-    .unwrap();
+    .expect("test invariant");
 
     assert!(out.is_some());
-    let out_path = out.unwrap();
+    let out_path = out.expect("test invariant");
     assert_eq!(out_path.extension().and_then(|e| e.to_str()), Some("md"));
-    let content = std::fs::read_to_string(&out_path).unwrap();
+    let content = std::fs::read_to_string(&out_path).expect("read fixture");
     assert!(
         content.contains("source_type: \"google_workspace\""),
         "missing source_type"
@@ -106,7 +106,7 @@ fn test_convert_gdoc_to_markdown_sidecar() {
 
 #[test]
 fn test_convert_gsheet_uses_xlsx_markdown_callback() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let shortcut = write_shortcut(&tmp, "Budget.gsheet", r#"{"doc_id":"sheet-456"}"#);
     let out_dir = tmp.path().join("converted");
 
@@ -129,10 +129,10 @@ fn test_convert_gsheet_uses_xlsx_markdown_callback() {
         ),
         Some(fake_export),
     )
-    .unwrap();
+    .expect("test invariant");
 
     assert!(out.is_some());
-    let content = std::fs::read_to_string(out.unwrap()).unwrap();
+    let content = std::fs::read_to_string(out.expect("test invariant")).expect("test invariant");
     assert!(content.contains("## Sheet: Main"));
 }
 
@@ -150,17 +150,17 @@ fn test_convert_gsheet_uses_xlsx_markdown_callback() {
 fn test_run_gws_export_uses_output_directory_as_cwd() {
     use std::sync::{Arc, Mutex};
 
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let out_dir = tmp.path().join("converted");
-    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir).expect("create_dir_all");
 
     let captured: Arc<Mutex<Option<(String, String, PathBuf)>>> = Arc::new(Mutex::new(None));
     let captured_clone = Arc::clone(&captured);
 
     let hook: &ExportHook = &move |file_id, mime_type, out, _rk| {
         // Write content so the sidecar is non-empty.
-        std::fs::write(out, "# doc").unwrap();
-        *captured_clone.lock().unwrap() = Some((
+        std::fs::write(out, "# doc").expect("write fixture");
+        *captured_clone.lock().expect("mutex") = Some((
             file_id.to_string(),
             mime_type.to_string(),
             out.to_path_buf(),
@@ -173,7 +173,7 @@ fn test_run_gws_export_uses_output_directory_as_cwd() {
         &shortcut_path,
         r#"{"doc_id":"doc-123","url":"https://docs.google.com/document/d/doc-123/edit"}"#,
     )
-    .unwrap();
+    .expect("test invariant");
 
     let _result = convert_google_workspace_file(
         &shortcut_path,
@@ -182,12 +182,12 @@ fn test_run_gws_export_uses_output_directory_as_cwd() {
         Some(hook),
     );
 
-    let guard = captured.lock().unwrap();
-    let (file_id, mime_type, out_path) = guard.as_ref().unwrap();
+    let guard = captured.lock().expect("mutex");
+    let (file_id, mime_type, out_path) = guard.as_ref().expect("test invariant");
     assert_eq!(file_id, "doc-123");
     assert_eq!(mime_type, "text/markdown");
     // The tmp file written by do_export lives inside out_dir.
-    assert_eq!(out_path.parent().unwrap(), out_dir.as_path());
+    assert_eq!(out_path.parent().expect("has parent"), out_dir.as_path());
 }
 
 // ---------------------------------------------------------------------------
@@ -243,10 +243,10 @@ fn test_google_workspace_enabled_env() {
 
 #[test]
 fn test_read_google_shortcut_missing_file_id_error() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let shortcut = write_shortcut(&tmp, "empty.gdoc", r#"{"url":""}"#);
 
-    let err = read_google_shortcut(&shortcut).unwrap_err();
+    let err = read_google_shortcut(&shortcut).expect_err("expected Err");
     let msg = err.to_string();
     assert!(
         msg.contains("does not include a Drive file ID"),
@@ -260,9 +260,9 @@ fn test_read_google_shortcut_missing_file_id_error() {
 
 #[test]
 fn test_convert_unsupported_extension_returns_none() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = TempDir::new().expect("tempdir");
     let path = tmp.path().join("readme.txt");
-    std::fs::write(&path, "hello").unwrap();
+    std::fs::write(&path, "hello").expect("write fixture");
 
     let no_hook: Option<&ExportHook> = None;
     let result = convert_google_workspace_file(
@@ -271,7 +271,7 @@ fn test_convert_unsupported_extension_returns_none() {
         None::<fn(&std::path::Path) -> Result<String, std::io::Error>>,
         no_hook,
     )
-    .unwrap();
+    .expect("test invariant");
 
     assert!(result.is_none());
 }

@@ -14,7 +14,7 @@
 //! `test_rationale.py` — every test calls `extract_python`, which lives in
 //! `graphify-extract`.  None of the tests exercise `graphify-analyze` directly;
 //! they are ported in `graphify-extract/tests/parity.rs`.
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_analyze::{
     SurpriseScoreInput, file_category, god_nodes, graph_diff, is_concept_node, is_json_key_node,
@@ -121,7 +121,7 @@ fn god_nodes_sorted_by_degree() {
     let result = god_nodes(&g, 10);
     let degrees: Vec<u64> = result
         .iter()
-        .map(|r| r["degree"].as_u64().unwrap())
+        .map(|r| r["degree"].as_u64().expect("u64 field"))
         .collect();
     let mut sorted = degrees.clone();
     sorted.sort_by(|a, b| b.cmp(a));
@@ -884,12 +884,22 @@ fn graph_diff_new_nodes() {
     let g_old = make_simple_graph(&[("n1", "Alpha"), ("n2", "Beta")], &[]);
     let g_new = make_simple_graph(&[("n1", "Alpha"), ("n2", "Beta"), ("n3", "Gamma")], &[]);
     let diff = graph_diff(&g_old, &g_new);
-    let new_nodes = diff["new_nodes"].as_array().unwrap();
+    let new_nodes = diff["new_nodes"].as_array().expect("array field");
     assert_eq!(new_nodes.len(), 1);
     assert_eq!(new_nodes[0]["id"], "n3");
     assert_eq!(new_nodes[0]["label"], "Gamma");
-    assert!(diff["removed_nodes"].as_array().unwrap().is_empty());
-    assert!(diff["summary"].as_str().unwrap().contains("1 new node"));
+    assert!(
+        diff["removed_nodes"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
+    assert!(
+        diff["summary"]
+            .as_str()
+            .expect("string field")
+            .contains("1 new node")
+    );
 }
 
 /// `test_graph_diff_removed_nodes`
@@ -898,11 +908,21 @@ fn graph_diff_removed_nodes() {
     let g_old = make_simple_graph(&[("n1", "Alpha"), ("n2", "Beta"), ("n3", "Gamma")], &[]);
     let g_new = make_simple_graph(&[("n1", "Alpha"), ("n2", "Beta")], &[]);
     let diff = graph_diff(&g_old, &g_new);
-    assert!(diff["new_nodes"].as_array().unwrap().is_empty());
-    let removed = diff["removed_nodes"].as_array().unwrap();
+    assert!(
+        diff["new_nodes"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
+    let removed = diff["removed_nodes"].as_array().expect("array field");
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0]["id"], "n3");
-    assert!(diff["summary"].as_str().unwrap().contains("removed"));
+    assert!(
+        diff["summary"]
+            .as_str()
+            .expect("string field")
+            .contains("removed")
+    );
 }
 
 /// `test_graph_diff_new_edges`
@@ -918,13 +938,23 @@ fn graph_diff_new_edges() {
         ],
     );
     let diff = graph_diff(&g_old, &g_new);
-    let new_edges = diff["new_edges"].as_array().unwrap();
+    let new_edges = diff["new_edges"].as_array().expect("array field");
     assert_eq!(new_edges.len(), 1);
     let new_edge = &new_edges[0];
     assert_eq!(new_edge["relation"], "uses");
     assert_eq!(new_edge["confidence"], "INFERRED");
-    assert!(diff["removed_edges"].as_array().unwrap().is_empty());
-    assert!(diff["summary"].as_str().unwrap().contains("new edge"));
+    assert!(
+        diff["removed_edges"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
+    assert!(
+        diff["summary"]
+            .as_str()
+            .expect("string field")
+            .contains("new edge")
+    );
 }
 
 /// `test_graph_diff_empty_diff`
@@ -935,10 +965,30 @@ fn graph_diff_empty_diff() {
     let g_old = make_simple_graph(&nodes, &edges);
     let g_new = make_simple_graph(&nodes, &edges);
     let diff = graph_diff(&g_old, &g_new);
-    assert!(diff["new_nodes"].as_array().unwrap().is_empty());
-    assert!(diff["removed_nodes"].as_array().unwrap().is_empty());
-    assert!(diff["new_edges"].as_array().unwrap().is_empty());
-    assert!(diff["removed_edges"].as_array().unwrap().is_empty());
+    assert!(
+        diff["new_nodes"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
+    assert!(
+        diff["removed_nodes"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
+    assert!(
+        diff["new_edges"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
+    assert!(
+        diff["removed_edges"]
+            .as_array()
+            .expect("array field")
+            .is_empty()
+    );
     assert_eq!(diff["summary"], "no changes");
 }
 
@@ -1423,7 +1473,7 @@ fn god_nodes_excludes_json_noise() {
     let result = god_nodes(&g, 10);
     let labels: Vec<&str> = result
         .iter()
-        .map(|r| r["label"].as_str().unwrap())
+        .map(|r| r["label"].as_str().expect("string field"))
         .collect();
     assert!(!labels.contains(&"name"));
     assert!(labels.contains(&"AuthService"));
@@ -1476,7 +1526,7 @@ fn god_nodes_filter_is_case_insensitive() {
     let result = god_nodes(&g, 10);
     let labels: Vec<&str> = result
         .iter()
-        .map(|r| r["label"].as_str().unwrap())
+        .map(|r| r["label"].as_str().expect("string field"))
         .collect();
     for variant in &["Start", "START", "Name", "ID"] {
         assert!(
@@ -1569,7 +1619,10 @@ fn check_npm_dep_key(dep_key: &str) {
     );
 
     let result = god_nodes(&g, 10);
-    let result_ids: Vec<&str> = result.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    let result_ids: Vec<&str> = result
+        .iter()
+        .map(|r| r["id"].as_str().expect("string field"))
+        .collect();
 
     assert!(
         !result_ids.contains(&"dep_node"),

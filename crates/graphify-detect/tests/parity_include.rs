@@ -1,6 +1,6 @@
 //! Coverage tests for `.graphifyinclude` parsing and inclusion matching.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 
@@ -13,27 +13,27 @@ use graphify_detect::walk::{auto_follow_symlinks, collect_files, detect};
 
 #[test]
 fn load_graphifyinclude_reads_explicit_patterns() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(
         tmp.path().join(".graphifyinclude"),
         "*.py\n# comment\nsrc/**\n",
     )
-    .unwrap();
+    .expect("test invariant");
     let patterns = load_graphifyinclude(tmp.path());
     assert!(!patterns.is_empty());
 }
 
 #[test]
 fn load_graphifyinclude_returns_empty_when_missing() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let patterns = load_graphifyinclude(tmp.path());
     assert!(patterns.is_empty());
 }
 
 #[test]
 fn load_graphifyinclude_skips_blank_lines() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join(".graphifyinclude"), "\n\n*.py\n\n").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".graphifyinclude"), "\n\n*.py\n\n").expect("test invariant");
     let patterns = load_graphifyinclude(tmp.path());
     assert_eq!(patterns.len(), 1);
 }
@@ -42,10 +42,10 @@ fn load_graphifyinclude_skips_blank_lines() {
 
 #[test]
 fn is_included_matches_glob() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(tmp.path().join("src")).unwrap();
-    fs::write(tmp.path().join("src/foo.py"), "").unwrap();
-    fs::write(tmp.path().join(".graphifyinclude"), "*.py\n").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("src")).expect("test invariant");
+    fs::write(tmp.path().join("src/foo.py"), "").expect("test invariant");
+    fs::write(tmp.path().join(".graphifyinclude"), "*.py\n").expect("test invariant");
     let patterns = load_graphifyinclude(tmp.path());
     assert!(is_included(
         &tmp.path().join("src/foo.py"),
@@ -56,7 +56,7 @@ fn is_included_matches_glob() {
 
 #[test]
 fn is_included_with_no_patterns_is_false() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let empty = vec![];
     // With empty include patterns, is_included returns false (no allowlist match).
     assert!(!is_included(&tmp.path().join("x.py"), tmp.path(), &empty));
@@ -64,9 +64,9 @@ fn is_included_with_no_patterns_is_false() {
 
 #[test]
 fn could_contain_included_path_works() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(tmp.path().join("src")).unwrap();
-    fs::write(tmp.path().join(".graphifyinclude"), "src/**\n").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("src")).expect("test invariant");
+    fs::write(tmp.path().join(".graphifyinclude"), "src/**\n").expect("test invariant");
     let patterns = load_graphifyinclude(tmp.path());
     assert!(could_contain_included_path(
         &tmp.path().join("src"),
@@ -79,8 +79,9 @@ fn could_contain_included_path_works() {
 
 #[test]
 fn load_graphifyignore_reads_patterns() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join(".graphifyignore"), "*.tmp\nnode_modules/\n").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".graphifyignore"), "*.tmp\nnode_modules/\n")
+        .expect("test invariant");
     let patterns = load_graphifyignore(tmp.path());
     assert!(!patterns.is_empty());
 }
@@ -89,28 +90,28 @@ fn load_graphifyignore_reads_patterns() {
 
 #[test]
 fn auto_follow_symlinks_returns_false_without_symlinks() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join("a.py"), "x = 1").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("a.py"), "x = 1").expect("test invariant");
     assert!(!auto_follow_symlinks(tmp.path()));
 }
 
 #[cfg(unix)]
 #[test]
 fn auto_follow_symlinks_detects_symlinks() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let real = tmp.path().join("real.py");
-    fs::write(&real, "x = 1").unwrap();
+    fs::write(&real, "x = 1").expect("write fixture");
     let link = tmp.path().join("link.py");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
+    std::os::unix::fs::symlink(&real, &link).expect("test invariant");
     assert!(auto_follow_symlinks(tmp.path()));
 }
 
 #[test]
 fn collect_files_finds_files() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(tmp.path().join("sub")).unwrap();
-    fs::write(tmp.path().join("a.py"), "x = 1").unwrap();
-    fs::write(tmp.path().join("sub").join("b.py"), "y = 2").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("sub")).expect("test invariant");
+    fs::write(tmp.path().join("a.py"), "x = 1").expect("test invariant");
+    fs::write(tmp.path().join("sub").join("b.py"), "y = 2").expect("test invariant");
     let files = collect_files(tmp.path());
     assert!(files.len() >= 2);
 }
@@ -119,56 +120,56 @@ fn collect_files_finds_files() {
 
 #[test]
 fn detect_with_explicit_follow_symlinks_true() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join("a.py"), "x = 1").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("a.py"), "x = 1").expect("test invariant");
     let result = detect(tmp.path(), Some(true), None);
     assert!(result.files.contains_key("code"));
 }
 
 #[test]
 fn detect_with_explicit_follow_symlinks_false() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join("a.py"), "x = 1").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("a.py"), "x = 1").expect("test invariant");
     let result = detect(tmp.path(), Some(false), None);
     assert!(result.files.contains_key("code"));
 }
 
 #[test]
 fn detect_with_extra_excludes() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(tmp.path().join("vendor")).unwrap();
-    fs::write(tmp.path().join("vendor").join("dep.py"), "x = 1").unwrap();
-    fs::write(tmp.path().join("main.py"), "x = 1").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("vendor")).expect("test invariant");
+    fs::write(tmp.path().join("vendor").join("dep.py"), "x = 1").expect("test invariant");
+    fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
     let extra: Vec<String> = vec!["vendor/**".to_string()];
     let result = detect(tmp.path(), None, Some(&extra));
-    let code: &Vec<String> = result.files.get("code").unwrap();
+    let code: &Vec<String> = result.files.get("code").expect("key present");
     // main.py should be present; vendor/dep.py should be excluded.
     assert!(code.iter().any(|f| f.ends_with("main.py")));
 }
 
 #[test]
 fn detect_picks_up_memory_sidecar() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join("main.py"), "x = 1").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
     // Memory sidecar directory under graphify-out — exercises the in-memory
     // tree branch of walk.rs that uses the sequential walk_dir.
     let mem_dir = tmp.path().join("graphify-out").join("memory");
-    fs::create_dir_all(&mem_dir).unwrap();
-    fs::write(mem_dir.join("note.md"), "# memory note").unwrap();
+    fs::create_dir_all(&mem_dir).expect("create_dir_all");
+    fs::write(mem_dir.join("note.md"), "# memory note").expect("test invariant");
     let result = detect(tmp.path(), None, None);
     // main.py should be present.
-    let code: &Vec<String> = result.files.get("code").unwrap();
+    let code: &Vec<String> = result.files.get("code").expect("key present");
     assert!(code.iter().any(|f| f.ends_with("main.py")));
 }
 
 #[test]
 fn detect_with_nested_subdirs() {
-    let tmp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(tmp.path().join("a").join("b").join("c")).unwrap();
-    fs::write(tmp.path().join("a/b/c/deep.py"), "x = 1").unwrap();
-    fs::write(tmp.path().join("a/mid.py"), "y = 2").unwrap();
-    fs::write(tmp.path().join("top.py"), "z = 3").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("a").join("b").join("c")).expect("test invariant");
+    fs::write(tmp.path().join("a/b/c/deep.py"), "x = 1").expect("test invariant");
+    fs::write(tmp.path().join("a/mid.py"), "y = 2").expect("test invariant");
+    fs::write(tmp.path().join("top.py"), "z = 3").expect("test invariant");
     let result = detect(tmp.path(), None, None);
-    let code: &Vec<String> = result.files.get("code").unwrap();
+    let code: &Vec<String> = result.files.get("code").expect("key present");
     assert!(code.len() >= 3);
 }

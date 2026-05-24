@@ -1,6 +1,6 @@
 //! Coverage tests for `to_obsidian`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 
@@ -14,8 +14,8 @@ use tempfile::tempdir;
 const EXTRACTION_JSON: &str = include_str!("../../../graphify-py/tests/fixtures/extraction.json");
 
 fn fixture_graph() -> graphify_build::Graph {
-    let val: Value = serde_json::from_str(EXTRACTION_JSON).unwrap();
-    build_from_json(val, false, None).unwrap()
+    let val: Value = serde_json::from_str(EXTRACTION_JSON).expect("valid JSON");
+    build_from_json(val, false, None).expect("build_from_json")
 }
 
 fn fixture_communities() -> IndexMap<i64, Vec<String>> {
@@ -26,14 +26,14 @@ fn fixture_communities() -> IndexMap<i64, Vec<String>> {
 fn obsidian_creates_node_notes() {
     let g = fixture_graph();
     let communities = fixture_communities();
-    let tmp = tempdir().unwrap();
-    let count = to_obsidian(&g, &communities, tmp.path(), None, None).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    let count = to_obsidian(&g, &communities, tmp.path(), None, None).expect("test invariant");
     // Returned count is node_count + community_notes_written.
     assert_eq!(count, g.node_count() + communities.len());
 
     // At least one node note must exist (filename derived from label).
     let md_files: Vec<_> = fs::read_dir(tmp.path())
-        .unwrap()
+        .expect("test invariant")
         .filter_map(Result::ok)
         .filter(|e| {
             e.path()
@@ -48,11 +48,11 @@ fn obsidian_creates_node_notes() {
 fn obsidian_creates_community_notes() {
     let g = fixture_graph();
     let communities = fixture_communities();
-    let tmp = tempdir().unwrap();
-    to_obsidian(&g, &communities, tmp.path(), None, None).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    to_obsidian(&g, &communities, tmp.path(), None, None).expect("test invariant");
 
     let comm_notes: Vec<_> = fs::read_dir(tmp.path())
-        .unwrap()
+        .expect("test invariant")
         .filter_map(Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with("_COMMUNITY_"))
         .collect();
@@ -63,17 +63,17 @@ fn obsidian_creates_community_notes() {
 fn obsidian_writes_graph_json_for_colors() {
     let g = fixture_graph();
     let communities = fixture_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let mut labels: IndexMap<i64, String> = IndexMap::new();
     for cid in communities.keys() {
         labels.insert(*cid, format!("Community-{cid}"));
     }
-    to_obsidian(&g, &communities, tmp.path(), Some(&labels), None).unwrap();
+    to_obsidian(&g, &communities, tmp.path(), Some(&labels), None).expect("test invariant");
 
     let obs_json = tmp.path().join(".obsidian").join("graph.json");
     assert!(obs_json.exists(), ".obsidian/graph.json missing");
-    let text = fs::read_to_string(&obs_json).unwrap();
-    let parsed: Value = serde_json::from_str(&text).unwrap();
+    let text = fs::read_to_string(&obs_json).expect("read fixture");
+    let parsed: Value = serde_json::from_str(&text).expect("valid JSON");
     assert!(parsed.get("colorGroups").is_some());
 }
 
@@ -81,16 +81,16 @@ fn obsidian_writes_graph_json_for_colors() {
 fn obsidian_uses_cohesion_in_community_notes() {
     let g = fixture_graph();
     let communities = fixture_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let mut cohesion: IndexMap<i64, f64> = IndexMap::new();
     #[allow(clippy::cast_precision_loss)]
     for (i, cid) in communities.keys().enumerate() {
         cohesion.insert(*cid, 0.5_f64 + (i as f64) * 0.1);
     }
-    to_obsidian(&g, &communities, tmp.path(), None, Some(&cohesion)).unwrap();
+    to_obsidian(&g, &communities, tmp.path(), None, Some(&cohesion)).expect("test invariant");
 
     let comm_notes: Vec<_> = fs::read_dir(tmp.path())
-        .unwrap()
+        .expect("test invariant")
         .filter_map(Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with("_COMMUNITY_"))
         .collect();
@@ -118,15 +118,15 @@ fn obsidian_handles_duplicate_node_labels() {
         false,
         None,
     )
-    .unwrap();
+    .expect("test invariant");
     let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
     communities.insert(0, vec!["a1".to_string(), "a2".to_string()]);
 
-    let tmp = tempdir().unwrap();
-    to_obsidian(&graph, &communities, tmp.path(), None, None).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    to_obsidian(&graph, &communities, tmp.path(), None, None).expect("test invariant");
 
     let names: Vec<String> = fs::read_dir(tmp.path())
-        .unwrap()
+        .expect("test invariant")
         .filter_map(Result::ok)
         .filter(|e| {
             e.path()
@@ -159,11 +159,11 @@ fn obsidian_handles_empty_communities() {
         false,
         None,
     )
-    .unwrap();
+    .expect("test invariant");
     let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
     communities.insert(0, vec!["x".to_string()]);
 
-    let tmp = tempdir().unwrap();
-    let count = to_obsidian(&graph, &communities, tmp.path(), None, None).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    let count = to_obsidian(&graph, &communities, tmp.path(), None, None).expect("test invariant");
     assert_eq!(count, graph.node_count() + 1);
 }

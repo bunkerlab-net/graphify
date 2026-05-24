@@ -1,6 +1,6 @@
 //! Ollama mockito tests.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_llm::ollama::{call_ollama, call_ollama_plain, validate_ollama_base_url};
 use serde_json::json;
@@ -67,7 +67,7 @@ fn call_ollama_via_mock() {
         128,
         "hello world",
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
     assert_eq!(resp.input_tokens, 12);
 }
@@ -90,7 +90,8 @@ fn call_ollama_plain_via_mock() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32).unwrap();
+    let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32)
+        .expect("test invariant");
     assert_eq!(out, "ollama answers");
 }
 
@@ -122,7 +123,7 @@ fn call_ollama_low_token_warning_path() {
         64,
         "hi",
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.output_tokens, 10);
 }
 
