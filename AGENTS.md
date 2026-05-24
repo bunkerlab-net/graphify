@@ -23,7 +23,7 @@ codebase translated word-for-word.**
   something obviously wrong, fix it in Rust and note the divergence in a comment.
   Tests assert observable contracts, not implementation choices.
 - **Never justify a clippy suppression with "that's how Python does it".** Valid
-  justifications describe the *Rust* trade-off (e.g. "splitting fragments linear
+  justifications describe the _Rust_ trade-off (e.g. "splitting fragments linear
   AST dispatch logic"). Invalid justifications mirror Python's accidental
   complexity.
 
@@ -32,7 +32,7 @@ Subagents working on individual module ports MUST follow these conventions.
 ## Rules
 
 - Format code: `cargo fmt`
-- Lint code: `cargo clippy --all-targets --all-features`
+- Lint code: `cargo clippy --all-targets --all-features --workspace`
 - Run tests: `cargo nextest`
 - Run pre-commit hooks: `hk check`
 - Fix failing hooks: `hk fix`

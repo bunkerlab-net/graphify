@@ -118,7 +118,7 @@ After all units are complete, run the full workspace gates:
 
 ```bash
 cargo fmt
-cargo clippy --all-targets --all-features
+cargo clippy --all-targets --all-features --workspace
 cargo nextest run
 hk check
 ```
@@ -214,35 +214,35 @@ Each Python module in `graphify-py/graphify/` maps to a crate under `crates/`.
 The crate's `src/lib.rs` is the entry point and `tests/parity.rs` is the 1:1
 port of `graphify-py/tests/test_<module>.py`.
 
-| Python file                         | Rust crate              |
-| ----------------------------------- | ----------------------- |
-| `graphify/analyze.py`               | `graphify-analyze`      |
-| `graphify/benchmark.py`             | `graphify-benchmark`    |
-| `graphify/build.py`                 | `graphify-build`        |
-| `graphify/cache.py`                 | `graphify-cache`        |
-| `graphify/cluster.py`               | `graphify-cluster`      |
-| `graphify/dedup.py`                 | `graphify-dedup`        |
-| `graphify/detect.py`                | `graphify-detect`       |
-| `graphify/export.py`                | `graphify-export`       |
-| `graphify/extract.py`               | `graphify-extract`      |
-| `graphify/global_graph.py`          | `graphify-global`       |
-| `graphify/google_workspace.py`      | `graphify-google`       |
-| `graphify/hooks.py`                 | `graphify-hooks`        |
-| `graphify/callflow_html.py`         | `graphify-html`         |
-| `graphify/tree_html.py`             | `graphify-html`         |
-| `graphify/ingest.py`                | `graphify-ingest`       |
-| `graphify/llm.py`                   | `graphify-llm`          |
-| `graphify/manifest.py`              | `graphify-manifest`     |
-| `graphify/prs.py`                   | `graphify-prs`          |
-| `graphify/report.py`                | `graphify-report`       |
-| `graphify/security.py`              | `graphify-security`     |
-| `graphify/serve.py`                 | `graphify-serve`        |
-| `graphify/transcribe.py`            | `graphify-transcribe`   |
-| `graphify/validate.py`              | `graphify-validate`     |
-| `graphify/watch.py`                 | `graphify-watch`        |
-| `graphify/wiki.py`                  | `graphify-wiki`         |
-| `graphify/__main__.py`, `cli.py`    | `src/main.rs`           |
-| `graphify/skill*.md`                | N/A (agent skill docs)  |
+| Python file                      | Rust crate             |
+| -------------------------------- | ---------------------- |
+| `graphify/analyze.py`            | `graphify-analyze`     |
+| `graphify/benchmark.py`          | `graphify-benchmark`   |
+| `graphify/build.py`              | `graphify-build`       |
+| `graphify/cache.py`              | `graphify-cache`       |
+| `graphify/cluster.py`            | `graphify-cluster`     |
+| `graphify/dedup.py`              | `graphify-dedup`       |
+| `graphify/detect.py`             | `graphify-detect`      |
+| `graphify/export.py`             | `graphify-export`      |
+| `graphify/extract.py`            | `graphify-extract`     |
+| `graphify/global_graph.py`       | `graphify-global`      |
+| `graphify/google_workspace.py`   | `graphify-google`      |
+| `graphify/hooks.py`              | `graphify-hooks`       |
+| `graphify/callflow_html.py`      | `graphify-html`        |
+| `graphify/tree_html.py`          | `graphify-html`        |
+| `graphify/ingest.py`             | `graphify-ingest`      |
+| `graphify/llm.py`                | `graphify-llm`         |
+| `graphify/manifest.py`           | `graphify-manifest`    |
+| `graphify/prs.py`                | `graphify-prs`         |
+| `graphify/report.py`             | `graphify-report`      |
+| `graphify/security.py`           | `graphify-security`    |
+| `graphify/serve.py`              | `graphify-serve`       |
+| `graphify/transcribe.py`         | `graphify-transcribe`  |
+| `graphify/validate.py`           | `graphify-validate`    |
+| `graphify/watch.py`              | `graphify-watch`       |
+| `graphify/wiki.py`               | `graphify-wiki`        |
+| `graphify/__main__.py`, `cli.py` | `src/main.rs`          |
+| `graphify/skill*.md`             | N/A (agent skill docs) |
 
 If `graphify-py` adds a brand-new top-level module with no matching crate,
 escalate to the Tech Priest before introducing a new workspace member — adding
@@ -291,7 +291,7 @@ non-test code. When porting:
 ## Definition of done (per resync)
 
 - `cargo nextest run` passes across the workspace.
-- `cargo clippy --all-targets --all-features` is warning-free.
+- `cargo clippy --all-targets --all-features --workspace` is warning-free.
 - `hk check` passes.
 - `cargo llvm-cov nextest` shows ≥ 95% line + branch coverage for every crate
   that was touched.
