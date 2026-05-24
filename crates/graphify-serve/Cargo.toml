@@ -16,7 +16,7 @@ graphify-security = { workspace = true }
 indexmap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { version = "1", features = [
+tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",
   "io-std",

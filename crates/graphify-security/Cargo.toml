@@ -12,11 +12,11 @@ description = "Security helpers: URL validation, safe fetch, path guards, label 
 ipnet = "2"
 regex = { workspace = true }
 thiserror = { workspace = true }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-mockito = "1"
+mockito = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
