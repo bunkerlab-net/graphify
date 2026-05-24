@@ -87,7 +87,7 @@ fn validate_rejects_oversize_payload() {
 
 #[test]
 fn validate_caps_hyperedge_node_count() {
-    let many: Vec<String> = (0..(MAX_SEMANTIC_HYPEREDGE_NODES + 1))
+    let many: Vec<String> = (0..=MAX_SEMANTIC_HYPEREDGE_NODES)
         .map(|i| format!("n{i}"))
         .collect();
     let frag = json!({
@@ -306,7 +306,7 @@ fn load_validated_rejects_invalid_json() {
 fn load_validated_rejects_oversize_before_parse() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("big.json");
-    let huge = "x".repeat((MAX_SEMANTIC_FRAGMENT_BYTES + 100) as usize);
+    let huge = "x".repeat(usize::try_from(MAX_SEMANTIC_FRAGMENT_BYTES + 100).unwrap());
     std::fs::write(&path, huge).unwrap();
     let (fragment, errors) = load_validated_semantic_fragment(&path);
     assert!(fragment.is_none());

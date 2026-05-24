@@ -25,6 +25,7 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 
 /// Extract functions, source imports, and cross-function calls from a `.sh` file.
 #[must_use]
+#[allow(clippy::too_many_lines)] // file-result builder + tree-sitter init + two-pass walk
 pub fn extract_bash(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {
         Ok(b) => b,
@@ -78,6 +79,31 @@ pub fn extract_bash(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+    });
+
+    // Synthesise a `bash_entrypoint` node attached to the file via a
+    // `contains` edge. Mirrors graphify-py `extract_bash` — top-level
+    // commands (those outside any function definition) are attributed
+    // to this entrypoint rather than orphaned.
+    let entry_nid = format!("{file_nid}__entry");
+    seen_ids.insert(entry_nid.clone());
+    nodes.push(Node {
+        id: entry_nid.clone(),
+        label: "__entry__".to_string(),
+        file_type: "code".to_string(),
+        source_file: str_path.clone(),
+        source_location: Some("L1".to_string()),
+    });
+    edges.push(Edge {
+        source: file_nid.clone(),
+        target: entry_nid.clone(),
+        relation: "contains".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: str_path.clone(),
+        source_location: Some("L1".to_string()),
+        weight: 1.0,
+        context: None,
+        confidence_score: None,
     });
 
     let root = tree.root_node();
@@ -372,6 +398,37 @@ struct BashCallCtx<'a> {
     seen_calls: &'a mut HashSet<(String, String)>,
 }
 
+/// Parent node kinds whose `command` children are shell expansions rather
+/// than real call sites. `$(build)` and `<(helper)` appear inside these and
+/// must not produce false `calls` edges.
+fn is_inside_expansion(node: tree_sitter::Node<'_>) -> bool {
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if matches!(
+            parent.kind(),
+            "command_substitution" | "process_substitution"
+        ) {
+            return true;
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// Reject command-name tokens that look like a shell expansion or
+/// metacharacter rather than a real function call. Mirrors the
+/// `literal(node)` helper added in `graphify-py/graphify/extract.py`.
+fn is_literal_command_name(name: &str) -> bool {
+    !name.contains('$')
+        && !name.contains('`')
+        && !name.contains("$(")
+        && !name.contains("<(")
+        && !name.contains('>')
+        && !name.contains('|')
+        && !name.contains(';')
+        && !name.contains('&')
+}
+
 fn walk_calls_bash(
     ctx: &mut BashCallCtx<'_>,
     node: tree_sitter::Node<'_>,
@@ -388,7 +445,7 @@ fn walk_calls_bash(
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
-    if node.kind() == "command" {
+    if node.kind() == "command" && !is_inside_expansion(node) {
         let cmd_name_node = node.child_by_field_name("name").or_else(|| {
             let mut cur = node.walk();
             if cur.goto_first_child() {
@@ -400,6 +457,7 @@ fn walk_calls_bash(
         if let Some(cnn) = cmd_name_node {
             let name = read_text(cnn, source).trim().to_string();
             if !name.is_empty()
+                && is_literal_command_name(&name)
                 && !BASH_SKIP.contains(name.as_str())
                 && defined_functions.contains(&name)
             {

@@ -20,6 +20,8 @@ pub mod generic;
 pub mod ids;
 pub mod import_handlers;
 pub mod lang_configs;
+pub mod postprocess;
+pub mod symbol_resolution;
 pub mod tsconfig;
 pub mod types;
 

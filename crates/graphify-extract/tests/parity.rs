@@ -587,6 +587,94 @@ fn extract_bash_emits_source_imports_from() {
 }
 
 #[test]
+fn extract_bash_creates_entrypoint_node() {
+    // Every script gets a `<file>__entry` entrypoint node attached to the
+    // file via `contains`. Mirrors the change in graphify-py `extract_bash`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let script = tmp.path().join("entry.sh");
+    std::fs::write(&script, "#!/bin/bash\necho top\n").unwrap();
+    let result = extract_bash(&script);
+    let entry_node = result
+        .nodes
+        .iter()
+        .find(|n| n.id.ends_with("__entry"))
+        .expect("bash entrypoint node should be present");
+    assert_eq!(entry_node.label, "__entry__");
+    let file_to_entry: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains" && e.target == entry_node.id)
+        .collect();
+    assert_eq!(
+        file_to_entry.len(),
+        1,
+        "expected exactly one file->entry contains edge"
+    );
+}
+
+#[test]
+fn extract_bash_entrypoint_no_collision_with_function_named_script() {
+    // The entrypoint ID is `<file_nid>__entry`, which must be distinct from
+    // any function named `script` even when the file is `script.sh`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let script = tmp.path().join("script.sh");
+    std::fs::write(&script, "#!/bin/bash\nscript() { echo s; }\n").unwrap();
+    let result = extract_bash(&script);
+    let mut ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+    ids.sort_unstable();
+    let mut deduped = ids.clone();
+    deduped.dedup();
+    assert_eq!(ids, deduped, "ids should be unique: {ids:?}");
+}
+
+#[test]
+fn extract_bash_rejects_command_substitution_as_call() {
+    // `$(build)` inside a function body is shell expansion, not a real call.
+    // The expansion-parent filter must skip it so no false `calls` edge is
+    // emitted (#993).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let script = tmp.path().join("expand.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\nbuild() { echo b; }\ndeploy() { x=$(build); }\n",
+    )
+    .unwrap();
+    let result = extract_bash(&script);
+    let calls: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "calls")
+        .collect();
+    assert!(
+        calls.is_empty(),
+        "command_substitution must not produce calls edges; got: {calls:?}"
+    );
+}
+
+#[test]
+fn extract_bash_process_substitution_not_recorded() {
+    // `<(helper)` is process substitution — same expansion-parent filter
+    // must skip it.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let script = tmp.path().join("proc.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\nhelper() { echo h; }\nrun() { diff <(helper) /dev/null; }\n",
+    )
+    .unwrap();
+    let result = extract_bash(&script);
+    let calls: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "calls")
+        .collect();
+    assert!(
+        calls.is_empty(),
+        "process_substitution must not produce calls edges; got: {calls:?}"
+    );
+}
+
+#[test]
 fn extract_bash_no_self_loops() {
     let result = extract_bash(&fixtures().join("sample.sh"));
     for edge in &result.edges {

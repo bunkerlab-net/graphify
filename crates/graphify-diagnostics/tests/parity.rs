@@ -8,6 +8,7 @@ use graphify_diagnostics::{
 use serde_json::{Map, Value, json};
 use tempfile::tempdir;
 
+#[allow(clippy::needless_pass_by_value)] // test helper — value-based callers read cleaner
 fn extraction(nodes: Value, edges: Value) -> Map<String, Value> {
     json!({"nodes": nodes, "edges": edges})
         .as_object()
