@@ -522,13 +522,21 @@ pub(super) fn report_highlights(report_text: &str, lang: &str) -> String {
 
 /// Inputs for [`emit_section_html`].
 pub(super) struct SectionEmit<'a> {
+    /// The section being rendered.
     pub sec: &'a Section,
+    /// 1-based display number for the section heading (e.g. `2` renders as `"2. <name>"`).
     pub section_num: usize,
+    /// Nodes belonging to this section.
     pub sec_nodes: &'a [Node],
+    /// Intra-section edges for this section.
     pub sec_edges: &'a [CfEdge],
+    /// BCP 47 language tag used for localized labels.
     pub lang: &'a str,
+    /// Mermaid diagram scale factor; clamped to `[0.65, 1.8]`.
     pub diagram_scale: f64,
+    /// Maximum nodes to render in the section flowchart.
     pub max_diagram_nodes: usize,
+    /// Maximum edges to render in the section flowchart.
     pub max_diagram_edges: usize,
 }
 

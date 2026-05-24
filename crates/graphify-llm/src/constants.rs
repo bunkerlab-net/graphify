@@ -7,8 +7,12 @@ pub const PER_FILE_OVERHEAD_CHARS: usize = 80;
 /// Hard cap on LLM JSON response size before parsing (10 MB).
 pub const LLM_JSON_MAX_BYTES: usize = 10 * 1024 * 1024;
 
-/// Extraction system prompt (byte-identical to Python for
-/// reproducibility).
+/// Extraction system prompt injected into every backend call.
+///
+/// Byte-identical to the Python reference prompt for reproducibility. Instructs
+/// the model to output a structured JSON fragment with `nodes`, `edges`, and
+/// `hyperedges` arrays, using the confidence taxonomy `EXTRACTED | INFERRED |
+/// AMBIGUOUS`.
 pub const EXTRACTION_SYSTEM: &str = "\
 You are a graphify semantic extraction agent. Extract a knowledge graph fragment from the files provided.\n\
 Output ONLY valid JSON — no explanation, no markdown fences, no preamble.\n\

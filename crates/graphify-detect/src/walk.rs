@@ -76,22 +76,31 @@ fn classify_one(
 /// `graphify_google::GOOGLE_WORKSPACE_EXTENSIONS`, with leading dots stripped).
 const GOOGLE_CONVERTIBLE_EXTS: &[&str] = &["gdoc", "gsheet", "gslides"];
 
-/// Corpus size warning thresholds (mirrors Python constants).
+/// Word count above which a knowledge graph is recommended over a flat context window.
 pub const CORPUS_WARN_THRESHOLD: u64 = 50_000;
+/// Word count above which semantic extraction is considered expensive and the user is advised to narrow the scan scope.
 pub const CORPUS_UPPER_THRESHOLD: u64 = 500_000;
+/// File count above which the corpus is considered large regardless of word count.
 pub const FILE_COUNT_UPPER: usize = 500;
 
-/// Full output of a `detect()` run, analogous to the Python dict return.
+/// Full output of a [`detect`] run, analogous to the Python dict return.
 #[derive(Debug, Clone)]
 pub struct DetectResult {
-    /// Files grouped by type string ("code", "document", "paper", "image", "video").
+    /// Files grouped by type string (`"code"`, `"document"`, `"paper"`, `"image"`, `"video"`).
     pub files: HashMap<String, Vec<String>>,
+    /// Total number of discovered files across all types.
     pub total_files: usize,
+    /// Estimated total word count across all non-video files.
     pub total_words: u64,
+    /// `true` when `total_words` exceeds [`CORPUS_WARN_THRESHOLD`], indicating a graph is recommended.
     pub needs_graph: bool,
+    /// Human-readable corpus-size advisory, or `None` when no caveat applies.
     pub warning: Option<String>,
+    /// Display strings for files skipped due to sensitive-file or conversion-failure rules.
     pub skipped_sensitive: Vec<String>,
+    /// Number of active ignore patterns loaded from `.graphifyignore` / `.gitignore` files.
     pub graphifyignore_patterns: usize,
+    /// Canonicalized path of the scan root as a UTF-8 string.
     pub scan_root: String,
 }
 

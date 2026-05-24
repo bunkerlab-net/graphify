@@ -374,9 +374,14 @@ pub(super) fn build_section_node_map(
 
 // ── Edge classification ──────────────────────────────────────────────────────
 
+/// Edges classified by whether they cross section boundaries.
 pub(super) struct ClassifiedEdges {
+    /// Intra-section edges: maps section id to the indices of edges whose source
+    /// and target both belong to that section.
     pub(super) intra: IndexMap<String, Vec<usize>>, // section_id -> edge indices
+    /// Indices of edges that cross section boundaries.
     pub(super) inter: Vec<usize>,
+    /// Maps node id to the id of the section it belongs to.
     pub(super) node_section: HashMap<String, String>,
 }
 

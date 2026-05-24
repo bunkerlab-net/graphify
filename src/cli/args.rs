@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+/// Root CLI struct parsed from `argv` by clap.
 #[derive(Debug, Parser)]
 #[command(
     name = "graphify",
@@ -13,10 +14,12 @@ use clap::{Parser, Subcommand};
     about = "Turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
 )]
 pub(crate) struct Cli {
+    /// The subcommand to run. When absent, a brief help hint is printed.
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 }
 
+/// All top-level subcommands exposed by the `graphify` binary.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     /// Validate an extraction JSON file against the graphify schema.
@@ -301,73 +304,90 @@ pub(crate) enum Command {
     HookCheck,
 
     // Platform-specific install/uninstall (delegate to graphify-hooks).
+    /// Install or uninstall graphify integration for Claude.
     Claude {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Gemini.
     Gemini {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Cursor.
     Cursor {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for VS Code.
     Vscode {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for GitHub Copilot.
     Copilot {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Kiro.
     Kiro {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Pi.
     Pi {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Antigravity.
     Antigravity {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Codex.
     Codex {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Opencode.
     Opencode {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Aider.
     Aider {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Claw.
     Claw {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Droid.
     Droid {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Trae.
     Trae {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Trae CN.
     #[command(name = "trae-cn")]
     TraeCn {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Hermes.
     Hermes {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
 }
 
+/// Subcommands for the `hook` command group.
 #[derive(Debug, Subcommand)]
 pub(crate) enum HookCmd {
     /// Install post-commit/post-checkout git hooks.
@@ -378,6 +398,7 @@ pub(crate) enum HookCmd {
     Status,
 }
 
+/// Subcommands for the `global` command group.
 #[derive(Debug, Subcommand)]
 pub(crate) enum GlobalCmd {
     /// Add or update a project graph in the global graph.
@@ -394,6 +415,7 @@ pub(crate) enum GlobalCmd {
     Path,
 }
 
+/// Subcommands for the `export` command group.
 #[derive(Debug, Subcommand)]
 pub(crate) enum ExportCmd {
     /// Mermaid-based architecture/call-flow HTML.
@@ -418,6 +440,7 @@ pub(crate) enum ExportCmd {
         #[arg(long)]
         sections: Option<PathBuf>,
     },
+    /// Render an interactive D3 force-graph HTML file from `graph.json`.
     Html {
         #[arg(long)]
         graph: Option<PathBuf>,
@@ -431,6 +454,7 @@ pub(crate) enum ExportCmd {
         #[arg(long = "node-limit", default_value_t = 5000)]
         node_limit: usize,
     },
+    /// Export graph nodes and edges as an Obsidian markdown vault.
     Obsidian {
         #[arg(long)]
         graph: Option<PathBuf>,
@@ -440,6 +464,7 @@ pub(crate) enum ExportCmd {
         #[arg(long)]
         labels: Option<PathBuf>,
     },
+    /// Export graph as a Markdown wiki with one article per community.
     Wiki {
         #[arg(long)]
         graph: Option<PathBuf>,
@@ -447,6 +472,7 @@ pub(crate) enum ExportCmd {
         #[arg(long)]
         labels: Option<PathBuf>,
     },
+    /// Render a static SVG force-directed graph image.
     Svg {
         #[arg(long)]
         graph: Option<PathBuf>,
@@ -454,10 +480,12 @@ pub(crate) enum ExportCmd {
         #[arg(long)]
         labels: Option<PathBuf>,
     },
+    /// Export graph in `GraphML` format for Gephi or yEd.
     Graphml {
         #[arg(long)]
         graph: Option<PathBuf>,
     },
+    /// Export graph as Cypher statements or push directly to a Neo4j instance.
     Neo4j {
         #[arg(long)]
         graph: Option<PathBuf>,
@@ -473,6 +501,7 @@ pub(crate) enum ExportCmd {
     },
 }
 
+/// Install/uninstall subcommand shared by every per-platform command group.
 #[derive(Debug, Subcommand)]
 pub(crate) enum PlatformCmd {
     /// Install graphify integration for this platform.

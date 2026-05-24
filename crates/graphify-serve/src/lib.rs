@@ -9,10 +9,13 @@
 //! - [`server`] — JSON-RPC stdio transport
 
 mod error;
+/// Pure graph-query helpers: scoring, BFS/DFS traversal, subgraph rendering.
 pub mod graph;
 mod serve_fn;
+/// MCP stdio JSON-RPC server transport and message dispatcher.
 pub mod server;
 mod state;
+/// MCP tool handler implementations invoked by the server dispatcher.
 pub mod tools;
 
 pub use error::ServeError;

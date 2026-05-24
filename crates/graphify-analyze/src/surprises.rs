@@ -16,24 +16,44 @@ use crate::cross_lang::{cross_language, node_community_map};
 /// Edge-count threshold above which surprise scoring is dispatched to Rayon.
 const PARALLEL_SURPRISE_THRESHOLD: usize = 256;
 
-/// Score how surprising a cross-file edge is.
+/// Input bundle for [`surprise_score`].
 ///
-/// Returns `(score, reasons)`.
-///
-/// Mirrors Python `_surprise_score`.
-///
-/// Inputs to [`surprise_score`].
+/// Groups the per-edge data needed to compute a surprise score so that the
+/// function signature stays manageable.  Mirrors Python `_surprise_score`'s
+/// parameter set.
 pub struct SurpriseScoreInput<'a> {
+    /// The graph the edge belongs to.
     pub graph: &'a Graph,
+    /// Source node ID of the edge.
     pub u: &'a str,
+    /// Target node ID of the edge.
     pub v: &'a str,
+    /// Edge attribute map (confidence, relation, `_src`/`_tgt` overrides, …).
     pub data: &'a IndexMap<String, Value>,
+    /// Pre-built `node_id → community_id` inversion (see `cross_lang::node_community_map`).
     pub node_community: &'a IndexMap<String, i64>,
+    /// `source_file` attribute of node `u`.
     pub u_source: &'a str,
+    /// `source_file` attribute of node `v`.
     pub v_source: &'a str,
+    /// Pre-computed degree map, or `None` to compute on demand.
+    ///
+    /// Pass `Some(&degrees)` when scoring many edges to avoid recomputing
+    /// degree counts for every call.
     pub degrees: Option<&'a IndexMap<String, usize>>,
 }
 
+/// Score how surprising a cross-file edge is.
+///
+/// Returns `(score, reasons)` where `score` is a non-negative integer (higher
+/// = more surprising) and `reasons` is a human-readable list of contributing
+/// factors.
+///
+/// Scoring factors include confidence level (AMBIGUOUS/INFERRED), cross-file-type
+/// bonus, cross-repo bonus, cross-community bonus, semantic-similarity multiplier,
+/// and a peripheral-to-hub bonus.
+///
+/// Mirrors Python `_surprise_score`.
 #[must_use]
 pub fn surprise_score(input: &SurpriseScoreInput<'_>) -> (i32, Vec<String>) {
     let SurpriseScoreInput {
@@ -148,7 +168,7 @@ pub fn surprise_score(input: &SurpriseScoreInput<'_>) -> (i32, Vec<String>) {
     (score, reasons)
 }
 
-/// Shared context for per-edge cross-file scoring.
+/// Pre-computed context threaded through per-edge cross-file scoring.
 struct CrossFileCtx<'a> {
     graph: &'a Graph,
     node_community: IndexMap<String, i64>,
@@ -314,7 +334,10 @@ fn betweenness_fallback(graph: &Graph, top_n: usize) -> Vec<Value> {
         .collect()
 }
 
-/// Confidence ordering used to dedupe surprises by community pair (AMBIGUOUS first).
+/// Map a confidence string to a sort key so AMBIGUOUS edges sort first.
+///
+/// Lower values appear earlier when sorted ascending: AMBIGUOUS (0) →
+/// INFERRED (1) → EXTRACTED (2) → unknown (3).
 fn conf_order(c: &str) -> i32 {
     match c {
         "AMBIGUOUS" => 0,
@@ -324,7 +347,7 @@ fn conf_order(c: &str) -> i32 {
     }
 }
 
-/// Shared context for per-edge cross-community scoring.
+/// Pre-computed context threaded through per-edge cross-community scoring.
 struct CrossCommunityCtx<'a> {
     graph: &'a Graph,
     node_community: IndexMap<String, i64>,

@@ -10,10 +10,15 @@ use super::tokens::fmt_comma;
 
 /// Confidence statistics derived from graph edge attributes.
 pub(crate) struct ConfidenceStats {
+    /// Percentage of edges with `confidence == "EXTRACTED"`.
     pub ext_pct: u64,
+    /// Percentage of edges with `confidence == "INFERRED"`.
     pub inf_pct: u64,
+    /// Percentage of edges with `confidence == "AMBIGUOUS"`.
     pub amb_pct: u64,
+    /// Raw count of `"INFERRED"` edges (used for the avg-confidence annotation).
     pub inf_edges_len: usize,
+    /// Mean confidence score across all `"INFERRED"` edges, or `None` if there are none.
     pub inf_avg: Option<f64>,
 }
 

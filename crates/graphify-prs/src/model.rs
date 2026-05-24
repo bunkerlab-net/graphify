@@ -110,7 +110,10 @@ const CI_FAILURE_CONCLUSIONS: &[&str] = &[
 /// Raw check-run entry from `statusCheckRollup`.
 #[derive(Debug, Deserialize)]
 pub struct CheckRun {
+    /// Terminal conclusion of the check run (e.g. `"SUCCESS"`, `"FAILURE"`).
+    /// `None` while the run is still in progress.
     pub conclusion: Option<String>,
+    /// Lifecycle status of the check run (e.g. `"IN_PROGRESS"`, `"QUEUED"`, `"COMPLETED"`).
     pub status: Option<String>,
 }
 

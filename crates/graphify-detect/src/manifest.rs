@@ -27,8 +27,11 @@ pub const MANIFEST_PATH: &str = "graphify-out/manifest.json";
 /// One entry in the manifest JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestEntry {
+    /// File modification time as seconds since the Unix epoch (nanosecond precision in fractional part).
     pub mtime: f64,
+    /// MD5 hex digest of the file content at the time of the last AST extraction.
     pub ast_hash: String,
+    /// MD5 hex digest of the file content at the time of the last semantic extraction.
     pub semantic_hash: String,
 }
 

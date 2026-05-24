@@ -4,7 +4,9 @@ use anyhow::Result;
 
 use crate::cli::graphify_out_dir;
 
+/// Maximum file size (bytes) accepted by [`read_graph_capped`] — 50 MiB.
 pub(crate) const MERGE_MAX_BYTES: u64 = 50 * 1024 * 1024;
+/// Maximum node count accepted after a merge before the operation is aborted.
 pub(crate) const MERGE_MAX_NODES: usize = 100_000;
 
 /// Read and parse `graph.json`, refusing files larger than `MERGE_MAX_BYTES`.

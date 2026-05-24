@@ -18,12 +18,19 @@ use crate::{
 
 /// Config passed in from a backend for one API call.
 pub struct OpenAiRequest<'a> {
+    /// Base URL of the OpenAI-compatible endpoint (e.g. `https://api.openai.com/v1`).
     pub base_url: &'a str,
+    /// Bearer token sent in the `Authorization` header.
     pub api_key: &'a str,
+    /// Model identifier forwarded verbatim to the API.
     pub model: &'a str,
+    /// Pre-built messages array, including any system prompt.
     pub messages: Vec<Value>,
+    /// Sampling temperature; `None` omits the field from the request body.
     pub temperature: Option<f64>,
+    /// Reasoning effort hint (e.g. `"low"`); `None` omits the field.
     pub reasoning_effort: Option<&'a str>,
+    /// Maximum tokens the model may generate in its reply.
     pub max_completion_tokens: u32,
     /// If `true`, inject Kimi's `thinking: disabled` extra body.
     pub disable_thinking: bool,
@@ -37,7 +44,9 @@ pub struct OpenAiRequest<'a> {
 
 /// Ollama-specific extra-body options.
 pub struct OllamaOptions {
+    /// Context window size passed as `options.num_ctx` in the Ollama request body.
     pub num_ctx: u32,
+    /// How long to keep the model loaded between requests (e.g. `"30m"`).
     pub keep_alive: String,
 }
 

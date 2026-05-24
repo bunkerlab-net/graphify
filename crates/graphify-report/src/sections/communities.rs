@@ -32,12 +32,19 @@ pub(crate) fn render_nav_hubs(
 
 /// Read-only context bundle for community-section rendering.
 pub(crate) struct CommunitiesCtx<'a> {
+    /// The graph being reported on.
     pub graph: &'a Graph,
+    /// Ordered list of `(community_id, [node_id, ...])` pairs.
     pub communities: &'a [(i64, Vec<&'a str>)],
+    /// Per-community cohesion scores keyed by community ID.
     pub cohesion_scores: &'a HashMap<i64, f64>,
+    /// Human-readable labels for each community, keyed by community ID.
     pub community_labels: &'a HashMap<i64, &'a str>,
+    /// Precomputed per-node degree map (see [`super::compute_degrees`]).
     pub degrees: &'a HashMap<String, usize>,
+    /// Number of communities omitted from the report due to being below `min_community_size`.
     pub thin_count_summary: usize,
+    /// Communities with fewer than this many real (non-file) nodes are omitted.
     pub min_community_size: usize,
 }
 

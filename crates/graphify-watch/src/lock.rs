@@ -53,7 +53,10 @@ impl RebuildLock {
         }
     }
 
-    /// `true` if this guard holds the lock.
+    /// Returns `true` if this guard successfully acquired the lock.
+    ///
+    /// When `false`, the lock was held by another process and the rebuild
+    /// should be skipped.
     #[must_use]
     pub fn acquired(&self) -> bool {
         self.acquired

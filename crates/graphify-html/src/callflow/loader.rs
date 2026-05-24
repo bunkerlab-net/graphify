@@ -197,6 +197,7 @@ pub fn normalize_edge(
 
 // ── Graph loading ───────────────────────────────────────────────────────────
 
+/// Parsed contents of a `graph.json` file: `(nodes, edges, hyperedges, meta)`.
 pub(super) type GraphData = (
     Vec<Node>,
     Vec<CfEdge>,
@@ -531,12 +532,19 @@ pub(super) fn detect_lang<S: std::hash::BuildHasher>(
 
 // ── Path resolution ─────────────────────────────────────────────────────────
 
+/// Resolved filesystem paths used throughout the callflow rendering pipeline.
 pub(super) struct ResolvedPaths {
+    /// Project root directory (parent of `graphify-out/` when present).
     pub(super) base: PathBuf,
+    /// Directory containing `graph.json` and related output files.
     pub(super) graphify_out: PathBuf,
+    /// Path to the `graph.json` input file.
     pub(super) graph: PathBuf,
+    /// Path to the optional `GRAPH_REPORT.md` file.
     pub(super) report: PathBuf,
+    /// Path to the optional `.graphify_labels.json` community-labels file.
     pub(super) labels: PathBuf,
+    /// Path to the optional sections JSON file; `None` when not provided.
     pub(super) sections: Option<PathBuf>,
 }
 

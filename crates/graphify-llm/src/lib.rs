@@ -1,10 +1,34 @@
-//! LLM router — ports `graphify-py/graphify/llm.py`.
+//! LLM backend abstraction for knowledge-graph extraction.
 //!
-//! Provides:
-//! - The [`LlmBackend`] trait with per-backend impls.
-//! - A [`router`] factory to get a backend by name.
-//! - Token estimation via [`tokenizer`].
-//! - File packing, adaptive retry, and corpus-parallel extraction.
+//! Ports `graphify-py/graphify/llm.py`. Provides a unified interface for sending
+//! extraction prompts to multiple LLM providers and merging the structured JSON
+//! responses into a single [`LlmResponse`].
+//!
+//! # Backends
+//!
+//! Each backend wraps a concrete API:
+//!
+//! | Name | Provider | Auth env var(s) |
+//! |------|----------|-----------------|
+//! | `claude` | Anthropic Messages API | `ANTHROPIC_API_KEY` |
+//! | `claude-cli` | Local `claude -p` binary | subscription / `claude auth` |
+//! | `openai` | `OpenAI` Chat Completions | `OPENAI_API_KEY` |
+//! | `gemini` | Google Generative Language | `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
+//! | `kimi` | Moonshot AI (Kimi K2) | `MOONSHOT_API_KEY` |
+//! | `deepseek` | `DeepSeek` Chat Completions | `DEEPSEEK_API_KEY` |
+//! | `ollama` | Local Ollama server | `OLLAMA_BASE_URL` (optional) |
+//! | `bedrock` | AWS Bedrock Converse API | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
+//!
+//! Use [`router`] to obtain a boxed [`LlmBackend`] by name, or call backend
+//! functions directly for finer control.
+//!
+//! # High-level entry points
+//!
+//! - [`extract_files_direct`] — send a slice of files to one backend and return an [`LlmResponse`].
+//! - [`extract_corpus_parallel`] — fan out across chunks with Rayon, then merge.
+//! - [`extract_with_adaptive_retry`] — bisect oversized chunks on context-window errors.
+//! - [`call_llm`] — send a plain-text prompt and receive a raw string reply.
+//! - [`pack_chunks_by_tokens`] — group files into token-budget–sized chunks before extraction.
 
 pub mod backends;
 pub mod bedrock;

@@ -132,8 +132,11 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
 
 /// Aggregated community-level counts used by [`render_report`].
 struct CommunityLayout<'a> {
+    /// Communities that contain at least one non-file node (used for the navigation hub list).
     non_empty: Vec<(i64, &'a Vec<&'a str>)>,
+    /// Number of communities omitted because they fall below `min_community_size`.
     thin_count_summary: usize,
+    /// Number of communities actually included in the rendered report.
     shown_count: usize,
 }
 

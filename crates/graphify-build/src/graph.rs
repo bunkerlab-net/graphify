@@ -34,8 +34,11 @@ impl GraphKind {
 /// One edge entry. Mirrors a ``NetworkX`` `(u, v, attrs)` tuple.
 #[derive(Debug, Clone, Default)]
 pub struct Edge {
+    /// ID of the source (or tail) node.
     pub source: String,
+    /// ID of the target (or head) node.
     pub target: String,
+    /// Arbitrary key-value attributes attached to this edge.
     pub attrs: IndexMap<String, Value>,
 }
 
@@ -43,8 +46,9 @@ pub struct Edge {
 /// graphify exercises. Iteration order is insertion order (matches Python 3.7+).
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
+    /// Structural variant of this graph (directed, multi, etc.).
     pub kind: GraphKind,
-    /// Node id → attributes.
+    /// Node ID to attribute map, in insertion order.
     pub node_map: IndexMap<String, IndexMap<String, Value>>,
     /// All edges in insertion order.
     pub edge_list: Vec<Edge>,

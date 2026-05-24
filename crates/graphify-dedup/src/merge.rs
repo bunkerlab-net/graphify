@@ -28,6 +28,10 @@ static CHUNK_SUFFIX: LazyLock<Regex> =
 
 // ── union-find ────────────────────────────────────────────────────────────────
 
+/// Disjoint-set data structure for tracking which node IDs belong to the same merge group.
+///
+/// Supports path-compressed `find` and union-by-root `union`. Used by all three
+/// deduplication passes to accumulate merge decisions before the final remap is applied.
 pub struct UnionFind {
     parent: IndexMap<String, String>,
 }

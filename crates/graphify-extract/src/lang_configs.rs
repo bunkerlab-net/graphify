@@ -19,6 +19,7 @@ use crate::import_handlers::{
 
 // ── Python ────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Python, using tree-sitter-python.
 pub static PYTHON: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_python::LANGUAGE.into(),
     class_types: &["class_definition"],
@@ -44,6 +45,7 @@ pub static PYTHON: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── JavaScript ────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for JavaScript (`.js`, `.jsx`, `.mjs`), using tree-sitter-javascript.
 pub static JAVASCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_javascript::LANGUAGE.into(),
     class_types: &["class_declaration"],
@@ -73,6 +75,7 @@ pub static JAVASCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── TypeScript ────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for TypeScript (`.ts`), using `LANGUAGE_TYPESCRIPT`.
 pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
     class_types: &[
@@ -107,6 +110,7 @@ pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── TypeScript (TSX) ──────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for TypeScript JSX (`.tsx`), using `LANGUAGE_TSX`.
 pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_typescript::LANGUAGE_TSX.into(),
     class_types: &[
@@ -141,6 +145,7 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── Java ──────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Java, using tree-sitter-java.
 pub static JAVA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_java::LANGUAGE.into(),
     class_types: &["class_declaration", "interface_declaration"],
@@ -166,6 +171,7 @@ pub static JAVA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── Groovy ────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Groovy (including Spock specs), using tree-sitter-groovy.
 pub static GROOVY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_groovy::LANGUAGE.into(),
     class_types: &["class_declaration", "interface_declaration"],
@@ -191,6 +197,7 @@ pub static GROOVY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── C ─────────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for C, using tree-sitter-c.
 pub static C: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_c::LANGUAGE.into(),
     class_types: &[],
@@ -216,6 +223,7 @@ pub static C: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── C++ ───────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for C++, using tree-sitter-cpp.
 pub static CPP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_cpp::LANGUAGE.into(),
     class_types: &["class_specifier", "struct_specifier"],
@@ -241,6 +249,7 @@ pub static CPP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── Ruby ──────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Ruby, using tree-sitter-ruby.
 pub static RUBY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_ruby::LANGUAGE.into(),
     class_types: &["class"],
@@ -266,6 +275,7 @@ pub static RUBY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── C# ────────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for C#, using tree-sitter-c-sharp.
 pub static CSHARP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_c_sharp::LANGUAGE.into(),
     class_types: &["class_declaration", "interface_declaration"],
@@ -292,6 +302,7 @@ pub static CSHARP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 // ── Kotlin ────────────────────────────────────────────────────────────────────
 // Uses tree-sitter-kotlin-ng which targets tree-sitter 0.23+.
 
+/// Pre-built [`LangConfig`] for Kotlin, using tree-sitter-kotlin-ng.
 pub static KOTLIN: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_kotlin_ng::LANGUAGE.into(),
     class_types: &["class_declaration", "object_declaration"],
@@ -317,6 +328,7 @@ pub static KOTLIN: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── Scala ─────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Scala, using tree-sitter-scala.
 pub static SCALA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_scala::LANGUAGE.into(),
     class_types: &["class_definition", "object_definition"],
@@ -342,6 +354,7 @@ pub static SCALA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── PHP ───────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for PHP (including Laravel), using `LANGUAGE_PHP`.
 pub static PHP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_php::LANGUAGE_PHP.into(),
     class_types: &["class_declaration"],
@@ -372,6 +385,7 @@ pub static PHP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── Lua ───────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Lua, using tree-sitter-lua.
 pub static LUA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_lua::LANGUAGE.into(),
     class_types: &[],
@@ -397,6 +411,7 @@ pub static LUA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 
 // ── Swift ─────────────────────────────────────────────────────────────────────
 
+/// Pre-built [`LangConfig`] for Swift, using tree-sitter-swift.
 pub static SWIFT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_swift::LANGUAGE.into(),
     class_types: &["class_declaration", "protocol_declaration"],

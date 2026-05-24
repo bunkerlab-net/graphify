@@ -447,6 +447,7 @@ pub struct SheetInfo {
 /// Structural summary of an `.xlsx` file.
 #[derive(Debug, Clone, Default)]
 pub struct XlsxStructure {
+    /// Per-sheet structural summaries, in workbook order.
     pub sheets: Vec<SheetInfo>,
 }
 

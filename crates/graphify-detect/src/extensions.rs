@@ -10,10 +10,15 @@ use regex::Regex;
 /// File extension → type mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
+    /// Source code file (e.g. `.rs`, `.py`, `.ts`).
     Code,
+    /// Prose document (e.g. `.md`, `.html`, `.docx`).
     Document,
+    /// Academic paper or PDF with paper-like content.
     Paper,
+    /// Raster or vector image (e.g. `.png`, `.svg`).
     Image,
+    /// Audio or video media file (e.g. `.mp4`, `.mp3`).
     Video,
 }
 

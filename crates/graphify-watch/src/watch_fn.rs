@@ -32,8 +32,8 @@ pub fn rebuild_code(
     rebuild::rebuild_code(watch_path, changed_paths, opts)
 }
 
-/// Return `true` if any of the paths has an extension that is **not**
-/// in [`CODE_EXTENSIONS`].
+/// Returns `true` if any of the paths has an extension that is **not** in
+/// [`CODE_EXTENSIONS`] (i.e. a doc, paper, or image file requiring LLM re-extraction).
 #[must_use]
 fn has_non_code(changed_paths: &[PathBuf]) -> bool {
     changed_paths.iter().any(|p| {
@@ -43,8 +43,8 @@ fn has_non_code(changed_paths: &[PathBuf]) -> bool {
     })
 }
 
-/// Return `true` if any of the paths has an extension in
-/// [`CODE_EXTENSIONS`].
+/// Returns `true` if any of the paths has an extension in [`CODE_EXTENSIONS`]
+/// (i.e. a source file that can be rebuilt without LLM re-extraction).
 #[must_use]
 fn has_code(changed_paths: &[PathBuf]) -> bool {
     changed_paths.iter().any(|p| {

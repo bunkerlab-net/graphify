@@ -1,4 +1,23 @@
-//! Security helpers — URL validation, safe fetch, path guards, label sanitisation.
+//! Security helpers for graphify: SSRF-protective URL and IP validation,
+//! safe HTTP fetch with redirect re-validation and size caps, path-traversal
+//! protection for `graphify-out/` files, and label sanitisation for text
+//! embedded in HTML or JSON.
+//!
+//! # Overview
+//!
+//! - **URL / IP validation** ([`validate_url`]): enforces an http/https
+//!   scheme allowlist, rejects known cloud-metadata endpoints, and blocks
+//!   private, loopback, link-local, CGN, NAT64-embedded, and other reserved
+//!   IP ranges to prevent SSRF attacks.
+//! - **Safe fetch** ([`safe_fetch`], [`safe_fetch_text`]): wraps `ureq` with
+//!   SSRF checks on every redirect hop and a hard byte-cap on the response
+//!   body.
+//! - **Path guard** ([`validate_graph_path`]): resolves a path and asserts it
+//!   stays inside the `graphify-out/` base directory, preventing directory
+//!   traversal reads.
+//! - **Label sanitisation** ([`sanitize_label`]): strips C0/C1 control
+//!   characters and JavaScript line terminators, then truncates to 256 chars,
+//!   making free-form text safe for JSON-in-`<script>` embedding.
 //!
 //! Ports `graphify-py/graphify/security.py`.
 

@@ -10,8 +10,11 @@ use regex::Regex;
 
 const VCS_MARKERS: &[&str] = &[".git", ".hg", ".svn", "_darcs", ".fossil"];
 
-/// A pattern read from a `.graphifyignore` or `.gitignore` file.
-/// `anchor` is the directory that contains the file; `pattern` is the raw pattern.
+/// Ordered list of `(anchor_dir, pattern)` pairs loaded from `.graphifyignore` or `.gitignore` files.
+///
+/// `anchor_dir` is the directory that contains the ignore file; `pattern` is
+/// the raw gitignore-style pattern string (never empty — blank lines and
+/// comments are stripped during loading).
 pub type IgnorePatterns = Vec<(PathBuf, String)>;
 
 // ── Pattern parsing ──────────────────────────────────────────────────────────

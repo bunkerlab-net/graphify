@@ -127,7 +127,11 @@ pub fn suggest_questions(
     questions.into_iter().take(top_n).collect()
 }
 
-/// Wrap a section closure with the `GRAPHIFY_PERF_LOG` timing prefix.
+/// Run `f` and, when `perf` is true, print elapsed time to stderr.
+///
+/// `label` identifies the section in the `[perf] suggest_questions/<label>` log line.
+/// The `perf` flag is derived from the `GRAPHIFY_PERF_LOG` environment variable so
+/// callers can avoid the repeated `env::var` lookup.
 fn run_with_perf(label: &str, perf: bool, f: impl FnOnce()) {
     let t = std::time::Instant::now();
     f();

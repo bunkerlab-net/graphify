@@ -17,6 +17,7 @@ use crate::rebuild::community::node_community_map;
 use crate::rebuild::helpers::{build_analysis, detect_code_files, graph_to_topology_value};
 use crate::rebuild::shrink::check_shrink;
 
+/// Re-export of [`graphify_detect::DetectResult`] used throughout the pipeline.
 pub(crate) type DetectResult = graphify_detect::DetectResult;
 
 /// Resolve the project-root path used for source-file relativisation.
@@ -486,16 +487,27 @@ pub(crate) fn compare_existing_report(report_path: &Path, report_content: &str) 
 /// rename + sidecar writes into one call.
 #[allow(clippy::struct_field_names)]
 pub(crate) struct CommitArgs<'a> {
+    /// Bypass the shrink guard when `true`.
     pub force: bool,
+    /// The graph JSON that was on disk before this rebuild began.
     pub existing_graph_data: &'a Value,
+    /// The newly built graph JSON to be committed.
     pub candidate_graph_data: &'a Value,
+    /// Temporary file path where the candidate graph was written.
     pub graph_tmp: &'a Path,
+    /// Destination path for the committed `graph.json`.
     pub existing_graph_path: &'a Path,
+    /// Path to the `GRAPH_REPORT.md` file.
     pub report_path: &'a Path,
+    /// Rendered report content to write to `report_path`.
     pub report_content: &'a str,
+    /// Community ID → human-readable label mapping.
     pub labels: &'a IndexMap<i64, String>,
+    /// Persistent labels JSON file path.
     pub labels_file: &'a Path,
+    /// Detection result used to produce the AST manifest.
     pub detected: &'a DetectResult,
+    /// Output directory where all artefacts are written.
     pub out: &'a Path,
 }
 
@@ -573,19 +585,33 @@ pub(crate) fn render_html_phase(
 /// HTML, and prints the final summary.
 #[allow(clippy::struct_field_names)]
 pub(crate) struct FinaliseArgs<'a> {
+    /// When `true`, both the graph and report are unchanged; outputs are left untouched.
     pub no_change: bool,
+    /// Bypass the shrink guard when `true`.
     pub force: bool,
+    /// Final graph value including attached hyperedges.
     pub graph_with_hyper: &'a Graph,
+    /// Community detection result mapping community ID → member node IDs.
     pub communities: &'a IndexMap<i64, Vec<String>>,
+    /// Community ID → human-readable label mapping.
     pub labels: &'a IndexMap<i64, String>,
+    /// Persistent labels JSON file path.
     pub labels_file: &'a std::path::Path,
+    /// The graph JSON that was on disk before this rebuild began.
     pub existing_graph_data: &'a Value,
+    /// The newly built graph JSON to be committed.
     pub candidate_graph_data: &'a Value,
+    /// Temporary file path where the candidate graph was written.
     pub graph_tmp: &'a std::path::Path,
+    /// Destination path for the committed `graph.json`.
     pub existing_graph_path: &'a std::path::Path,
+    /// Path to the `GRAPH_REPORT.md` file.
     pub report_path: &'a std::path::Path,
+    /// Rendered report content to write to `report_path`.
     pub report_content: &'a str,
+    /// Detection result used to produce the AST manifest.
     pub detected: &'a DetectResult,
+    /// Output directory where all artefacts are written.
     pub out: &'a std::path::Path,
 }
 

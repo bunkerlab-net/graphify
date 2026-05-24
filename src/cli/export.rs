@@ -237,6 +237,7 @@ fn resolve_wiki_gods(
         .collect()
 }
 
+/// Bundled arguments extracted from `ExportCmd::CallflowHtml` for dispatch.
 struct CallflowDispatchOptions {
     graph: Option<std::path::PathBuf>,
     output: Option<std::path::PathBuf>,

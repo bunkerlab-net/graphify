@@ -1,5 +1,22 @@
-//! Graph export to JSON / HTML / SVG / Obsidian vault / Canvas /
-//! `GraphML` / Cypher.
+//! Graph export to multiple output formats.
+//!
+//! This crate provides serialisers that turn a [`graphify_build::Graph`] into
+//! human-readable or tool-consumable representations:
+//!
+//! - **JSON** (`to_json`) — node-link format, the primary interchange format.
+//! - **HTML** (`to_html`) — interactive vis.js visualisation with community
+//!   filtering and a search sidebar.
+//! - **SVG** (`to_svg`) — static spring-layout visualisation.
+//! - **`GraphML`** (`to_graphml`) — XML format understood by Gephi and yEd.
+//! - **Cypher** (`to_cypher`) — Neo4j import script.
+//! - **Neo4j push** (`push_to_neo4j`) — direct Bolt-protocol upsert.
+//! - **Obsidian vault** (`to_obsidian`) — one Markdown note per node plus
+//!   community overview notes.
+//! - **Obsidian Canvas** (`to_canvas`) — `.canvas` JSON file with a grid
+//!   layout of community groups.
+//!
+//! Utility helpers (colour palettes, YAML escaping, diacritic stripping, …)
+//! are exposed via [`util`] and re-exported at the crate root.
 //!
 //! Ports `graphify-py/graphify/export.py`.
 
@@ -28,5 +45,5 @@ pub use util::{
     obsidian_tag, strip_diacritics, viz_node_limit, yaml_str,
 };
 
-// Backward-compatible alias.
+/// Backward-compatible alias for [`to_html`].
 pub use html::to_html as generate_html;

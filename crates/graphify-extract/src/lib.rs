@@ -1,6 +1,19 @@
 //! Tree-sitter structural extraction for 26+ programming languages.
 //!
 //! Ports `graphify-py/graphify/extract.py`.
+//!
+//! # Module layout
+//!
+//! - **`extractors/`** — one file per language (e.g. `python.rs`, `rust_lang.rs`), each
+//!   exposing an `extract_<lang>` function, plus `multi.rs` which drives parallel
+//!   multi-file extraction and cross-file import resolution.
+//! - **`generic/`** — language-agnostic tree-sitter walking logic (`walk.rs`, `calls.rs`,
+//!   `inherit.rs`, `js_extra.rs`) and the shared configuration types (`config.rs`).
+//! - **`lang_configs.rs`** — pre-built [`generic::LangConfig`] constants (one per language).
+//! - **`types.rs`** — core graph types: [`Node`], [`Edge`], [`RawCall`], [`FileResult`], [`ExtractOutput`].
+//! - **`import_handlers.rs`** — language-specific import-edge builders.
+//! - **`ids.rs`** — deterministic node-ID helpers.
+//! - **`tsconfig.rs`** — TypeScript `tsconfig.json` alias resolution.
 
 pub mod error;
 pub mod generic;

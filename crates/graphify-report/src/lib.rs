@@ -1,4 +1,10 @@
-//! `GRAPH_REPORT.md` renderer. Ports `graphify-py/graphify/report.py`.
+//! Markdown report renderer for Graphify analysis results.
+//!
+//! Ports `graphify-py/graphify/report.py`. Accepts a [`graphify_build::Graph`]
+//! and a JSON analysis object produced by `graphify-analyze`, and renders a
+//! `GRAPH_REPORT.md` document covering communities, god-nodes, surprising
+//! cross-file connections, hyperedges, knowledge gaps, token usage, detection
+//! results, and suggested questions.
 //!
 //! Public entry points are [`render_report`] and [`write_report`].
 //!

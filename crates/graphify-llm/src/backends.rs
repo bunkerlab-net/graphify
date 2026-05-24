@@ -11,16 +11,22 @@ use crate::{
 /// Pricing entry (USD per 1M tokens).
 #[derive(Debug, Clone, Copy)]
 pub struct Pricing {
+    /// Cost per 1 million input (prompt) tokens, in USD.
     pub input: f64,
+    /// Cost per 1 million output (completion) tokens, in USD.
     pub output: f64,
 }
 
 /// Static backend metadata (mirrors Python `BACKENDS` dict).
 #[derive(Debug, Clone)]
 pub struct BackendConfig {
+    /// Short identifier used to select the backend (e.g. `"claude"`, `"openai"`).
     pub name: &'static str,
+    /// Model string used when the caller does not supply an explicit override.
     pub default_model: &'static str,
+    /// Published pricing for cost estimation (may be stale — update as needed).
     pub pricing: Pricing,
+    /// Maximum output tokens requested when the caller does not override.
     pub default_max_tokens: u32,
 }
 

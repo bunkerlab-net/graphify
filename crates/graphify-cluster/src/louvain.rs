@@ -1,4 +1,4 @@
-//! Pure-Rust Louvain community detection.
+//! Pure-Rust Louvain community detection used as the sole partitioning backend.
 //!
 //! Mirrors the fallback path in `graphify-py/graphify/cluster.py` which calls
 //! `nx.community.louvain_communities(stable, seed=42, threshold=1e-4,
@@ -22,12 +22,15 @@ use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom as _;
 
+/// RNG seed matching the Python reference `seed=42`.
 const DEFAULT_SEED: u64 = 42;
+/// Minimum modularity gain required to accept a node move.
 #[allow(clippy::cast_precision_loss)] // threshold is a heuristic, precision loss is acceptable
 const DEFAULT_THRESHOLD: f64 = 1e-4;
+/// Maximum number of Louvain aggregation levels.
 const DEFAULT_MAX_LEVEL: usize = 10;
 
-/// Run Louvain on a list of undirected edges (node indices `0..n_nodes`).
+/// Run the full multi-level Louvain algorithm on a list of undirected edges (node indices `0..n_nodes`).
 ///
 /// Returns a Vec of length `n_nodes` where `result[i]` is the community
 /// assignment for node `i`.
@@ -120,7 +123,12 @@ fn louvain_indices(
     final_community
 }
 
-/// Phase 1: local moves. Returns true if any improvement was made.
+/// Execute Phase 1 (local greedy moves) on the current graph state.
+///
+/// Iterates over nodes in shuffled order, moving each to the neighbour
+/// community that yields the greatest modularity gain. Repeats until no
+/// node move improves modularity by more than `threshold`. Returns `true`
+/// if at least one move was made during the pass.
 fn louvain_phase1(
     n: usize,
     adj: &[HashMap<usize, f64>],
@@ -218,7 +226,11 @@ fn louvain_phase1(
     any_improved
 }
 
-/// Renumber community labels to 0..k and return the k count.
+/// Renumber community labels to the dense range `0..k` and return `k`.
+///
+/// The input labels may be sparse (e.g. `[0, 5, 5, 12]`); the output is
+/// a contiguous re-labelling in first-seen order. Used before graph
+/// contraction so super-node indices are tightly packed.
 fn renumber(community: &[usize], n: usize) -> (Vec<usize>, usize) {
     let mut old_to_new: HashMap<usize, usize> = HashMap::new();
     let mut next_id = 0_usize;
@@ -234,7 +246,12 @@ fn renumber(community: &[usize], n: usize) -> (Vec<usize>, usize) {
     (result, next_id)
 }
 
-/// Build the contracted graph: merge all nodes in the same community.
+/// Build the contracted (super-node) graph for the next Louvain level.
+///
+/// Each community in `community` becomes a single super-node. Edge weights
+/// between super-nodes accumulate the weights of all cross-community edges.
+/// Self-loops (intra-community edges) are omitted from the contracted
+/// adjacency because they do not contribute to inter-community modularity.
 fn contract_graph(
     k: usize,
     community: &[usize],

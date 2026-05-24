@@ -28,17 +28,27 @@ pub fn merge_into(merged: &mut LlmResponse, result: &LlmResponse) {
 
 /// Configuration for [`extract_corpus_parallel`].
 pub struct CorpusConfig<'a> {
+    /// Backend name (e.g. `"claude"`, `"openai"`).
     pub backend: &'a str,
+    /// Optional API key override; falls back to the environment when `None`.
     pub api_key: Option<&'a str>,
+    /// Optional model override; uses the backend's default when `None`.
     pub model: Option<&'a str>,
+    /// Filesystem root used to compute relative paths in extraction prompts.
     pub root: &'a Path,
+    /// Number of files per chunk when `token_budget` is not set.
     pub chunk_size: usize,
+    /// Token budget per chunk; when set, `pack_chunks_by_tokens` is used instead of `chunk_size`.
     pub token_budget: Option<usize>,
+    /// Maximum number of concurrent extraction workers (Rayon threads).
     pub max_concurrency: usize,
+    /// Maximum bisect depth for [`crate::retry::extract_with_adaptive_retry`].
     pub max_retry_depth: usize,
 }
 
-/// Callback type for chunk-done notifications.
+/// Callback invoked after each chunk completes successfully.
+///
+/// Arguments: `(chunk_index, total_chunks, chunk_result)`.
 pub type ChunkDoneCb = dyn Fn(usize, usize, &LlmResponse) + Send + Sync;
 
 /// One outcome from processing a single chunk.

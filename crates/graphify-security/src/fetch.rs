@@ -8,9 +8,17 @@ use url::Url;
 use crate::error::SecurityError;
 use crate::url_guard::validate_url_with;
 
-/// 50 MB hard cap for binary downloads.
+/// Hard cap for binary downloads passed to [`safe_fetch`]: 50 MiB (52,428,800 bytes).
+///
+/// Callers that need a lower limit should pass a smaller value directly;
+/// this constant is the absolute ceiling for general-purpose binary fetches.
 pub const MAX_FETCH_BYTES: usize = 52_428_800;
-/// 10 MB hard cap for HTML / text content.
+
+/// Hard cap for HTML / text content passed to [`safe_fetch_text`]: 10 MiB (10,485,760 bytes).
+///
+/// Text responses larger than this are rejected with
+/// [`SecurityError::SizeLimitExceeded`] to avoid memory exhaustion when
+/// processing untrusted web content.
 pub const MAX_TEXT_BYTES: usize = 10_485_760;
 
 /// Fetch `url` and return the raw body, applying:

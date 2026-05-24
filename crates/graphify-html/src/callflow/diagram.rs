@@ -296,13 +296,21 @@ pub(super) fn generate_overview_graph(
 
 /// Parameters for [`generate_section_flowchart`].
 pub(super) struct FlowchartParams<'a> {
+    /// Stable HTML anchor id of the section.
     pub(super) section_id: &'a str,
+    /// Display name of the section (used in Mermaid comments and empty-state labels).
     pub(super) section_name: &'a str,
+    /// Nodes belonging to this section.
     pub(super) nodes: &'a [Node],
+    /// Intra-section edges for this section.
     pub(super) edges: &'a [CfEdge],
+    /// BCP 47 language tag used for localized labels.
     pub(super) lang: &'a str,
+    /// Mermaid diagram scale factor; clamped to `[0.65, 1.8]`.
     pub(super) diagram_scale: f64,
+    /// Maximum number of nodes to include in the diagram.
     pub(super) max_nodes: usize,
+    /// Maximum number of edges to include in the diagram.
     pub(super) max_edges: usize,
 }
 

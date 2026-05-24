@@ -1,8 +1,19 @@
-//! Community detection on `graphify_build::Graph` values.
+//! Community detection, cohesion scoring, and community ID remapping for
+//! `graphify_build::Graph` values.
 //!
 //! Ports `graphify-py/graphify/cluster.py`.
 //!
-//! ## Algorithm
+//! # Primary entry points
+//!
+//! - [`cluster`] — run Louvain community detection on a graph and return a
+//!   `{community_id → [node_ids]}` mapping sorted by community size.
+//! - [`cohesion_score`] — compute the edge-density ratio for a single community.
+//! - [`score_all`] — efficiently compute cohesion scores for all communities in
+//!   a single graph pass.
+//! - [`remap_communities_to_previous`] — remap community IDs to maximise
+//!   overlap with a prior assignment, useful for temporal stability.
+//!
+//! # Algorithm
 //!
 //! The Python reference attempts Leiden (graspologic) and falls back to
 //! `NetworkX`'s Louvain. This crate ships a pure-Rust Louvain

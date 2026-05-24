@@ -79,6 +79,10 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
     }
 }
 
+/// Resolve the install platform from `--platform` and the positional fallback, then install.
+///
+/// Defaults to `"windows"` on Windows and `"claude"` on all other targets when
+/// neither flag is provided, mirroring Python's platform-detection fallback.
 fn dispatch_install(platform: Option<&str>, positional: Option<&str>) -> Result<()> {
     let resolved = match (platform, positional) {
         (Some(a), Some(b)) if a != b => {

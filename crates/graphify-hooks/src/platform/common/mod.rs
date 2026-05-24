@@ -5,13 +5,13 @@
 //! installers: embedded skill files, markdown constants, hook JSON
 //! builders, atomic filesystem helpers.
 //!
-//! Sub-modules:
-//! - [`skills`] — `include_str!`-embedded skill markdown files.
-//! - [`markdown`] — section text written into CLAUDE.md / AGENTS.md / etc.
-//! - [`hooks_json`] — Claude Code & Gemini hook JSON builders.
-//! - [`fs`] — atomic write, JSON read/write, skill install/remove helpers.
-//! - [`install_skill`] — multi-platform [`install_platform_skill`] entry point.
-//! - [`uninstall_all`] — multi-platform [`uninstall_all`] entry point.
+//! Sub-modules (all internal):
+//! - `skills` — `include_str!`-embedded skill markdown files.
+//! - `markdown` — section text written into CLAUDE.md / AGENTS.md / etc.
+//! - `hooks_json` — Claude Code & Gemini hook JSON builders.
+//! - `fs` — atomic write, JSON read/write, skill install/remove helpers.
+//! - `install_skill` — multi-platform [`install_platform_skill`] entry point.
+//! - `uninstall_all` — multi-platform [`uninstall_all`] entry point.
 
 pub(super) mod fs;
 pub(super) mod hooks_json;

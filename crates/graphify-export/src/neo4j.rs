@@ -50,11 +50,13 @@ pub struct NodeRow {
 /// One edge row for UNWIND batching.
 #[derive(Debug, Clone)]
 pub struct EdgeRow {
+    /// Source node ID.
     pub src: String,
+    /// Target node ID.
     pub tgt: String,
-    /// Relationship type (safe identifier).
+    /// Relationship type as a safe Cypher identifier (e.g. `RELATES_TO`).
     pub rel_type: String,
-    /// String properties to attach.
+    /// String properties to attach to the relationship.
     pub props: IndexMap<String, String>,
 }
 

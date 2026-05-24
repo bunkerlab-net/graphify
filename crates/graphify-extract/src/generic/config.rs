@@ -65,21 +65,37 @@ pub struct LangConfig {
 /// Language discriminant used for per-language special-case logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LangId {
+    /// Python source files (`.py`).
     Python,
+    /// JavaScript source files (`.js`, `.jsx`, `.mjs`).
     JavaScript,
+    /// TypeScript source files (`.ts`).
     TypeScript,
+    /// TypeScript JSX source files (`.tsx`).
     TypeScriptX,
+    /// Java source files (`.java`).
     Java,
+    /// Groovy source files (`.groovy`), including Spock specs.
     Groovy,
+    /// C source files (`.c`, `.h`).
     C,
+    /// C++ source files (`.cpp`, `.cc`, `.cxx`, `.hpp`).
     Cpp,
+    /// Ruby source files (`.rb`).
     Ruby,
+    /// C# source files (`.cs`).
     CSharp,
+    /// Kotlin source files (`.kt`, `.kts`).
     Kotlin,
+    /// Scala source files (`.scala`).
     Scala,
+    /// PHP source files (`.php`).
     Php,
+    /// Lua source files (`.lua`).
     Lua,
+    /// Swift source files (`.swift`).
     Swift,
+    /// Any language without special-case logic in the generic walker.
     Other,
 }
 
