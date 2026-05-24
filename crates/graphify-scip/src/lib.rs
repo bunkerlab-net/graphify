@@ -239,6 +239,7 @@ fn emit_relationships(
     }
 }
 
+#[must_use]
 fn resolve_relationship_target(
     target_symbol: &str,
     source_doc_path: &str,
@@ -255,10 +256,12 @@ fn resolve_relationship_target(
     None
 }
 
+#[must_use]
 fn is_strictly_true(value: Option<&Value>) -> bool {
     matches!(value, Some(Value::Bool(true)))
 }
 
+#[must_use]
 fn scip_relation_for(rel: &Map<String, Value>) -> String {
     if is_strictly_true(rel.get("is_implementation")) {
         return "scip_impl".to_string();
@@ -296,6 +299,7 @@ fn first_occurrence_line(occurrences: Option<&Value>) -> i64 {
     0
 }
 
+#[must_use]
 fn coerce_str(value: Option<&Value>, default: &str) -> String {
     match value {
         Some(Value::String(s)) => s.clone(),
@@ -332,10 +336,12 @@ pub fn make_scip_node_id(symbol: &str, source_file: &str) -> String {
     }
 }
 
+#[must_use]
 fn scip_kind_to_file_type(_kind: &str) -> &'static str {
     "code"
 }
 
+#[must_use]
 fn build_scip_metadata(symbol_id: &str, kind: &str, description: &str) -> Map<String, Value> {
     let mut map = Map::new();
     map.insert(

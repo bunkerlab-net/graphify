@@ -112,6 +112,13 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
         }
     }
 
+    // A poisoned mutex (another thread panicked while holding it) is
+    // tolerable here: we deliberately skip the cache insert and still return
+    // the fully-computed `packages` map. The downside is that subsequent
+    // resolves for this workspace root will re-scan the filesystem, which
+    // is correct-but-slower — strictly better than propagating the
+    // poison-induced error all the way out to a callsite that just wants
+    // to resolve one import.
     if let Ok(mut guard) = WORKSPACE_PACKAGE_CACHE.lock() {
         guard.insert(root, packages.clone());
     }

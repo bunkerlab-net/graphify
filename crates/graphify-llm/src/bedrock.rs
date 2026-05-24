@@ -128,11 +128,17 @@ pub fn credentials_appear_configured() -> bool {
 
 /// Process-wide tokio runtime used to drive the (async-only) AWS SDK.
 ///
-/// Building the runtime should never fail in practice; if it does, we have
-/// no useful way to continue and panicking surfaces the root cause clearly.
+/// Building the runtime fails only when the OS denies thread/file-descriptor
+/// resources at process start — at which point Bedrock calls have no way to
+/// proceed anyway, so an unrecoverable panic is the honest signal. The
+/// runtime is shared across calls so the SDK's connection pool and
+/// background tasks stay alive for the life of the process.
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
+        // panic justification: see the doc comment — failure to build the
+        // tokio runtime at process start is unrecoverable for any Bedrock
+        // call this process could possibly make.
         Runtime::new().unwrap_or_else(|e| panic!("failed to build tokio runtime for Bedrock: {e}"))
     })
 }

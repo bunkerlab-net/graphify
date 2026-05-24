@@ -56,6 +56,11 @@ pub fn check_graph_file_size_cap_with(path: &Path, cap: u64) -> Result<(), Secur
 /// glance.
 fn format_with_underscores(value: u64) -> String {
     let digits = value.to_string();
+    // `digits` comes from `u64::to_string`, which only emits ASCII decimal
+    // digits, so every 3-byte slice from `rchunks(3)` is guaranteed-valid
+    // UTF-8. The `unwrap_or("")` fallback in the map below is therefore
+    // unreachable in practice — kept only so this helper never panics on
+    // future refactors that change `digits`'s source.
     let chunks: Vec<&str> = digits
         .as_bytes()
         .rchunks(3)

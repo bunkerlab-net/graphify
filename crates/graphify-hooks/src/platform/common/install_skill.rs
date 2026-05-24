@@ -245,6 +245,10 @@ pub fn uninstall_platform_skill_project(
 /// e.g. `.claude/skills/graphify/SKILL.md` → `.claude`. Used in the
 /// `git add` hint printed after a project install.
 fn scope_root_for(rel: &str) -> &str {
+    // `rel` is fed from the string literals returned by `skill_for`, which
+    // all contain `/`, so `.split('/').next()` is always `Some`. The
+    // `unwrap_or(rel)` branch is purely defensive against a future caller
+    // passing a path without a separator.
     rel.split('/').next().unwrap_or(rel)
 }
 
