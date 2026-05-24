@@ -40,18 +40,21 @@ pub static VARIANT_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
 
 // ── normalisation ─────────────────────────────────────────────────────────────
 
-/// Lowercase + collapse runs of non-word characters (Unicode-aware) to a
+/// Casefold + collapse runs of non-word characters (Unicode-aware) to a
 /// single space, then strip leading/trailing whitespace.
 ///
 /// Mirrors Python's
 /// `re.sub(r"[\W_]+", " ", unicodedata.normalize("NFKC", label).casefold(),
-/// flags=re.UNICODE).strip()` so that CJK and other non-ASCII letters are
-/// preserved instead of being collapsed away.
+/// flags=re.UNICODE).strip()`. Uses the `caseless` crate's full Unicode
+/// case folding (the Rust equivalent of Python's `str.casefold()`), not
+/// `str::to_lowercase`, so German `ß` folds to `ss` and the Greek final
+/// sigma normalises correctly — both of which are needed for parity with
+/// Python on non-ASCII identifiers.
 #[must_use]
 pub fn norm(label: &str) -> String {
     let nfkc: String = label.nfkc().collect();
-    let lower = nfkc.to_lowercase();
-    let replaced = NON_WORD.replace_all(&lower, " ");
+    let folded: String = caseless::default_case_fold_str(&nfkc);
+    let replaced = NON_WORD.replace_all(&folded, " ");
     replaced.trim().to_string()
 }
 

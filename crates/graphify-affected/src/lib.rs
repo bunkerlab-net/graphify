@@ -84,8 +84,7 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
         .filter(|(_, data)| {
             data.get("label")
                 .and_then(Value::as_str)
-                .map(str::to_lowercase)
-                == Some(q.clone())
+                .is_some_and(|s| s.to_lowercase() == q)
         })
         .map(|(id, _)| id.clone())
         .collect();
@@ -98,8 +97,7 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
         .filter(|(_, data)| {
             data.get("source_file")
                 .and_then(Value::as_str)
-                .map(str::to_lowercase)
-                == Some(q.clone())
+                .is_some_and(|s| s.to_lowercase() == q)
         })
         .map(|(id, _)| id.clone())
         .collect();

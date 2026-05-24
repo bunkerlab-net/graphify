@@ -48,6 +48,7 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 blake3 = "1"
+caseless = "0.2"
 chrono = { version = "0.4", default-features = false, features = [
   "clock",
   "serde",

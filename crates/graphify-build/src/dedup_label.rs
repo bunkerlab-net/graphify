@@ -23,12 +23,15 @@ static CHUNK_SUFFIX: LazyLock<Regex> =
 ///
 /// Mirrors Python's
 /// `re.sub(r"[\W_ ]+", " ", unicodedata.normalize("NFKC", label).casefold(),
-/// flags=re.UNICODE).strip()`.
+/// flags=re.UNICODE).strip()`. Uses the `caseless` crate's full Unicode
+/// case folding (Python's `str.casefold()`) rather than
+/// `str::to_lowercase` so identifiers like `ß` and the Greek final
+/// sigma fold identically across the two languages.
 #[must_use]
 pub fn norm_label(label: &str) -> String {
     let nfkc: String = label.nfkc().collect();
-    let lower = nfkc.to_lowercase();
-    let cleaned = NON_WORD.replace_all(&lower, " ");
+    let folded: String = caseless::default_case_fold_str(&nfkc);
+    let cleaned = NON_WORD.replace_all(&folded, " ");
     cleaned.trim().to_string()
 }
 

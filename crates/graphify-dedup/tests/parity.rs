@@ -70,6 +70,14 @@ fn norm_nfkc_normalizes_fullwidth() {
     assert_eq!(norm("ＡＢＣ"), "abc");
 }
 
+#[test]
+fn norm_casefold_matches_python_for_german_sharp_s() {
+    // Python's str.casefold() maps "ß" -> "ss"; str::to_lowercase() does
+    // not. Pinning the casefold contract here so a regression to
+    // `to_lowercase` is caught immediately.
+    assert_eq!(norm("Straße"), "strasse");
+}
+
 // ── shingles ─────────────────────────────────────────────────────────────────
 
 #[test]

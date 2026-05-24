@@ -20,7 +20,6 @@ use serde_json::Value;
 /// imports from multiple threads. Mirrors the Python module-level
 /// `_WORKSPACE_PACKAGE_CACHE` dict (single-threaded there, but the
 /// semantic intent is the same: load each workspace once).
-#[allow(clippy::expect_used)] // static lock; cannot panic at construction time
 static WORKSPACE_PACKAGE_CACHE: Mutex<Option<HashMap<PathBuf, IndexMap<String, PathBuf>>>> =
     Mutex::new(None);
 

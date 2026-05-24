@@ -9,6 +9,7 @@ publish.workspace = true
 description = "Graph assembly from extraction dicts"
 
 [dependencies]
+caseless = { workspace = true }
 graphify-validate = { workspace = true }
 indexmap = { workspace = true }
 rayon = { workspace = true }
