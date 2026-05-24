@@ -74,6 +74,21 @@ fn canonical_edge(edge: &Value) -> IndexMap<String, String> {
     out
 }
 
+/// Render an `input_path` field for the diagnostic header.
+///
+/// `Value::String(p)` is returned verbatim. Other shapes (rare in
+/// practice) are first round-tripped through
+/// `serde_json::from_str::<String>` to undo any JSON escaping
+/// (`\n`, `\"`, …) and then `trim_matches('"')` strips any surrounding
+/// quotes from a still-JSON-encoded form.
+fn display_input_path(value: &Value) -> String {
+    if let Value::String(s) = value {
+        return s.clone();
+    }
+    let json = value.to_string();
+    serde_json::from_str::<String>(&json).unwrap_or_else(|_| json.trim_matches('"').to_string())
+}
+
 fn safe_text(value: Option<&Value>) -> String {
     let Some(value) = value else {
         return String::new();
@@ -120,20 +135,31 @@ fn exact_signature(edge: &Value) -> String {
     let Value::Object(orig) = edge else {
         return "<non-object>".to_string();
     };
-    let mut normalised = orig.clone();
+    // Single-pass normalisation: walk the original map and build the
+    // normalised map directly, applying the `from`→`source` / `to`→`target`
+    // aliases as we go. `source`/`target` always win over `from`/`to`, so
+    // we defer the alias insert until after we've seen every key.
+    let mut normalised: Map<String, Value> = Map::new();
+    let mut alias_source: Option<Value> = None;
+    let mut alias_target: Option<Value> = None;
+    for (k, v) in orig {
+        match k.as_str() {
+            "from" => alias_source = Some(v.clone()),
+            "to" => alias_target = Some(v.clone()),
+            _ => {
+                normalised.insert(k.clone(), v.clone());
+            }
+        }
+    }
     if !normalised.contains_key("source")
-        && let Some(v) = normalised.remove("from")
+        && let Some(v) = alias_source
     {
         normalised.insert("source".to_string(), v);
-    } else {
-        normalised.remove("from");
     }
     if !normalised.contains_key("target")
-        && let Some(v) = normalised.remove("to")
+        && let Some(v) = alias_target
     {
         normalised.insert("target".to_string(), v);
-    } else {
-        normalised.remove("to");
     }
     // Sort keys to produce a canonical signature.
     let mut sorted: Vec<(String, Value)> = normalised.into_iter().collect();
@@ -535,14 +561,13 @@ pub fn format_diagnostic_report(summary: &Value) -> String {
 
     let mut lines: Vec<String> = vec![
         "[graphify] MultiDiGraph edge-collapse diagnostic".to_string(),
-        format!(
-            "input: {}",
-            stringify(&get_field("input_path"))
-                .as_str()
-                .strip_prefix('"')
-                .unwrap_or(stringify(&get_field("input_path")).as_str())
-                .replace('"', "")
-        ),
+        // `stringify` already returns the raw string content for
+        // `Value::String`, so we don't need the historical
+        // `strip_prefix('"').replace('"', "")` chain. For non-string
+        // values (rare), fall back to `serde_json::from_str` to
+        // unescape the JSON string form before display, then trim
+        // any surviving surrounding quotes as a final safety net.
+        format!("input: {}", display_input_path(&get_field("input_path"))),
         "input_stage: provided JSON (normal graph.json is post-build)".to_string(),
         format!(
             "effective_directed: {}",

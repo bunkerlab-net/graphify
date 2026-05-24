@@ -771,7 +771,15 @@ fn test_load_graph_accepts_under_cap() {
     // `_with(cap)` variant lets us trigger the error explicitly.
     let dir = tempdir().expect("tempdir");
     let graph_path = dir.path().join("graph.json");
-    std::fs::write(&graph_path, br#"{"nodes": [], "edges": []}"#).expect("write");
+    // Canonical NetworkX `node_link_data` shape — `links` not `edges`,
+    // plus the `directed`/`multigraph` flags the loader inspects. Using
+    // the same shape as `test_load_graph_roundtrip` so this test exercises
+    // the real parse path rather than a degenerate minimal payload.
+    std::fs::write(
+        &graph_path,
+        br#"{"directed": true, "multigraph": false, "nodes": [], "links": []}"#,
+    )
+    .expect("write");
     let result = load_graph(graph_path.to_str().expect("utf-8"));
     assert!(result.is_ok(), "small graph should load: {result:?}");
 }

@@ -290,7 +290,7 @@ fn louvain_phase1(
             touched.clear();
         }
 
-        if progress && (pass < 3 || pass.is_multiple_of(10)) {
+        if progress && (pass < 3 || pass % 10 == 0) {
             eprintln!("        phase1 pass {pass}: {moves_this_pass} moves over {n} nodes");
         }
 

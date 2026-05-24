@@ -19,8 +19,12 @@ const PARALLEL_EDGE_THRESHOLD: usize = 1024;
 /// language families, the edge is dropped because shared short names
 /// (`render`, `parse`, ...) produce phantom call edges across language
 /// boundaries in multi-language chunks.
+// Callers (`source_file_ext`) always pass an already-lowercased extension,
+// so the match arms only need to enumerate the lowercase forms. Skipping the
+// `to_ascii_lowercase` call avoids the per-call `String` allocation on a hot
+// loop over every edge.
 fn language_family(ext: &str) -> Option<&'static str> {
-    match ext.to_ascii_lowercase().as_str() {
+    match ext {
         "py" | "pyi" => Some("py"),
         "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => Some("js"),
         "go" => Some("go"),
