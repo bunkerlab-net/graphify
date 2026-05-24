@@ -425,9 +425,10 @@ Force a backend with `--backend`; override its default model with `--model`.
 ### Determinism note
 
 `graph.json` is written with `serde_json` configured for `preserve_order`, so node and edge insertion order is preserved
-across runs. Cluster IDs come from a deterministic Louvain pass at resolution 1.0. Two extractions of the same input on
-the same machine should produce byte-identical JSON; cluster IDs can drift between machines with different rayon thread
-counts on graphs with degenerate communities.
+across runs. Cluster IDs come from a deterministic community-detection pass at resolution 1.0 — Leiden by default via
+`leiden-rs` with `random_seed=42`, or Louvain when `GRAPHIFY_CLUSTER_BACKEND=louvain` is set. Two extractions of the
+same input on the same machine should produce byte-identical JSON; cluster IDs can drift between machines with
+different rayon thread counts on graphs with degenerate communities.
 
 ---
 

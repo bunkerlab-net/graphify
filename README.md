@@ -102,7 +102,7 @@ graphify/
 │   ├── graphify-detect/       # filesystem walking + file-type detection
 │   ├── graphify-extract/      # tree-sitter / document / media extractors
 │   ├── graphify-build/        # graph construction
-│   ├── graphify-cluster/      # deterministic Louvain clustering
+│   ├── graphify-cluster/      # community detection (Leiden, Louvain fallback)
 │   ├── graphify-analyze/      # god-nodes, cohesion, communities
 │   ├── graphify-report/       # GRAPH_REPORT.md generator
 │   ├── graphify-export/       # HTML / SVG / GraphML / Obsidian / Cypher / Neo4j
