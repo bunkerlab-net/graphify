@@ -94,7 +94,7 @@ pub fn to_json(
         .graph_attrs
         .get("hyperedges")
         .cloned()
-        .and_then(|v| if v.is_array() { Some(v) } else { None })
+        .filter(serde_json::Value::is_array)
         .unwrap_or_else(|| json!([]));
 
     let mut data = serde_json::Map::new();
