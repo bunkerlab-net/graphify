@@ -106,7 +106,7 @@ fn tool_list_prs_returns_count_and_prs() {
     let args = json!({});
     let v = tool_list_prs_with_clients(&args, &gh, &git).unwrap();
     assert_eq!(v["count"], 2);
-    assert!(v["prs"].as_array().unwrap().len() == 2);
+    assert_eq!(v["prs"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn tool_get_pr_impact_returns_communities() {
     let args = json!({"pr_number": 42});
     let v = tool_get_pr_impact_with_clients(&g, &args, &gh).unwrap();
     assert_eq!(v["pr_number"], 42);
-    assert!(v["files_changed"].as_array().unwrap().len() == 2);
+    assert_eq!(v["files_changed"].as_array().unwrap().len(), 2);
 }
 
 #[test]
