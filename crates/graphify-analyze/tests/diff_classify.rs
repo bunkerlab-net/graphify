@@ -148,8 +148,8 @@ fn is_json_key_node_for_python_source() {
 #[test]
 fn is_concept_or_json_handles_missing_node() {
     let g = graph(json!([{"id": "a", "label": "A"}]), json!([]));
-    // Missing node → is_concept_node returns true (no metadata → treated as concept).
-    assert!(is_concept_node(&g, "ghost"));
-    // Missing node → is_json_key_node returns false (cannot classify without source).
+    // Missing node → both classifiers return false (cannot classify without
+    // metadata; we deliberately diverge from Python's KeyError for safety).
+    assert!(!is_concept_node(&g, "ghost"));
     assert!(!is_json_key_node(&g, "ghost"));
 }

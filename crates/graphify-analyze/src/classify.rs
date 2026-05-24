@@ -123,8 +123,12 @@ pub(crate) fn is_file_node(
 /// Mirrors Python `_is_concept_node`.
 #[must_use]
 pub fn is_concept_node(graph: &Graph, node_id: &str) -> bool {
+    // Python raises `KeyError` for an unknown id; the safer Rust analogue
+    // is to report `false` so callers don't silently classify
+    // truly-missing nodes as concepts. Matches the matching helper in
+    // `graphify-report`.
     let Some(attrs) = graph.node_data(node_id) else {
-        return true;
+        return false;
     };
     let source = attrs
         .get("source_file")

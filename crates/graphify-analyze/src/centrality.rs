@@ -252,9 +252,8 @@ pub(crate) fn edge_betweenness_centrality(graph: &Graph) -> Vec<((String, String
         1.0
     };
 
-    let idx_to_node: Vec<&String> = nodes.clone();
     edge_bet
         .into_iter()
-        .map(|((u, v), b)| ((idx_to_node[u].clone(), idx_to_node[v].clone()), b * scale))
+        .map(|((u, v), b)| ((nodes[u].clone(), nodes[v].clone()), b * scale))
         .collect()
 }
