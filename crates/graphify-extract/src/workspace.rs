@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -20,8 +20,8 @@ use serde_json::Value;
 /// imports from multiple threads. Mirrors the Python module-level
 /// `_WORKSPACE_PACKAGE_CACHE` dict (single-threaded there, but the
 /// semantic intent is the same: load each workspace once).
-static WORKSPACE_PACKAGE_CACHE: Mutex<Option<HashMap<PathBuf, IndexMap<String, PathBuf>>>> =
-    Mutex::new(None);
+static WORKSPACE_PACKAGE_CACHE: LazyLock<Mutex<HashMap<PathBuf, IndexMap<String, PathBuf>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Find the closest ancestor of `start_dir` that contains a
 /// `pnpm-workspace.yaml`. Returns `None` when none of the ancestors do.
@@ -85,8 +85,7 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
         return IndexMap::new();
     };
     if let Ok(guard) = WORKSPACE_PACKAGE_CACHE.lock()
-        && let Some(map) = guard.as_ref()
-        && let Some(packages) = map.get(&root)
+        && let Some(packages) = guard.get(&root)
     {
         return packages.clone();
     }
@@ -114,8 +113,7 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
     }
 
     if let Ok(mut guard) = WORKSPACE_PACKAGE_CACHE.lock() {
-        let entry = guard.get_or_insert_with(HashMap::new);
-        entry.insert(root, packages.clone());
+        guard.insert(root, packages.clone());
     }
     packages
 }

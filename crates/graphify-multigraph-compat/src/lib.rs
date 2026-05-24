@@ -24,7 +24,9 @@ pub struct CapabilityCheck {
 /// Aggregate result of running every capability probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultigraphCapabilityResult {
-    /// Rust toolchain version this binary was built with.
+    /// Declared MSRV from the workspace `Cargo.toml` (`rust-version`),
+    /// not the actual compiler version. Reported here so error messages
+    /// can quote the toolchain floor when a probe fails.
     pub rust_version: String,
     /// Workspace version of the probe and the graph crate it tests. Every
     /// graphify-workspace crate inherits the same version via
