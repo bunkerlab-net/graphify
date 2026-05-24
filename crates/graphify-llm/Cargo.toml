@@ -10,16 +10,16 @@ description = "LLM router (Kimi, Ollama, Bedrock, Gemini, OpenAI, Claude CLI)"
 
 [dependencies]
 aws-config = { version = "1", default-features = false, features = [
-    "behavior-version-latest",
-    "credentials-process",
-    "default-https-client",
-    "rt-tokio",
-    "sso",
+  "behavior-version-latest",
+  "credentials-process",
+  "default-https-client",
+  "rt-tokio",
+  "sso",
 ] }
 aws-sdk-bedrockruntime = { version = "1", default-features = false, features = [
-    "behavior-version-latest",
-    "default-https-client",
-    "rt-tokio",
+  "behavior-version-latest",
+  "default-https-client",
+  "rt-tokio",
 ] }
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
@@ -34,6 +34,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 mockito = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

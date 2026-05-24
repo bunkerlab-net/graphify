@@ -59,12 +59,14 @@ fn clear_backend_envs(g: &mut EnvGuard) {
 // ── call_llm ────────────────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_unknown_backend_errors() {
     let result = call_llm("hello", "no_such_backend", 16);
     assert!(matches!(result, Err(LlmError::UnknownBackend(_, _))));
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_missing_api_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -74,6 +76,7 @@ fn call_llm_missing_api_key_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_gemini_missing_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -82,6 +85,7 @@ fn call_llm_gemini_missing_key_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_kimi_missing_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -90,6 +94,7 @@ fn call_llm_kimi_missing_key_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_deepseek_missing_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -100,6 +105,7 @@ fn call_llm_deepseek_missing_key_errors() {
 // ── extract_files_direct ───────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn extract_files_direct_unknown_backend() {
     let result = extract_files_direct(
         &[],
@@ -112,6 +118,7 @@ fn extract_files_direct_unknown_backend() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn extract_files_direct_missing_api_key() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -120,6 +127,7 @@ fn extract_files_direct_missing_api_key() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn extract_files_direct_with_empty_string_api_key_still_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -131,6 +139,7 @@ fn extract_files_direct_with_empty_string_api_key_still_errors() {
 // ── parse helpers ──────────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn empty_fragment_has_expected_shape() {
     let v = empty_fragment();
     assert!(v["nodes"].as_array().unwrap().is_empty());
@@ -141,6 +150,7 @@ fn empty_fragment_has_expected_shape() {
 // ── LlmResponse merging via retry helpers (only public surface) ───────────
 
 #[test]
+#[serial_test::serial(env)]
 fn llm_response_default_is_sensible() {
     let r = LlmResponse {
         nodes: vec![],
@@ -159,6 +169,7 @@ fn llm_response_default_is_sensible() {
 // ── looks_like_context_exceeded ────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn looks_like_context_exceeded_detects_common_markers() {
     use graphify_llm::looks_like_context_exceeded;
 
@@ -181,6 +192,7 @@ fn looks_like_context_exceeded_detects_common_markers() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn looks_like_context_exceeded_ignores_other_errors() {
     use graphify_llm::looks_like_context_exceeded;
     let err = LlmError::Http("connection refused".to_string());
@@ -188,6 +200,7 @@ fn looks_like_context_exceeded_ignores_other_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn looks_like_context_exceeded_dyn_works() {
     use graphify_llm::looks_like_context_exceeded_dyn;
     #[derive(Debug)]
@@ -209,6 +222,7 @@ fn looks_like_context_exceeded_dyn_works() {
 // ── empty_fragment used in fallback paths ──────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn empty_fragment_round_trips_serialization() {
     let v = empty_fragment();
     let text = serde_json::to_string(&v).unwrap();

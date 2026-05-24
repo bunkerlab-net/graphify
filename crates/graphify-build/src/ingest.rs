@@ -43,6 +43,7 @@ fn language_family(ext: &str) -> Option<&'static str> {
 
 /// Return the extension (without the leading dot, lowercased) of a node's
 /// `source_file`, or an empty string if absent or extensionless.
+#[must_use]
 fn source_file_ext(node_source_files: &IndexMap<String, String>, id: &str) -> String {
     node_source_files
         .get(id)

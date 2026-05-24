@@ -176,7 +176,10 @@ fn exact_signature(edge: &Value) -> String {
     })
 }
 
-fn count_extra(counter: &IndexMap<String, usize>) -> usize {
+fn count_extra<K>(counter: &IndexMap<K, usize>) -> usize
+where
+    K: std::hash::Hash + Eq,
+{
     counter.values().filter(|&&c| c > 1).map(|c| c - 1).sum()
 }
 
@@ -434,11 +437,9 @@ pub fn diagnose_extraction(extraction: &Map<String, Value>, opts: &DiagnoseOptio
         "valid_candidate_edges": valid_candidate_edges,
         "exact_duplicate_edges": count_extra(&exact_counts),
         "directed_unique_endpoint_pairs": directed_pairs.len(),
-        "directed_same_endpoint_collapsed_edges":
-            count_extra(&pair_counter_to_index_map(&directed_pairs)),
+        "directed_same_endpoint_collapsed_edges": count_extra(&directed_pairs),
         "undirected_unique_endpoint_pairs": undirected_pairs.len(),
-        "undirected_same_endpoint_collapsed_edges":
-            count_extra(&pair_counter_to_index_map(&undirected_pairs)),
+        "undirected_same_endpoint_collapsed_edges": count_extra(&undirected_pairs),
         "same_endpoint_group_count": same_endpoint_group_count,
         "relation_variant_groups": variant_group_count(&grouped, "relation", false),
         "source_file_variant_groups": variant_group_count(&grouped, "source_file", true),
@@ -452,13 +453,6 @@ pub fn diagnose_extraction(extraction: &Map<String, Value>, opts: &DiagnoseOptio
         "producer_suppression": suppression,
         "examples": examples,
     })
-}
-
-fn pair_counter_to_index_map(pairs: &IndexMap<(String, String), usize>) -> IndexMap<String, usize> {
-    pairs
-        .iter()
-        .map(|((s, t), c)| (format!("{s}->{t}"), *c))
-        .collect()
 }
 
 /// Read a graph/extraction JSON file from disk and run [`diagnose_extraction`].

@@ -93,9 +93,19 @@ fn louvain_indices(
             *adj_map[v].entry(u).or_insert(0.0) += w;
         }
     }
+    // Each adjacency row is materialised from a HashMap, so the per-row
+    // neighbour order is otherwise non-deterministic. Sort by neighbour
+    // index so Phase 1 visits every neighbour in the same order across
+    // runs — floating-point modularity ties otherwise resolve via the
+    // RNG-shuffled `order` differently between runs, which breaks
+    // byte-identical-determinism on the same machine.
     let mut cur_adj: Vec<Vec<(usize, f64)>> = adj_map
         .into_iter()
-        .map(|m| m.into_iter().collect())
+        .map(|m| {
+            let mut row: Vec<(usize, f64)> = m.into_iter().collect();
+            row.sort_unstable_by_key(|&(nb, _)| nb);
+            row
+        })
         .collect();
 
     // community[i] = which community node i belongs to.
@@ -366,7 +376,12 @@ fn contract_graph(
                 }
             }
         }
-        row.into_iter().collect()
+        // Sort by neighbour super-node id so the contracted graph's row
+        // iteration order matches across runs (same reasoning as the
+        // initial adjacency build at the top of `louvain_indices`).
+        let mut out: Vec<(usize, f64)> = row.into_iter().collect();
+        out.sort_unstable_by_key(|&(nb, _)| nb);
+        out
     };
 
     if k >= CONTRACT_PARALLEL_THRESHOLD {

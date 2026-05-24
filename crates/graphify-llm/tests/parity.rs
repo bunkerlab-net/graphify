@@ -96,6 +96,7 @@ fn clear_backend_envs(g: &mut EnvGuard) {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_gemini_accepts_gemini_api_key() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -106,6 +107,7 @@ fn test_gemini_accepts_gemini_api_key() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_gemini_accepts_google_api_key() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -116,6 +118,7 @@ fn test_gemini_accepts_google_api_key() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_backend_detection_prefers_gemini() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -128,6 +131,7 @@ fn test_backend_detection_prefers_gemini() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_openai_backend_detected() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -322,6 +326,7 @@ fn test_all_expected_backends_registered() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_ollama_from_base_url() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -331,6 +336,7 @@ fn test_detect_backend_ollama_from_base_url() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_kimi_beats_ollama() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -341,6 +347,7 @@ fn test_detect_backend_kimi_beats_ollama() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_claude_beats_ollama() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -351,6 +358,7 @@ fn test_detect_backend_claude_beats_ollama() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_none_without_envvars() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -366,6 +374,7 @@ fn test_detect_backend_none_without_envvars() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_bedrock_aws_region_alone_is_not_enough() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -378,6 +387,7 @@ fn test_detect_backend_bedrock_aws_region_alone_is_not_enough() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_bedrock_static_creds() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -388,6 +398,7 @@ fn test_detect_backend_bedrock_static_creds() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_bedrock_access_key_without_secret_is_not_enough() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -398,6 +409,7 @@ fn test_detect_backend_bedrock_access_key_without_secret_is_not_enough() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_bedrock_via_profile() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -406,6 +418,7 @@ fn test_detect_backend_bedrock_via_profile() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_bedrock_via_web_identity() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -414,6 +427,7 @@ fn test_detect_backend_bedrock_via_web_identity() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_bedrock_via_ecs_relative_uri() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);

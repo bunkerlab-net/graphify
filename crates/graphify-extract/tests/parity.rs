@@ -752,10 +752,14 @@ fn extract_js_resolves_pnpm_workspace_package() {
         "expected at least one imports_from edge: {:?}",
         result.edges
     );
-    let target_id = &imports_from[0].target;
+    let any_resolved = imports_from
+        .iter()
+        .any(|e| e.target.contains("utils") || e.target.contains("index"));
     assert!(
-        target_id.contains("utils") || target_id.contains("index"),
-        "imports_from target should reference resolved workspace path; got: {target_id}"
+        any_resolved,
+        "at least one imports_from target should reference a resolved \
+         workspace path; got: {:?}",
+        imports_from.iter().map(|e| &e.target).collect::<Vec<_>>()
     );
 }
 

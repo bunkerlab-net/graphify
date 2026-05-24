@@ -227,12 +227,16 @@ pub fn uninstall_platform_skill_project(
     }
     if matches!(platform, "claude" | "windows") {
         let claude_md = project_dir.join(".claude").join("CLAUDE.md");
-        if claude_md.exists()
-            && let Ok(content) = fs::read_to_string(&claude_md)
-        {
+        if claude_md.exists() {
+            // Propagate every I/O failure rather than swallowing it. The
+            // documented contract of `uninstall_platform_skill_project`
+            // promises `HooksError::Io` on filesystem failures, and a
+            // silent swallow here would let the function report success
+            // even when the CLAUDE.md update failed.
+            let content = fs::read_to_string(&claude_md)?;
             let cleaned = strip_graphify_section(&content);
             if cleaned.trim().is_empty() {
-                let _ = fs::remove_file(&claude_md);
+                fs::remove_file(&claude_md)?;
             } else {
                 fs::write(&claude_md, cleaned)?;
             }
