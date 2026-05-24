@@ -71,15 +71,5 @@ fn format_with_underscores(value: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_with_underscores_matches_python() {
-        assert_eq!(format_with_underscores(0), "0");
-        assert_eq!(format_with_underscores(16), "16");
-        assert_eq!(format_with_underscores(999), "999");
-        assert_eq!(format_with_underscores(1_000), "1_000");
-        assert_eq!(format_with_underscores(536_870_912), "536_870_912");
-    }
-}
+#[path = "graph_size_tests.rs"]
+mod graph_size_tests;

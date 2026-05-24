@@ -3,7 +3,7 @@
 //! Focuses on the small, self-contained HTML-emission helpers; the full
 //! `write_tree_html` round-trip is exercised in `tests/parity.rs`.
 
- // reason: test-only unwrap convenience
+#![allow(clippy::expect_used)] // test-only — `.expect("...")` panics are the failure
 
 use super::*;
 use graphify_build::{Graph, GraphKind};

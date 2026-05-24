@@ -4,6 +4,8 @@
 //! scenarios are exercised by `tests/parity_ignore.rs` and so are intentionally
 //! omitted here.
 
+#![allow(clippy::expect_used)] // test-only — `.expect("...")` panics are the failure
+
 use super::*;
 
 /// Lines that start with `#` are treated as comments (returns empty string).

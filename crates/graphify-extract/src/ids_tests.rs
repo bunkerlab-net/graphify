@@ -3,6 +3,8 @@
 //! Parity with Python's `graphify.extract._make_id` is critical: every node ID
 //! the LLM and dedup phases see flows through these helpers.
 
+#![allow(clippy::expect_used)] // test-only — `.expect("...")` panics are the failure
+
 use super::*;
 
 /// Leading dots and underscores are stripped so `_auth` and `.auth` collapse
