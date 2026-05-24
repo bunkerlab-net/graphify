@@ -483,8 +483,15 @@ fn run_cluster_phase(
     let hub_desc = exclude_hubs
         .map(|p| format!(", exclude-hubs={p}"))
         .unwrap_or_default();
+    // Mirror `crates/graphify-cluster::edge_list::run_partition`: the env var
+    // overrides default backend selection, anything else (including unset)
+    // resolves to Leiden.
+    let backend = std::env::var("GRAPHIFY_CLUSTER_BACKEND")
+        .ok()
+        .filter(|s| s == "louvain")
+        .map_or("Leiden", |_| "Louvain");
     eprintln!(
-        "[4/6] clustering (Louvain, resolution={resolution}{hub_desc}) on {} nodes ...",
+        "[4/6] clustering ({backend}, resolution={resolution}{hub_desc}) on {} nodes ...",
         graph.node_count()
     );
     let cluster_start = std::time::Instant::now();
