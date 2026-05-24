@@ -43,7 +43,9 @@ pub fn find_workspace_root(start_dir: &Path) -> Option<PathBuf> {
 ///
 /// Hand-rolled (avoids the YAML dependency) — only handles the common
 /// shape `packages:\n  - 'glob/*'\n  - 'apps/*'`. Negation entries
-/// (`!exclude`) are skipped.
+/// (`!exclude`) are skipped. Inline `# comment` trailers on unquoted
+/// entries are stripped; for quoted entries we read the content
+/// between the matching quotes so a `#` inside the glob is preserved.
 #[must_use]
 pub fn workspace_globs(workspace_file: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(workspace_file) else {
@@ -61,7 +63,10 @@ pub fn workspace_globs(workspace_file: &Path) -> Vec<String> {
             continue;
         }
         if in_packages && line.starts_with('-') {
-            let value = line[1..].trim().trim_matches(|c| c == '\'' || c == '"');
+            let rest = line[1..].trim();
+            let Some(value) = parse_packages_entry(rest) else {
+                continue;
+            };
             if !value.is_empty() && !value.starts_with('!') {
                 globs.push(value.to_string());
             }
@@ -73,6 +78,29 @@ pub fn workspace_globs(workspace_file: &Path) -> Vec<String> {
         }
     }
     globs
+}
+
+/// Extract the value of a single `- entry` line from a `pnpm-workspace.yaml`
+/// `packages:` block. Handles three cases:
+///
+/// 1. `'apps/*'` / `"apps/*"` — single- or double-quoted; content is
+///    whatever sits between the matching quotes, even if it contains `#`.
+/// 2. `apps/*  # inline comment` — bare; first `#` starts a comment,
+///    trim trailing whitespace.
+/// 3. Anything else — return the trimmed string as-is.
+fn parse_packages_entry(rest: &str) -> Option<&str> {
+    let bytes = rest.as_bytes();
+    if let Some(&first) = bytes.first()
+        && (first == b'\'' || first == b'"')
+    {
+        let quote = first as char;
+        // Slice past the opening quote, find the matching closing quote.
+        let after_open = &rest[1..];
+        let end = after_open.find(quote)?;
+        return Some(&after_open[..end]);
+    }
+    let cut = rest.find('#').unwrap_or(rest.len());
+    Some(rest[..cut].trim_end())
 }
 
 /// Resolve a `packages:` glob to the matching `package.json` directories,

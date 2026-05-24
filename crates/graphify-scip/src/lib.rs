@@ -202,7 +202,13 @@ fn emit_relationships(
             }
             target_node_id = Some(stub_id);
         }
-        let target_node_id = target_node_id.unwrap_or_default();
+        // Invariant: at this point `target_node_id` is `Some`. It was
+        // either resolved by `resolve_relationship_target` or set to
+        // `Some(stub_id)` inside the `is_none` branch above. The
+        // `.expect` documents that invariant rather than hiding it
+        // behind a silent default.
+        #[allow(clippy::expect_used)] // invariant documented above
+        let target_node_id = target_node_id.expect("target_node_id set on every code path above");
         let relation = scip_relation_for(rel_obj);
         let source_location = if sourceline > 0 {
             format!("L{sourceline}")

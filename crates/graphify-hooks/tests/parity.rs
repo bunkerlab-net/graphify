@@ -327,9 +327,9 @@ use graphify_hooks::platform::{
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
     claude_uninstall, cursor_install, cursor_uninstall, gemini_install, gemini_uninstall,
     install_claude_hook, install_codex_hook, install_gemini_hook, install_opencode_plugin,
-    install_platform_skill, kiro_install, kiro_uninstall, replace_or_append_section,
-    uninstall_claude_hook, uninstall_codex_hook, uninstall_gemini_hook, uninstall_opencode_plugin,
-    vscode_install, vscode_uninstall,
+    install_platform_skill, install_platform_skill_project, kiro_install, kiro_uninstall,
+    replace_or_append_section, uninstall_claude_hook, uninstall_codex_hook, uninstall_gemini_hook,
+    uninstall_opencode_plugin, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
 };
 
 // ---------------------------------------------------------------------------
@@ -1449,6 +1449,117 @@ fn test_vscode_uninstall_removes_section() {
     if instructions.exists() {
         assert!(!instructions.read_to_string_unwrap().contains("## graphify"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// install_platform_skill_project / uninstall_platform_skill_project
+// ---------------------------------------------------------------------------
+
+#[test]
+fn install_platform_skill_project_claude_writes_skill_and_registers() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path();
+    let msg = install_platform_skill_project("claude", project).unwrap();
+
+    let skill_path = project.join(".claude/skills/graphify/SKILL.md");
+    assert!(skill_path.is_file(), "skill must be written to project dir");
+
+    let claude_md = project.join(".claude/CLAUDE.md");
+    assert!(
+        claude_md.is_file(),
+        "CLAUDE.md must be created on first install"
+    );
+    let content = fs::read_to_string(&claude_md).unwrap();
+    assert!(
+        content
+            .lines()
+            .any(|line| line.trim_start() == "## graphify"),
+        "CLAUDE.md must contain the `## graphify` registration heading: {content:?}"
+    );
+
+    assert!(
+        msg.contains("git add .claude"),
+        "install message must include the `git add` hint pointing at the scope root: {msg}"
+    );
+}
+
+#[test]
+fn install_platform_skill_project_idempotent_registration() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path();
+
+    // Seed CLAUDE.md with an existing registration so the install must
+    // detect it and skip the append rather than duplicate it.
+    let claude_md = project.join(".claude/CLAUDE.md");
+    fs::create_dir_all(claude_md.parent().unwrap()).unwrap();
+    fs::write(
+        &claude_md,
+        "## graphify\n\nFollow `.claude/skills/graphify/SKILL.md` when working in this project.\n",
+    )
+    .unwrap();
+
+    let msg = install_platform_skill_project("claude", project).unwrap();
+    let after = fs::read_to_string(&claude_md).unwrap();
+    let count = after
+        .lines()
+        .filter(|line| line.trim_start() == "## graphify")
+        .count();
+    assert_eq!(count, 1, "second install must not duplicate the heading");
+    assert!(
+        msg.contains("already registered"),
+        "install message must call out the idempotent-skip path: {msg}"
+    );
+}
+
+#[test]
+fn install_platform_skill_project_unknown_platform_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = install_platform_skill_project("not-a-platform", dir.path());
+    assert!(
+        result.is_err(),
+        "unrecognised platform must surface as an error"
+    );
+}
+
+#[test]
+fn uninstall_platform_skill_project_removes_skill_and_strips_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path();
+    install_platform_skill_project("claude", project).unwrap();
+
+    let skill_path = project.join(".claude/skills/graphify/SKILL.md");
+    let claude_md = project.join(".claude/CLAUDE.md");
+    assert!(skill_path.is_file());
+    assert!(claude_md.is_file());
+
+    uninstall_platform_skill_project("claude", project).unwrap();
+    assert!(
+        !skill_path.exists(),
+        "uninstall must remove the project skill file"
+    );
+
+    // The CLAUDE.md should either be gone (if it was empty after stripping)
+    // or no longer contain the `## graphify` heading.
+    if claude_md.exists() {
+        let content = fs::read_to_string(&claude_md).unwrap();
+        assert!(
+            !content
+                .lines()
+                .any(|line| line.trim_start() == "## graphify"),
+            "uninstall must strip the `## graphify` registration"
+        );
+    }
+}
+
+#[test]
+fn uninstall_platform_skill_project_when_not_installed_is_silent() {
+    let dir = tempfile::tempdir().unwrap();
+    // No prior install — uninstall must succeed and announce the no-op.
+    let msg = uninstall_platform_skill_project("claude", dir.path()).unwrap();
+    assert!(
+        msg.contains("not installed"),
+        "uninstall on clean dir must report the no-op: {msg}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -277,7 +277,7 @@ pub fn diagnose_extraction(extraction: &Map<String, Value>, opts: &DiagnoseOptio
     let mut valid_candidate_edges = 0_usize;
 
     for edge in &canonical_edges {
-        if !edge.get("_invalid").is_none_or(String::is_empty) {
+        if edge.get("_invalid").is_some_and(|s| !s.is_empty()) {
             non_object_edges += 1;
             continue;
         }

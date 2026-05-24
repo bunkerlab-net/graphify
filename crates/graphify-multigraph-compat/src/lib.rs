@@ -331,11 +331,11 @@ fn probe_remove_edges_two_tuple() -> ProbeResult {
 
 #[allow(clippy::unnecessary_wraps)] // probe slot — preserved for parity with the Python suite
 fn probe_to_undirected_preserves_type() -> ProbeResult {
-    use graphify_build::GraphKind;
-    // The Rust GraphKind enum has explicit MultiGraph / MultiDiGraph
-    // variants — there is no runtime polymorphism that could "lose" the
-    // multigraph type on a to_undirected transition. Pass unconditionally;
-    // the probe slot exists to surface future regressions.
-    let _ = GraphKind::MultiGraph;
+    // No runtime check is needed: the `GraphKind` enum has explicit
+    // `MultiGraph` / `MultiDiGraph` variants, so a `to_undirected`
+    // transition cannot statically lose the multigraph type. The probe
+    // slot is preserved so the parity surface keeps matching Python's
+    // suite, and so a future refactor that collapses the enum surfaces
+    // here as a compile error rather than a silent regression.
     Ok(())
 }
