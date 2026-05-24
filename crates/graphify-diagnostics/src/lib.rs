@@ -83,7 +83,15 @@ fn safe_text(value: Option<&Value>) -> String {
         Value::String(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
-        other => serde_json::to_string(other).unwrap_or_default(),
+        // `serde_json::to_string` on an arbitrary `Value` can fail only on
+        // OOM or NaN/Infinity inside a Number (which `serde_json` rejects as
+        // a JSON-spec violation). Surface those rather than silently
+        // returning an empty string so the diagnostic output can still be
+        // traced back to a malformed input.
+        other => serde_json::to_string(other).unwrap_or_else(|e| {
+            eprintln!("[graphify] diagnostics: failed to render edge field as JSON: {e}");
+            String::new()
+        }),
     }
 }
 
@@ -131,7 +139,15 @@ fn exact_signature(edge: &Value) -> String {
     let mut sorted: Vec<(String, Value)> = normalised.into_iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     let sorted_map: Map<String, Value> = sorted.into_iter().collect();
-    serde_json::to_string(&Value::Object(sorted_map)).unwrap_or_default()
+    // Same caveat as `safe_text`: `serde_json::to_string` here only fails on
+    // OOM or a NaN/Infinity number in the input. Surface the failure to
+    // stderr so a malformed edge can be traced rather than silently
+    // collapsing every malformed signature to the empty string (which would
+    // make every such edge dedup against the others).
+    serde_json::to_string(&Value::Object(sorted_map)).unwrap_or_else(|e| {
+        eprintln!("[graphify] diagnostics: failed to render canonical edge signature: {e}");
+        String::new()
+    })
 }
 
 fn count_extra(counter: &IndexMap<String, usize>) -> usize {

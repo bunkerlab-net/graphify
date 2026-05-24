@@ -151,7 +151,14 @@ fn emit_symbol_node(
     }));
 }
 
-#[allow(clippy::too_many_arguments)] // mirrors Python signature; refactor would obscure parity
+// `emit_relationships` deliberately takes its scratch state by `&mut` rather
+// than bundling it into a context struct. The scratch fields (`nodes`,
+// `edges`, `seen_node_ids`, `seen_edges`) are all distinct types with
+// distinct lifetimes and the borrow checker is happier with separate
+// `&mut`s than with a single `&mut Context` whose fields would need to be
+// re-borrowed inside the function. Wrapping them obscures the disjoint
+// access pattern without paying any indirection cost worth measuring.
+#[allow(clippy::too_many_arguments)]
 fn emit_relationships(
     record: &SymbolRecord,
     per_doc_index: &IndexMap<(String, String), String>,

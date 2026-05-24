@@ -71,6 +71,11 @@ pub fn partition(
     sorted_edges.sort_unstable_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| a.1.cmp(&b.1))
+            // `partial_cmp` returns `None` only on NaN weights. We treat
+            // NaN as `Ordering::Equal` so the sort is total and stable —
+            // NaNs land in whatever position the underlying sort places
+            // them, which is fine because edge ordering only feeds Leiden
+            // determinism, not numeric semantics.
             .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
     });
     for (src, tgt, w) in &sorted_edges {

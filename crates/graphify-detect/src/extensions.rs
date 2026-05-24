@@ -41,7 +41,9 @@ impl FileType {
 ///
 /// This is the authoritative list — matches Python `CODE_EXTENSIONS`. The
 /// `.tsx` entry precedes `.js` to mirror the Python ordering, and `.ets`
-/// (`ArkTS` / `HarmonyOS`) was added alongside `.ejs`.
+/// (`ArkTS` / `HarmonyOS`) was added immediately after `.ejs` so the new
+/// entry sits at the tail of the TypeScript-family run rather than in the
+/// middle of an unrelated group.
 pub const CODE_EXTENSIONS: &[&str] = &[
     "py", "ts", "tsx", "js", "jsx", "mjs", "ejs", "ets", "go", "rs", "java", "groovy", "gradle",
     "cpp", "cc", "cxx", "c", "h", "hpp", "rb", "swift", "kt", "kts", "cs", "scala", "php", "lua",

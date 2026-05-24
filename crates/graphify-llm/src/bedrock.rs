@@ -139,7 +139,13 @@ fn runtime() -> &'static Runtime {
         // panic justification: see the doc comment — failure to build the
         // tokio runtime at process start is unrecoverable for any Bedrock
         // call this process could possibly make.
-        Runtime::new().unwrap_or_else(|e| panic!("failed to build tokio runtime for Bedrock: {e}"))
+        Runtime::new().unwrap_or_else(|e| {
+            panic!(
+                "failed to build tokio runtime for Bedrock: {e} \
+                 (check `ulimit` for open files / threads; the runtime needs both \
+                 to spawn worker threads)"
+            )
+        })
     })
 }
 

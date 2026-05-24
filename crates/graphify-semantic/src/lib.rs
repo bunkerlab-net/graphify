@@ -125,8 +125,8 @@ pub fn validate_semantic_fragment(fragment: &Value) -> Vec<String> {
         {
             let ft_str = ft.as_str().unwrap_or_default();
             if !VALID_SEMANTIC_FILE_TYPES.contains(&ft_str) {
-                let mut sorted: Vec<&&str> = VALID_SEMANTIC_FILE_TYPES.iter().collect();
-                sorted.sort();
+                let mut sorted: Vec<&str> = VALID_SEMANTIC_FILE_TYPES.to_vec();
+                sorted.sort_unstable();
                 errors.push(format!(
                     "nodes[{i}].file_type {ft:?} is not one of {sorted:?}"
                 ));

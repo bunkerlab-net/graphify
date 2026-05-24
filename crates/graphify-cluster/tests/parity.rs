@@ -321,22 +321,30 @@ struct BackendGuard {
 #[allow(unsafe_code)]
 impl BackendGuard {
     fn set(value: &str) -> Self {
-        let prev = std::env::var("GRAPHIFY_CLUSTER_BACKEND").ok();
-        // SAFETY: test-only env-var manipulation; tests touching this env var
-        // run under `serial_test` semantics implicitly because each guard
-        // restores the previous value on drop.
-        unsafe { std::env::set_var("GRAPHIFY_CLUSTER_BACKEND", value) };
+        let prev = std::env::var(GRAPHIFY_CLUSTER_BACKEND).ok();
+        // SAFETY: test-only env-var manipulation. The guard restores the
+        // previous value on `Drop`, but restoration alone is *not*
+        // mutual-exclusion — without serialisation a concurrent test in
+        // the same process could read the env var between our `set_var`
+        // and the inner test's read. Mutual exclusion is enforced by
+        // the `#[serial_test::serial]` attribute on each test that uses
+        // this guard. Both responsibilities (cleanup + serialisation)
+        // are required for correctness here.
+        unsafe { std::env::set_var(GRAPHIFY_CLUSTER_BACKEND, value) };
         Self { prev }
     }
 }
+
+const GRAPHIFY_CLUSTER_BACKEND: &str = "GRAPHIFY_CLUSTER_BACKEND";
 
 #[allow(unsafe_code)]
 impl Drop for BackendGuard {
     fn drop(&mut self) {
         match self.prev.take() {
-            // SAFETY: see `set`.
-            Some(v) => unsafe { std::env::set_var("GRAPHIFY_CLUSTER_BACKEND", v) },
-            None => unsafe { std::env::remove_var("GRAPHIFY_CLUSTER_BACKEND") },
+            // SAFETY: see `set`. Restoration is cleanup-only; the
+            // serialisation guarantee comes from `#[serial_test::serial]`.
+            Some(v) => unsafe { std::env::set_var(GRAPHIFY_CLUSTER_BACKEND, v) },
+            None => unsafe { std::env::remove_var(GRAPHIFY_CLUSTER_BACKEND) },
         }
     }
 }
