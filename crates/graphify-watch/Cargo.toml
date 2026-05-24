@@ -1,0 +1,33 @@
+[package]
+name = "graphify-watch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Filesystem watcher"
+
+[dependencies]
+graphify-analyze = { workspace = true }
+graphify-build = { workspace = true }
+graphify-cluster = { workspace = true }
+graphify-detect = { workspace = true }
+graphify-export = { workspace = true }
+graphify-extract = { workspace = true }
+graphify-report = { workspace = true }
+indexmap = { workspace = true }
+notify = "8"
+notify-debouncer-full = "0.7"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "graphify-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "URL / PDF / Office document ingestion into corpus"
+
+[dependencies]
+chrono = { workspace = true }
+graphify-security = { workspace = true }
+html2md = "0.2"
+percent-encoding = { workspace = true }
+regex = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+mockito = "1"
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

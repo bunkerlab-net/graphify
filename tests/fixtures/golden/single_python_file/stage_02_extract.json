@@ -1,0 +1,648 @@
+{
+  "nodes": [
+    {
+      "id": "shapes_py",
+      "label": "shapes.py",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "single_python_file_shapes_point",
+      "label": "Point",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L8"
+    },
+    {
+      "id": "single_python_file_shapes_point_distance_to",
+      "label": ".distance_to()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L13"
+    },
+    {
+      "id": "single_python_file_shapes_shape",
+      "label": "Shape",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L18"
+    },
+    {
+      "id": "single_python_file_shapes_shape_area",
+      "label": ".area()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L21"
+    },
+    {
+      "id": "single_python_file_shapes_shape_perimeter",
+      "label": ".perimeter()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L24"
+    },
+    {
+      "id": "single_python_file_shapes_shape_describe",
+      "label": ".describe()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L27"
+    },
+    {
+      "id": "single_python_file_shapes_circle",
+      "label": "Circle",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L31"
+    },
+    {
+      "id": "single_python_file_shapes_circle_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L34"
+    },
+    {
+      "id": "single_python_file_shapes_circle_area",
+      "label": ".area()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L38"
+    },
+    {
+      "id": "single_python_file_shapes_circle_perimeter",
+      "label": ".perimeter()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L41"
+    },
+    {
+      "id": "single_python_file_shapes_circle_contains",
+      "label": ".contains()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L44"
+    },
+    {
+      "id": "single_python_file_shapes_rectangle",
+      "label": "Rectangle",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L48"
+    },
+    {
+      "id": "single_python_file_shapes_rectangle_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L51"
+    },
+    {
+      "id": "single_python_file_shapes_rectangle_area",
+      "label": ".area()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L56"
+    },
+    {
+      "id": "single_python_file_shapes_rectangle_perimeter",
+      "label": ".perimeter()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L59"
+    },
+    {
+      "id": "single_python_file_shapes_rectangle_diagonal",
+      "label": ".diagonal()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L62"
+    },
+    {
+      "id": "single_python_file_shapes_triangle",
+      "label": "Triangle",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L66"
+    },
+    {
+      "id": "single_python_file_shapes_triangle_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L69"
+    },
+    {
+      "id": "single_python_file_shapes_triangle_side_lengths",
+      "label": "._side_lengths()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L74"
+    },
+    {
+      "id": "single_python_file_shapes_triangle_area",
+      "label": ".area()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L81"
+    },
+    {
+      "id": "single_python_file_shapes_triangle_perimeter",
+      "label": ".perimeter()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L87"
+    },
+    {
+      "id": "single_python_file_shapes_largest_shape",
+      "label": "largest_shape()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L91"
+    },
+    {
+      "id": "single_python_file_shapes_bounding_box",
+      "label": "bounding_box()",
+      "file_type": "code",
+      "source_file": "shapes.py",
+      "source_location": "L98"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_1",
+      "label": "Geometry module with basic shape classes and area calculations.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_14",
+      "label": "Euclidean distance to another point.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L14"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_19",
+      "label": "Abstract base for all shapes.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L19"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_32",
+      "label": "A circle defined by centre and radius.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L32"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_49",
+      "label": "An axis-aligned rectangle.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L49"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_67",
+      "label": "A triangle defined by three vertices.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L67"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_92",
+      "label": "Return the shape with the greatest area.",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L92"
+    },
+    {
+      "id": "single_python_file_shapes_rationale_99",
+      "label": "Approximate bounding box of a list of circles (simplified).",
+      "file_type": "rationale",
+      "source_file": "shapes.py",
+      "source_location": "L99"
+    }
+  ],
+  "edges": [
+    {
+      "source": "shapes_py",
+      "target": "math",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "dataclasses",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L4",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_point",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_point",
+      "target": "single_python_file_shapes_point_distance_to",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L13",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_shape",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L18",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_shape",
+      "target": "single_python_file_shapes_shape_area",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L21",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_shape",
+      "target": "single_python_file_shapes_shape_perimeter",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L24",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_shape",
+      "target": "single_python_file_shapes_shape_describe",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L27",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_circle",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L31",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_circle",
+      "target": "single_python_file_shapes_shape",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L31",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_circle",
+      "target": "single_python_file_shapes_circle_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L34",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_circle",
+      "target": "single_python_file_shapes_circle_area",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L38",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_circle",
+      "target": "single_python_file_shapes_circle_perimeter",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L41",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_circle",
+      "target": "single_python_file_shapes_circle_contains",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L44",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_rectangle",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L48",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rectangle",
+      "target": "single_python_file_shapes_shape",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L48",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rectangle",
+      "target": "single_python_file_shapes_rectangle_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L51",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rectangle",
+      "target": "single_python_file_shapes_rectangle_area",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L56",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rectangle",
+      "target": "single_python_file_shapes_rectangle_perimeter",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L59",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rectangle",
+      "target": "single_python_file_shapes_rectangle_diagonal",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L62",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_triangle",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L66",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle",
+      "target": "single_python_file_shapes_shape",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L66",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle",
+      "target": "single_python_file_shapes_triangle_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L69",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle",
+      "target": "single_python_file_shapes_triangle_side_lengths",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L74",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle",
+      "target": "single_python_file_shapes_triangle_area",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L81",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle",
+      "target": "single_python_file_shapes_triangle_perimeter",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L87",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_largest_shape",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L91",
+      "weight": 1.0
+    },
+    {
+      "source": "shapes_py",
+      "target": "single_python_file_shapes_bounding_box",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L98",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_shape_describe",
+      "target": "single_python_file_shapes_triangle_area",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L28",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_shape_describe",
+      "target": "single_python_file_shapes_triangle_perimeter",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L28",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_circle_contains",
+      "target": "single_python_file_shapes_point_distance_to",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L45",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle_side_lengths",
+      "target": "single_python_file_shapes_point_distance_to",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L76",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle_area",
+      "target": "single_python_file_shapes_triangle_side_lengths",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L83",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_triangle_perimeter",
+      "target": "single_python_file_shapes_triangle_side_lengths",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L88",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_largest_shape",
+      "target": "single_python_file_shapes_triangle_area",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L95",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_bounding_box",
+      "target": "single_python_file_shapes_rectangle",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L107",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_bounding_box",
+      "target": "single_python_file_shapes_point",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L108",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_1",
+      "target": "shapes_py",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_14",
+      "target": "single_python_file_shapes_point_distance_to",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L14",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_19",
+      "target": "single_python_file_shapes_shape",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L19",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_32",
+      "target": "single_python_file_shapes_circle",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L32",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_49",
+      "target": "single_python_file_shapes_rectangle",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L49",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_67",
+      "target": "single_python_file_shapes_triangle",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L67",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_92",
+      "target": "single_python_file_shapes_largest_shape",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L92",
+      "weight": 1.0
+    },
+    {
+      "source": "single_python_file_shapes_rationale_99",
+      "target": "single_python_file_shapes_bounding_box",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "shapes.py",
+      "source_location": "L99",
+      "weight": 1.0
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

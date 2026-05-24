@@ -1,0 +1,22 @@
+{
+  "god_nodes": [
+    {
+      "id": "tiny_hello_hello",
+      "label": "hello()",
+      "degree": 2
+    },
+    {
+      "id": "tiny_hello_rationale_2",
+      "label": "Return a greeting string.",
+      "degree": 1
+    }
+  ],
+  "surprising_connections": [],
+  "suggested_questions": [
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `Return a greeting string.` to the rest of the system?",
+      "why": "1 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

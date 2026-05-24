@@ -1,0 +1,64 @@
+name: Lint
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  run:
+    name: ${{ matrix.toolchain }}
+    runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.toolchain != 'stable' }}
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta, nightly]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy, rustfmt
+
+      - name: Capture rustc fingerprint
+        id: rustc
+        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        env:
+          MISE_JOBS: 4
+        with:
+          cache_key_prefix: mise
+          cache: true
+          experimental: true
+          install: true
+
+      - name: Cache Cargo
+        if: matrix.toolchain == 'stable'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-lint-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+
+      - run: cargo clippy --all-targets --all-features --workspace
+      - run: cargo fmt --check --all
+      - run: hk check --all --skip-step no_commit_protected_branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

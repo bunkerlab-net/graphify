@@ -1,0 +1,65 @@
+name: Build
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  run:
+    name: ${{ matrix.runs-on }}
+    runs-on: ${{ matrix.runs-on }}
+
+    permissions:
+      contents: read
+
+    strategy:
+      matrix:
+        runs-on: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+        include:
+          - runs-on: ubuntu-24.04
+            arch: x86-64
+          - runs-on: ubuntu-24.04-arm
+            arch: arm64
+          - runs-on: macos-26
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+
+      - name: Capture rustc fingerprint
+        id: rustc
+        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Cargo
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-build-${{ matrix.arch }}-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.arch }}-
+
+      - run: cargo build --release
+
+      - id: artifact-name
+        run: |-
+          os=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          sha=$(git rev-parse --short HEAD)
+          echo "name=graphify-$os-${{ matrix.arch }}-$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: target/release/graphify

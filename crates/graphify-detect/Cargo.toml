@@ -1,0 +1,33 @@
+[package]
+name = "graphify-detect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "File discovery + filtering, gitignore-aware"
+
+[dependencies]
+calamine = "0.35"
+graphify-google = { workspace = true }
+hex = { workspace = true }
+ignore_walk = { version = "0.4", package = "ignore" }
+indexmap = { workspace = true }
+lopdf = "0.40"
+md5 = "0.8"
+quick-xml = "0.40"
+rayon = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

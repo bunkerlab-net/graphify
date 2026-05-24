@@ -1,0 +1,381 @@
+{
+  "nodes": [
+    {
+      "id": "architecture_md",
+      "label": "architecture.md",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "docs_only_architecture_architecture",
+      "label": "Architecture",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "docs_only_architecture_broker_cluster",
+      "label": "Broker Cluster",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L3"
+    },
+    {
+      "id": "docs_only_architecture_partitioning",
+      "label": "Partitioning",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L8"
+    },
+    {
+      "id": "docs_only_architecture_storage",
+      "label": "Storage",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L14"
+    },
+    {
+      "id": "docs_only_architecture_replication",
+      "label": "Replication",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L20"
+    },
+    {
+      "id": "docs_only_architecture_consumer_groups",
+      "label": "Consumer Groups",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L25"
+    },
+    {
+      "id": "overview_md",
+      "label": "overview.md",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "docs_only_overview_project_overview",
+      "label": "Project Overview",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "docs_only_overview_goals",
+      "label": "Goals",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L5"
+    },
+    {
+      "id": "docs_only_overview_components",
+      "label": "Components",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L11"
+    },
+    {
+      "id": "api_md",
+      "label": "api.md",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "docs_only_api_api_reference",
+      "label": "API Reference",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L1"
+    },
+    {
+      "id": "docs_only_api_topics",
+      "label": "Topics",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L5"
+    },
+    {
+      "id": "docs_only_api_post_topics",
+      "label": "`POST /topics`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L7"
+    },
+    {
+      "id": "docs_only_api_codeblock_1",
+      "label": "code:json ({)",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L12"
+    },
+    {
+      "id": "docs_only_api_get_topics_name",
+      "label": "`GET /topics/{name}`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L23"
+    },
+    {
+      "id": "docs_only_api_delete_topics_name",
+      "label": "`DELETE /topics/{name}`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L27"
+    },
+    {
+      "id": "docs_only_api_producers",
+      "label": "Producers",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L31"
+    },
+    {
+      "id": "docs_only_api_post_topics_name_messages",
+      "label": "`POST /topics/{name}/messages`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L33"
+    },
+    {
+      "id": "docs_only_api_codeblock_2",
+      "label": "code:json ({)",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L38"
+    },
+    {
+      "id": "docs_only_api_consumers",
+      "label": "Consumers",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L48"
+    },
+    {
+      "id": "docs_only_api_post_consumers",
+      "label": "`POST /consumers`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L50"
+    },
+    {
+      "id": "docs_only_api_get_consumers_id_messages",
+      "label": "`GET /consumers/{id}/messages`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L54"
+    },
+    {
+      "id": "docs_only_api_post_consumers_id_offsets",
+      "label": "`POST /consumers/{id}/offsets`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L58"
+    }
+  ],
+  "edges": [
+    {
+      "source": "architecture_md",
+      "target": "docs_only_architecture_architecture",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_architecture_architecture",
+      "target": "docs_only_architecture_broker_cluster",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_architecture_architecture",
+      "target": "docs_only_architecture_partitioning",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_architecture_architecture",
+      "target": "docs_only_architecture_storage",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L14",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_architecture_architecture",
+      "target": "docs_only_architecture_replication",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L20",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_architecture_architecture",
+      "target": "docs_only_architecture_consumer_groups",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L25",
+      "weight": 1.0
+    },
+    {
+      "source": "overview_md",
+      "target": "docs_only_overview_project_overview",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "overview.md",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_overview_project_overview",
+      "target": "docs_only_overview_goals",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "overview.md",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_overview_project_overview",
+      "target": "docs_only_overview_components",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "overview.md",
+      "source_location": "L11",
+      "weight": 1.0
+    },
+    {
+      "source": "api_md",
+      "target": "docs_only_api_api_reference",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_api_reference",
+      "target": "docs_only_api_topics",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_topics",
+      "target": "docs_only_api_post_topics",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L7",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_post_topics",
+      "target": "docs_only_api_codeblock_1",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L12",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_topics",
+      "target": "docs_only_api_get_topics_name",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L23",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_topics",
+      "target": "docs_only_api_delete_topics_name",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L27",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_api_reference",
+      "target": "docs_only_api_producers",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L31",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_producers",
+      "target": "docs_only_api_post_topics_name_messages",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L33",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_post_topics_name_messages",
+      "target": "docs_only_api_codeblock_2",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L38",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_api_reference",
+      "target": "docs_only_api_consumers",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L48",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_consumers",
+      "target": "docs_only_api_post_consumers",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L50",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_consumers",
+      "target": "docs_only_api_get_consumers_id_messages",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L54",
+      "weight": 1.0
+    },
+    {
+      "source": "docs_only_api_consumers",
+      "target": "docs_only_api_post_consumers_id_offsets",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L58",
+      "weight": 1.0
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

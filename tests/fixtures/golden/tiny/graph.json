@@ -1,0 +1,57 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "hello.py",
+      "file_type": "code",
+      "source_file": "hello.py",
+      "source_location": "L1",
+      "community": 0,
+      "id": "hello_py",
+      "norm_label": "hello.py"
+    },
+    {
+      "label": "hello()",
+      "file_type": "code",
+      "source_file": "hello.py",
+      "source_location": "L1",
+      "community": 0,
+      "id": "tiny_hello_hello",
+      "norm_label": "hello()"
+    },
+    {
+      "label": "Return a greeting string.",
+      "file_type": "rationale",
+      "source_file": "hello.py",
+      "source_location": "L2",
+      "community": 0,
+      "id": "tiny_hello_rationale_2",
+      "norm_label": "return a greeting string."
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "hello.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "hello_py",
+      "target": "tiny_hello_hello",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "hello.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "source": "tiny_hello_rationale_2",
+      "target": "tiny_hello_hello",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": []
+}

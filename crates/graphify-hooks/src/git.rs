@@ -1,0 +1,132 @@
+//! Git repository discovery and `.git/hooks` directory resolution.
+//!
+//! Resolves the hooks directory by, in order:
+//! 1. honoring a `core.hooksPath` in `.git/config` (if it stays within the
+//!    repo root, to defeat supply-chain attacks via malicious values),
+//! 2. running `git rev-parse --git-path hooks` (which handles linked
+//!    worktrees), and
+//! 3. falling back to `.git/hooks` under the repo root.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use regex::Regex;
+
+use crate::error::HooksError;
+
+/// Walks upward from `path` until a directory containing `.git` is found,
+/// returning that directory.
+///
+/// Returns `None` if no `.git` ancestor exists.
+pub(crate) fn git_root(path: &Path) -> Option<PathBuf> {
+    let current = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut candidate = current.as_path();
+    loop {
+        if candidate.join(".git").exists() {
+            return Some(candidate.to_path_buf());
+        }
+        candidate = candidate.parent()?;
+    }
+}
+
+/// Resolve the git hooks directory for `root`, respecting `core.hooksPath`.
+///
+/// Creates the hooks directory if needed.
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` if the resolved hooks directory cannot be created.
+pub fn hooks_dir(root: &Path) -> Result<PathBuf, HooksError> {
+    hooks_dir_with(root, &default_rev_parse)
+}
+
+/// Like [`hooks_dir`] but accepts an injectable `rev_parse_fn` so tests can
+/// substitute a mock instead of spawning a real `git` subprocess.
+///
+/// The `rev_parse_fn` receives the repository root and returns the raw
+/// stdout from `git -C <root> rev-parse --git-path hooks`, or `None` on
+/// failure.
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` if the resolved hooks directory cannot be created.
+pub fn hooks_dir_with(
+    root: &Path,
+    rev_parse_fn: &dyn Fn(&Path) -> Option<String>,
+) -> Result<PathBuf, HooksError> {
+    let git_config = root.join(".git").join("config");
+    if let Ok(content) = fs::read_to_string(&git_config)
+        && let Some(custom) = parse_hooks_path(&content)
+    {
+        let p = PathBuf::from(shellexpand::tilde(&custom).as_ref());
+        let p = if p.is_absolute() { p } else { root.join(&p) };
+        let root_canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let p_for_check = p.canonicalize().unwrap_or_else(|_| p.clone());
+        if p_for_check.starts_with(&root_canonical) {
+            fs::create_dir_all(&p)?;
+            return Ok(p.canonicalize().unwrap_or(p));
+        }
+    }
+
+    if let Some(raw) = rev_parse_fn(root) {
+        let raw = raw.trim().to_string();
+        if !raw.is_empty() && !raw.contains('\n') && !raw.contains('\r') && !raw.contains('\x00') {
+            let d = root.join(&raw);
+            fs::create_dir_all(&d)?;
+            return Ok(d.canonicalize().unwrap_or(d));
+        }
+    }
+
+    let d = root.join(".git").join("hooks");
+    fs::create_dir_all(&d)?;
+    Ok(d.canonicalize().unwrap_or(d))
+}
+
+/// Shells out to `git -C <root> rev-parse --git-path hooks` and returns
+/// stdout on success.
+fn default_rev_parse(root: &Path) -> Option<String> {
+    let res = Command::new("git")
+        .args([
+            "-C",
+            &root.to_string_lossy(),
+            "rev-parse",
+            "--git-path",
+            "hooks",
+        ])
+        .output()
+        .ok()?;
+    if res.status.success() {
+        Some(String::from_utf8_lossy(&res.stdout).into_owned())
+    } else {
+        None
+    }
+}
+
+/// Parse `core.hooksPath` (case-insensitive key) from raw `.git/config` text.
+///
+/// `configparser` lowercases option names, so git's `hooksPath` becomes
+/// `hookspath` — this matcher accepts either. Returns the trimmed value,
+/// or `None` if not present / empty.
+fn parse_hooks_path(config_text: &str) -> Option<String> {
+    #[allow(clippy::expect_used)]
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"(?i)^hookspath\s*=\s*(.+)$").expect("literal pattern is valid")
+    });
+
+    let mut in_core = false;
+    for line in config_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_core = trimmed.to_lowercase().starts_with("[core");
+            continue;
+        }
+        if in_core && let Some(caps) = RE.captures(trimmed) {
+            let val = caps[1].trim().to_string();
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    None
+}

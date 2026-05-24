@@ -1,0 +1,74 @@
+{
+  "god_nodes": [
+    {
+      "id": "per_language_samples_sample_httpclient",
+      "label": "HttpClient",
+      "degree": 7
+    },
+    {
+      "id": "per_language_samples_sample_apiclient",
+      "label": "ApiClient",
+      "degree": 5
+    },
+    {
+      "id": "per_language_samples_typescript_advanced_userservice",
+      "label": "UserService",
+      "degree": 4
+    },
+    {
+      "id": "per_language_samples_sample_dataprocessor",
+      "label": "DataProcessor",
+      "degree": 4
+    },
+    {
+      "id": "per_language_samples_sample_calls_run_analysis",
+      "label": "run_analysis()",
+      "degree": 4
+    },
+    {
+      "id": "per_language_samples_sample_calls_analyzer",
+      "label": "Analyzer",
+      "degree": 4
+    },
+    {
+      "id": "per_language_samples_sample_graph",
+      "label": "Graph",
+      "degree": 4
+    },
+    {
+      "id": "per_language_samples_sample_createclient",
+      "label": "createClient()",
+      "degree": 3
+    },
+    {
+      "id": "per_language_samples_server",
+      "label": "Server",
+      "degree": 3
+    },
+    {
+      "id": "per_language_samples_sample_main",
+      "label": "main()",
+      "degree": 3
+    }
+  ],
+  "surprising_connections": [
+    {
+      "source": "parse_response()",
+      "target": "parse()",
+      "source_files": [
+        "sample.rb",
+        "crate_a/src/lib.rs"
+      ],
+      "confidence": "INFERRED",
+      "relation": "calls",
+      "why": "inferred connection - not explicitly stated in source"
+    }
+  ],
+  "suggested_questions": [
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `IUserRepository`, `UserStatus`, `UserId` to the rest of the system?",
+      "why": "7 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

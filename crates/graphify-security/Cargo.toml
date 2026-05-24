@@ -1,0 +1,23 @@
+[package]
+name = "graphify-security"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Security helpers: URL validation, safe fetch, path guards, label sanitisation"
+
+[dependencies]
+ipnet = "2"
+regex = { workspace = true }
+thiserror = { workspace = true }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+url = { workspace = true }
+
+[dev-dependencies]
+mockito = "1"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

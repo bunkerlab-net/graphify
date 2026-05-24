@@ -1,0 +1,427 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "architecture.md",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L1",
+      "community": 0,
+      "id": "architecture_md",
+      "norm_label": "architecture.md"
+    },
+    {
+      "label": "Broker Cluster",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L3",
+      "community": 0,
+      "id": "docs_only_architecture_broker_cluster",
+      "norm_label": "broker cluster"
+    },
+    {
+      "label": "Partitioning",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L8",
+      "community": 0,
+      "id": "docs_only_architecture_partitioning",
+      "norm_label": "partitioning"
+    },
+    {
+      "label": "Storage",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L14",
+      "community": 0,
+      "id": "docs_only_architecture_storage",
+      "norm_label": "storage"
+    },
+    {
+      "label": "Replication",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L20",
+      "community": 0,
+      "id": "docs_only_architecture_replication",
+      "norm_label": "replication"
+    },
+    {
+      "label": "Consumer Groups",
+      "file_type": "document",
+      "source_file": "architecture.md",
+      "source_location": "L25",
+      "community": 0,
+      "id": "docs_only_architecture_consumer_groups",
+      "norm_label": "consumer groups"
+    },
+    {
+      "label": "overview.md",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L1",
+      "community": 3,
+      "id": "overview_md",
+      "norm_label": "overview.md"
+    },
+    {
+      "label": "Project Overview",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L1",
+      "community": 3,
+      "id": "docs_only_overview_project_overview",
+      "norm_label": "project overview"
+    },
+    {
+      "label": "Goals",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L5",
+      "community": 3,
+      "id": "docs_only_overview_goals",
+      "norm_label": "goals"
+    },
+    {
+      "label": "Components",
+      "file_type": "document",
+      "source_file": "overview.md",
+      "source_location": "L11",
+      "community": 3,
+      "id": "docs_only_overview_components",
+      "norm_label": "components"
+    },
+    {
+      "label": "api.md",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L1",
+      "community": 4,
+      "id": "api_md",
+      "norm_label": "api.md"
+    },
+    {
+      "label": "API Reference",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L1",
+      "community": 4,
+      "id": "docs_only_api_api_reference",
+      "norm_label": "api reference"
+    },
+    {
+      "label": "Topics",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L5",
+      "community": 1,
+      "id": "docs_only_api_topics",
+      "norm_label": "topics"
+    },
+    {
+      "label": "`POST /topics`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L7",
+      "community": 1,
+      "id": "docs_only_api_post_topics",
+      "norm_label": "`post /topics`"
+    },
+    {
+      "label": "code:json ({)",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L12",
+      "community": 1,
+      "id": "docs_only_api_codeblock_1",
+      "norm_label": "code:json ({)"
+    },
+    {
+      "label": "`GET /topics/{name}`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L23",
+      "community": 1,
+      "id": "docs_only_api_get_topics_name",
+      "norm_label": "`get /topics/{name}`"
+    },
+    {
+      "label": "`DELETE /topics/{name}`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L27",
+      "community": 1,
+      "id": "docs_only_api_delete_topics_name",
+      "norm_label": "`delete /topics/{name}`"
+    },
+    {
+      "label": "Producers",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L31",
+      "community": 4,
+      "id": "docs_only_api_producers",
+      "norm_label": "producers"
+    },
+    {
+      "label": "`POST /topics/{name}/messages`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L33",
+      "community": 1,
+      "id": "docs_only_api_post_topics_name_messages",
+      "norm_label": "`post /topics/{name}/messages`"
+    },
+    {
+      "label": "Consumers",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L48",
+      "community": 2,
+      "id": "docs_only_api_consumers",
+      "norm_label": "consumers"
+    },
+    {
+      "label": "`POST /consumers`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L50",
+      "community": 2,
+      "id": "docs_only_api_post_consumers",
+      "norm_label": "`post /consumers`"
+    },
+    {
+      "label": "`GET /consumers/{id}/messages`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L54",
+      "community": 2,
+      "id": "docs_only_api_get_consumers_id_messages",
+      "norm_label": "`get /consumers/{id}/messages`"
+    },
+    {
+      "label": "`POST /consumers/{id}/offsets`",
+      "file_type": "document",
+      "source_file": "api.md",
+      "source_location": "L58",
+      "community": 2,
+      "id": "docs_only_api_post_consumers_id_offsets",
+      "norm_label": "`post /consumers/{id}/offsets`"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L3",
+      "weight": 1.0,
+      "source": "architecture_md",
+      "target": "docs_only_architecture_broker_cluster",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "architecture_md",
+      "target": "docs_only_architecture_partitioning",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "architecture_md",
+      "target": "docs_only_architecture_storage",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "architecture_md",
+      "target": "docs_only_architecture_replication",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "architecture.md",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "architecture_md",
+      "target": "docs_only_architecture_consumer_groups",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "overview.md",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "overview_md",
+      "target": "docs_only_overview_project_overview",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "overview.md",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "docs_only_overview_project_overview",
+      "target": "docs_only_overview_goals",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "overview.md",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "docs_only_overview_project_overview",
+      "target": "docs_only_overview_components",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "api_md",
+      "target": "docs_only_api_api_reference",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "docs_only_api_api_reference",
+      "target": "docs_only_api_topics",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L31",
+      "weight": 1.0,
+      "source": "docs_only_api_api_reference",
+      "target": "docs_only_api_producers",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L48",
+      "weight": 1.0,
+      "source": "docs_only_api_api_reference",
+      "target": "docs_only_api_consumers",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L7",
+      "weight": 1.0,
+      "source": "docs_only_api_topics",
+      "target": "docs_only_api_post_topics",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L23",
+      "weight": 1.0,
+      "source": "docs_only_api_topics",
+      "target": "docs_only_api_get_topics_name",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L27",
+      "weight": 1.0,
+      "source": "docs_only_api_topics",
+      "target": "docs_only_api_delete_topics_name",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L12",
+      "weight": 1.0,
+      "source": "docs_only_api_post_topics",
+      "target": "docs_only_api_codeblock_1",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L38",
+      "weight": 1.0,
+      "source": "docs_only_api_post_topics_name_messages",
+      "target": "docs_only_api_codeblock_1",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L33",
+      "weight": 1.0,
+      "source": "docs_only_api_producers",
+      "target": "docs_only_api_post_topics_name_messages",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L50",
+      "weight": 1.0,
+      "source": "docs_only_api_consumers",
+      "target": "docs_only_api_post_consumers",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L54",
+      "weight": 1.0,
+      "source": "docs_only_api_consumers",
+      "target": "docs_only_api_get_consumers_id_messages",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "api.md",
+      "source_location": "L58",
+      "weight": 1.0,
+      "source": "docs_only_api_consumers",
+      "target": "docs_only_api_post_consumers_id_offsets",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": []
+}

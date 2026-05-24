@@ -1,0 +1,32 @@
+[package]
+name = "graphify-serve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "MCP stdio server"
+
+[dependencies]
+graphify-analyze = { workspace = true }
+graphify-build = { workspace = true }
+graphify-prs = { workspace = true }
+graphify-security = { workspace = true }
+indexmap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = [
+  "macros",
+  "rt-multi-thread",
+  "io-std",
+  "io-util",
+  "sync",
+] }
+unicode-normalization = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

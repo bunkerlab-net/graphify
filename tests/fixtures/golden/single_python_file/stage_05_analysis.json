@@ -1,0 +1,100 @@
+{
+  "god_nodes": [
+    {
+      "id": "single_python_file_shapes_shape",
+      "label": "Shape",
+      "degree": 8
+    },
+    {
+      "id": "single_python_file_shapes_rectangle",
+      "label": "Rectangle",
+      "degree": 8
+    },
+    {
+      "id": "single_python_file_shapes_circle",
+      "label": "Circle",
+      "degree": 7
+    },
+    {
+      "id": "single_python_file_shapes_triangle",
+      "label": "Triangle",
+      "degree": 7
+    },
+    {
+      "id": "single_python_file_shapes_bounding_box",
+      "label": "bounding_box()",
+      "degree": 4
+    },
+    {
+      "id": "single_python_file_shapes_point",
+      "label": "Point",
+      "degree": 3
+    },
+    {
+      "id": "single_python_file_shapes_largest_shape",
+      "label": "largest_shape()",
+      "degree": 3
+    },
+    {
+      "id": "single_python_file_shapes_rationale_1",
+      "label": "Geometry module with basic shape classes and area calculations.",
+      "degree": 1
+    },
+    {
+      "id": "single_python_file_shapes_rationale_14",
+      "label": "Euclidean distance to another point.",
+      "degree": 1
+    },
+    {
+      "id": "single_python_file_shapes_rationale_19",
+      "label": "Abstract base for all shapes.",
+      "degree": 1
+    }
+  ],
+  "surprising_connections": [
+    {
+      "source": "Circle",
+      "target": "Shape",
+      "source_files": [
+        "shapes.py",
+        "shapes.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "inherits",
+      "note": "Bridges community 1 → community 3"
+    },
+    {
+      "source": "Rectangle",
+      "target": "Shape",
+      "source_files": [
+        "shapes.py",
+        "shapes.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "inherits",
+      "note": "Bridges community 1 → community 0"
+    }
+  ],
+  "suggested_questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `Rectangle` connect `Community 0` to `Community 1`, `Community 3`, `Community 4`?",
+      "why": "High betweenness centrality (0.234) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `Circle` connect `Community 3` to `Community 0`, `Community 1`, `Community 2`, `Community 4`?",
+      "why": "High betweenness centrality (0.176) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `Shape` connect `Community 1` to `Community 0`, `Community 3`, `Community 4`?",
+      "why": "High betweenness centrality (0.138) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `Geometry module with basic shape classes and area calculations.`, `Euclidean distance to another point.`, `Abstract base for all shapes.` to the rest of the system?",
+      "why": "8 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

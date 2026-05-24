@@ -1,0 +1,1327 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "service.py",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L1",
+      "id": "service_py"
+    },
+    {
+      "label": "TaskService",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L8",
+      "id": "multi_python_modules_service_taskservice"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L11",
+      "id": "multi_python_modules_service_taskservice_init"
+    },
+    {
+      "label": ".register_user()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L18",
+      "id": "multi_python_modules_service_taskservice_register_user"
+    },
+    {
+      "label": ".get_user()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L24",
+      "id": "multi_python_modules_service_taskservice_get_user"
+    },
+    {
+      "label": ".create_project()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L29",
+      "id": "multi_python_modules_service_taskservice_create_project"
+    },
+    {
+      "label": ".get_project()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L35",
+      "id": "multi_python_modules_service_taskservice_get_project"
+    },
+    {
+      "label": ".create_task()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L40",
+      "id": "multi_python_modules_service_taskservice_create_task"
+    },
+    {
+      "label": ".assign_task()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L56",
+      "id": "multi_python_modules_service_taskservice_assign_task"
+    },
+    {
+      "label": ".complete_task()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L66",
+      "id": "multi_python_modules_service_taskservice_complete_task"
+    },
+    {
+      "label": ".dashboard()",
+      "file_type": "code",
+      "source_file": "service.py",
+      "source_location": "L73",
+      "id": "multi_python_modules_service_taskservice_dashboard"
+    },
+    {
+      "label": "Business logic layer for task management.",
+      "file_type": "rationale",
+      "source_file": "service.py",
+      "source_location": "L1",
+      "id": "multi_python_modules_service_rationale_1"
+    },
+    {
+      "label": "Orchestrates task operations and enforces business rules.",
+      "file_type": "rationale",
+      "source_file": "service.py",
+      "source_location": "L9",
+      "id": "multi_python_modules_service_rationale_9"
+    },
+    {
+      "label": "models.py",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L1",
+      "id": "models_py"
+    },
+    {
+      "label": "Priority",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L9",
+      "id": "multi_python_modules_models_priority"
+    },
+    {
+      "label": "Enum",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "id": "enum"
+    },
+    {
+      "label": "Status",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L16",
+      "id": "multi_python_modules_models_status"
+    },
+    {
+      "label": "User",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L24",
+      "id": "multi_python_modules_models_user"
+    },
+    {
+      "label": ".display_name()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L31",
+      "id": "multi_python_modules_models_user_display_name"
+    },
+    {
+      "label": "Task",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L36",
+      "id": "multi_python_modules_models_task"
+    },
+    {
+      "label": ".is_overdue()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L48",
+      "id": "multi_python_modules_models_task_is_overdue"
+    },
+    {
+      "label": ".assign_to()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L53",
+      "id": "multi_python_modules_models_task_assign_to"
+    },
+    {
+      "label": ".complete()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L57",
+      "id": "multi_python_modules_models_task_complete"
+    },
+    {
+      "label": "Project",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L62",
+      "id": "multi_python_modules_models_project"
+    },
+    {
+      "label": ".add_task()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L69",
+      "id": "multi_python_modules_models_project_add_task"
+    },
+    {
+      "label": ".open_tasks()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L72",
+      "id": "multi_python_modules_models_project_open_tasks"
+    },
+    {
+      "label": ".completion_ratio()",
+      "file_type": "code",
+      "source_file": "models.py",
+      "source_location": "L75",
+      "id": "multi_python_modules_models_project_completion_ratio"
+    },
+    {
+      "label": "Data models for the task management system.",
+      "file_type": "rationale",
+      "source_file": "models.py",
+      "source_location": "L1",
+      "id": "multi_python_modules_models_rationale_1"
+    },
+    {
+      "label": "Represents a system user.",
+      "file_type": "rationale",
+      "source_file": "models.py",
+      "source_location": "L25",
+      "id": "multi_python_modules_models_rationale_25"
+    },
+    {
+      "label": "A unit of work to be completed.",
+      "file_type": "rationale",
+      "source_file": "models.py",
+      "source_location": "L37",
+      "id": "multi_python_modules_models_rationale_37"
+    },
+    {
+      "label": "A container for related tasks.",
+      "file_type": "rationale",
+      "source_file": "models.py",
+      "source_location": "L63",
+      "id": "multi_python_modules_models_rationale_63"
+    },
+    {
+      "label": "cli.py",
+      "file_type": "code",
+      "source_file": "cli.py",
+      "source_location": "L1",
+      "id": "cli_py"
+    },
+    {
+      "label": "_parse_priority()",
+      "file_type": "code",
+      "source_file": "cli.py",
+      "source_location": "L8",
+      "id": "multi_python_modules_cli_parse_priority"
+    },
+    {
+      "label": "run_demo()",
+      "file_type": "code",
+      "source_file": "cli.py",
+      "source_location": "L16",
+      "id": "multi_python_modules_cli_run_demo"
+    },
+    {
+      "label": "Command-line interface for the task management system.",
+      "file_type": "rationale",
+      "source_file": "cli.py",
+      "source_location": "L1",
+      "id": "multi_python_modules_cli_rationale_1"
+    },
+    {
+      "label": "storage.py",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L1",
+      "id": "storage_py"
+    },
+    {
+      "label": "UserStore",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L7",
+      "id": "multi_python_modules_storage_userstore"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L10",
+      "id": "multi_python_modules_storage_userstore_init"
+    },
+    {
+      "label": ".create()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L14",
+      "id": "multi_python_modules_storage_userstore_create"
+    },
+    {
+      "label": ".get()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L20",
+      "id": "multi_python_modules_storage_userstore_get"
+    },
+    {
+      "label": ".find_by_email()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L23",
+      "id": "multi_python_modules_storage_userstore_find_by_email"
+    },
+    {
+      "label": ".all()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L26",
+      "id": "multi_python_modules_storage_userstore_all"
+    },
+    {
+      "label": "TaskStore",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L30",
+      "id": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "label": ".by_status()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L58",
+      "id": "multi_python_modules_storage_taskstore_by_status"
+    },
+    {
+      "label": ".by_assignee()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L61",
+      "id": "multi_python_modules_storage_taskstore_by_assignee"
+    },
+    {
+      "label": ".overdue()",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L64",
+      "id": "multi_python_modules_storage_taskstore_overdue"
+    },
+    {
+      "label": "ProjectStore",
+      "file_type": "code",
+      "source_file": "storage.py",
+      "source_location": "L68",
+      "id": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "label": "In-memory storage layer for task management.",
+      "file_type": "rationale",
+      "source_file": "storage.py",
+      "source_location": "L1",
+      "id": "multi_python_modules_storage_rationale_1"
+    },
+    {
+      "label": "Simple in-memory user repository.",
+      "file_type": "rationale",
+      "source_file": "storage.py",
+      "source_location": "L8",
+      "id": "multi_python_modules_storage_rationale_8"
+    },
+    {
+      "label": "Simple in-memory task repository.",
+      "file_type": "rationale",
+      "source_file": "storage.py",
+      "source_location": "L31",
+      "id": "multi_python_modules_storage_rationale_31"
+    },
+    {
+      "label": "Simple in-memory project repository.",
+      "file_type": "rationale",
+      "source_file": "storage.py",
+      "source_location": "L69",
+      "id": "multi_python_modules_storage_rationale_69"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L8",
+      "weight": 1.0,
+      "_src": "service_py",
+      "_tgt": "multi_python_modules_service_taskservice",
+      "source": "service_py",
+      "target": "multi_python_modules_service_taskservice"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_rationale_1",
+      "_tgt": "service_py",
+      "source": "service_py",
+      "target": "multi_python_modules_service_rationale_1"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L11",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_init",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_init"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_register_user",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_register_user"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_get_user",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_get_user"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L29",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_create_project",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_create_project"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L35",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_get_project",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_get_project"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L40",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_create_task",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_create_task"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L56",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_assign_task",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_assign_task"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L66",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_complete_task",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_complete_task"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L73",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_service_taskservice_dashboard",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_taskservice_dashboard"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "service.py",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_rationale_9",
+      "_tgt": "multi_python_modules_service_taskservice",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_service_rationale_9"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_models_user"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_models_task"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_models_project"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_models_priority",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_models_priority"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_models_status",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_models_status"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L5",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_storage_userstore",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L5",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_storage_taskstore",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "service.py",
+      "source_location": "L5",
+      "weight": 0.8,
+      "_src": "multi_python_modules_service_taskservice",
+      "_tgt": "multi_python_modules_storage_projectstore",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "cli.py",
+      "source_location": "L17",
+      "weight": 1.0,
+      "_src": "multi_python_modules_cli_run_demo",
+      "_tgt": "multi_python_modules_service_taskservice",
+      "source": "multi_python_modules_service_taskservice",
+      "target": "multi_python_modules_cli_run_demo"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "service.py",
+      "source_location": "L12",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice_init",
+      "_tgt": "multi_python_modules_storage_userstore",
+      "source": "multi_python_modules_service_taskservice_init",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "service.py",
+      "source_location": "L13",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice_init",
+      "_tgt": "multi_python_modules_storage_taskstore",
+      "source": "multi_python_modules_service_taskservice_init",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "service.py",
+      "source_location": "L14",
+      "weight": 1.0,
+      "_src": "multi_python_modules_service_taskservice_init",
+      "_tgt": "multi_python_modules_storage_projectstore",
+      "source": "multi_python_modules_service_taskservice_init",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_src": "models_py",
+      "_tgt": "enum",
+      "source": "models_py",
+      "target": "enum"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_src": "models_py",
+      "_tgt": "multi_python_modules_models_priority",
+      "source": "models_py",
+      "target": "multi_python_modules_models_priority"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_src": "models_py",
+      "_tgt": "multi_python_modules_models_status",
+      "source": "models_py",
+      "target": "multi_python_modules_models_status"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "_src": "models_py",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "models_py",
+      "target": "multi_python_modules_models_user"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L36",
+      "weight": 1.0,
+      "_src": "models_py",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "models_py",
+      "target": "multi_python_modules_models_task"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L62",
+      "weight": 1.0,
+      "_src": "models_py",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "models_py",
+      "target": "multi_python_modules_models_project"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_rationale_1",
+      "_tgt": "models_py",
+      "source": "models_py",
+      "target": "multi_python_modules_models_rationale_1"
+    },
+    {
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_priority",
+      "_tgt": "enum",
+      "source": "multi_python_modules_models_priority",
+      "target": "enum"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_models_priority",
+      "source": "multi_python_modules_models_priority",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_models_priority",
+      "source": "multi_python_modules_models_priority",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_models_priority",
+      "source": "multi_python_modules_models_priority",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_status",
+      "_tgt": "enum",
+      "source": "enum",
+      "target": "multi_python_modules_models_status"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_models_status",
+      "source": "multi_python_modules_models_status",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_models_status",
+      "source": "multi_python_modules_models_status",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_models_status",
+      "source": "multi_python_modules_models_status",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L31",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_user",
+      "_tgt": "multi_python_modules_models_user_display_name",
+      "source": "multi_python_modules_models_user",
+      "target": "multi_python_modules_models_user_display_name"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L25",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_rationale_25",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "multi_python_modules_models_user",
+      "target": "multi_python_modules_models_rationale_25"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "multi_python_modules_models_user",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "multi_python_modules_models_user",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "multi_python_modules_models_user",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "storage.py",
+      "source_location": "L15",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore_create",
+      "_tgt": "multi_python_modules_models_user",
+      "source": "multi_python_modules_models_user",
+      "target": "multi_python_modules_storage_userstore_create"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L48",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_task",
+      "_tgt": "multi_python_modules_models_task_is_overdue",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_models_task_is_overdue"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L53",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_task",
+      "_tgt": "multi_python_modules_models_task_assign_to",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_models_task_assign_to"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L57",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_task",
+      "_tgt": "multi_python_modules_models_task_complete",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_models_task_complete"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L37",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_rationale_37",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_models_rationale_37"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "storage.py",
+      "source_location": "L44",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore_create",
+      "_tgt": "multi_python_modules_models_task",
+      "source": "multi_python_modules_models_task",
+      "target": "multi_python_modules_storage_userstore_create"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L69",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_project",
+      "_tgt": "multi_python_modules_models_project_add_task",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_models_project_add_task"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L72",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_project",
+      "_tgt": "multi_python_modules_models_project_open_tasks",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_models_project_open_tasks"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L75",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_project",
+      "_tgt": "multi_python_modules_models_project_completion_ratio",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_models_project_completion_ratio"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "models.py",
+      "source_location": "L63",
+      "weight": 1.0,
+      "_src": "multi_python_modules_models_rationale_63",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_models_rationale_63"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "storage.py",
+      "source_location": "L4",
+      "weight": 0.8,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "storage.py",
+      "source_location": "L78",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore_create",
+      "_tgt": "multi_python_modules_models_project",
+      "source": "multi_python_modules_models_project",
+      "target": "multi_python_modules_storage_userstore_create"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "cli.py",
+      "source_location": "L8",
+      "weight": 1.0,
+      "_src": "cli_py",
+      "_tgt": "multi_python_modules_cli_parse_priority",
+      "source": "cli_py",
+      "target": "multi_python_modules_cli_parse_priority"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "cli.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_src": "cli_py",
+      "_tgt": "multi_python_modules_cli_run_demo",
+      "source": "cli_py",
+      "target": "multi_python_modules_cli_run_demo"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "cli.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_src": "multi_python_modules_cli_rationale_1",
+      "_tgt": "cli_py",
+      "source": "cli_py",
+      "target": "multi_python_modules_cli_rationale_1"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_src": "storage_py",
+      "_tgt": "multi_python_modules_storage_userstore",
+      "source": "storage_py",
+      "target": "multi_python_modules_storage_userstore"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "_src": "storage_py",
+      "_tgt": "multi_python_modules_storage_taskstore",
+      "source": "storage_py",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L68",
+      "weight": 1.0,
+      "_src": "storage_py",
+      "_tgt": "multi_python_modules_storage_projectstore",
+      "source": "storage_py",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_rationale_1",
+      "_tgt": "storage_py",
+      "source": "storage_py",
+      "target": "multi_python_modules_storage_rationale_1"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L10",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_storage_userstore_init",
+      "source": "multi_python_modules_storage_userstore",
+      "target": "multi_python_modules_storage_userstore_init"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L14",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_storage_userstore_create",
+      "source": "multi_python_modules_storage_userstore",
+      "target": "multi_python_modules_storage_userstore_create"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L20",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_storage_userstore_get",
+      "source": "multi_python_modules_storage_userstore",
+      "target": "multi_python_modules_storage_userstore_get"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L23",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_storage_userstore_find_by_email",
+      "source": "multi_python_modules_storage_userstore",
+      "target": "multi_python_modules_storage_userstore_find_by_email"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L26",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_userstore",
+      "_tgt": "multi_python_modules_storage_userstore_all",
+      "source": "multi_python_modules_storage_userstore",
+      "target": "multi_python_modules_storage_userstore_all"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L8",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_rationale_8",
+      "_tgt": "multi_python_modules_storage_userstore",
+      "source": "multi_python_modules_storage_userstore",
+      "target": "multi_python_modules_storage_rationale_8"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L33",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_storage_userstore_init",
+      "source": "multi_python_modules_storage_userstore_init",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L71",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_storage_userstore_init",
+      "source": "multi_python_modules_storage_userstore_init",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L37",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_storage_userstore_create",
+      "source": "multi_python_modules_storage_userstore_create",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L77",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_storage_userstore_create",
+      "source": "multi_python_modules_storage_userstore_create",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L55",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_storage_userstore_get",
+      "source": "multi_python_modules_storage_userstore_get",
+      "target": "multi_python_modules_storage_taskstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L83",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_storage_userstore_get",
+      "source": "multi_python_modules_storage_userstore_get",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L86",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_projectstore",
+      "_tgt": "multi_python_modules_storage_userstore_all",
+      "source": "multi_python_modules_storage_userstore_all",
+      "target": "multi_python_modules_storage_projectstore"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L58",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_storage_taskstore_by_status",
+      "source": "multi_python_modules_storage_taskstore",
+      "target": "multi_python_modules_storage_taskstore_by_status"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L61",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_storage_taskstore_by_assignee",
+      "source": "multi_python_modules_storage_taskstore",
+      "target": "multi_python_modules_storage_taskstore_by_assignee"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L64",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_taskstore",
+      "_tgt": "multi_python_modules_storage_taskstore_overdue",
+      "source": "multi_python_modules_storage_taskstore",
+      "target": "multi_python_modules_storage_taskstore_overdue"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L31",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_rationale_31",
+      "_tgt": "multi_python_modules_storage_taskstore",
+      "source": "multi_python_modules_storage_taskstore",
+      "target": "multi_python_modules_storage_rationale_31"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "storage.py",
+      "source_location": "L69",
+      "weight": 1.0,
+      "_src": "multi_python_modules_storage_rationale_69",
+      "_tgt": "multi_python_modules_storage_projectstore",
+      "source": "multi_python_modules_storage_projectstore",
+      "target": "multi_python_modules_storage_rationale_69"
+    }
+  ]
+}

@@ -1,6 +1,162 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/graphify-validate",
+  "crates/graphify-manifest",
+  "crates/graphify-security",
+  "crates/graphify-cache",
+  "crates/graphify-detect",
+  "crates/graphify-dedup",
+  "crates/graphify-build",
+  "crates/graphify-cluster",
+  "crates/graphify-analyze",
+  "crates/graphify-report",
+  "crates/graphify-export",
+  "crates/graphify-extract",
+  "crates/graphify-ingest",
+  "crates/graphify-hooks",
+  "crates/graphify-wiki",
+  "crates/graphify-html",
+  "crates/graphify-global",
+  "crates/graphify-prs",
+  "crates/graphify-transcribe",
+  "crates/graphify-serve",
+  "crates/graphify-watch",
+  "crates/graphify-benchmark",
+  "crates/graphify-llm",
+  "crates/graphify-google",
+]
+default-members = ["."]
+exclude = [
+  "tests/fixtures/inputs/per_language_samples/crate_a",
+  "tests/fixtures/inputs/per_language_samples/crate_b",
+]
+
+[workspace.package]
+version = "0.8.14"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/bunkerlab-net/graphify"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = [
+  "clock",
+  "serde",
+] }
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+htmlescape = "0.3"
+idna = "1"
+ignore = "0.4"
+indexmap = { version = "2", features = ["serde"] }
+once_cell = "1"
+percent-encoding = "2"
+petgraph = { version = "0.8", features = ["serde-1"] }
+rayon = "1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serial_test = "3"
+sha2 = "0.11"
+tempfile = "3"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
+url = "2"
+walkdir = "2"
+
+# Internal workspace crates
+graphify-analyze = { path = "crates/graphify-analyze" }
+graphify-benchmark = { path = "crates/graphify-benchmark" }
+graphify-build = { path = "crates/graphify-build" }
+graphify-cache = { path = "crates/graphify-cache" }
+graphify-cluster = { path = "crates/graphify-cluster" }
+graphify-dedup = { path = "crates/graphify-dedup" }
+graphify-detect = { path = "crates/graphify-detect" }
+graphify-export = { path = "crates/graphify-export" }
+graphify-extract = { path = "crates/graphify-extract" }
+graphify-global = { path = "crates/graphify-global" }
+graphify-google = { path = "crates/graphify-google" }
+graphify-hooks = { path = "crates/graphify-hooks" }
+graphify-html = { path = "crates/graphify-html" }
+graphify-ingest = { path = "crates/graphify-ingest" }
+graphify-llm = { path = "crates/graphify-llm" }
+graphify-manifest = { path = "crates/graphify-manifest" }
+graphify-prs = { path = "crates/graphify-prs" }
+graphify-report = { path = "crates/graphify-report" }
+graphify-security = { path = "crates/graphify-security" }
+graphify-serve = { path = "crates/graphify-serve" }
+graphify-transcribe = { path = "crates/graphify-transcribe" }
+graphify-validate = { path = "crates/graphify-validate" }
+graphify-watch = { path = "crates/graphify-watch" }
+graphify-wiki = { path = "crates/graphify-wiki" }
+
+[workspace.lints.rust]
+dead_code = "deny"
+unsafe_code = "deny"
+warnings = "deny"
+
+[workspace.lints.clippy]
+enum_glob_use = "deny"
+expect_used = "deny"
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+
 [package]
 name = "graphify"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
+
+[[bin]]
+name = "graphify"
+path = "src/main.rs"
 
 [dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+graphify-analyze = { workspace = true }
+graphify-benchmark = { workspace = true }
+graphify-build = { workspace = true }
+graphify-cache = { workspace = true }
+graphify-cluster = { workspace = true }
+graphify-dedup = { workspace = true }
+graphify-detect = { workspace = true }
+graphify-export = { workspace = true }
+graphify-extract = { workspace = true }
+graphify-global = { workspace = true }
+graphify-hooks = { workspace = true }
+graphify-html = { workspace = true }
+graphify-ingest = { workspace = true }
+graphify-llm = { workspace = true }
+graphify-prs = { workspace = true }
+graphify-report = { workspace = true }
+graphify-serve = { workspace = true }
+graphify-validate = { workspace = true }
+graphify-watch = { workspace = true }
+graphify-wiki = { workspace = true }
+indexmap = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt"] }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

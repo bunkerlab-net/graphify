@@ -1,0 +1,1597 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "typescript_advanced.ts",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L1",
+      "community": 0,
+      "id": "typescript_advanced_ts",
+      "norm_label": "typescript_advanced.ts"
+    },
+    {
+      "label": "IUserRepository",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L23",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_iuserrepository",
+      "norm_label": "iuserrepository"
+    },
+    {
+      "label": "UserStatus",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L28",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_userstatus",
+      "norm_label": "userstatus"
+    },
+    {
+      "label": "UserId",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L34",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_userid",
+      "norm_label": "userid"
+    },
+    {
+      "label": "DEFAULT_ROLES",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L38",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_default_roles",
+      "norm_label": "default_roles"
+    },
+    {
+      "label": "USER_CONFIG",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L40",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_user_config",
+      "norm_label": "user_config"
+    },
+    {
+      "label": "UserService",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L50",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_userservice",
+      "norm_label": "userservice"
+    },
+    {
+      "label": ".constructor()",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L51",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_userservice_constructor",
+      "norm_label": ".constructor()"
+    },
+    {
+      "label": ".create()",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L53",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_userservice_create",
+      "norm_label": ".create()"
+    },
+    {
+      "label": ".bulkCreate()",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L57",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_userservice_bulkcreate",
+      "norm_label": ".bulkcreate()"
+    },
+    {
+      "label": "UserModule",
+      "file_type": "code",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L69",
+      "community": 0,
+      "id": "per_language_samples_typescript_advanced_usermodule",
+      "norm_label": "usermodule"
+    },
+    {
+      "label": "sample.kt",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L1",
+      "community": 1,
+      "id": "sample_kt",
+      "norm_label": "sample.kt"
+    },
+    {
+      "label": "Config",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L4",
+      "community": 1,
+      "id": "per_language_samples_sample_config",
+      "norm_label": "config"
+    },
+    {
+      "label": "HttpClient",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L6",
+      "community": 1,
+      "id": "per_language_samples_sample_httpclient",
+      "norm_label": "httpclient"
+    },
+    {
+      "label": ".get()",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L7",
+      "community": 1,
+      "id": "per_language_samples_sample_httpclient_get",
+      "norm_label": ".get()"
+    },
+    {
+      "label": ".post()",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L11",
+      "community": 1,
+      "id": "per_language_samples_sample_httpclient_post",
+      "norm_label": ".post()"
+    },
+    {
+      "label": ".buildRequest()",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L15",
+      "community": 1,
+      "id": "per_language_samples_sample_httpclient_buildrequest",
+      "norm_label": ".buildrequest()"
+    },
+    {
+      "label": "createClient()",
+      "file_type": "code",
+      "source_file": "sample.kt",
+      "source_location": "L20",
+      "community": 1,
+      "id": "per_language_samples_sample_createclient",
+      "norm_label": "createclient()"
+    },
+    {
+      "label": "sample.ts",
+      "file_type": "code",
+      "source_file": "sample.ts",
+      "source_location": "L1",
+      "community": 1,
+      "id": "sample_ts",
+      "norm_label": "sample.ts"
+    },
+    {
+      "label": ".constructor()",
+      "file_type": "code",
+      "source_file": "sample.ts",
+      "source_location": "L6",
+      "community": 1,
+      "id": "per_language_samples_sample_httpclient_constructor",
+      "norm_label": ".constructor()"
+    },
+    {
+      "label": "buildHeaders()",
+      "file_type": "code",
+      "source_file": "sample.ts",
+      "source_location": "L19",
+      "community": 1,
+      "id": "per_language_samples_sample_buildheaders",
+      "norm_label": "buildheaders()"
+    },
+    {
+      "label": "sample.java",
+      "file_type": "code",
+      "source_file": "sample.java",
+      "source_location": "L1",
+      "community": 6,
+      "id": "sample_java",
+      "norm_label": "sample.java"
+    },
+    {
+      "label": "DataProcessor",
+      "file_type": "code",
+      "source_file": "sample.java",
+      "source_location": "L4",
+      "community": 6,
+      "id": "per_language_samples_sample_dataprocessor",
+      "norm_label": "dataprocessor"
+    },
+    {
+      "label": ".addItem()",
+      "file_type": "code",
+      "source_file": "sample.java",
+      "source_location": "L11",
+      "community": 6,
+      "id": "per_language_samples_sample_dataprocessor_additem",
+      "norm_label": ".additem()"
+    },
+    {
+      "label": ".validate()",
+      "file_type": "code",
+      "source_file": "sample.java",
+      "source_location": "L19",
+      "community": 6,
+      "id": "per_language_samples_sample_dataprocessor_validate",
+      "norm_label": ".validate()"
+    },
+    {
+      "label": "Processor",
+      "file_type": "code",
+      "source_file": "sample.java",
+      "source_location": "L30",
+      "community": 6,
+      "id": "per_language_samples_sample_processor",
+      "norm_label": "processor"
+    },
+    {
+      "label": ".process()",
+      "file_type": "code",
+      "source_file": "sample.java",
+      "source_location": "L31",
+      "community": 6,
+      "id": "per_language_samples_sample_processor_process",
+      "norm_label": ".process()"
+    },
+    {
+      "label": "sample.rb",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L1",
+      "community": 2,
+      "id": "sample_rb",
+      "norm_label": "sample.rb"
+    },
+    {
+      "label": "ApiClient",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L4",
+      "community": 2,
+      "id": "per_language_samples_sample_apiclient",
+      "norm_label": "apiclient"
+    },
+    {
+      "label": ".initialize()",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L5",
+      "community": 2,
+      "id": "per_language_samples_sample_apiclient_initialize",
+      "norm_label": ".initialize()"
+    },
+    {
+      "label": ".get()",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L9",
+      "community": 2,
+      "id": "per_language_samples_sample_apiclient_get",
+      "norm_label": ".get()"
+    },
+    {
+      "label": ".post()",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L13",
+      "community": 2,
+      "id": "per_language_samples_sample_apiclient_post",
+      "norm_label": ".post()"
+    },
+    {
+      "label": ".fetch()",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L19",
+      "community": 2,
+      "id": "per_language_samples_sample_apiclient_fetch",
+      "norm_label": ".fetch()"
+    },
+    {
+      "label": "parse_response()",
+      "file_type": "code",
+      "source_file": "sample.rb",
+      "source_location": "L25",
+      "community": 2,
+      "id": "per_language_samples_sample_parse_response",
+      "norm_label": "parse_response()"
+    },
+    {
+      "label": "dynamic_import.ts",
+      "file_type": "code",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L1",
+      "community": 4,
+      "id": "dynamic_import_ts",
+      "norm_label": "dynamic_import.ts"
+    },
+    {
+      "label": "processInbound()",
+      "file_type": "code",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L3",
+      "community": 4,
+      "id": "per_language_samples_dynamic_import_processinbound",
+      "norm_label": "processinbound()"
+    },
+    {
+      "label": "pollMessages()",
+      "file_type": "code",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L11",
+      "community": 4,
+      "id": "per_language_samples_dynamic_import_pollmessages",
+      "norm_label": "pollmessages()"
+    },
+    {
+      "label": "loadHandler()",
+      "file_type": "code",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L16",
+      "community": 4,
+      "id": "per_language_samples_dynamic_import_loadhandler",
+      "norm_label": "loadhandler()"
+    },
+    {
+      "label": "loadStatic()",
+      "file_type": "code",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L22",
+      "community": 4,
+      "id": "per_language_samples_dynamic_import_loadstatic",
+      "norm_label": "loadstatic()"
+    },
+    {
+      "label": "syncOnly()",
+      "file_type": "code",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L28",
+      "community": 4,
+      "id": "per_language_samples_dynamic_import_synconly",
+      "norm_label": "synconly()"
+    },
+    {
+      "label": "sample.go",
+      "file_type": "code",
+      "source_file": "sample.go",
+      "source_location": "L1",
+      "community": 7,
+      "id": "sample_go",
+      "norm_label": "sample.go"
+    },
+    {
+      "label": "Server",
+      "file_type": "code",
+      "source_file": "sample.go",
+      "source_location": "L8",
+      "community": 7,
+      "id": "per_language_samples_server",
+      "norm_label": "server"
+    },
+    {
+      "label": "NewServer()",
+      "file_type": "code",
+      "source_file": "sample.go",
+      "source_location": "L12",
+      "community": 7,
+      "id": "per_language_samples_sample_newserver",
+      "norm_label": "newserver()"
+    },
+    {
+      "label": ".Start()",
+      "file_type": "code",
+      "source_file": "sample.go",
+      "source_location": "L16",
+      "community": 7,
+      "id": "per_language_samples_server_start",
+      "norm_label": ".start()"
+    },
+    {
+      "label": ".Stop()",
+      "file_type": "code",
+      "source_file": "sample.go",
+      "source_location": "L20",
+      "community": 7,
+      "id": "per_language_samples_server_stop",
+      "norm_label": ".stop()"
+    },
+    {
+      "label": "main()",
+      "file_type": "code",
+      "source_file": "sample.go",
+      "source_location": "L24",
+      "community": 7,
+      "id": "per_language_samples_sample_main",
+      "norm_label": "main()"
+    },
+    {
+      "label": "sample.tsx",
+      "file_type": "code",
+      "source_file": "sample.tsx",
+      "source_location": "L1",
+      "community": 8,
+      "id": "sample_tsx",
+      "norm_label": "sample.tsx"
+    },
+    {
+      "label": "fmtDate()",
+      "file_type": "code",
+      "source_file": "sample.tsx",
+      "source_location": "L1",
+      "community": 8,
+      "id": "per_language_samples_sample_fmtdate",
+      "norm_label": "fmtdate()"
+    },
+    {
+      "label": "fmtCount()",
+      "file_type": "code",
+      "source_file": "sample.tsx",
+      "source_location": "L5",
+      "community": 8,
+      "id": "per_language_samples_sample_fmtcount",
+      "norm_label": "fmtcount()"
+    },
+    {
+      "label": "App()",
+      "file_type": "code",
+      "source_file": "sample.tsx",
+      "source_location": "L9",
+      "community": 8,
+      "id": "per_language_samples_sample_app",
+      "norm_label": "app()"
+    },
+    {
+      "label": "sample.py",
+      "file_type": "code",
+      "source_file": "sample.py",
+      "source_location": "L1",
+      "community": 9,
+      "id": "sample_py",
+      "norm_label": "sample.py"
+    },
+    {
+      "label": "Transformer",
+      "file_type": "code",
+      "source_file": "sample.py",
+      "source_location": "L1",
+      "community": 9,
+      "id": "per_language_samples_sample_transformer",
+      "norm_label": "transformer"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "sample.py",
+      "source_location": "L2",
+      "community": 9,
+      "id": "per_language_samples_sample_transformer_init",
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".forward()",
+      "file_type": "code",
+      "source_file": "sample.py",
+      "source_location": "L5",
+      "community": 9,
+      "id": "per_language_samples_sample_transformer_forward",
+      "norm_label": ".forward()"
+    },
+    {
+      "label": "sample_calls.py",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L1",
+      "community": 3,
+      "id": "sample_calls_py",
+      "norm_label": "sample_calls.py"
+    },
+    {
+      "label": "compute_score()",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L4",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_compute_score",
+      "norm_label": "compute_score()"
+    },
+    {
+      "label": "normalize()",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L8",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_normalize",
+      "norm_label": "normalize()"
+    },
+    {
+      "label": "run_analysis()",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L12",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_run_analysis",
+      "norm_label": "run_analysis()"
+    },
+    {
+      "label": "Analyzer",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L17",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_analyzer",
+      "norm_label": "analyzer"
+    },
+    {
+      "label": ".process()",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L18",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_analyzer_process",
+      "norm_label": ".process()"
+    },
+    {
+      "label": ".score()",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L21",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_analyzer_score",
+      "norm_label": ".score()"
+    },
+    {
+      "label": ".full_pipeline()",
+      "file_type": "code",
+      "source_file": "sample_calls.py",
+      "source_location": "L24",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_analyzer_full_pipeline",
+      "norm_label": ".full_pipeline()"
+    },
+    {
+      "label": "Fixture: functions and methods that call each other - for call-graph extraction",
+      "file_type": "rationale",
+      "source_file": "sample_calls.py",
+      "source_location": "L1",
+      "community": 3,
+      "id": "per_language_samples_sample_calls_rationale_1",
+      "norm_label": "fixture: functions and methods that call each other - for call-graph extraction"
+    },
+    {
+      "label": "sample.rs",
+      "file_type": "code",
+      "source_file": "sample.rs",
+      "source_location": "L1",
+      "community": 5,
+      "id": "sample_rs",
+      "norm_label": "sample.rs"
+    },
+    {
+      "label": "Graph",
+      "file_type": "code",
+      "source_file": "sample.rs",
+      "source_location": "L3",
+      "community": 5,
+      "id": "per_language_samples_sample_graph",
+      "norm_label": "graph"
+    },
+    {
+      "label": ".new()",
+      "file_type": "code",
+      "source_file": "sample.rs",
+      "source_location": "L8",
+      "community": 5,
+      "id": "per_language_samples_sample_graph_new",
+      "norm_label": ".new()"
+    },
+    {
+      "label": ".add_node()",
+      "file_type": "code",
+      "source_file": "sample.rs",
+      "source_location": "L12",
+      "community": 5,
+      "id": "per_language_samples_sample_graph_add_node",
+      "norm_label": ".add_node()"
+    },
+    {
+      "label": ".add_edge()",
+      "file_type": "code",
+      "source_file": "sample.rs",
+      "source_location": "L16",
+      "community": 5,
+      "id": "per_language_samples_sample_graph_add_edge",
+      "norm_label": ".add_edge()"
+    },
+    {
+      "label": "build_graph()",
+      "file_type": "code",
+      "source_file": "sample.rs",
+      "source_location": "L21",
+      "community": 5,
+      "id": "per_language_samples_sample_build_graph",
+      "norm_label": "build_graph()"
+    },
+    {
+      "label": "lib.rs",
+      "file_type": "code",
+      "source_file": "crate_a/src/lib.rs",
+      "source_location": "L1",
+      "community": 2,
+      "id": "crate_a_src_lib_rs",
+      "norm_label": "lib.rs"
+    },
+    {
+      "label": "start()",
+      "file_type": "code",
+      "source_file": "crate_a/src/lib.rs",
+      "source_location": "L1",
+      "community": 2,
+      "id": "src_lib_start",
+      "norm_label": "start()"
+    },
+    {
+      "label": "parse()",
+      "file_type": "code",
+      "source_file": "crate_a/src/lib.rs",
+      "source_location": "L5",
+      "community": 2,
+      "id": "src_lib_parse",
+      "norm_label": "parse()"
+    },
+    {
+      "label": "lib.rs",
+      "file_type": "code",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L1",
+      "community": 10,
+      "id": "crate_b_src_lib_rs",
+      "norm_label": "lib.rs"
+    },
+    {
+      "label": "Server",
+      "file_type": "code",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L5",
+      "community": 10,
+      "id": "src_lib_server",
+      "norm_label": "server"
+    },
+    {
+      "label": ".run()",
+      "file_type": "code",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L8",
+      "community": 10,
+      "id": "src_lib_server_run",
+      "norm_label": ".run()"
+    },
+    {
+      "label": ".start()",
+      "file_type": "code",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L15",
+      "community": 10,
+      "id": "src_lib_server_start",
+      "norm_label": ".start()"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L36",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_iuserrepository",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L28",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_userstatus",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L34",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_userid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L38",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_default_roles",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L40",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_user_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L50",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_userservice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L69",
+      "weight": 1.0,
+      "source": "typescript_advanced_ts",
+      "target": "per_language_samples_typescript_advanced_usermodule",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L51",
+      "weight": 1.0,
+      "source": "per_language_samples_typescript_advanced_userservice",
+      "target": "per_language_samples_typescript_advanced_userservice_constructor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L53",
+      "weight": 1.0,
+      "source": "per_language_samples_typescript_advanced_userservice",
+      "target": "per_language_samples_typescript_advanced_userservice_create",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "typescript_advanced.ts",
+      "source_location": "L57",
+      "weight": 1.0,
+      "source": "per_language_samples_typescript_advanced_userservice",
+      "target": "per_language_samples_typescript_advanced_userservice_bulkcreate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L4",
+      "weight": 1.0,
+      "source": "sample_kt",
+      "target": "per_language_samples_sample_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L6",
+      "weight": 1.0,
+      "source": "sample_kt",
+      "target": "per_language_samples_sample_httpclient",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "sample_kt",
+      "target": "per_language_samples_sample_createclient",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_createclient",
+      "target": "per_language_samples_sample_config",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.ts",
+      "source_location": "L10",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient",
+      "target": "per_language_samples_sample_httpclient_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.ts",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient",
+      "target": "per_language_samples_sample_httpclient_post",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient",
+      "target": "per_language_samples_sample_httpclient_buildrequest",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_createclient",
+      "target": "per_language_samples_sample_httpclient",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "source": "sample_ts",
+      "target": "per_language_samples_sample_httpclient",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.ts",
+      "source_location": "L6",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient",
+      "target": "per_language_samples_sample_httpclient_constructor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient_get",
+      "target": "per_language_samples_sample_httpclient_buildrequest",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.ts",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient_post",
+      "target": "per_language_samples_sample_httpclient_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "sample.ts",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient_get",
+      "target": "per_language_samples_sample_apiclient_fetch"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.kt",
+      "source_location": "L12",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_httpclient_post",
+      "target": "per_language_samples_sample_httpclient_buildrequest",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.ts",
+      "source_location": "L19",
+      "weight": 1.0,
+      "source": "sample_ts",
+      "target": "per_language_samples_sample_buildheaders",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L4",
+      "weight": 1.0,
+      "source": "sample_java",
+      "target": "per_language_samples_sample_dataprocessor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "sample_java",
+      "target": "per_language_samples_sample_processor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_dataprocessor",
+      "target": "per_language_samples_sample_dataprocessor_additem",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_dataprocessor",
+      "target": "per_language_samples_sample_processor_process",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L19",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_dataprocessor",
+      "target": "per_language_samples_sample_dataprocessor_validate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_processor_process",
+      "target": "per_language_samples_sample_dataprocessor_validate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.java",
+      "source_location": "L31",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_processor",
+      "target": "per_language_samples_sample_processor_process",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L4",
+      "weight": 1.0,
+      "source": "sample_rb",
+      "target": "per_language_samples_sample_apiclient",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "sample_rb",
+      "target": "per_language_samples_sample_parse_response",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_apiclient",
+      "target": "per_language_samples_sample_apiclient_initialize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L9",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_apiclient",
+      "target": "per_language_samples_sample_apiclient_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L13",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_apiclient",
+      "target": "per_language_samples_sample_apiclient_post",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L19",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_apiclient",
+      "target": "per_language_samples_sample_apiclient_fetch",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_apiclient_fetch",
+      "target": "per_language_samples_sample_apiclient_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rb",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_apiclient_post",
+      "target": "per_language_samples_sample_apiclient_fetch",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "sample.rb",
+      "source_location": "L26",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_parse_response",
+      "target": "src_lib_parse"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "source": "dynamic_import_ts",
+      "target": "per_language_samples_dynamic_import_processinbound",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "dynamic_import_ts",
+      "target": "per_language_samples_dynamic_import_pollmessages",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "dynamic_import_ts",
+      "target": "per_language_samples_dynamic_import_loadhandler",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "dynamic_import_ts",
+      "target": "per_language_samples_dynamic_import_loadstatic",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dynamic_import.ts",
+      "source_location": "L28",
+      "weight": 1.0,
+      "source": "dynamic_import_ts",
+      "target": "per_language_samples_dynamic_import_synconly",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "sample_go",
+      "target": "per_language_samples_server",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L12",
+      "weight": 1.0,
+      "source": "sample_go",
+      "target": "per_language_samples_sample_newserver",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "sample_go",
+      "target": "per_language_samples_sample_main",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "per_language_samples_server",
+      "target": "per_language_samples_server_start",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "per_language_samples_server",
+      "target": "per_language_samples_server_stop",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_main",
+      "target": "per_language_samples_sample_newserver",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.go",
+      "source_location": "L26",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_main",
+      "target": "per_language_samples_server_start",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "sample_tsx",
+      "target": "per_language_samples_sample_fmtdate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.tsx",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "sample_tsx",
+      "target": "per_language_samples_sample_fmtcount",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "source": "sample_tsx",
+      "target": "per_language_samples_sample_app",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.tsx",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_app",
+      "target": "per_language_samples_sample_fmtdate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.tsx",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_app",
+      "target": "per_language_samples_sample_fmtcount",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "sample_py",
+      "target": "per_language_samples_sample_transformer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_transformer",
+      "target": "per_language_samples_sample_transformer_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_transformer",
+      "target": "per_language_samples_sample_transformer_forward",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "source": "sample_calls_py",
+      "target": "per_language_samples_sample_calls_compute_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "sample_calls_py",
+      "target": "per_language_samples_sample_calls_normalize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L12",
+      "weight": 1.0,
+      "source": "sample_calls_py",
+      "target": "per_language_samples_sample_calls_run_analysis",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L17",
+      "weight": 1.0,
+      "source": "sample_calls_py",
+      "target": "per_language_samples_sample_calls_analyzer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_rationale_1",
+      "target": "sample_calls_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L13",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_run_analysis",
+      "target": "per_language_samples_sample_calls_compute_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer_score",
+      "target": "per_language_samples_sample_calls_compute_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_run_analysis",
+      "target": "per_language_samples_sample_calls_normalize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L26",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer_full_pipeline",
+      "target": "per_language_samples_sample_calls_normalize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L19",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer_process",
+      "target": "per_language_samples_sample_calls_run_analysis",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer",
+      "target": "per_language_samples_sample_calls_analyzer_process",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer",
+      "target": "per_language_samples_sample_calls_analyzer_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer",
+      "target": "per_language_samples_sample_calls_analyzer_full_pipeline",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample_calls.py",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_calls_analyzer_full_pipeline",
+      "target": "per_language_samples_sample_calls_analyzer_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L3",
+      "weight": 1.0,
+      "source": "sample_rs",
+      "target": "per_language_samples_sample_graph",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "sample_rs",
+      "target": "per_language_samples_sample_build_graph",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_graph",
+      "target": "per_language_samples_sample_graph_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L12",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_graph",
+      "target": "per_language_samples_sample_graph_add_node",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_graph",
+      "target": "per_language_samples_sample_graph_add_edge",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_build_graph",
+      "target": "per_language_samples_sample_graph_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "sample.rs",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "per_language_samples_sample_build_graph",
+      "target": "per_language_samples_sample_graph_add_edge",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crate_a/src/lib.rs",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "crate_a_src_lib_rs",
+      "target": "src_lib_start",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crate_a/src/lib.rs",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "crate_a_src_lib_rs",
+      "target": "src_lib_parse",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "crate_b_src_lib_rs",
+      "target": "src_lib_server",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L8",
+      "weight": 1.0,
+      "source": "src_lib_server",
+      "target": "src_lib_server_run",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "src_lib_server",
+      "target": "src_lib_server_start",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crate_b/src/lib.rs",
+      "source_location": "L10",
+      "weight": 1.0,
+      "source": "src_lib_server_run",
+      "target": "src_lib_server_start",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": []
+}

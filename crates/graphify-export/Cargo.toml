@@ -1,0 +1,30 @@
+[package]
+name = "graphify-export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Export graphs to JSON / HTML / SVG / Obsidian / Canvas"
+
+[dependencies]
+chrono = { workspace = true }
+graphify-build = { workspace = true }
+graphify-cluster = { workspace = true }
+graphify-security = { workspace = true }
+htmlescape = { workspace = true }
+indexmap = { workspace = true }
+neo4rs = "0.8"
+rayon = { workspace = true }
+regex = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
