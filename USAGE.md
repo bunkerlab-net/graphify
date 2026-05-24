@@ -16,10 +16,16 @@ This is the Rust reimplementation of the Python `graphify` reference; the CLI su
 
 ## Install
 
-Build from source (requires Rust 1.90+):
+Requires Rust 1.90 or newer.
 
 ```bash
-git clone https://github.com/bunkerlab-net/graphify
+cargo install --git https://github.com/bunkerlab-net/graphify.git
+```
+
+Or build from a local checkout:
+
+```bash
+git clone https://github.com/bunkerlab-net/graphify.git
 cd graphify
 cargo install --path .
 ```
@@ -174,16 +180,27 @@ graphify export callflow-html
 graphify export callflow-html --graph other/graph.json --output ARCH.html
 ```
 
-### `export html`, `export obsidian`, `export svg`, `export graphml`
+### `export html`, `export obsidian`, `export svg`, `export graphml`, `export wiki`, `export neo4j`
 
 ```bash
 graphify export html       # interactive D3 viz (different from `tree`)
+graphify export html --no-viz --node-limit 10000      # cap size or skip generation
 graphify export obsidian   # vault of per-cluster Markdown notes — open in Obsidian
 graphify export svg        # spring-layout static SVG
 graphify export graphml    # GraphML for Gephi / yEd / Cytoscape
+graphify export wiki       # per-community markdown wiki under graphify-out/wiki/
 ```
 
-`export neo4j` and `export wiki` are reserved for future plug-ins (Neo4j driver / wiki backend integration).
+`export wiki` reads communities from `graphify-out/.graphify_analysis.json` and refuses to run if the sidecar is
+missing — run `graphify extract .` (or `cluster-only`) first to regenerate the community map.
+
+```bash
+graphify export neo4j                                            # → graphify-out/cypher.txt (import via cypher-shell)
+graphify export neo4j --push bolt://localhost:7687 --password ** # push directly to a live Neo4j instance
+```
+
+`export neo4j` defaults to writing a Cypher script. With `--push <uri>` it streams nodes and relationships to a live
+Neo4j instance. The password can come from `--password` or the `NEO4J_PASSWORD` env var; the user defaults to `neo4j`.
 
 ---
 
@@ -206,10 +223,16 @@ graphify global path                                     # prints location of gl
 ```bash
 graphify merge-graphs a/graph.json b/graph.json --out merged.json
 graphify merge-driver <base> <current> <other>     # configured as a git merge driver
+graphify merge-chunks chunk1.json chunk2.json --out merged.json    # combine extraction JSON chunks
+graphify merge-semantic --cached cached.json --new fresh.json --out out.json   # reuse cached semantic data
 ```
 
 The merge driver is what `graphify hook install` registers in `.git/config` so that two branches editing the same
 `graph.json` produce a union-merged result instead of a conflict.
+
+`merge-chunks` is used when a large repo was extracted across multiple worker chunks (the headless pipeline calls it
+internally; you only need it directly when wiring up custom CI fan-out). `merge-semantic` combines a cached semantic
+extraction with a fresh one — the cache provides untouched files, the fresh side provides changed files.
 
 ### Adding external content
 
@@ -262,13 +285,26 @@ graphify aider install         # AGENTS.md section
 graphify claw install          # AGENTS.md section (OpenClaw)
 graphify droid install         # AGENTS.md section (Factory Droid)
 graphify trae install          # AGENTS.md section
+graphify trae-cn install       # AGENTS.md section (Trae CN)
+graphify hermes install        # AGENTS.md section (Hermes)
 graphify kiro install          # .kiro/steering/graphify.md
 graphify antigravity install   # .antigravity/ rules
 graphify pi install            # global Pi config
 ```
 
-Each has a matching `... uninstall`. The aggregate `graphify uninstall [--purge]` removes graphify from every detected
-platform, optionally also deleting `graphify-out/`.
+Each has a matching `... uninstall`.
+
+### Aggregate install / uninstall
+
+```bash
+graphify install --platform claude    # same as `graphify claude install`
+graphify install claude               # positional shorthand also accepted
+graphify uninstall                    # removes graphify from every detected platform
+graphify uninstall --purge            # also deletes graphify-out/
+```
+
+The aggregate `install` is a convenience dispatcher to the per-platform installer; the aggregate `uninstall` scans
+every supported platform and removes the integration wherever it finds one.
 
 ### `hook-check`
 
@@ -291,11 +327,16 @@ Uses the local `gh` CLI to enumerate PRs, joins their changed files against the 
 ## Utilities
 
 ```bash
-graphify validate <file.json>           # check an extraction JSON against the schema
-graphify benchmark                       # token reduction vs naive full-corpus baseline
+graphify validate <file.json>            # check an extraction JSON against the schema
+graphify benchmark                        # token reduction vs naive full-corpus baseline
 graphify benchmark other/graph.json
-graphify check-update <path>            # cron-safe: exit 0 if graph is fresh, 1 if stale
+graphify check-update <path>             # cron-safe: exit 0 if graph is fresh, 1 if stale
+graphify cache-check files.txt --root .  # report which files have a fresh semantic cache entry
 ```
+
+`cache-check` reads a newline-separated list of file paths from `files.txt` (resolved relative to `--root`) and prints
+which ones already have a valid entry in the semantic cache. Useful in CI to decide whether a re-extraction is worth
+the LLM spend.
 
 ---
 
