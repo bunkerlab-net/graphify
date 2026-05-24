@@ -26,7 +26,7 @@ pub(super) fn truncate_text(text: &str, limit: usize) -> String {
     } else {
         format!(
             "{}...",
-            &s[..s.len().min(limit.saturating_sub(3))].trim_end()
+            s[..s.len().min(limit.saturating_sub(3))].trim_end()
         )
     }
 }

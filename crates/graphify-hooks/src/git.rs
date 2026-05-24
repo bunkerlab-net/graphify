@@ -26,10 +26,7 @@ pub(crate) fn git_root(path: &Path) -> Option<PathBuf> {
         if candidate.join(".git").exists() {
             return Some(candidate.to_path_buf());
         }
-        match candidate.parent() {
-            Some(p) => candidate = p,
-            None => return None,
-        }
+        candidate = candidate.parent()?;
     }
 }
 
