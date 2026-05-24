@@ -25,6 +25,11 @@ members = [
   "crates/graphify-benchmark",
   "crates/graphify-llm",
   "crates/graphify-google",
+  "crates/graphify-affected",
+  "crates/graphify-diagnostics",
+  "crates/graphify-multigraph-compat",
+  "crates/graphify-scip",
+  "crates/graphify-semantic",
 ]
 default-members = ["."]
 exclude = [
@@ -99,6 +104,11 @@ graphify-transcribe = { path = "crates/graphify-transcribe" }
 graphify-validate = { path = "crates/graphify-validate" }
 graphify-watch = { path = "crates/graphify-watch" }
 graphify-wiki = { path = "crates/graphify-wiki" }
+graphify-affected = { path = "crates/graphify-affected" }
+graphify-diagnostics = { path = "crates/graphify-diagnostics" }
+graphify-multigraph-compat = { path = "crates/graphify-multigraph-compat" }
+graphify-scip = { path = "crates/graphify-scip" }
+graphify-semantic = { path = "crates/graphify-semantic" }
 
 [workspace.lints.rust]
 dead_code = "deny"
