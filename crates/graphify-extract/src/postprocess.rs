@@ -224,6 +224,173 @@ fn is_type_like_definition(node: &Node) -> bool {
     node.file_type == "code"
 }
 
+/// Collapse cross-file Swift `extension Foo` nodes into the canonical
+/// `Foo` declaration.
+///
+/// tree-sitter-swift reuses `class_declaration` for both `class Foo` and
+/// `extension Foo`, and node IDs carry the file stem, so each file that
+/// extends `Foo` produces its own `Foo` node. This pass re-parses each
+/// `.swift` file to identify which class nodes were actually `extension`
+/// declarations, then matches them by label against the corpus's
+/// non-extension nodes. When exactly one match exists the extension's
+/// edges are remapped onto the canonical node and the extension node is
+/// dropped. Extensions of types outside the corpus, and ambiguous
+/// labels, are left untouched.
+///
+/// Mirrors `_merge_swift_extensions` in graphify-py `extract.py`.
+pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
+    use std::collections::HashMap;
+
+    // Collect (nid, label) for every Swift class_declaration whose body
+    // contains the `extension` keyword. Re-parsing each Swift file once
+    // here is cheaper than threading a sidecar through the generic walker.
+    let mut extension_nids: HashSet<String> = HashSet::new();
+    let mut extension_labels: HashMap<String, String> = HashMap::new();
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_swift::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+
+    for path in paths {
+        if path.extension().is_none_or(|e| e != "swift") {
+            continue;
+        }
+        let Ok(source) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+        let stem = crate::ids::file_stem(path);
+        collect_swift_extensions(
+            tree.root_node(),
+            &source,
+            &stem,
+            &mut extension_nids,
+            &mut extension_labels,
+        );
+    }
+
+    if extension_nids.is_empty() {
+        return;
+    }
+
+    // Build label → [canonical_nid] from corpus nodes (excluding the
+    // extension nodes themselves).
+    let mut label_to_canonical: HashMap<String, Vec<String>> = HashMap::new();
+    for node in nodes.iter() {
+        if extension_nids.contains(&node.id) {
+            continue;
+        }
+        if node.label.is_empty() {
+            continue;
+        }
+        label_to_canonical
+            .entry(node.label.clone())
+            .or_default()
+            .push(node.id.clone());
+    }
+
+    let mut remap: HashMap<String, String> = HashMap::new();
+    for ext_nid in &extension_nids {
+        let Some(label) = extension_labels.get(ext_nid) else {
+            continue;
+        };
+        let candidates = label_to_canonical.get(label).cloned().unwrap_or_default();
+        if candidates.len() != 1 {
+            continue;
+        }
+        if candidates[0] != *ext_nid {
+            remap.insert(ext_nid.clone(), candidates[0].clone());
+        }
+    }
+
+    if remap.is_empty() {
+        return;
+    }
+
+    nodes.retain(|n| !remap.contains_key(&n.id));
+
+    // Rewrite edges, drop self-loops created by the merge, and dedup on
+    // (src, tgt, relation, source_file, source_location).
+    let mut rewritten: Vec<Edge> = Vec::with_capacity(edges.len());
+    let mut seen_keys: HashSet<(String, String, String, String, String)> = HashSet::new();
+    for edge in edges.drain(..) {
+        let mut edge = edge;
+        if let Some(new_src) = remap.get(&edge.source) {
+            edge.source.clone_from(new_src);
+        }
+        if let Some(new_tgt) = remap.get(&edge.target) {
+            edge.target.clone_from(new_tgt);
+        }
+        if edge.source == edge.target {
+            continue;
+        }
+        let key = (
+            edge.source.clone(),
+            edge.target.clone(),
+            edge.relation.clone(),
+            edge.source_file.clone(),
+            edge.source_location.clone().unwrap_or_default(),
+        );
+        if seen_keys.contains(&key) {
+            continue;
+        }
+        seen_keys.insert(key);
+        rewritten.push(edge);
+    }
+    *edges = rewritten;
+}
+
+fn collect_swift_extensions(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    stem: &str,
+    extension_nids: &mut HashSet<String>,
+    extension_labels: &mut std::collections::HashMap<String, String>,
+) {
+    // tree-sitter `child()` takes a `u32` index while `child_count()` returns
+    // `usize`. AST nodes never exceed 2^32 children in practice; truncate
+    // explicitly with the cap so clippy doesn't flag the lossy cast.
+    let child_count: u32 = u32::try_from(node.child_count()).unwrap_or(u32::MAX);
+    if node.kind() == "class_declaration" {
+        let is_extension = (0..child_count)
+            .filter_map(|i| node.child(i))
+            .any(|c| c.kind() == "extension");
+        if is_extension {
+            // Find the type name child.
+            let name = (0..child_count).find_map(|i| {
+                let c = node.child(i)?;
+                if matches!(c.kind(), "type_identifier" | "user_type" | "identifier") {
+                    let raw = std::str::from_utf8(&source[c.start_byte()..c.end_byte()])
+                        .ok()?
+                        .trim()
+                        .to_string();
+                    Some(raw)
+                } else {
+                    None
+                }
+            });
+            if let Some(name) = name
+                && !name.is_empty()
+            {
+                let nid = make_id(&[stem, &name]);
+                extension_labels.insert(nid.clone(), name);
+                extension_nids.insert(nid);
+            }
+        }
+    }
+    for i in 0..child_count {
+        if let Some(child) = node.child(i) {
+            collect_swift_extensions(child, source, stem, extension_nids, extension_labels);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

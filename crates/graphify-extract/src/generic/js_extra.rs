@@ -291,11 +291,10 @@ pub fn resolve_js_import_target(raw: &str, str_path: &str) -> (String, Option<st
         let resolved = crate::tsconfig::resolve_js_module_path(&resolved_raw);
         return (make_id1(&resolved.to_string_lossy()), Some(resolved));
     }
-    let aliases = load_tsconfig_aliases(
-        std::path::Path::new(str_path)
-            .parent()
-            .unwrap_or(std::path::Path::new(".")),
-    );
+    let start_dir = std::path::Path::new(str_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let aliases = load_tsconfig_aliases(start_dir);
     for (alias_prefix, alias_base) in &aliases {
         if raw == alias_prefix || raw.starts_with(&format!("{alias_prefix}/")) {
             let rest = raw[alias_prefix.len()..].trim_start_matches('/');
@@ -304,6 +303,13 @@ pub fn resolve_js_import_target(raw: &str, str_path: &str) -> (String, Option<st
             let resolved = crate::tsconfig::resolve_js_module_path(&resolved_raw);
             return (make_id1(&resolved.to_string_lossy()), Some(resolved));
         }
+    }
+    // Try resolving against a pnpm workspace before falling back to the
+    // bare-module hash. Inside a monorepo, `@scope/pkg` should resolve to
+    // the package's entry-point file so cross-package edges target real
+    // nodes instead of a synthetic ID.
+    if let Some(resolved) = crate::workspace::resolve_workspace_import(raw, start_dir) {
+        return (make_id1(&resolved.to_string_lossy()), Some(resolved));
     }
     let module_name = raw.split('/').next_back().unwrap_or(raw);
     if module_name.is_empty() {

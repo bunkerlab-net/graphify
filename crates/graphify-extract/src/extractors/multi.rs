@@ -829,6 +829,10 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // the rewire succeeds.
     crate::postprocess::rewire_unique_stub_nodes(&mut all_nodes, &mut all_edges);
 
+    // Collapse Swift `extension Foo` nodes onto the canonical `class Foo`
+    // declaration. Mirrors `_merge_swift_extensions` in graphify-py.
+    crate::postprocess::merge_swift_extensions(paths, &mut all_nodes, &mut all_edges);
+
     // Cross-file call resolution via raw_calls
     // Build label → [nid] (skip rationale)
     let mut global_label_to_nids: HashMap<String, Vec<String>> = HashMap::new();

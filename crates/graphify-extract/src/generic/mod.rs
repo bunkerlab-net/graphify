@@ -38,6 +38,7 @@ use walk::{add_node, walk};
 /// Extract nodes and edges from `path` using the given language configuration.
 ///
 /// Mirrors Python `_extract_generic(path, config)`.
+#[allow(clippy::too_many_lines)] // single-pass tree-sitter walker — splitting hurts flow
 #[must_use]
 pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     let source = match std::fs::read(path) {
@@ -137,12 +138,18 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     }
 
     // ── Clean edges ───────────────────────────────────────────────────────────
+    // Cross-module edge relations (`imports`, `imports_from`, `re_exports`)
+    // legitimately point at nodes that don't live in this file. Everything
+    // else must have both endpoints among `seen_ids`.
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {
             seen_ids.contains(&e.source)
                 && (seen_ids.contains(&e.target)
-                    || matches!(e.relation.as_str(), "imports" | "imports_from"))
+                    || matches!(
+                        e.relation.as_str(),
+                        "imports" | "imports_from" | "re_exports"
+                    ))
         })
         .collect();
 

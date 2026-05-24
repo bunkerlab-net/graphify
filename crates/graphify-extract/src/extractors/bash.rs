@@ -107,6 +107,13 @@ pub fn extract_bash(path: &Path) -> FileResult {
     });
 
     let root = tree.root_node();
+    // Pre-scan: collect every function name defined anywhere in the file
+    // before the structural walk fires. This makes `defined_functions`
+    // complete when the `source` command handler decides whether to emit
+    // an `imports_from` or `calls` edge — without this, a forward-referenced
+    // user function named `source` would silently misclassify the call.
+    prescan_defined_functions(root, &source, &mut defined_functions);
+
     {
         let mut walk_ctx = BashWalkCtx {
             str_path: &str_path,
@@ -263,64 +270,87 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
             if let Some(cnn) = cmd_name_node {
                 let cmd = read_text(cnn, source).trim().to_string();
                 if matches!(cmd.as_str(), "source" | ".") {
-                    // find path argument
-                    let args: Vec<tree_sitter::Node<'_>> = {
-                        let mut a = vec![];
-                        let mut cur = node.walk();
-                        if cur.goto_first_child() {
-                            loop {
-                                let child = cur.node();
-                                if matches!(child.kind(), "word" | "string" | "concatenation")
-                                    && child.start_byte() != cnn.start_byte()
-                                {
-                                    a.push(child);
-                                }
-                                if !cur.goto_next_sibling() {
-                                    break;
-                                }
-                            }
-                        }
-                        a
-                    };
-                    if let Some(arg) = args.first() {
-                        let raw = read_text(*arg, source)
-                            .trim()
-                            .trim_matches(|c| c == '\'' || c == '"')
-                            .to_string();
+                    // Source shadowing: when the user has defined a function
+                    // literally named `source`, the builtin is shadowed and
+                    // `source ./helpers.sh` must be treated as a function
+                    // call (mirrors graphify-py extract.py source-command
+                    // dispatcher). The pre-scan above guarantees that
+                    // forward-declared shadowers are detected here.
+                    let shadowed = cmd == "source" && defined_functions.contains("source");
+                    if shadowed {
+                        let tgt_nid = make_id(&[stem, "source"]);
                         let line = node.start_position().row + 1;
-                        if raw.starts_with('.') || raw.starts_with('/') {
-                            let resolved = path
-                                .parent()
-                                .map(|p| p.join(&raw))
-                                .and_then(|p| p.canonicalize().ok());
-                            if let Some(res) = resolved {
-                                let tgt_nid = make_id1(&res.to_string_lossy());
-                                edges.push(Edge {
-                                    source: file_nid.to_string(),
-                                    target: tgt_nid,
-                                    relation: "imports_from".to_string(),
-                                    confidence: "EXTRACTED".to_string(),
-                                    source_file: str_path.to_string(),
-                                    source_location: Some(format!("L{line}")),
-                                    weight: 1.0,
-                                    context: Some("import".to_string()),
-                                    confidence_score: None,
-                                });
+                        edges.push(Edge {
+                            source: file_nid.to_string(),
+                            target: tgt_nid,
+                            relation: "calls".to_string(),
+                            confidence: "EXTRACTED".to_string(),
+                            source_file: str_path.to_string(),
+                            source_location: Some(format!("L{line}")),
+                            weight: 1.0,
+                            context: Some("call".to_string()),
+                            confidence_score: None,
+                        });
+                    } else {
+                        // find path argument
+                        let args: Vec<tree_sitter::Node<'_>> = {
+                            let mut a = vec![];
+                            let mut cur = node.walk();
+                            if cur.goto_first_child() {
+                                loop {
+                                    let child = cur.node();
+                                    if matches!(child.kind(), "word" | "string" | "concatenation")
+                                        && child.start_byte() != cnn.start_byte()
+                                    {
+                                        a.push(child);
+                                    }
+                                    if !cur.goto_next_sibling() {
+                                        break;
+                                    }
+                                }
                             }
-                        } else {
-                            let tgt_nid = make_id1(&raw);
-                            if !tgt_nid.is_empty() {
-                                edges.push(Edge {
-                                    source: file_nid.to_string(),
-                                    target: tgt_nid,
-                                    relation: "imports".to_string(),
-                                    confidence: "EXTRACTED".to_string(),
-                                    source_file: str_path.to_string(),
-                                    source_location: Some(format!("L{line}")),
-                                    weight: 1.0,
-                                    context: Some("import".to_string()),
-                                    confidence_score: None,
-                                });
+                            a
+                        };
+                        if let Some(arg) = args.first() {
+                            let raw = read_text(*arg, source)
+                                .trim()
+                                .trim_matches(|c| c == '\'' || c == '"')
+                                .to_string();
+                            let line = node.start_position().row + 1;
+                            if raw.starts_with('.') || raw.starts_with('/') {
+                                let resolved = path
+                                    .parent()
+                                    .map(|p| p.join(&raw))
+                                    .and_then(|p| p.canonicalize().ok());
+                                if let Some(res) = resolved {
+                                    let tgt_nid = make_id1(&res.to_string_lossy());
+                                    edges.push(Edge {
+                                        source: file_nid.to_string(),
+                                        target: tgt_nid,
+                                        relation: "imports_from".to_string(),
+                                        confidence: "EXTRACTED".to_string(),
+                                        source_file: str_path.to_string(),
+                                        source_location: Some(format!("L{line}")),
+                                        weight: 1.0,
+                                        context: Some("import".to_string()),
+                                        confidence_score: None,
+                                    });
+                                }
+                            } else {
+                                let tgt_nid = make_id1(&raw);
+                                if !tgt_nid.is_empty() {
+                                    edges.push(Edge {
+                                        source: file_nid.to_string(),
+                                        target: tgt_nid,
+                                        relation: "imports".to_string(),
+                                        confidence: "EXTRACTED".to_string(),
+                                        source_file: str_path.to_string(),
+                                        source_location: Some(format!("L{line}")),
+                                        weight: 1.0,
+                                        context: Some("import".to_string()),
+                                        confidence_score: None,
+                                    });
+                                }
                             }
                         }
                     }
@@ -396,6 +426,42 @@ struct BashCallCtx<'a> {
     defined_functions: &'a HashSet<String>,
     edges: &'a mut Vec<Edge>,
     seen_calls: &'a mut HashSet<(String, String)>,
+}
+
+/// Recursively walk the entire AST and record every `function_definition`
+/// name into `defined_functions`. Mirrors `_prescan_functions` in
+/// graphify-py `extract.py`.
+fn prescan_defined_functions(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    defined: &mut HashSet<String>,
+) {
+    if node.kind() == "function_definition" {
+        let mut cur = node.walk();
+        if cur.goto_first_child() {
+            loop {
+                if cur.node().kind() == "word" {
+                    let name = read_text(cur.node(), source).trim().to_string();
+                    if !name.is_empty() {
+                        defined.insert(name);
+                    }
+                    break;
+                }
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            prescan_defined_functions(cur.node(), source, defined);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
 }
 
 /// Parent node kinds whose `command` children are shell expansions rather

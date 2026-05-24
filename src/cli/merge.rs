@@ -206,7 +206,7 @@ pub(crate) fn cmd_merge_graphs(
         .and_then(serde_json::Value::as_array)
         .map_or(0, Vec::len);
     println!(
-        "Merged {} graphs → {n_nodes} nodes, {n_edges} edges",
+        "Merged {} graphs -> {n_nodes} nodes, {n_edges} edges",
         graphs.len()
     );
     println!("Written to: {}", out_path.display());

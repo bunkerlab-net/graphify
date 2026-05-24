@@ -675,6 +675,168 @@ fn extract_bash_process_substitution_not_recorded() {
 }
 
 #[test]
+fn extract_js_barrel_reexport_emits_re_exports_edges() {
+    // `export { Foo, Bar } from './mod'` is a barrel re-export — graphify
+    // emits one `re_exports` edge per specifier (with context="re-export")
+    // and one `imports_from` edge to the source module.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("mod.ts"),
+        "export const Foo = 1;\nexport const Bar = 2;\n",
+    )
+    .unwrap();
+    let barrel = tmp.path().join("index.ts");
+    std::fs::write(&barrel, "export { Foo, Bar } from './mod';\n").unwrap();
+    let result = extract_js(&barrel);
+    let re_exports: Vec<&graphify_extract::types::Edge> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "re_exports")
+        .collect();
+    assert_eq!(
+        re_exports.len(),
+        2,
+        "expected 2 re_exports edges (Foo, Bar): {:?}",
+        result.edges
+    );
+    for e in &re_exports {
+        assert_eq!(e.context.as_deref(), Some("re-export"));
+        assert_eq!(e.confidence, "EXTRACTED");
+    }
+    let imports_from: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports_from")
+        .collect();
+    assert_eq!(
+        imports_from.len(),
+        1,
+        "expected exactly one imports_from to './mod'"
+    );
+}
+
+#[test]
+fn extract_js_resolves_pnpm_workspace_package() {
+    // Set up a minimal pnpm workspace and verify a bare `@scope/pkg`
+    // import resolves to the package's entry-point file inside the
+    // workspace rather than degrading to a bare-name hash.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::write(
+        root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'packages/*'\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("packages/utils/src")).unwrap();
+    std::fs::create_dir_all(root.join("apps/api")).unwrap();
+    std::fs::write(
+        root.join("packages/utils/package.json"),
+        r#"{"name": "@scope/utils", "main": "src/index.ts"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("packages/utils/src/index.ts"),
+        "export const helper = 1;\n",
+    )
+    .unwrap();
+    let consumer = root.join("apps/api/main.ts");
+    std::fs::write(&consumer, "import { helper } from '@scope/utils';\n").unwrap();
+    let result = extract_js(&consumer);
+    let imports_from: Vec<&graphify_extract::types::Edge> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports_from")
+        .collect();
+    assert!(
+        !imports_from.is_empty(),
+        "expected at least one imports_from edge: {:?}",
+        result.edges
+    );
+    let target_id = &imports_from[0].target;
+    assert!(
+        target_id.contains("utils") || target_id.contains("index"),
+        "imports_from target should reference resolved workspace path; got: {target_id}"
+    );
+}
+
+#[test]
+fn extract_js_pure_export_no_from_not_treated_as_reexport() {
+    // `export { x }` with no `from` clause is a local re-bind — must NOT
+    // emit a re_exports edge.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let file = tmp.path().join("local.ts");
+    std::fs::write(&file, "const x = 1;\nexport { x };\n").unwrap();
+    let result = extract_js(&file);
+    let re_exports: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "re_exports")
+        .collect();
+    assert!(re_exports.is_empty(), "no re_exports for pure local export");
+}
+
+#[test]
+fn extract_swift_merges_extension_across_files() {
+    // Two Swift files: `Foo.swift` declares `class Foo`, `Foo+Ext.swift`
+    // declares `extension Foo`. The Swift merge pass collapses the
+    // extension node onto the canonical class so downstream consumers see
+    // a single `Foo` node.
+    use graphify_extract::extract;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let canonical = tmp.path().join("Foo.swift");
+    let extension = tmp.path().join("Foo+Ext.swift");
+    std::fs::write(&canonical, "class Foo {\n    func bar() {}\n}\n").unwrap();
+    std::fs::write(&extension, "extension Foo {\n    func baz() {}\n}\n").unwrap();
+    let result = extract(&[canonical.clone(), extension.clone()], None);
+    let foo_nodes: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| n.get("label").and_then(serde_json::Value::as_str) == Some("Foo"))
+        .collect();
+    assert_eq!(
+        foo_nodes.len(),
+        1,
+        "expected a single canonical Foo node, got {}: {foo_nodes:?}",
+        foo_nodes.len()
+    );
+}
+
+#[test]
+fn extract_bash_source_user_defined_emits_calls_not_imports_from() {
+    // When `source` is user-defined as a function (shadowing the builtin),
+    // `source ./helpers.sh` must emit a `calls` edge to the function, not
+    // an `imports_from` edge. The pre-scan ensures the shadow is detected
+    // even when the function definition appears AFTER the source call.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let script = tmp.path().join("shadow.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\nsource ./helpers.sh\nsource() { echo custom; }\n",
+    )
+    .unwrap();
+    let result = extract_bash(&script);
+    let imports_from: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports_from")
+        .collect();
+    let calls: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "calls" && e.target.ends_with("_source"))
+        .collect();
+    assert!(
+        imports_from.is_empty(),
+        "user-defined source must not emit imports_from"
+    );
+    assert!(
+        !calls.is_empty(),
+        "user-defined source must emit a calls edge: {:?}",
+        result.edges
+    );
+}
+
+#[test]
 fn extract_bash_no_self_loops() {
     let result = extract_bash(&fixtures().join("sample.sh"));
     for edge in &result.edges {

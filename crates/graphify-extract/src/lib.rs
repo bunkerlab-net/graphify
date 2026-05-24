@@ -24,6 +24,7 @@ pub mod postprocess;
 pub mod symbol_resolution;
 pub mod tsconfig;
 pub mod types;
+pub mod workspace;
 
 // Language-specific extractors
 mod extractors;

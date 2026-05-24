@@ -75,11 +75,25 @@ pub fn extract_corpus_parallel(
     cfg: &CorpusConfig<'_>,
     on_chunk_done: Option<&ChunkDoneCb>,
 ) -> (LlmResponse, usize) {
+    let (response, failed, _total) = extract_corpus_parallel_with_total(files, cfg, on_chunk_done);
+    (response, failed)
+}
+
+/// Same as [`extract_corpus_parallel`] but also returns the total number
+/// of chunks attempted, so callers can detect "all chunks failed"
+/// (used by the CLI to exit non-zero in that case).
+#[must_use]
+pub fn extract_corpus_parallel_with_total(
+    files: &[PathBuf],
+    cfg: &CorpusConfig<'_>,
+    on_chunk_done: Option<&ChunkDoneCb>,
+) -> (LlmResponse, usize, usize) {
     let chunks = pack_chunks(files, cfg);
     let total = chunks.len();
     let workers = resolve_worker_count(cfg, total);
     let outcomes = run_chunks(&chunks, cfg, workers);
-    merge_outcomes(outcomes, cfg, total, on_chunk_done)
+    let (response, failed) = merge_outcomes(outcomes, cfg, total, on_chunk_done);
+    (response, failed, total)
 }
 
 /// Split `files` into chunks using either the token-budget packer or a fixed

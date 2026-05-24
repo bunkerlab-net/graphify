@@ -171,7 +171,14 @@ pub(super) fn walk<'tree>(
         if let Some(handler) = config.import_handler {
             handler(source, node, file_nid, stem, str_path, ctx.edges);
         }
-        return;
+        // `export_statement` may also wrap a declaration body
+        // (`export function App() {}` / `export class Foo {}`) — keep
+        // walking its children so the wrapped declaration is extracted.
+        // Pure `import_statement` and `import_from_statement` never carry
+        // child declarations and can return immediately.
+        if t != "export_statement" {
+            return;
+        }
     }
 
     // ── Classes ──────────────────────────────────────────────────────────────

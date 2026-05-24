@@ -341,8 +341,8 @@ fn run_semantic_phase(
         uncached_files.len()
     );
     let sem_start = std::time::Instant::now();
-    let (mut sem_result, failed) =
-        graphify_llm::extract_corpus_parallel(&uncached_files, &llm_cfg, None);
+    let (mut sem_result, failed, total_chunks) =
+        graphify_llm::extract_corpus_parallel_with_total(&uncached_files, &llm_cfg, None);
     let sem_output_tokens = sem_result.output_tokens;
     let sem_input_tokens = sem_result.input_tokens;
     eprintln!(
@@ -352,6 +352,18 @@ fn run_semantic_phase(
         sem_result.nodes.len(),
         sem_result.edges.len(),
     );
+
+    // When every chunk failed, exit non-zero rather than silently writing
+    // an AST-only graph. Mirrors graphify-py `__main__.py:_chunk_stats`
+    // ("all semantic chunks failed ... claude" exit path).
+    if !uncached_files.is_empty() && total_chunks > 0 && failed >= total_chunks {
+        eprintln!(
+            "error: all semantic chunks failed (backend={b}). \
+             Check your API key and that `pip install \"graphifyy[mcp]\"` (or the equivalent \
+             Cargo install) is up to date."
+        );
+        std::process::exit(1);
+    }
 
     save_semantic_cache_safe(&sem_result, path);
     merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);

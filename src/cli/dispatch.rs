@@ -14,7 +14,8 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         Command::Install {
             platform,
             platform_positional,
-        } => dispatch_install(platform.as_deref(), platform_positional.as_deref()),
+            project,
+        } => dispatch_install(platform.as_deref(), platform_positional.as_deref(), project),
         Command::Uninstall { purge } => cli::install::cmd_uninstall(purge),
         Command::Hook { cmd } => cli::hooks::cmd_hook(&cmd),
         Command::Global { cmd } => cli::global::cmd_global(cmd),
@@ -90,7 +91,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
 ///
 /// Defaults to `"windows"` on Windows and `"claude"` on all other targets when
 /// neither flag is provided, mirroring Python's platform-detection fallback.
-fn dispatch_install(platform: Option<&str>, positional: Option<&str>) -> Result<()> {
+fn dispatch_install(platform: Option<&str>, positional: Option<&str>, project: bool) -> Result<()> {
     let resolved = match (platform, positional) {
         (Some(a), Some(b)) if a != b => {
             anyhow::bail!("error: specify install platform only once")
@@ -105,7 +106,7 @@ fn dispatch_install(platform: Option<&str>, positional: Option<&str>) -> Result<
             }
         }
     };
-    cli::install::cmd_install(&resolved)
+    cli::install::cmd_install(&resolved, project)
 }
 
 fn dispatch_cluster_only(cmd: Command) -> Result<()> {

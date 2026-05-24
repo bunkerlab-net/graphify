@@ -62,7 +62,10 @@ pub use constants::{
 };
 pub use error::LlmError;
 pub use extract::extract_files_direct;
-pub use parallel::{ChunkDoneCb, CorpusConfig, extract_corpus_parallel, merge_into};
+pub use parallel::{
+    ChunkDoneCb, CorpusConfig, extract_corpus_parallel, extract_corpus_parallel_with_total,
+    merge_into,
+};
 pub use parse::{empty_fragment, parse_llm_json, response_is_hollow};
 pub use read::read_files;
 pub use response::{LlmBackend, LlmResponse};

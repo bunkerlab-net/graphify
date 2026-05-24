@@ -40,6 +40,11 @@ pub(crate) enum Command {
         platform: Option<String>,
         /// Optional positional platform (mutually exclusive with `--platform`).
         platform_positional: Option<String>,
+        /// Install the skill under the current project (./.{platform}/skills/...)
+        /// instead of the user-global home directory. Mirrors the Python
+        /// `--project` flag (#931).
+        #[arg(long)]
+        project: bool,
     },
 
     /// Remove graphify from all detected platforms in one shot.
@@ -527,9 +532,18 @@ pub(crate) enum ExportCmd {
 #[derive(Debug, Subcommand)]
 pub(crate) enum PlatformCmd {
     /// Install graphify integration for this platform.
-    Install,
+    Install {
+        /// Install under the current project instead of the home directory.
+        #[arg(long)]
+        project: bool,
+    },
     /// Uninstall graphify integration for this platform.
-    Uninstall,
+    Uninstall {
+        /// Uninstall only the project-scoped install (leave user-global
+        /// untouched).
+        #[arg(long)]
+        project: bool,
+    },
 }
 
 /// Subcommands for the `diagnose` command group.

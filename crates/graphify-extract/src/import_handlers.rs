@@ -118,7 +118,17 @@ pub fn import_python(
 
 // ── JavaScript / TypeScript ───────────────────────────────────────────────────
 
-/// Emit `imports_from` and named-symbol `imports` edges for a JS/TS `import_statement` node.
+/// Emit `imports_from` / `imports` / `re_exports` edges for a JS/TS
+/// `import_statement` or `export_statement` node.
+///
+/// Re-export shape: `export { Foo } from './bar'` matches the
+/// `export_statement` path and emits `re_exports` edges with
+/// `context="re-export"` for each specifier, plus a single `imports_from`
+/// edge to the source module. A pure `export { foo }` with no `from`
+/// clause is skipped — local re-binding of an already-declared symbol
+/// produces no inter-file edge.
+///
+/// Mirrors `_import_js` in graphify-py `extract.py`.
 pub fn import_js(
     source: &[u8],
     node: Node<'_>,
@@ -128,13 +138,18 @@ pub fn import_js(
     edges: &mut Vec<Edge>,
 ) {
     let line = node.start_position().row as u32 + 1;
-    let mut resolved_path: Option<std::path::PathBuf> = None;
+    let is_export = node.kind() == "export_statement";
 
+    // Find the source-module `string` child. For an `export_statement`,
+    // its absence means a pure local re-bind (`export { foo }`) — skip.
+    let mut resolved_path: Option<std::path::PathBuf> = None;
+    let mut found_string = false;
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
             let child = cur.node();
             if child.kind() == "string" {
+                found_string = true;
                 let raw = read_text_owned(child, source)
                     .trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ' ')
                     .to_string();
@@ -161,54 +176,129 @@ pub fn import_js(
             }
         }
     }
+    if is_export && !found_string {
+        return;
+    }
 
-    // Named imports: `import { Foo, Bar } from './bar'`
-    if let Some(ref rp) = resolved_path {
-        let target_stem = file_stem(rp);
-        let mut cur2 = node.walk();
-        if cur2.goto_first_child() {
-            loop {
-                let child = cur2.node();
-                if child.kind() == "import_clause" {
-                    let mut scur = child.walk();
-                    if scur.goto_first_child() {
+    let Some(ref rp) = resolved_path else { return };
+    let target_stem = file_stem(rp);
+
+    // Walk either `import_clause` (for imports) or `export_clause` (for
+    // re-exports). The clause names differ but the named-specifier shape
+    // is the same.
+    let (clause_kind, relation, context) = if is_export {
+        ("export_clause", "re_exports", "re-export")
+    } else {
+        ("import_clause", "imports", "import")
+    };
+
+    let mut cur2 = node.walk();
+    if cur2.goto_first_child() {
+        loop {
+            let child = cur2.node();
+            if child.kind() == clause_kind {
+                walk_specifiers(
+                    source,
+                    child,
+                    file_nid,
+                    &target_stem,
+                    str_path,
+                    relation,
+                    context,
+                    line,
+                    edges,
+                );
+            }
+            if !cur2.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Walk a `named_imports` (for `import_clause`) or the `export_specifier`
+/// children directly (for `export_clause`), emitting one edge per specifier.
+#[allow(clippy::too_many_arguments)] // mirrors Python signature; each arg is load-bearing
+fn walk_specifiers(
+    source: &[u8],
+    clause: Node<'_>,
+    file_nid: &str,
+    target_stem: &str,
+    str_path: &str,
+    relation: &str,
+    context: &str,
+    line: u32,
+    edges: &mut Vec<Edge>,
+) {
+    let mut cur = clause.walk();
+    if !cur.goto_first_child() {
+        return;
+    }
+    loop {
+        let sub = cur.node();
+        match sub.kind() {
+            "named_imports" => {
+                // `import { Foo, Bar } from '...'`
+                let mut ncur = sub.walk();
+                if ncur.goto_first_child() {
+                    loop {
+                        let spec = ncur.node();
+                        if spec.kind() == "import_specifier"
+                            && let Some(name_node) = spec.child_by_field_name("name")
+                        {
+                            let sym = read_text_owned(name_node, source);
+                            edges.push(make_edge(
+                                file_nid,
+                                &make_id(&[target_stem, &sym]),
+                                relation,
+                                Some(context),
+                                str_path,
+                                line,
+                            ));
+                        }
+                        if !ncur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            "export_specifier" => {
+                // `export { Foo } from '...'`. tree-sitter-typescript exposes
+                // the identifier under field `name`, but older grammars
+                // (and the JavaScript variant) may not — fall back to the
+                // first `identifier` / `property_identifier` child.
+                let mut name_node = sub.child_by_field_name("name");
+                if name_node.is_none() {
+                    let mut nc = sub.walk();
+                    if nc.goto_first_child() {
                         loop {
-                            let sub = scur.node();
-                            if sub.kind() == "named_imports" {
-                                let mut ncur = sub.walk();
-                                if ncur.goto_first_child() {
-                                    loop {
-                                        let spec = ncur.node();
-                                        if spec.kind() == "import_specifier"
-                                            && let Some(name_node) =
-                                                spec.child_by_field_name("name")
-                                        {
-                                            let sym = read_text_owned(name_node, source);
-                                            edges.push(make_edge(
-                                                file_nid,
-                                                &make_id(&[&target_stem, &sym]),
-                                                "imports",
-                                                Some("import"),
-                                                str_path,
-                                                line,
-                                            ));
-                                        }
-                                        if !ncur.goto_next_sibling() {
-                                            break;
-                                        }
-                                    }
-                                }
+                            let kind = nc.node().kind();
+                            if matches!(kind, "identifier" | "property_identifier") {
+                                name_node = Some(nc.node());
+                                break;
                             }
-                            if !scur.goto_next_sibling() {
+                            if !nc.goto_next_sibling() {
                                 break;
                             }
                         }
                     }
                 }
-                if !cur2.goto_next_sibling() {
-                    break;
+                if let Some(name_node) = name_node {
+                    let sym = read_text_owned(name_node, source);
+                    edges.push(make_edge(
+                        file_nid,
+                        &make_id(&[target_stem, &sym]),
+                        relation,
+                        Some(context),
+                        str_path,
+                        line,
+                    ));
                 }
             }
+            _ => {}
+        }
+        if !cur.goto_next_sibling() {
+            break;
         }
     }
 }
