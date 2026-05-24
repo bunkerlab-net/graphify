@@ -38,6 +38,20 @@ use rayon::prelude::*;
 /// (see `.claude/local/notes/perf_rayon.md`).
 const CONTRACT_PARALLEL_THRESHOLD: usize = 4096;
 
+/// Hard cap on the per-level Phase 1 inner pass count.
+///
+/// Phase 1's natural convergence criterion ("no node moved in a full pass")
+/// can in principle oscillate forever when groups of nodes flip-flop between
+/// neighbouring communities — A → X, B → Y, then C reattaches A back to A's
+/// original community, and so on. The pathology is well-known; scikit-network,
+/// igraph, and graspologic all cap the inner loop. `NetworkX` does not, which
+/// is the outlier behaviour we deliberately diverge from.
+///
+/// 100 passes is enough to converge on every well-behaved input we have
+/// (production graphs converge in under 10 passes); the cap exists purely
+/// so a pathological input can't hang the CLI.
+const MAX_INNER_PASSES: usize = 100;
+
 /// RNG seed matching the Python reference `seed=42`.
 const DEFAULT_SEED: u64 = 42;
 /// Minimum modularity gain required to accept a node move.
@@ -204,9 +218,11 @@ fn louvain_phase1(
 
     let tol = threshold.max(f64::EPSILON / m);
     let two_m_sq = 2.0 * m * m;
+    let progress = std::env::var("GRAPHIFY_CLUSTER_PROGRESS").is_ok_and(|v| !v.is_empty());
 
-    loop {
+    for pass in 0..MAX_INNER_PASSES {
         let mut improved_this_pass = false;
+        let mut moves_this_pass: usize = 0;
         order.shuffle(rng);
 
         for &node in &order {
@@ -264,6 +280,7 @@ fn louvain_phase1(
             if best_c != current_c {
                 community[node] = best_c;
                 improved_this_pass = true;
+                moves_this_pass += 1;
             }
 
             // Clear scratch entries we dirtied so the next node starts clean.
@@ -273,13 +290,24 @@ fn louvain_phase1(
             touched.clear();
         }
 
+        if progress && (pass < 3 || pass.is_multiple_of(10)) {
+            eprintln!("        phase1 pass {pass}: {moves_this_pass} moves over {n} nodes");
+        }
+
         if improved_this_pass {
             any_improved = true;
         } else {
-            break;
+            return any_improved;
         }
     }
 
+    // Hit the iteration cap. Emit a warning so the user knows convergence
+    // was bounded artificially and the partition for this level is best-
+    // effort rather than locally optimal.
+    eprintln!(
+        "[graphify] cluster: phase1 hit {MAX_INNER_PASSES}-pass cap on {n} nodes; \
+         accepting best-effort partition (some communities may be suboptimal)"
+    );
     any_improved
 }
 
