@@ -87,10 +87,11 @@ jobs:
       - if: matrix.runs-on == 'ubuntu-24.04'
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info nextest
 
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
-        if: matrix.runs-on == 'ubuntu-24.04'
-        with:
-          fail_ci_if_error: true
-          files: lcov.info
-          use_oidc: true
+      # TODO: re-enable once Codecov is set up for this repo.
+      # - name: Upload coverage reports to Codecov
+      #   uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+      #   if: matrix.runs-on == 'ubuntu-24.04'
+      #   with:
+      #     fail_ci_if_error: true
+      #     files: lcov.info
+      #     use_oidc: true
