@@ -358,10 +358,12 @@ fn run_semantic_phase(
     // ("all semantic chunks failed ... claude" exit path). The CLI top
     // level translates the error to a non-zero process exit.
     if !uncached_files.is_empty() && total_chunks > 0 && failed >= total_chunks {
+        let n_uncached = uncached_files.len();
         anyhow::bail!(
-            "all semantic chunks failed (backend={b}). \
-             Check your API key and that `pip install \"graphifyy[mcp]\"` (or the equivalent \
-             Cargo install) is up to date."
+            "[graphify extract] error: all semantic chunks failed for backend '{b}' \
+             ({n_uncached} uncached files) - see per-chunk errors above. \
+             If you see 'requires the X package', run the matching install \
+             command (e.g. `pip install X`) and retry."
         );
     }
 

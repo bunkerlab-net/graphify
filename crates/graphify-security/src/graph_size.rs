@@ -51,18 +51,18 @@ pub fn check_graph_file_size_cap_with(path: &Path, cap: u64) -> Result<(), Secur
 }
 
 /// Format a `u64` using underscore thousand separators, matching Python's
-/// `f"{value:_d}"`.
+/// `f"{value:_d}"`. Implemented as a right-aligned chunked walk
+/// (`.rchunks(3).rev()`) so the separator placement is obvious at a
+/// glance.
 fn format_with_underscores(value: u64) -> String {
     let digits = value.to_string();
-    let bytes = digits.as_bytes();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            out.push('_');
-        }
-        out.push(char::from(*b));
-    }
-    out
+    let chunks: Vec<&str> = digits
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .collect();
+    chunks.join("_")
 }
 
 #[cfg(test)]
