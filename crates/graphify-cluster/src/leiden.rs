@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
 use leiden_rs::graph::builder::GraphDataBuilder;
 use leiden_rs::leiden::{Leiden, LeidenConfig};
 
@@ -34,7 +35,12 @@ use leiden_rs::leiden::{Leiden, LeidenConfig};
 /// - Self-loops are dropped (Leiden does not need them for modularity).
 /// - Determinism: nodes and edges are sorted before being handed to the
 ///   builder so a given (nodes, edges, resolution) tuple always produces
-///   the same partition. `random_seed=42` matches the Python reference.
+///   the same partition. The return type is `IndexMap` (not `HashMap`)
+///   so the alphabetical-by-node insertion order survives back to the
+///   caller — downstream community-list ordering observably depends on
+///   this when communities are built in `cluster::cluster` from a
+///   `for (node, cid) in partition` loop. `random_seed=42` matches the
+///   Python reference.
 /// - If the underlying builder rejects the graph (e.g. zero nodes after
 ///   the empty-input early-return is bypassed) or the Leiden run fails,
 ///   we return an empty map so the caller's downstream code paths
@@ -44,9 +50,9 @@ pub fn partition(
     nodes: &[String],
     edges: &[(String, String, f64)],
     resolution: f64,
-) -> HashMap<String, usize> {
+) -> IndexMap<String, usize> {
     if nodes.is_empty() {
-        return HashMap::new();
+        return IndexMap::new();
     }
 
     // Sort nodes for stable index assignment. The original Louvain port did
@@ -92,7 +98,7 @@ pub fn partition(
     }
 
     let Ok(graph_data) = builder.build() else {
-        return HashMap::new();
+        return IndexMap::new();
     };
 
     let config = LeidenConfig::builder()
@@ -101,7 +107,7 @@ pub fn partition(
         .build();
 
     let Ok(output) = Leiden::new(config).run(&graph_data) else {
-        return HashMap::new();
+        return IndexMap::new();
     };
 
     let membership = output.partition.as_slice();

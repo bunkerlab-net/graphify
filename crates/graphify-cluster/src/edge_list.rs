@@ -90,10 +90,13 @@ pub(crate) fn run_partition(
     edges: &[(String, String, f64)],
     resolution: f64,
 ) -> IndexMap<String, i64> {
+    // Lowercase the env value so `GRAPHIFY_CLUSTER_BACKEND=Louvain` and
+    // similar capitalisations resolve to the same backend as the
+    // canonical lowercase form.
     let backend = std::env::var("GRAPHIFY_CLUSTER_BACKEND")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "leiden".to_string());
+        .map_or_else(|| "leiden".to_string(), |s| s.to_ascii_lowercase());
     if !matches!(backend.as_str(), "leiden" | "louvain") {
         eprintln!(
             "[graphify] cluster: unknown GRAPHIFY_CLUSTER_BACKEND={backend:?}; \

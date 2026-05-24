@@ -280,14 +280,23 @@ fn probe_duplicate_overwrite() -> ProbeResult {
 
     // The Rust port's invariant: in MultiDiGraph mode, same-`key` add_edge
     // calls are kept as parallel edges (different from NetworkX's overwrite).
-    // The probe records the observed behaviour and accepts it — what matters
-    // is that the behaviour is reproducible, not that it matches NetworkX.
-    let edges: Vec<_> = graph
+    // The probe records the observed behaviour: it asserts that exactly two
+    // edges with the same explicit `key="same"` field coexist after the two
+    // `add_edge` calls. A future API change that silently switches to
+    // overwrite semantics would collapse them and fail this probe.
+    let same_key_edges: Vec<_> = graph
         .edges()
-        .filter(|e| e.source == "x" && e.target == "y")
+        .filter(|e| {
+            e.source == "x"
+                && e.target == "y"
+                && e.attrs.get("key").and_then(serde_json::Value::as_str) == Some("same")
+        })
         .collect();
-    if edges.is_empty() {
-        return Err("expected at least one parallel edge".to_string());
+    if same_key_edges.len() != 2 {
+        return Err(format!(
+            "expected 2 parallel edges with key=\"same\", saw {}",
+            same_key_edges.len()
+        ));
     }
     Ok(())
 }

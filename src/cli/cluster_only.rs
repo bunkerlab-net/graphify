@@ -40,7 +40,7 @@ pub(crate) fn cmd_cluster_only(
         .unwrap_or_default();
     let backend = std::env::var("GRAPHIFY_CLUSTER_BACKEND")
         .ok()
-        .filter(|s| s == "louvain")
+        .filter(|s| s.eq_ignore_ascii_case("louvain"))
         .map_or("Leiden", |_| "Louvain");
     eprintln!("[2/4] clustering ({backend}, resolution={resolution}{hub_desc}) ...");
     let cluster_start = std::time::Instant::now();

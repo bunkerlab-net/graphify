@@ -390,9 +390,9 @@ pub fn partition(
     nodes: &[String],
     edges: &[(String, String, f64)],
     resolution: f64,
-) -> HashMap<String, usize> {
+) -> indexmap::IndexMap<String, usize> {
     if nodes.is_empty() {
-        return HashMap::new();
+        return indexmap::IndexMap::new();
     }
 
     // Assign a stable integer index to each node (sorted for determinism)

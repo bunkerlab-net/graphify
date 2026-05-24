@@ -227,6 +227,7 @@ pub fn load_graph(path: &Path) -> Result<Graph, AffectedError> {
 }
 
 /// Build the `node_id → Vec<(source_id, relation)>` incoming-edge index.
+#[must_use]
 fn build_in_edges(graph: &Graph) -> IndexMap<String, Vec<(String, String)>> {
     let mut in_edges: IndexMap<String, Vec<(String, String)>> = IndexMap::new();
     for edge in graph.edges() {
@@ -244,6 +245,7 @@ fn build_in_edges(graph: &Graph) -> IndexMap<String, Vec<(String, String)>> {
     in_edges
 }
 
+#[must_use]
 fn node_label(graph: &Graph, node_id: &str) -> String {
     graph
         .node_data(node_id)
@@ -252,6 +254,7 @@ fn node_label(graph: &Graph, node_id: &str) -> String {
         .map_or_else(|| node_id.to_owned(), str::to_owned)
 }
 
+#[must_use]
 fn format_location(data: Option<&IndexMap<String, Value>>) -> String {
     let Some(d) = data else {
         return "-".to_string();
