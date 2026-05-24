@@ -157,6 +157,33 @@ graphify save-result \
     --nodes    AuthMiddleware request_context
 ```
 
+### `affected "<query>"`
+
+Reverse-traversal impact analysis: given a node label / ID / source-file substring, enumerate every node that
+depends on it (via `calls`, `imports`, `imports_from`, `re_exports`, `inherits`, etc.) up to a configurable depth.
+A fast pre-flight before refactors and bulk edits.
+
+```bash
+graphify affected "AuthMiddleware"
+graphify affected "AuthMiddleware" --depth 3                   # default 2
+graphify affected "AuthMiddleware" --relation calls --relation imports   # repeatable filter
+graphify affected "AuthMiddleware" --graph other-graph.json
+```
+
+### `diagnose multigraph`
+
+Read-only diagnostic that reports how many edges in the on-disk graph (or raw extraction) would be silently
+collapsed by the simple-graph builder. Useful when investigating whether a corpus is ready for an opt-in
+multigraph build.
+
+```bash
+graphify diagnose multigraph                                    # text report
+graphify diagnose multigraph --json                             # JSON envelope
+graphify diagnose multigraph --max-examples 10                  # cap high-multiplicity examples
+graphify diagnose multigraph --directed                         # force directed analysis
+graphify diagnose multigraph --extract-path graphify-py/graphify/extract.py
+```
+
 ---
 
 ## Visualisation and export
@@ -293,6 +320,23 @@ graphify pi install            # global Pi config
 ```
 
 Each has a matching `... uninstall`.
+
+#### Project-scoped installs (`--project`)
+
+Every platform install/uninstall subcommand accepts `--project`, which writes the skill under the current
+working directory (e.g. `./.claude/skills/graphify/SKILL.md`) instead of the home directory. The CLAUDE.md
+registration uses a relative path, and the installer prints a `git add` hint so the new files are easy to
+commit into the repo:
+
+```bash
+graphify claude install --project          # writes ./.claude/skills/graphify/SKILL.md
+graphify claude uninstall --project        # removes only the project-scoped install
+graphify install --platform claude --project   # same via the aggregate dispatcher
+```
+
+Use this for repos where every contributor should get the graphify skill installed automatically when they
+clone, without depending on the user-global home install. The user-global install (no `--project`) remains
+available and is untouched by the project flag.
 
 ### Aggregate install / uninstall
 
