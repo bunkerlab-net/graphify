@@ -40,13 +40,14 @@ Subagents working on individual module ports MUST follow these conventions.
 - Test coverage report: `cargo llvm-cov nextest`
 - Do not use `cargo check`, use `cargo clippy` instead
 - Any test that interacts with the filesystem **MUST** be isolated and use a temporary directory
-- All tests must be in dedicated `test.rs` files, not inline with the main module code
+- All tests must live under each crate's `tests/` directory as integration tests
+  (e.g. `tests/parity.rs`), not inline with the main module code
 
 ## Workspace layout
 
 ```text
 graphify/
-├── Cargo.toml                 # workspace root — DO NOT modify unless adding a NEW crate
+├── Cargo.toml                 # workspace root — `[workspace.dependencies]` / `[workspace.lints]` are off-limits (see "What you must NOT touch")
 ├── crates/
 │   ├── graphify-<module>/
 │   │   ├── Cargo.toml         # add per-crate deps here

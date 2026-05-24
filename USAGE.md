@@ -67,7 +67,7 @@ graphify extract .                       # current directory
 graphify extract ../some-repo            # any directory
 graphify extract . --no-cluster          # raw extraction only
 graphify extract . --out /tmp/g          # write to /tmp/g/graphify-out
-graphify extract . --google-workspace    # also export .gdoc/.gsheet/.gslides sidecars via gws
+graphify extract . --google-workspace    # also export .gdoc/.gsheet/.gslides sidecars via gws (requires the optional `gws` Google Workspace export CLI)
 graphify extract . --global              # merge result into ~/.graphify/global-graph.json
 graphify extract . --global --as my-repo # custom tag for --global
 ```
