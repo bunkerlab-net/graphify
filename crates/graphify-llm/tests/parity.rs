@@ -81,6 +81,11 @@ fn clear_backend_envs(g: &mut EnvGuard) {
         "AWS_PROFILE",
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
     ] {
         g.remove(key);
     }
@@ -351,6 +356,72 @@ fn test_detect_backend_none_without_envvars() {
     clear_backend_envs(&mut g);
 
     assert_eq!(detect_backend(), None);
+}
+
+// ---------------------------------------------------------------------------
+// Bedrock auto-detection — only triggers when credentials look configured.
+// The pre-port behaviour (auto-select Bedrock when *only* AWS_REGION was set)
+// led to every extraction chunk failing with "AWS credentials not
+// configured" because the SDK can't resolve credentials from a region.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_detect_backend_bedrock_aws_region_alone_is_not_enough() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_REGION", "us-east-1");
+    assert_eq!(
+        detect_backend(),
+        None,
+        "AWS_REGION alone must not auto-select Bedrock"
+    );
+}
+
+#[test]
+fn test_detect_backend_bedrock_static_creds() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_REGION", "us-east-1");
+    g.set("AWS_ACCESS_KEY_ID", "AKIAFAKE");
+    g.set("AWS_SECRET_ACCESS_KEY", "secret");
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+#[test]
+fn test_detect_backend_bedrock_access_key_without_secret_is_not_enough() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_REGION", "us-east-1");
+    g.set("AWS_ACCESS_KEY_ID", "AKIAFAKE");
+    // Missing AWS_SECRET_ACCESS_KEY — the SDK's env provider would fail.
+    assert_eq!(detect_backend(), None);
+}
+
+#[test]
+fn test_detect_backend_bedrock_via_profile() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_PROFILE", "graphify");
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+#[test]
+fn test_detect_backend_bedrock_via_web_identity() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/sts/token");
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+#[test]
+fn test_detect_backend_bedrock_via_ecs_relative_uri() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set(
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "/v2/credentials/abc",
+    );
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
 }
 
 // ---------------------------------------------------------------------------

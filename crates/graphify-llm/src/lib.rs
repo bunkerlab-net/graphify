@@ -17,7 +17,7 @@
 //! | `kimi` | Moonshot AI (Kimi K2) | `MOONSHOT_API_KEY` |
 //! | `deepseek` | `DeepSeek` Chat Completions | `DEEPSEEK_API_KEY` |
 //! | `ollama` | Local Ollama server | `OLLAMA_BASE_URL` (optional) |
-//! | `bedrock` | AWS Bedrock Converse API | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
+//! | `bedrock` | AWS Bedrock Converse API (`aws-sdk-bedrockruntime`) | Any AWS credential provider: env vars, profile, SSO, IMDS, ECS, web identity |
 //!
 //! Use [`router`] to obtain a boxed [`LlmBackend`] by name, or call backend
 //! functions directly for finer control.

@@ -1,13 +1,28 @@
-//! AWS Bedrock backend — Converse API via `ureq` + AWS Signature `V4`.
+//! AWS Bedrock backend — Converse API via `aws-sdk-bedrockruntime`.
 //!
-//! Ports the `_call_bedrock` function in `graphify-py/graphify/llm.py`.
+//! Replaces a hand-rolled `ureq` + AWS Signature V4 implementation with the
+//! official SDK so we pick up the standard credential provider chain:
+//! environment variables, `~/.aws/credentials` profiles, IMDS / IAM Roles,
+//! ECS task roles, SSO, and STS web-identity / role-assumption.
 //!
-//! Signs requests manually (`SigV4`) rather than pulling in the full AWS SDK.
-//! Reads the standard AWS credential chain: `AWS_ACCESS_KEY_ID` +
-//! `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`).
+//! Divergence from `graphify-py/graphify/llm.py`: the Python reference uses
+//! `boto3` (which has the same credential chain) but auto-detection there
+//! only checks `AWS_REGION` / `AWS_PROFILE` env vars — it would happily pick
+//! Bedrock as the backend and then fail on every chunk if real credentials
+//! aren't configured. This port tightens the auto-detect rule (see
+//! [`crate::backends::detect_backend`]) so we only land on Bedrock when
+//! credentials are actually resolvable.
 
-use serde::Deserialize;
+use std::sync::OnceLock;
+
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_bedrockruntime::Client;
+use aws_sdk_bedrockruntime::config::Builder as SdkConfigBuilder;
+use aws_sdk_bedrockruntime::types::{
+    ContentBlock, ConversationRole, InferenceConfiguration, Message, StopReason, SystemContentBlock,
+};
 use serde_json::json;
+use tokio::runtime::Runtime;
 
 use crate::openai_compat::resolve_max_tokens;
 use crate::{
@@ -18,7 +33,9 @@ use crate::{
 pub const DEFAULT_MODEL: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
 /// Model override env var.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_BEDROCK_MODEL";
-/// Endpoint override env var (overrides the entire `https://bedrock-runtime.<region>.amazonaws.com` URL).
+/// Endpoint override env var. When set, the SDK will route requests to this
+/// URL instead of the standard `https://bedrock-runtime.<region>.amazonaws.com`.
+/// Used by tests (mockito) and rarely for VPC endpoint overrides.
 pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_BEDROCK_BASE_URL";
 
 /// Effective base URL — defaults to AWS's regional endpoint, overrideable via env.
@@ -86,145 +103,137 @@ pub fn resolve_region() -> String {
         .unwrap_or_else(|| "us-east-1".to_string())
 }
 
-#[derive(Deserialize)]
-struct BedrockResponse {
-    output: Option<BedrockOutput>,
-    usage: Option<BedrockUsage>,
-    #[serde(rename = "stopReason")]
-    stop_reason: Option<String>,
+/// Returns `true` when the environment looks like it has AWS credentials
+/// configured — i.e. one of the standard credential-provider entry points
+/// is set. Used by [`crate::backends::detect_backend`] to avoid picking
+/// Bedrock when only `AWS_REGION` is set.
+///
+/// This is intentionally a fast env-var check rather than a full
+/// credential-chain resolution (which would require spinning up an async
+/// runtime). Real credential resolution happens inside [`call_bedrock`]
+/// via the SDK.
+#[must_use]
+pub fn credentials_appear_configured() -> bool {
+    let env_set = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty());
+    // Explicit static credentials.
+    (env_set("AWS_ACCESS_KEY_ID") && env_set("AWS_SECRET_ACCESS_KEY"))
+        // Profile in ~/.aws/credentials or ~/.aws/config.
+        || env_set("AWS_PROFILE")
+        // Web identity (IRSA on EKS, GitHub OIDC, etc.).
+        || env_set("AWS_WEB_IDENTITY_TOKEN_FILE")
+        // ECS task role.
+        || env_set("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        || env_set("AWS_CONTAINER_CREDENTIALS_FULL_URI")
 }
 
-#[derive(Deserialize)]
-struct BedrockOutput {
-    message: Option<BedrockMessage>,
+/// Process-wide tokio runtime used to drive the (async-only) AWS SDK.
+///
+/// Building the runtime should never fail in practice; if it does, we have
+/// no useful way to continue and panicking surfaces the root cause clearly.
+fn runtime() -> &'static Runtime {
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        Runtime::new().unwrap_or_else(|e| panic!("failed to build tokio runtime for Bedrock: {e}"))
+    })
 }
 
-#[derive(Deserialize)]
-struct BedrockMessage {
-    content: Option<Vec<BedrockContent>>,
-}
+/// Build the SDK client. Each call resolves credentials freshly via the
+/// SDK's default provider chain, so callers that change `AWS_*` env vars
+/// mid-process still pick up the new values.
+fn client_for(region: &str) -> Client {
+    let endpoint_override = std::env::var(BASE_URL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty());
 
-#[derive(Deserialize)]
-struct BedrockContent {
-    text: Option<String>,
-}
+    let base = runtime().block_on(async {
+        aws_config::defaults(BehaviorVersion::latest())
+            .region(Region::new(region.to_string()))
+            .load()
+            .await
+    });
 
-#[derive(Deserialize)]
-struct BedrockUsage {
-    #[serde(rename = "inputTokens")]
-    input_tokens: Option<u64>,
-    #[serde(rename = "outputTokens")]
-    output_tokens: Option<u64>,
+    let mut builder: SdkConfigBuilder = (&base).into();
+    if let Some(endpoint) = endpoint_override {
+        builder = builder.endpoint_url(endpoint);
+    }
+    Client::from_conf(builder.build())
 }
 
 /// Call AWS Bedrock Converse API.
 ///
-/// Uses AWS Signature `V4`. Reads credentials from the standard env-var chain:
-/// `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally
-/// `AWS_SESSION_TOKEN`.
+/// Uses the AWS SDK and its standard credential provider chain. The caller
+/// no longer needs to set `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+/// directly — any provider supported by `aws-config` works (env, profile,
+/// IMDS, ECS, web identity, SSO).
 ///
 /// # Errors
-/// Returns [`LlmError::NoApiKey`] if credentials are missing, [`LlmError::Security`]
-/// if the endpoint URL is rejected, or [`LlmError::Http`] / [`LlmError::Parse`] on
-/// transport errors.
+/// Returns [`LlmError::NoApiKey`] if no AWS credentials can be resolved,
+/// or [`LlmError::Http`] / [`LlmError::Parse`] on transport / response
+/// errors.
 pub fn call_bedrock(
     model: &str,
     region: &str,
     messages: &[serde_json::Value],
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
-    let access_key = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
-    let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
-    let session_token = std::env::var("AWS_SESSION_TOKEN").ok();
+    let client = client_for(region);
+    let sdk_messages = build_messages(messages)?;
+    let system = SystemContentBlock::Text(EXTRACTION_SYSTEM.to_string());
 
-    if access_key.is_empty() || secret_key.is_empty() {
-        return Err(LlmError::NoApiKey(
-            "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set for Bedrock".to_string(),
-        ));
-    }
+    let inference = InferenceConfiguration::builder()
+        .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))
+        .temperature(0.0)
+        .build();
 
-    let endpoint = format!("{}/model/{model}/converse", base_url(region));
-    graphify_security::validate_url(&endpoint)?;
-
-    let body = json!({
-        "system": [{"text": EXTRACTION_SYSTEM}],
-        "messages": messages,
-        "inferenceConfig": {
-            "maxTokens": max_tokens,
-            "temperature": 0,
-        },
+    let output = runtime().block_on(async {
+        client
+            .converse()
+            .model_id(model)
+            .system(system)
+            .set_messages(Some(sdk_messages))
+            .inference_config(inference)
+            .send()
+            .await
     });
 
-    let body_str = serde_json::to_string(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
+    let output = output.map_err(|e| map_sdk_error(&e))?;
 
-    let now = chrono_now_utc();
-    let date_str = &now[..8]; // YYYYMMDD
-    let datetime_str = now.as_str(); // YYYYMMDDTHHmmssZ
-
-    let signed = sign_request(&SignInput {
-        method: "POST",
-        url: &endpoint,
-        region,
-        service: "bedrock",
-        body: &body_str,
-        access_key: &access_key,
-        secret_key: &secret_key,
-        session_token: session_token.as_deref(),
-        datetime_str,
-        date_str,
-    })?;
-
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(600)))
-        .build()
-        .into();
-    let mut req = agent
-        .post(&endpoint)
-        .header("Content-Type", "application/json")
-        .header("x-amz-date", datetime_str);
-
-    for (k, v) in &signed.extra_headers {
-        req = req.header(k.as_str(), v.as_str());
+    // Extract assistant text — the Converse output is a sequence of
+    // content blocks; we concatenate every Text block.
+    let mut text = String::new();
+    if let Some(out) = output.output.as_ref()
+        && let Ok(msg) = out.as_message()
+    {
+        for block in &msg.content {
+            if let ContentBlock::Text(t) = block {
+                text.push_str(t);
+            }
+        }
     }
-    req = req.header("Authorization", &signed.authorization);
+    if text.is_empty() {
+        text.push_str("{}");
+    }
 
-    let http_resp = req
-        .send(&body_str)
-        .map_err(|e| LlmError::Http(e.to_string()))?;
-
-    let resp: BedrockResponse = http_resp
-        .into_body()
-        .read_json()
-        .map_err(|e| LlmError::Parse(e.to_string()))?;
-
-    let text = resp
-        .output
-        .as_ref()
-        .and_then(|o| o.message.as_ref())
-        .and_then(|m| m.content.as_ref())
-        .and_then(|c| c.first())
-        .and_then(|c| c.text.as_deref())
-        .unwrap_or("{}");
-
-    let mut parsed = parse_llm_json(text);
-    let input_tokens = resp
+    let input_tokens = output
         .usage
         .as_ref()
-        .and_then(|u| u.input_tokens)
+        .map(|u| u.input_tokens)
+        .and_then(|v| u64::try_from(v).ok())
         .unwrap_or(0);
-    let output_tokens = resp
+    let output_tokens = output
         .usage
         .as_ref()
-        .and_then(|u| u.output_tokens)
+        .map(|u| u.output_tokens)
+        .and_then(|v| u64::try_from(v).ok())
         .unwrap_or(0);
-    let stop_reason = resp.stop_reason.as_deref().unwrap_or("end_turn");
-    let mut finish_reason = if stop_reason == "max_tokens" {
-        "length".to_string()
-    } else {
-        "stop".to_string()
+
+    let mut finish_reason = match output.stop_reason {
+        StopReason::MaxTokens => "length".to_string(),
+        _ => "stop".to_string(),
     };
 
-    if response_is_hollow(Some(text), &parsed) && finish_reason != "length" {
+    let mut parsed = parse_llm_json(&text);
+    if response_is_hollow(Some(text.as_str()), &parsed) && finish_reason != "length" {
         eprintln!(
             "[graphify] bedrock returned a hollow response; treating as \
              truncation so adaptive retry can bisect the chunk."
@@ -250,7 +259,70 @@ pub fn call_bedrock(
     })
 }
 
-/// Send a plain-text `prompt` to Bedrock and return the text reply.
+/// Convert the wire-format messages (`[{role, content: [{text}]}]`) into
+/// SDK `Message` builders. Each content list element becomes a `Text`
+/// content block on the SDK side.
+fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmError> {
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        let role = match msg.get("role").and_then(|v| v.as_str()) {
+            Some("assistant") => ConversationRole::Assistant,
+            // Any other value (including missing) → user role. Bedrock's
+            // Converse API rejects an empty `messages` array, so this also
+            // covers the common case of callers omitting the role.
+            _ => ConversationRole::User,
+        };
+
+        let mut builder = Message::builder().role(role);
+        if let Some(content) = msg.get("content").and_then(|v| v.as_array()) {
+            for block in content {
+                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                    builder = builder.content(ContentBlock::Text(text.to_string()));
+                }
+            }
+        }
+        let built = builder
+            .build()
+            .map_err(|e| LlmError::Parse(format!("bedrock message build failed: {e}")))?;
+        out.push(built);
+    }
+    Ok(out)
+}
+
+/// Translate an SDK `ConverseError` into the crate's [`LlmError`].
+///
+/// `NoApiKey` is reserved for the case where the credential chain returned
+/// no usable credentials. Everything else is an [`LlmError::Http`] carrying
+/// the SDK's diagnostic string.
+fn map_sdk_error(
+    err: &aws_sdk_bedrockruntime::error::SdkError<
+        aws_sdk_bedrockruntime::operation::converse::ConverseError,
+    >,
+) -> LlmError {
+    use aws_sdk_bedrockruntime::error::SdkError;
+    let msg = match err {
+        SdkError::DispatchFailure(d) => {
+            let mut s = format!("{d:?}");
+            // Recognise credential-resolution failures so the user sees the
+            // same hint they'd have gotten from the old hand-rolled check.
+            if s.contains("CredentialsNotLoaded") || s.contains("no credentials") {
+                return LlmError::NoApiKey(
+                    "AWS credentials not configured for Bedrock (set AWS_ACCESS_KEY_ID + \
+                     AWS_SECRET_ACCESS_KEY, run `aws configure`, or assume a role)"
+                        .to_string(),
+                );
+            }
+            s.truncate(512);
+            s
+        }
+        _ => err.to_string(),
+    };
+    LlmError::Http(msg)
+}
+
+/// Send a plain-text `prompt` to Bedrock and return the first text content
+/// of the response. Used by callers that want a free-form completion rather
+/// than the extraction-shaped JSON.
 ///
 /// # Errors
 /// Returns [`LlmError::NoApiKey`] when AWS credentials are missing,
@@ -261,187 +333,46 @@ pub fn call_bedrock_plain(
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String, LlmError> {
-    let msgs = vec![json!({"role": "user", "content": [{"text": prompt}]})];
-    let resp = call_bedrock(model, region, &msgs, max_tokens)?;
-    // Extract the first text block from the response nodes (best-effort).
-    // Bedrock returns nodes as parsed extraction JSON; for plain calls the
-    // response text is embedded in the raw content — fall back to an empty string.
-    Ok(resp
-        .nodes
-        .first()
-        .and_then(|v| v.get("label").and_then(|l| l.as_str()))
-        .unwrap_or("")
-        .to_string())
+    let client = client_for(region);
+    let messages = vec![
+        Message::builder()
+            .role(ConversationRole::User)
+            .content(ContentBlock::Text(prompt.to_string()))
+            .build()
+            .map_err(|e| LlmError::Parse(format!("bedrock message build failed: {e}")))?,
+    ];
+
+    let inference = InferenceConfiguration::builder()
+        .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))
+        .temperature(0.0)
+        .build();
+
+    let output = runtime().block_on(async {
+        client
+            .converse()
+            .model_id(model)
+            .set_messages(Some(messages))
+            .inference_config(inference)
+            .send()
+            .await
+    });
+    let output = output.map_err(|e| map_sdk_error(&e))?;
+
+    let mut text = String::new();
+    if let Some(out) = output.output.as_ref()
+        && let Ok(msg) = out.as_message()
+    {
+        for block in &msg.content {
+            if let ContentBlock::Text(t) = block {
+                text.push_str(t);
+            }
+        }
+    }
+    Ok(text)
 }
 
 /// Default max tokens for bedrock.
 #[must_use]
 pub fn default_max_tokens() -> u32 {
     resolve_max_tokens(16_384)
-}
-
-// ---------------------------------------------------------------------------
-// Minimal AWS SigV4 implementation
-// ---------------------------------------------------------------------------
-
-struct SignResult {
-    authorization: String,
-    extra_headers: Vec<(String, String)>,
-}
-
-/// Input bundle for `sign_request` (avoids `too_many_arguments` lint).
-struct SignInput<'a> {
-    method: &'a str,
-    url: &'a str,
-    region: &'a str,
-    service: &'a str,
-    body: &'a str,
-    access_key: &'a str,
-    secret_key: &'a str,
-    session_token: Option<&'a str>,
-    datetime_str: &'a str,
-    date_str: &'a str,
-}
-
-/// Produce AWS Signature V4 authorization and extra headers for a Bedrock request.
-fn sign_request(inp: &SignInput<'_>) -> Result<SignResult, LlmError> {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write as _;
-
-    let parsed = url::Url::parse(inp.url).map_err(|e| LlmError::Http(e.to_string()))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| LlmError::Http("no host in bedrock URL".to_string()))?
-        .to_string();
-    let path = parsed.path();
-    let query = parsed.query().unwrap_or("");
-
-    // Payload hash
-    let mut hasher = Sha256::new();
-    hasher.update(inp.body.as_bytes());
-    let payload_hash = hex::encode(hasher.finalize());
-
-    // Canonical headers (sorted, lowercase) — must include all signed headers.
-    let mut canonical_headers = format!(
-        "content-type:application/json\nhost:{host}\nx-amz-date:{}\n",
-        inp.datetime_str
-    );
-    let mut signed_headers_str = "content-type;host;x-amz-date".to_string();
-    let mut extra_headers: Vec<(String, String)> = Vec::new();
-
-    if let Some(tok) = inp.session_token {
-        // Use write! to avoid a temporary allocation (clippy::format_push_string).
-        let _ = writeln!(canonical_headers, "x-amz-security-token:{tok}");
-        signed_headers_str.push_str(";x-amz-security-token");
-        extra_headers.push(("x-amz-security-token".to_string(), tok.to_string()));
-    }
-
-    let canonical_request = format!(
-        "{}\n{path}\n{query}\n{canonical_headers}\n{signed_headers_str}\n{payload_hash}",
-        inp.method
-    );
-
-    // String to sign
-    let mut cr_hasher = Sha256::new();
-    cr_hasher.update(canonical_request.as_bytes());
-    let cr_hash = hex::encode(cr_hasher.finalize());
-    let credential_scope = format!(
-        "{}/{}/{}/aws4_request",
-        inp.date_str, inp.region, inp.service
-    );
-    let string_to_sign = format!(
-        "AWS4-HMAC-SHA256\n{}\n{credential_scope}\n{cr_hash}",
-        inp.datetime_str
-    );
-
-    // Signing key
-    let signing_key = derive_signing_key(inp.secret_key, inp.date_str, inp.region, inp.service);
-    let signature = hmac_sha256_hex(&signing_key, string_to_sign.as_bytes());
-
-    let authorization = format!(
-        "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, \
-         SignedHeaders={signed_headers_str}, Signature={signature}",
-        inp.access_key
-    );
-
-    Ok(SignResult {
-        authorization,
-        extra_headers,
-    })
-}
-
-/// Computes HMAC-SHA256 of `msg` under `key` and returns the raw digest bytes.
-fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, KeyInit, Mac};
-    use sha2::Sha256;
-    type HmacSha256 = Hmac<Sha256>;
-    #[allow(clippy::expect_used)]
-    // reason: HMAC-SHA256 accepts any key length; new_from_slice cannot fail.
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(msg);
-    mac.finalize().into_bytes().to_vec()
-}
-
-/// Returns the lowercase hex-encoded HMAC-SHA256 of `msg` under `key`.
-fn hmac_sha256_hex(key: &[u8], msg: &[u8]) -> String {
-    hex::encode(hmac_sha256(key, msg))
-}
-
-/// Derives the AWS `SigV4` signing key from the secret key, date, region, and service.
-fn derive_signing_key(secret_key: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
-    let k_secret = format!("AWS4{secret_key}");
-    let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
-    let k_region = hmac_sha256(&k_date, region.as_bytes());
-    let k_service = hmac_sha256(&k_region, service.as_bytes());
-    hmac_sha256(&k_service, b"aws4_request")
-}
-
-/// Returns current UTC time as `YYYYMMDDTHHmmssZ`.
-fn chrono_now_utc() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let (year, month, day, hour, min, sec) = unix_to_datetime(secs);
-    format!("{year:04}{month:02}{day:02}T{hour:02}{min:02}{sec:02}Z")
-}
-
-/// Converts a Unix timestamp (seconds since epoch) to `(year, month, day, hour, min, sec)`.
-fn unix_to_datetime(ts: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let secs_per_day = 86_400_u64;
-    let days_since_epoch = ts / secs_per_day;
-    let time_of_day = ts % secs_per_day;
-    let hh = time_of_day / 3600;
-    let mm = (time_of_day % 3600) / 60;
-    let ss = time_of_day % 60;
-
-    let mut y = 1970_u64;
-    let mut d = days_since_epoch;
-    loop {
-        let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if d < days_in_year {
-            break;
-        }
-        d -= days_in_year;
-        y += 1;
-    }
-    let month_days: &[u64] = if is_leap(y) {
-        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut mo = 1_u64;
-    for mdays in month_days {
-        if d < *mdays {
-            break;
-        }
-        d -= mdays;
-        mo += 1;
-    }
-    (y, mo, d + 1, hh, mm, ss)
-}
-
-/// Returns `true` if `year` is a Gregorian leap year.
-fn is_leap(year: u64) -> bool {
-    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }

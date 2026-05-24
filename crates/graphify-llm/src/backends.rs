@@ -161,7 +161,7 @@ pub fn format_backend_env_keys(backend: &str) -> String {
         "openai" => openai::ENV_KEY.to_string(),
         "deepseek" => deepseek::ENV_KEY.to_string(),
         "ollama" => ollama::ENV_KEY.to_string(),
-        _ => "AWS_PROFILE or AWS_REGION".to_string(),
+        _ => "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (or AWS_PROFILE)".to_string(),
     }
 }
 
@@ -169,6 +169,14 @@ pub fn format_backend_env_keys(backend: &str) -> String {
 ///
 /// Priority: gemini → kimi → claude → openai → deepseek → bedrock → ollama.
 /// Returns `None` if no backend is configured.
+///
+/// Bedrock requires that AWS credentials actually appear to be configured —
+/// not just `AWS_REGION` — otherwise every extraction chunk would fail with
+/// "AWS credentials not configured" once we tried to call the API. The
+/// check is via [`bedrock::credentials_appear_configured`], which inspects
+/// the standard credential-provider env vars (access key + secret, profile,
+/// web identity, container creds). The actual credential chain is still
+/// resolved at call time by the AWS SDK.
 #[must_use]
 pub fn detect_backend() -> Option<String> {
     for backend in ["gemini", "kimi", "claude", "openai", "deepseek"] {
@@ -176,11 +184,7 @@ pub fn detect_backend() -> Option<String> {
             return Some(backend.to_string());
         }
     }
-    // Bedrock: check for any AWS env var.
-    if std::env::var("AWS_PROFILE").is_ok()
-        || std::env::var("AWS_REGION").is_ok()
-        || std::env::var("AWS_DEFAULT_REGION").is_ok()
-    {
+    if bedrock::credentials_appear_configured() {
         return Some("bedrock".to_string());
     }
     // Ollama: checked last to avoid shadowing paid backends.

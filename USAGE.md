@@ -395,6 +395,7 @@ the LLM spend.
 | `GRAPHIFY_VIZ_NODE_LIMIT`   | Cap nodes before HTML export is skipped (default 5000).          |
 | `GRAPHIFY_GOOGLE_WORKSPACE` | Truthy value enables `.gdoc/.gsheet/.gslides` export by default. |
 | `GRAPHIFY_BEDROCK_MODEL`    | Override the default model for the Bedrock backend.              |
+| `GRAPHIFY_BEDROCK_BASE_URL` | Override the Bedrock Runtime endpoint URL (mainly for tests).    |
 
 ### LLM backends
 
@@ -409,7 +410,13 @@ The active backend is auto-detected from environment variables:
 | `kimi`     | `MOONSHOT_API_KEY`                                                                           |
 | `deepseek` | `DEEPSEEK_API_KEY`                                                                           |
 | `ollama`   | local daemon — set `OLLAMA_HOST` if non-default                                              |
-| `bedrock`  | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`, `AWS_REGION`) |
+| `bedrock`  | Any AWS credential-chain entry — see paragraph below                                         |
+
+The Bedrock backend uses `aws-sdk-bedrockruntime`, which resolves credentials through the standard AWS provider chain:
+`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (with optional `AWS_SESSION_TOKEN`), `AWS_PROFILE` from
+`~/.aws/credentials`, `AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA, GitHub OIDC), `AWS_CONTAINER_CREDENTIALS_*` (ECS task
+roles), IMDS, and SSO. `AWS_REGION` alone is **not** sufficient to auto-select Bedrock — credentials must also be
+present, otherwise auto-detection falls through to the next backend.
 
 Force a backend with `--backend`; override its default model with `--model`.
 
