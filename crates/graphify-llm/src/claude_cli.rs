@@ -198,7 +198,7 @@ pub fn call_claude_cli_inner(
         LlmError::ClaudeCliError(format!(
             "claude -p produced unparseable JSON envelope: {e}; \
              first 500 chars of stdout: {:?}",
-            &stdout.chars().take(500).collect::<String>()
+            stdout.chars().take(500).collect::<String>()
         ))
     })?;
 
