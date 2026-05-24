@@ -20,7 +20,7 @@ rayon = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [dev-dependencies]
 serial_test = { workspace = true }
