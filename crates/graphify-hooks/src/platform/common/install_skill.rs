@@ -252,6 +252,7 @@ fn scope_root_for(rel: &str) -> &str {
 /// blob, returning the cleaned text. Tolerates either form (multi-line
 /// section after the heading, or single-line registration). Preserves
 /// the original trailing newline so well-formed files stay well-formed.
+#[must_use]
 fn strip_graphify_section(content: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut in_section = false;

@@ -6,7 +6,7 @@
 
 use std::fs;
 
-use graphify_detect::{FileType, classify_file, shebang_interpreter};
+use graphify_detect::{FileType, classify_file, env_command_args, shebang_interpreter};
 use tempfile::tempdir;
 
 fn write(name: &str, contents: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -275,4 +275,70 @@ fn classify_file_ets_extension() {
         Some(FileType::Code),
         ".ets (ArkTS / HarmonyOS) should be classified as code",
     );
+}
+
+// ---------------------------------------------------------------------------
+// env_command_args — unit tests for the env(1) argv parser. These were
+// originally inline `#[cfg(test)] mod tests` in `src/shebang.rs`; moved to
+// the integration test file to match the project convention that all tests
+// live under `tests/` (see CLAUDE.md).
+// ---------------------------------------------------------------------------
+
+fn split(args: &[&str]) -> Vec<String> {
+    args.iter().map(|s| (*s).to_owned()).collect()
+}
+
+#[test]
+fn env_command_args_passthrough() {
+    assert_eq!(
+        env_command_args(&split(&["python3"]), true),
+        split(&["python3"])
+    );
+}
+
+#[test]
+fn env_command_args_skips_split_string_flag() {
+    let r = env_command_args(&split(&["-S", "python3 -u"]), true);
+    assert_eq!(r, split(&["python3", "-u"]));
+}
+
+#[test]
+fn env_command_args_clumped_s() {
+    let r = env_command_args(&split(&["-Spython3 -u"]), true);
+    assert_eq!(r, split(&["python3", "-u"]));
+}
+
+#[test]
+fn env_command_args_long_split_string() {
+    let r = env_command_args(&split(&["--split-string=python3 -u"]), true);
+    assert_eq!(r, split(&["python3", "-u"]));
+}
+
+#[test]
+fn env_command_args_skips_assignment() {
+    let r = env_command_args(&split(&["DEBUG=1", "python3"]), true);
+    assert_eq!(r, split(&["python3"]));
+}
+
+#[test]
+fn env_command_args_skips_unset_operand() {
+    let r = env_command_args(&split(&["-u", "PYTHONPATH", "python3"]), true);
+    assert_eq!(r, split(&["python3"]));
+}
+
+#[test]
+fn env_command_args_skips_clumped_unset() {
+    let r = env_command_args(&split(&["-uPYTHONPATH", "python3"]), true);
+    assert_eq!(r, split(&["python3"]));
+}
+
+#[test]
+fn env_command_args_unknown_flag_returns_empty() {
+    assert!(env_command_args(&split(&["--what", "python3"]), true).is_empty());
+}
+
+#[test]
+fn env_command_args_double_dash_terminates() {
+    let r = env_command_args(&split(&["--", "--weird"]), true);
+    assert_eq!(r, split(&["--weird"]));
 }
