@@ -4,11 +4,13 @@
 //! group.  Shared helpers used by more than one command live here.
 
 pub(crate) mod add;
+pub(crate) mod affected;
 pub(crate) mod args;
 pub(crate) mod benchmark;
 pub(crate) mod cache_check;
 pub(crate) mod clone;
 pub(crate) mod cluster_only;
+pub(crate) mod diagnose;
 pub(crate) mod dispatch;
 pub(crate) mod export;
 pub(crate) mod extract;

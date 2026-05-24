@@ -291,6 +291,28 @@ pub(crate) enum Command {
         graph: Option<PathBuf>,
     },
 
+    /// Reverse-traversal impact analysis (`graphify affected <query>`).
+    Affected {
+        /// Node label, ID, or source file substring to use as the seed.
+        query: String,
+        /// Edge relation to follow (repeatable). Defaults to the canonical
+        /// impact relations (calls/references/imports/...).
+        #[arg(long = "relation")]
+        relations: Vec<String>,
+        /// Maximum BFS depth.
+        #[arg(long, default_value_t = 2)]
+        depth: usize,
+        /// Path to graph.json (default `graphify-out/graph.json`).
+        #[arg(long)]
+        graph: Option<PathBuf>,
+    },
+
+    /// Diagnose graph health (`graphify diagnose <subcommand>`).
+    Diagnose {
+        #[command(subcommand)]
+        cmd: DiagnoseCmd,
+    },
+
     /// Check semantic cache for a list of files.
     #[command(name = "cache-check")]
     CacheCheck {
@@ -508,4 +530,32 @@ pub(crate) enum PlatformCmd {
     Install,
     /// Uninstall graphify integration for this platform.
     Uninstall,
+}
+
+/// Subcommands for the `diagnose` command group.
+#[derive(Debug, Subcommand)]
+pub(crate) enum DiagnoseCmd {
+    /// `MultiDiGraph` edge-collapse risk report.
+    Multigraph {
+        /// Path to graph.json (default `graphify-out/graph.json`).
+        #[arg(long)]
+        graph: Option<PathBuf>,
+        /// Emit a JSON envelope instead of the line-by-line text report.
+        #[arg(long)]
+        json: bool,
+        /// Maximum number of edge-group examples to include.
+        #[arg(long = "max-examples", default_value_t = 5)]
+        max_examples: usize,
+        /// Force directed analysis (overrides the JSON's `directed` flag).
+        #[arg(long, conflicts_with = "undirected")]
+        directed: bool,
+        /// Force undirected analysis (overrides the JSON's `directed` flag).
+        #[arg(long, conflicts_with = "directed")]
+        undirected: bool,
+        /// Path to the Python extractor file scanned for `seen_*` producer
+        /// suppression sites. Optional — when omitted the producer-suppression
+        /// section is empty.
+        #[arg(long = "extract-path")]
+        extract_path: Option<PathBuf>,
+    },
 }

@@ -152,6 +152,8 @@ graphify-hooks = { workspace = true }
 graphify-html = { workspace = true }
 graphify-ingest = { workspace = true }
 graphify-llm = { workspace = true }
+graphify-affected = { workspace = true }
+graphify-diagnostics = { workspace = true }
 graphify-prs = { workspace = true }
 graphify-report = { workspace = true }
 graphify-security = { workspace = true }

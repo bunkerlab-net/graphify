@@ -52,6 +52,13 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         }
         cmd @ Command::Prs { .. } => dispatch_prs(cmd),
         Command::Serve { graph } => cli::serve::cmd_serve(graph.as_deref()),
+        Command::Affected {
+            query,
+            relations,
+            depth,
+            graph,
+        } => cli::affected::cmd_affected(&query, &relations, depth, graph.as_deref()),
+        Command::Diagnose { cmd } => cli::diagnose::cmd_diagnose(cmd),
         Command::CacheCheck { files_from, root } => {
             cli::cache_check::cmd_cache_check(&files_from, &root)
         }
