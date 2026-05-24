@@ -10,6 +10,7 @@ description = "GitHub PR analysis"
 
 [dependencies]
 chrono = { workspace = true }
+graphify-security = { workspace = true }
 indexmap = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

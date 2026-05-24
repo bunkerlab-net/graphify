@@ -6,7 +6,7 @@
 
 use graphify_dedup::{
     DedupLlmBackend, JudgeResult, NoOpBackend, deduplicate_entities, entropy, is_variant_pair,
-    shingles, short_label_blocked,
+    norm, shingles, short_label_blocked,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -46,6 +46,28 @@ fn test_entropy_normal_label_high() {
 #[test]
 fn test_entropy_empty_string() {
     assert_eq!(entropy(""), 0.0);
+}
+
+// ── norm: NFKC + Unicode-aware (#937) ────────────────────────────────────────
+
+#[test]
+fn norm_preserves_cjk_word_chars() {
+    // CJK letters must survive the non-word collapse — they used to be stripped
+    // by the old `[^a-z0-9]+` regex, which silently zero-ed the dedup key.
+    assert_eq!(norm("認証"), "認証");
+    assert_eq!(norm("身份验证 API"), "身份验证 api");
+}
+
+#[test]
+fn norm_collapses_underscores_and_punctuation() {
+    assert_eq!(norm("foo___bar"), "foo bar");
+    assert_eq!(norm("foo--bar"), "foo bar");
+}
+
+#[test]
+fn norm_nfkc_normalizes_fullwidth() {
+    // Full-width Latin A "Ａ" (U+FF21) folds to ASCII "a" under NFKC + lower.
+    assert_eq!(norm("ＡＢＣ"), "abc");
 }
 
 // ── shingles ─────────────────────────────────────────────────────────────────

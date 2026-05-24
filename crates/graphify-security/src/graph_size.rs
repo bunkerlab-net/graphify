@@ -1,0 +1,80 @@
+//! Graph-load memory-bomb cap.
+//!
+//! Rejects on-disk graph files larger than the cap before they are read into
+//! memory and JSON-parsed. Mirrors `graphify-py/graphify/security.py`
+//! `check_graph_file_size_cap` / `_MAX_GRAPH_FILE_BYTES`.
+
+use std::path::Path;
+
+use crate::error::SecurityError;
+
+/// Hard cap on the size of a graph file before parsing. Matches Python's
+/// `_MAX_GRAPH_FILE_BYTES = 512 * 1024 * 1024` (512 MiB).
+pub const MAX_GRAPH_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Reject the file at `path` if its size exceeds [`MAX_GRAPH_FILE_BYTES`].
+///
+/// Silently returns `Ok(())` when `path.metadata()` cannot be read — the
+/// caller's own existence check is expected to surface a clearer error in
+/// that case.
+///
+/// # Errors
+///
+/// Returns [`SecurityError::GraphFileTooLarge`] if the file size strictly
+/// exceeds the cap. Equal-to-cap passes.
+pub fn check_graph_file_size_cap(path: &Path) -> Result<(), SecurityError> {
+    check_graph_file_size_cap_with(path, MAX_GRAPH_FILE_BYTES)
+}
+
+/// Variant of [`check_graph_file_size_cap`] that takes an explicit cap.
+///
+/// Mirrors Python's monkeypatching pattern in `test_security.py` where the
+/// `_MAX_GRAPH_FILE_BYTES` constant is temporarily overridden.
+///
+/// # Errors
+///
+/// Returns [`SecurityError::GraphFileTooLarge`] if the file size strictly
+/// exceeds `cap`. Equal-to-cap passes.
+pub fn check_graph_file_size_cap_with(path: &Path, cap: u64) -> Result<(), SecurityError> {
+    let Ok(meta) = path.metadata() else {
+        return Ok(());
+    };
+    let size = meta.len();
+    if size > cap {
+        return Err(SecurityError::GraphFileTooLarge {
+            path: path.to_path_buf(),
+            size: format_with_underscores(size),
+            cap: format_with_underscores(cap),
+        });
+    }
+    Ok(())
+}
+
+/// Format a `u64` using underscore thousand separators, matching Python's
+/// `f"{value:_d}"`.
+fn format_with_underscores(value: u64) -> String {
+    let digits = value.to_string();
+    let bytes = digits.as_bytes();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push('_');
+        }
+        out.push(char::from(*b));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_with_underscores_matches_python() {
+        assert_eq!(format_with_underscores(0), "0");
+        assert_eq!(format_with_underscores(16), "16");
+        assert_eq!(format_with_underscores(999), "999");
+        assert_eq!(format_with_underscores(1_000), "1_000");
+        assert_eq!(format_with_underscores(536_870_912), "536_870_912");
+    }
+}

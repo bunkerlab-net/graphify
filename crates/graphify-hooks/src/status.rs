@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::constants::{CHECKOUT_MARKER, HOOK_MARKER};
-use crate::git::{git_root, hooks_dir};
+use crate::git::{git_root, hooks_dir, user_hooks_dir};
 
 /// Return a single-hook status string: `"installed"`, `"not installed"`, or
 /// `"not installed (hook exists but graphify not found)"`.
@@ -34,6 +34,7 @@ pub fn status(path: &Path) -> String {
     let Ok(hdir) = hooks_dir(&root) else {
         return "Not in a git repository.".to_string();
     };
+    let hdir = user_hooks_dir(&hdir);
 
     let commit = check_hook(&hdir, "post-commit", HOOK_MARKER);
     let checkout = check_hook(&hdir, "post-checkout", CHECKOUT_MARKER);

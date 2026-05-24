@@ -15,8 +15,11 @@ use crate::types::{BenchmarkResult, QuestionResult, SAMPLE_QUESTIONS};
 /// # Errors
 ///
 /// Returns [`BenchmarkError`] on I/O failure, JSON parse failure, or if
-/// the graph data cannot be assembled by `graphify-build`.
+/// the graph data cannot be assembled by `graphify-build`. Also rejects
+/// graph files larger than [`graphify_security::MAX_GRAPH_FILE_BYTES`]
+/// before reading them into memory.
 pub fn load_graph(path: &Path) -> Result<Graph, BenchmarkError> {
+    graphify_security::check_graph_file_size_cap(path)?;
     let text = std::fs::read_to_string(path)?;
     let mut data: Value = serde_json::from_str(&text)?;
 

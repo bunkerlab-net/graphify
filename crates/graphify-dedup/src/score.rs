@@ -3,6 +3,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::minhash::MinHash;
 
@@ -21,9 +22,13 @@ pub const COMMUNITY_BOOST: f64 = 5.0;
 
 // ── static regex ─────────────────────────────────────────────────────────────
 
+// `\W` in the Rust `regex` crate is Unicode-aware by default (matches anything
+// that is not a Unicode word character), so `[\W_]+` collapses runs of
+// non-alphanumeric characters while preserving CJK and other Unicode letters
+// — matching Python's `re.sub(r"[\W_]+", " ", s, flags=re.UNICODE)`.
 #[allow(clippy::expect_used)] // literal pattern; cannot panic at runtime.
-static NON_ALNUM: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[^a-z0-9]+").expect("static non-alnum regex"));
+static NON_WORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\W_]+").expect("static non-word regex"));
 
 /// Variant-suffix regex.  Matches labels whose trailing token is a
 /// version/variant suffix (chip SKUs, codename revisions, etc.).
@@ -35,14 +40,18 @@ pub static VARIANT_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
 
 // ── normalisation ─────────────────────────────────────────────────────────────
 
-/// Lowercase + collapse runs of non-alphanumeric characters to a single space,
-/// then strip leading/trailing whitespace.
+/// Lowercase + collapse runs of non-word characters (Unicode-aware) to a
+/// single space, then strip leading/trailing whitespace.
 ///
-/// Matches `_norm` in the Python source.
+/// Mirrors Python's
+/// `re.sub(r"[\W_]+", " ", unicodedata.normalize("NFKC", label).casefold(),
+/// flags=re.UNICODE).strip()` so that CJK and other non-ASCII letters are
+/// preserved instead of being collapsed away.
 #[must_use]
 pub fn norm(label: &str) -> String {
-    let lower = label.to_lowercase();
-    let replaced = NON_ALNUM.replace_all(&lower, " ");
+    let nfkc: String = label.nfkc().collect();
+    let lower = nfkc.to_lowercase();
+    let replaced = NON_WORD.replace_all(&lower, " ");
     replaced.trim().to_string()
 }
 

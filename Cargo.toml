@@ -63,6 +63,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serial_test = "3"
 sha2 = "0.11"
+shlex = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1" }
@@ -143,6 +144,7 @@ graphify-ingest = { workspace = true }
 graphify-llm = { workspace = true }
 graphify-prs = { workspace = true }
 graphify-report = { workspace = true }
+graphify-security = { workspace = true }
 graphify-serve = { workspace = true }
 graphify-validate = { workspace = true }
 graphify-watch = { workspace = true }

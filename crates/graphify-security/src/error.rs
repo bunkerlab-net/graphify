@@ -101,4 +101,19 @@ pub enum SecurityError {
     /// URL parsed successfully but has no host (e.g. `http:///foo`).
     #[error("URL is missing a host. Got: '{0}'")]
     MissingHost(String),
+
+    /// Graph file size exceeds the memory-bomb safety cap.
+    ///
+    /// The error message mirrors the Python parity wording
+    /// ("graph file <path> is N bytes, exceeds M-byte cap") so callers and
+    /// parity tests can assert on its substrings.
+    #[error("graph file {path} is {size} bytes, exceeds {cap}-byte cap")]
+    GraphFileTooLarge {
+        /// The path to the graph file.
+        path: PathBuf,
+        /// The observed size, pre-formatted with underscore separators.
+        size: String,
+        /// The configured cap, pre-formatted with underscore separators.
+        cap: String,
+    },
 }

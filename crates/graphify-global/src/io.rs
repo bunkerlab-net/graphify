@@ -26,6 +26,7 @@ pub fn load_graph_from_file(path: &Path) -> Result<Graph, GlobalError> {
     if !path.exists() {
         return Ok(Graph::new(GraphKind::Graph));
     }
+    graphify_security::check_graph_file_size_cap(path)?;
     let text = std::fs::read_to_string(path)?;
     let mut data: serde_json::Map<String, Value> = serde_json::from_str(&text)?;
 

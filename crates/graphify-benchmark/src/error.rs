@@ -16,4 +16,8 @@ pub enum BenchmarkError {
     /// Error returned by the build layer.
     #[error(transparent)]
     Build(#[from] graphify_build::BuildError),
+
+    /// Graph file exceeds the memory-bomb size cap.
+    #[error(transparent)]
+    Security(#[from] graphify_security::SecurityError),
 }

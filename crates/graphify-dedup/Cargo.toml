@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 strsim = "0.11"
 thiserror = { workspace = true }
 twox-hash = "2"
+unicode-normalization = { workspace = true }
 
 [lints]
 workspace = true

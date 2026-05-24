@@ -20,7 +20,7 @@ use std::process::Command;
 
 use graphify_hooks::{
     CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT, PYTHON_DETECT, hooks_dir_with,
-    install, status, uninstall,
+    install, status, uninstall, user_hooks_dir,
 };
 use serial_test::serial;
 
@@ -161,6 +161,31 @@ fn test_no_git_repo_raises() {
     fs::create_dir_all(&not_a_repo).unwrap();
     let err = install(&not_a_repo).unwrap_err();
     assert!(format!("{err}").contains("No git repository"));
+}
+
+// ---------------------------------------------------------------------------
+// user_hooks_dir — Husky 9 .husky/_ → .husky/ remap (#987)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn user_hooks_dir_strips_husky_underscore() {
+    let dir = tempfile::tempdir().unwrap();
+    let husky_under = dir.path().join(".husky").join("_");
+    assert_eq!(user_hooks_dir(&husky_under), dir.path().join(".husky"));
+}
+
+#[test]
+fn user_hooks_dir_passthrough_for_plain_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join(".git").join("hooks");
+    assert_eq!(user_hooks_dir(&plain), plain);
+}
+
+#[test]
+fn user_hooks_dir_does_not_strip_underscore_in_other_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let custom = dir.path().join(".git").join("_hooks");
+    assert_eq!(user_hooks_dir(&custom), custom);
 }
 
 // ---------------------------------------------------------------------------

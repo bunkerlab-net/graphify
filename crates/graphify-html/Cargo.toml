@@ -11,6 +11,7 @@ description = "HTML generators (tree view, call-flow Mermaid)"
 [dependencies]
 chrono = { workspace = true }
 graphify-build = { workspace = true }
+graphify-security = { workspace = true }
 hex = { workspace = true }
 htmlescape = { workspace = true }
 indexmap = { workspace = true }

@@ -63,6 +63,11 @@ pub fn extract_files_direct(
 
     let mdl = model.filter(|s| !s.is_empty()).unwrap_or(cfg.default_model);
     let user_msg = read_files(files, root);
+    // `resolve_max_tokens` applies the `GRAPHIFY_MAX_OUTPUT_TOKENS` env var
+    // override uniformly across every backend (parity fix from
+    // graphify-py 06a9b72 — env var was previously silently ignored on the
+    // OpenAI-compatible path because the cfg dict's hardcoded value shadowed
+    // the resolved value).
     let max_out = openai_compat::resolve_max_tokens(cfg.default_max_tokens);
 
     match backend {

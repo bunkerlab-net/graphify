@@ -12,6 +12,43 @@ use crate::normalize::{norm_source_file, normalize_id};
 /// Edge-count threshold above which per-edge resolution is dispatched to Rayon.
 const PARALLEL_EDGE_THRESHOLD: usize = 1024;
 
+/// Language family for the cross-language `calls` INFERRED filter.
+///
+/// Mirrors the per-extension table in `build.py` `build_from_json`: when
+/// both endpoints of an `INFERRED` `calls` edge resolve to different
+/// language families, the edge is dropped because shared short names
+/// (`render`, `parse`, ...) produce phantom call edges across language
+/// boundaries in multi-language chunks.
+fn language_family(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "py" | "pyi" => Some("py"),
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => Some("js"),
+        "go" => Some("go"),
+        "rs" => Some("rs"),
+        "java" | "kt" | "scala" | "groovy" => Some("jvm"),
+        "c" | "h" => Some("c"),
+        "cc" | "cpp" | "hpp" => Some("cpp"),
+        "rb" => Some("rb"),
+        "php" => Some("php"),
+        "cs" => Some("cs"),
+        "swift" => Some("swift"),
+        "lua" => Some("lua"),
+        _ => None,
+    }
+}
+
+/// Return the extension (without the leading dot, lowercased) of a node's
+/// `source_file`, or an empty string if absent or extensionless.
+fn source_file_ext(node_source_files: &IndexMap<String, String>, id: &str) -> String {
+    node_source_files
+        .get(id)
+        .map(std::path::Path::new)
+        .and_then(std::path::Path::extension)
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
 /// Normalise node objects inside an extraction dict in place.
 ///
 /// Renames `source` → `source_file` and coerces `file_type` values to
@@ -111,6 +148,22 @@ pub(crate) fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<
         .iter()
         .map(|nid| (normalize_id(nid), nid.clone()))
         .collect();
+    // Snapshot each node's `source_file` so the cross-language `calls`
+    // INFERRED filter can resolve language families without re-borrowing
+    // `graph` from inside the per-edge closure.
+    let node_source_files: IndexMap<String, String> = graph
+        .nodes()
+        .map(|(id, attrs)| {
+            (
+                id.clone(),
+                attrs
+                    .get("source_file")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
 
     // Per-edge resolution is pure read-only work over `node_ids` and
     // `norm_to_id` — fan out across Rayon. We collect the resolved
@@ -147,6 +200,23 @@ pub(crate) fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<
         let resolved_tgt = resolve_edge_id(tgt_str, &node_ids, &norm_to_id);
         if !node_ids.contains(&resolved_src) || !node_ids.contains(&resolved_tgt) {
             return None;
+        }
+        // Drop cross-language INFERRED `calls` edges — same short names
+        // (`render`, `parse`, ...) appear across language boundaries in
+        // multi-language chunks, producing phantom edges that don't
+        // represent real call relationships. Mirrors the dispatcher added
+        // in graphify-py `build.py` `build_from_json`.
+        let relation = canonical_map.get("relation").and_then(Value::as_str);
+        let confidence = canonical_map.get("confidence").and_then(Value::as_str);
+        if relation == Some("calls") && confidence == Some("INFERRED") {
+            let src_ext = source_file_ext(&node_source_files, &resolved_src);
+            let tgt_ext = source_file_ext(&node_source_files, &resolved_tgt);
+            if !src_ext.is_empty()
+                && !tgt_ext.is_empty()
+                && language_family(&src_ext) != language_family(&tgt_ext)
+            {
+                return None;
+            }
         }
         let mut attrs: IndexMap<String, Value> = IndexMap::new();
         for (k, v) in canonical_map {

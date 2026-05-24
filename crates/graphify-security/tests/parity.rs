@@ -4,9 +4,13 @@
 use std::time::Duration;
 
 use graphify_security::{
-    MAX_FETCH_BYTES, MAX_TEXT_BYTES, SecurityError, safe_fetch, sanitize_label, test_support,
+    MAX_FETCH_BYTES, MAX_GRAPH_FILE_BYTES, MAX_TEXT_BYTES, METADATA_MAX_LIST_ITEMS,
+    METADATA_MAX_VALUE_LEN, SecurityError, check_graph_file_size_cap,
+    check_graph_file_size_cap_with, safe_fetch, sanitize_label, sanitize_metadata,
+    sanitize_metadata_map, sanitize_metadata_string, sanitize_metadata_value, test_support,
     validate_graph_path, validate_url,
 };
+use serde_json::{Map, Value, json};
 
 // ---------------------------------------------------------------------------
 // validate_url
@@ -271,4 +275,189 @@ fn sanitize_label_safe_passthrough() {
 #[test]
 fn sanitize_label_none_returns_empty() {
     assert_eq!(sanitize_label(None), "");
+}
+
+// ---------------------------------------------------------------------------
+// check_graph_file_size_cap
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graph_size_cap_default_is_512_mib() {
+    assert_eq!(MAX_GRAPH_FILE_BYTES, 512 * 1024 * 1024);
+}
+
+#[test]
+fn graph_size_cap_under_limit_returns_ok() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("graph.json");
+    std::fs::write(&p, br#"{"nodes": [], "links": []}"#).expect("write");
+    check_graph_file_size_cap(&p).expect("under limit should pass");
+}
+
+#[test]
+fn graph_size_cap_over_limit_raises() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("graph.json");
+    std::fs::write(&p, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").expect("write");
+    let err = check_graph_file_size_cap_with(&p, 16).expect_err("over limit should fail");
+    assert!(matches!(err, SecurityError::GraphFileTooLarge { .. }));
+    let msg = format!("{err}");
+    assert!(msg.contains("exceeds"), "msg: {msg}");
+}
+
+#[test]
+fn graph_size_cap_error_message_includes_size_and_cap() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("graph.json");
+    std::fs::write(&p, "AAAAAAAAAAAAAAAA").expect("write"); // 16 bytes
+    let err = check_graph_file_size_cap_with(&p, 8).expect_err("over limit should fail");
+    let msg = format!("{err}");
+    assert!(msg.contains("16"), "msg: {msg}");
+    assert!(msg.contains('8'), "msg: {msg}");
+    assert!(msg.to_lowercase().contains("byte"), "msg: {msg}");
+}
+
+#[test]
+fn graph_size_cap_at_boundary_passes_then_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("graph.json");
+    std::fs::write(&p, "A".repeat(32)).expect("write");
+    check_graph_file_size_cap_with(&p, 32).expect("equal to cap allowed");
+    let err = check_graph_file_size_cap_with(&p, 31).expect_err("strictly greater rejected");
+    assert!(matches!(err, SecurityError::GraphFileTooLarge { .. }));
+}
+
+#[test]
+fn graph_size_cap_missing_file_silently_returns() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing = tmp.path().join("does_not_exist.json");
+    check_graph_file_size_cap(&missing).expect("missing file silently ok");
+}
+
+// ---------------------------------------------------------------------------
+// sanitize_metadata
+// ---------------------------------------------------------------------------
+
+#[test]
+fn metadata_string_strips_control_chars() {
+    let result = sanitize_metadata_string("hello\x00\x1fworld");
+    assert!(!result.contains('\x00'));
+    assert!(!result.contains('\x1f'));
+    assert!(result.contains("helloworld"));
+}
+
+#[test]
+fn metadata_string_escapes_html() {
+    let result = sanitize_metadata_string("<script>alert('x')</script>");
+    assert!(result.contains("&lt;"));
+    assert!(result.contains("&gt;"));
+    assert!(!result.contains("<script>"));
+}
+
+#[test]
+fn metadata_string_escapes_quotes() {
+    let result = sanitize_metadata_string("a\"b'c");
+    assert!(result.contains("&quot;"));
+    assert!(result.contains("&#x27;"));
+}
+
+#[test]
+fn metadata_string_caps_length() {
+    let long = "a".repeat(METADATA_MAX_VALUE_LEN + 100);
+    let result = sanitize_metadata_string(&long);
+    assert!(result.chars().count() <= METADATA_MAX_VALUE_LEN);
+}
+
+#[test]
+fn metadata_value_preserves_simple_types() {
+    assert_eq!(sanitize_metadata_value(&json!(42)), json!(42));
+    assert!((sanitize_metadata_value(&json!(2.5)).as_f64().unwrap() - 2.5).abs() < 1e-9);
+    assert_eq!(sanitize_metadata_value(&json!(true)), json!(true));
+    assert_eq!(sanitize_metadata_value(&json!(false)), json!(false));
+    assert_eq!(sanitize_metadata_value(&Value::Null), Value::Null);
+}
+
+#[test]
+fn metadata_value_recurses_into_dict() {
+    let input = json!({ "k": "<script>x</script>" });
+    let out = sanitize_metadata_value(&input);
+    let obj = out.as_object().expect("dict");
+    let v = obj.get("k").expect("k").as_str().expect("str");
+    assert!(v.contains("&lt;"));
+}
+
+#[test]
+fn metadata_value_recurses_into_list() {
+    let input = json!(["<a>", "<b>", "<c>"]);
+    let out = sanitize_metadata_value(&input);
+    let arr = out.as_array().expect("array");
+    assert!(arr.iter().all(|v| v.as_str().unwrap().contains("&lt;")));
+}
+
+#[test]
+fn metadata_value_caps_list_length() {
+    let items: Vec<Value> = (0..METADATA_MAX_LIST_ITEMS * 3).map(|n| json!(n)).collect();
+    let out = sanitize_metadata_value(&Value::Array(items));
+    let arr = out.as_array().expect("array");
+    assert_eq!(arr.len(), METADATA_MAX_LIST_ITEMS);
+}
+
+#[test]
+fn metadata_none_returns_empty_map() {
+    assert!(sanitize_metadata(None).is_empty());
+}
+
+#[test]
+fn metadata_drops_empty_key() {
+    let mut map = Map::new();
+    map.insert("\x00".to_owned(), json!("v"));
+    map.insert("k".to_owned(), json!("v2"));
+    let out = sanitize_metadata_map(&map);
+    assert!(!out.contains_key("\x00"));
+    assert_eq!(out.get("k"), Some(&json!("v2")));
+    assert_eq!(out.len(), 1);
+}
+
+#[test]
+fn metadata_sanitizes_keys() {
+    let mut map = Map::new();
+    map.insert("<bad>".to_owned(), json!("v"));
+    let out = sanitize_metadata_map(&map);
+    assert!(!out.contains_key("<bad>"));
+    assert!(out.keys().any(|k| k.contains("&lt;")));
+}
+
+#[test]
+fn metadata_recursive_nested() {
+    let raw = json!({
+        "outer": {
+            "inner": "<script>x</script>",
+            "list": ["a", "<b>", 99, null, true],
+        },
+        "scalar": 42,
+    });
+    let map = raw.as_object().expect("obj").clone();
+    let out = sanitize_metadata(Some(&map));
+    let outer = out.get("outer").expect("outer").as_object().expect("obj");
+    let inner = outer.get("inner").expect("inner").as_str().expect("str");
+    assert!(inner.contains("&lt;"));
+    let items = outer.get("list").expect("list").as_array().expect("arr");
+    assert_eq!(items[0], json!("a"));
+    assert!(items[1].as_str().unwrap().contains("&lt;"));
+    assert_eq!(items[2], json!(99));
+    assert_eq!(items[3], Value::Null);
+    assert_eq!(items[4], json!(true));
+    assert_eq!(out.get("scalar"), Some(&json!(42)));
+}
+
+#[test]
+fn metadata_bool_not_coerced_to_int() {
+    let map = json!({"flag_t": true, "flag_f": false, "num": 1})
+        .as_object()
+        .expect("obj")
+        .clone();
+    let out = sanitize_metadata(Some(&map));
+    assert_eq!(out.get("flag_t"), Some(&json!(true)));
+    assert_eq!(out.get("flag_f"), Some(&json!(false)));
+    assert_eq!(out.get("num"), Some(&json!(1)));
 }

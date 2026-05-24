@@ -26,4 +26,8 @@ pub enum GlobalError {
     /// JSON serialisation / deserialisation error.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// Graph file exceeds the memory-bomb size cap.
+    #[error(transparent)]
+    Security(#[from] graphify_security::SecurityError),
 }

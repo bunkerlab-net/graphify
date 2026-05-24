@@ -2,10 +2,11 @@
 //!
 //! Ports the extension sets and `classify_file` from `graphify-py/graphify/detect.py`.
 
-use std::io::Read;
 use std::path::Path;
 
 use regex::Regex;
+
+use crate::shebang::shebang_interpreter;
 
 /// File extension → type mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,13 +39,15 @@ impl FileType {
 
 /// Code source file extensions (without the leading dot).
 ///
-/// This is the authoritative list — matches Python `CODE_EXTENSIONS`.
+/// This is the authoritative list — matches Python `CODE_EXTENSIONS`. The
+/// `.tsx` entry precedes `.js` to mirror the Python ordering, and `.ets`
+/// (`ArkTS` / `HarmonyOS`) was added alongside `.ejs`.
 pub const CODE_EXTENSIONS: &[&str] = &[
-    "py", "ts", "js", "jsx", "tsx", "mjs", "ejs", "go", "rs", "java", "groovy", "gradle", "cpp",
-    "cc", "cxx", "c", "h", "hpp", "rb", "swift", "kt", "kts", "cs", "scala", "php", "lua", "luau",
-    "toc", "zig", "ps1", "ex", "exs", "m", "mm", "jl", "vue", "svelte", "astro", "dart", "v", "sv",
-    "sql", "r", "f", "F", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08", "pas", "pp",
-    "dpr", "dpk", "lpr", "inc", "dfm", "lfm", "lpk", "sh", "bash", "json",
+    "py", "ts", "tsx", "js", "jsx", "mjs", "ejs", "ets", "go", "rs", "java", "groovy", "gradle",
+    "cpp", "cc", "cxx", "c", "h", "hpp", "rb", "swift", "kt", "kts", "cs", "scala", "php", "lua",
+    "luau", "toc", "zig", "ps1", "ex", "exs", "m", "mm", "jl", "vue", "svelte", "astro", "dart",
+    "v", "sv", "sql", "r", "f", "F", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08", "pas",
+    "pp", "dpr", "dpk", "lpr", "inc", "dfm", "lfm", "lpk", "sh", "bash", "json",
 ];
 
 const DOC_EXTENSIONS: &[&str] = &["md", "mdx", "qmd", "txt", "rst", "html", "yaml", "yml"];
@@ -126,28 +129,8 @@ fn looks_like_paper(path: &Path) -> bool {
 
 /// Peek at the first line of an extensionless file for a shebang interpreter.
 fn shebang_file_type(path: &Path) -> Option<FileType> {
-    let mut buf = vec![0u8; 128];
-    let n = {
-        let Ok(mut f) = std::fs::File::open(path) else {
-            return None;
-        };
-        f.read(&mut buf).unwrap_or(0)
-    };
-    let first = &buf[..n];
-    if !first.starts_with(b"#!") {
-        return None;
-    }
-    let line = String::from_utf8_lossy(first.split(|&b| b == b'\n').next()?);
-    let trimmed = line[2..].trim();
-    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    let raw_interp = parts.first()?;
-    let mut interp = raw_interp.split('/').next_back().unwrap_or(raw_interp);
-    if interp == "env"
-        && let Some(second) = parts.get(1)
-    {
-        interp = second.split('/').next_back().unwrap_or(second);
-    }
-    if SHEBANG_CODE_INTERPRETERS.contains(&interp) {
+    let interp = shebang_interpreter(path)?;
+    if SHEBANG_CODE_INTERPRETERS.contains(&interp.as_str()) {
         Some(FileType::Code)
     } else {
         None

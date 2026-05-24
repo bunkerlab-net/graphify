@@ -8,8 +8,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use graphify_build::{
-    Graph, GraphKind, build, build_from_json, deduplicate_by_label, prefix_graph_for_global,
-    prune_repo_from_graph,
+    Graph, GraphKind, build, build_from_json, deduplicate_by_label, norm_label,
+    prefix_graph_for_global, prune_repo_from_graph,
 };
 use serde_json::{Value, json};
 
@@ -403,4 +403,96 @@ fn prune_repo_from_graph_removes_tagged_nodes() {
     let n = prune_repo_from_graph(&mut h, "tag1");
     assert_eq!(n, 2);
     assert_eq!(h.node_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// norm_label: NFKC + Unicode-aware (#937)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn norm_label_preserves_cjk() {
+    assert_eq!(norm_label("認証"), "認証");
+    assert_eq!(norm_label("身份验证 API"), "身份验证 api");
+}
+
+#[test]
+fn norm_label_collapses_punctuation_to_spaces() {
+    assert_eq!(norm_label("foo--bar__baz"), "foo bar baz");
+}
+
+#[test]
+fn norm_label_nfkc_normalizes_fullwidth() {
+    assert_eq!(norm_label("ＡＢＣ"), "abc");
+}
+
+// ---------------------------------------------------------------------------
+// build_from_json: drop cross-language INFERRED `calls` edges (#993, #991)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn build_drops_cross_language_inferred_calls_edge() {
+    let ext = json!({
+        "nodes": [
+            {"id": "py_parse", "label": "parse", "file_type": "code", "source_file": "src/lib.py"},
+            {"id": "rs_parse", "label": "parse", "file_type": "code", "source_file": "src/lib.rs"},
+        ],
+        "edges": [
+            {"source": "py_parse", "target": "rs_parse", "relation": "calls",
+             "confidence": "INFERRED", "source_file": "src/lib.py"},
+        ],
+    });
+    let g = build_from_json(ext, true, None).expect("build");
+    assert_eq!(g.edge_count(), 0);
+}
+
+#[test]
+fn build_keeps_same_language_inferred_calls_edge() {
+    let ext = json!({
+        "nodes": [
+            {"id": "p1", "label": "parse", "file_type": "code", "source_file": "src/a.py"},
+            {"id": "p2", "label": "parse_inner", "file_type": "code", "source_file": "src/b.py"},
+        ],
+        "edges": [
+            {"source": "p1", "target": "p2", "relation": "calls",
+             "confidence": "INFERRED", "source_file": "src/a.py"},
+        ],
+    });
+    let g = build_from_json(ext, true, None).expect("build");
+    assert_eq!(g.edge_count(), 1);
+}
+
+#[test]
+fn build_keeps_extracted_cross_language_edges() {
+    // The cross-language filter only applies to INFERRED edges. EXTRACTED
+    // edges (from real tree-sitter parse evidence) survive.
+    let ext = json!({
+        "nodes": [
+            {"id": "py", "label": "foo", "file_type": "code", "source_file": "src/a.py"},
+            {"id": "rs", "label": "foo", "file_type": "code", "source_file": "src/a.rs"},
+        ],
+        "edges": [
+            {"source": "py", "target": "rs", "relation": "calls",
+             "confidence": "EXTRACTED", "source_file": "src/a.py"},
+        ],
+    });
+    let g = build_from_json(ext, true, None).expect("build");
+    assert_eq!(g.edge_count(), 1);
+}
+
+#[test]
+fn build_keeps_inferred_uses_edge_across_languages() {
+    // The filter is scoped to `calls` only — other relations (`uses`,
+    // `implements`, etc.) are not dropped across language boundaries.
+    let ext = json!({
+        "nodes": [
+            {"id": "py", "label": "Foo", "file_type": "code", "source_file": "src/a.py"},
+            {"id": "rs", "label": "Foo", "file_type": "code", "source_file": "src/a.rs"},
+        ],
+        "edges": [
+            {"source": "py", "target": "rs", "relation": "uses",
+             "confidence": "INFERRED", "source_file": "src/a.py"},
+        ],
+    });
+    let g = build_from_json(ext, true, None).expect("build");
+    assert_eq!(g.edge_count(), 1);
 }

@@ -132,6 +132,11 @@ pub(crate) fn merge_with_existing_graph(
     extract_targets: &[PathBuf],
     project_root: &Path,
 ) -> Value {
+    // Reject oversized graph files before reading them into memory — mirrors
+    // the size-cap guard added in `graphify-py/graphify/watch.py`.
+    if graphify_security::check_graph_file_size_cap(existing_graph_path).is_err() {
+        return Value::Null;
+    }
     let Ok(text) = std::fs::read_to_string(existing_graph_path) else {
         return Value::Null;
     };
@@ -450,6 +455,9 @@ pub(crate) fn write_graph_tmp(
 
 /// Returns `true` when the candidate graph data matches what's already on disk.
 pub(crate) fn compare_existing_graph(existing_graph_path: &Path, candidate_data: &Value) -> bool {
+    if graphify_security::check_graph_file_size_cap(existing_graph_path).is_err() {
+        return false;
+    }
     let Ok(text) = std::fs::read_to_string(existing_graph_path) else {
         return false;
     };

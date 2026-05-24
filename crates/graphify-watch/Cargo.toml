@@ -16,6 +16,7 @@ graphify-detect = { workspace = true }
 graphify-export = { workspace = true }
 graphify-extract = { workspace = true }
 graphify-report = { workspace = true }
+graphify-security = { workspace = true }
 indexmap = { workspace = true }
 notify = "8"
 notify-debouncer-full = "0.7"

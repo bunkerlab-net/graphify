@@ -69,8 +69,12 @@ pub(crate) fn default_graph_path() -> PathBuf {
 /// Load and parse `graph.json` into a [`graphify_build::Graph`].
 ///
 /// Reads the file, parses JSON, and calls `build_from_json`. Used by every
-/// command that needs to traverse or query the graph.
+/// command that needs to traverse or query the graph. Rejects graph files
+/// larger than [`graphify_security::MAX_GRAPH_FILE_BYTES`] before reading
+/// them into memory — mirrors the Python `_enforce_graph_size_cap_or_exit`
+/// helper in `graphify-py/graphify/__main__.py`.
 pub(crate) fn load_graph(path: &std::path::Path) -> anyhow::Result<graphify_build::Graph> {
+    graphify_security::check_graph_file_size_cap(path)?;
     let contents = std::fs::read_to_string(path)?;
     let value: serde_json::Value = serde_json::from_str(&contents)?;
     let graph = graphify_build::build_from_json(value, true, None)?;

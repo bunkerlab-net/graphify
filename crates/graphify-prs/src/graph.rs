@@ -70,9 +70,18 @@ pub fn build_file_index(nodes: &[Value]) -> FileIndex {
 }
 
 /// Load `graph.json` from `path`, returning parsed JSON or `None`.
+///
+/// Rejects graph files larger than
+/// [`graphify_security::MAX_GRAPH_FILE_BYTES`] silently (returns `None`)
+/// to match the Python `_load_graph_json` behaviour after the cap was
+/// added — the caller fell back to "no graph" rather than surfacing a
+/// `ValueError`.
 #[must_use]
 pub fn load_graph_json(path: &Path) -> Option<Value> {
     if !path.exists() {
+        return None;
+    }
+    if graphify_security::check_graph_file_size_cap(path).is_err() {
         return None;
     }
     let text = std::fs::read_to_string(path).ok()?;

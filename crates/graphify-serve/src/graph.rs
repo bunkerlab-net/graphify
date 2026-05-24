@@ -60,6 +60,9 @@ pub fn load_graph(graph_path: &str) -> Result<Graph, ServeError> {
         )));
     }
 
+    graphify_security::check_graph_file_size_cap(&resolved)
+        .map_err(|e| ServeError::Io(format!("{e}")))?;
+
     let text = std::fs::read_to_string(&resolved).map_err(|e| ServeError::Io(format!("{e}")))?;
 
     let mut data: Value =
@@ -704,6 +707,28 @@ pub fn shortest_path(graph: &Graph, src: &str, tgt: &str) -> Option<Vec<String>>
 
 // ── Main query entry point ────────────────────────────────────────────────────
 
+/// Split a query string into searchable terms.
+///
+/// Terms are lowercased; short tokens (≤ 2 chars) are dropped only when
+/// they are entirely English (ASCII `a-z`). Non-ASCII short tokens such as
+/// CJK characters are kept so non-English queries remain searchable (#964).
+/// Mirrors Python `_query_terms` in `serve.py`.
+#[must_use]
+pub fn query_terms(question: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in question.split_whitespace() {
+        let lower = raw.to_lowercase();
+        if lower.is_empty() {
+            continue;
+        }
+        let is_english_only = lower.chars().all(|c| c.is_ascii_lowercase());
+        if !is_english_only || lower.chars().count() > 2 {
+            out.push(lower);
+        }
+    }
+    out
+}
+
 /// High-level graph query: search, traverse, and render as text.
 ///
 /// Mirrors Python `_query_graph_text`.
@@ -717,11 +742,7 @@ pub fn query_graph_text<S: BuildHasher>(
     context_filters: Option<&[String]>,
     idf_cache: &mut HashMap<String, f64, S>,
 ) -> String {
-    let terms: Vec<String> = question
-        .split_whitespace()
-        .filter(|t| t.len() > 2)
-        .map(str::to_lowercase)
-        .collect();
+    let terms: Vec<String> = query_terms(question);
     let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
     let scored = score_nodes(graph, &term_refs, idf_cache);
     let start_nodes = pick_seeds(&scored, 3, 0.2);
