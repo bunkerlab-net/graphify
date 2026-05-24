@@ -26,5 +26,6 @@ jobs:
           cache: true
           experimental: true
           install: true
+          install_args: cargo:cargo-deny
 
       - run: mise x cargo:cargo-deny -- cargo deny check bans sources
