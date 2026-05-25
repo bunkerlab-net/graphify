@@ -1,3 +1,7 @@
+---
+description: Resync graphify with graphify-py
+---
+
 # Resync graphify with graphify-py
 
 Analyse all commits in `./graphify-py` since the last pinned submodule commit and port the applicable changes to this
