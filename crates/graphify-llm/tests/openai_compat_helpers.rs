@@ -46,7 +46,7 @@ impl Drop for EnvGuard {
 // ── api_timeout ─────────────────────────────────────────────────────────────
 
 #[test]
-fn api_timeout_default_is_600s() {
+fn api_timeout_default_is_10_minutes() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_API_TIMEOUT");
     assert_eq!(api_timeout(), Duration::from_mins(10));

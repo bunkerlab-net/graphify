@@ -153,7 +153,7 @@ fn test_transcribe_uses_cache() {
         &MissingWhisperRunner,
         &UnreachableYtDlpRunner,
     )
-    .expect("test invariant");
+    .expect("cache hit should be returned without invoking whisper");
 
     assert_eq!(result, cached);
 }
@@ -179,7 +179,7 @@ fn test_transcribe_force_reruns() {
         &runner,
         &UnreachableYtDlpRunner,
     )
-    .expect("test invariant");
+    .expect("force=true should re-transcribe even when a cached transcript exists");
 
     let content = std::fs::read_to_string(&result).expect("read fixture");
     assert_eq!(content, "New transcript segment.");
@@ -201,7 +201,7 @@ fn test_transcribe_missing_whisper_binary() {
         &MissingWhisperRunner,
         &UnreachableYtDlpRunner,
     )
-    .expect_err("expected Err");
+    .expect_err("transcribe_with must surface BinaryMissing when whisper is absent");
 
     assert!(
         matches!(err, TranscribeError::BinaryMissing { .. }),

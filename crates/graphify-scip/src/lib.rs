@@ -289,6 +289,7 @@ fn scip_relation_for(rel: &Map<String, Value>) -> String {
     "scip_ref".to_string()
 }
 
+#[must_use]
 fn first_occurrence_line(occurrences: Option<&Value>) -> i64 {
     let Some(arr) = occurrences.and_then(Value::as_array) else {
         return 0;

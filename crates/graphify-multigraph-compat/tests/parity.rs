@@ -1,5 +1,4 @@
 //! Parity tests against `graphify-py/tests/test_multigraph_compat.py`.
-#![allow(clippy::expect_used)]
 
 use graphify_multigraph_compat::{probe_multigraph_capabilities, require_multigraph_capabilities};
 

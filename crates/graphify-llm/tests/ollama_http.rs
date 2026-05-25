@@ -68,7 +68,7 @@ fn call_ollama_via_mock() {
         128,
         "hello world",
     )
-    .expect("test invariant");
+    .expect("mock ollama server should return a valid graph response");
     assert_eq!(resp.nodes.len(), 1);
     assert_eq!(resp.input_tokens, 12);
 }
@@ -93,7 +93,7 @@ fn call_ollama_plain_via_mock() {
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
     let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32)
-        .expect("test invariant");
+        .expect("mock ollama server should return a plain-text response");
     assert_eq!(out, "ollama answers");
 }
 
@@ -126,7 +126,7 @@ fn call_ollama_low_token_warning_path() {
         64,
         "hi",
     )
-    .expect("test invariant");
+    .expect("mock ollama server should return a response with low token count");
     assert_eq!(resp.output_tokens, 10);
 }
 
