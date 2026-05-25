@@ -62,7 +62,7 @@ regardless of whether Rust changes follow.
    above forbids. Verify with:
 
    ```bash
-   git -C graphify-py merge-base --is-ancestor <target-ref> origin/$(git config -f ../.gitmodules submodule.graphify-py.branch)
+   git -C graphify-py merge-base --is-ancestor <target-ref> origin/$(git config -f .gitmodules submodule.graphify-py.branch)
    ```
 
    A non-zero exit means the ref is on a different lineage; stop and ask the
