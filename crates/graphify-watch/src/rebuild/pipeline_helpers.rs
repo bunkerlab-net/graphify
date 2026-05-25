@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use graphify_build::{Graph, build_from_json};
 use graphify_cluster::{cluster, remap_communities_to_previous, score_all};
+use graphify_detect::{FileType, classify_file};
 use graphify_export::{backup_if_protected, to_html, to_json};
 use graphify_extract::extract;
 use indexmap::IndexMap;
@@ -44,6 +45,23 @@ pub(crate) fn detect_phase(watch_path: &Path) -> (DetectResult, Vec<PathBuf>) {
         );
     }
     (detected, code_files)
+}
+
+/// `true` when `path` would have been pulled into the rebuild's `code_files`
+/// set if it still existed on disk. Mirrors the inclusion rule used in
+/// [`crate::rebuild::helpers::detect_code_files`]: any `FileType::Code` plus
+/// the markdown-family documents (`.md` / `.mdx` / `.qmd`) that have AST
+/// extractors. Used to narrow the shrink-guard bypass — a deleted
+/// `.gitignore` or `.env` is not a tracked-code deletion.
+fn is_tracked_code_path(path: &Path) -> bool {
+    if matches!(classify_file(path), Some(FileType::Code)) {
+        return true;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    matches!(ext, "md" | "mdx" | "qmd")
 }
 
 /// Result of [`compute_extract_targets`]: which files to extract from, which
@@ -96,11 +114,15 @@ pub(crate) fn compute_extract_targets(
         if cand.exists() && code_set.contains(&cand) {
             wanted.push(cand);
         } else {
-            // A path that doesn't exist on disk is a true deletion. A path
-            // that exists but isn't in `code_set` (e.g. a touched README)
-            // still earns eviction so its stale nodes drop out, but it does
-            // NOT count as a tracked-file deletion for the shrink guard.
-            if !cand.exists() {
+            // A path that doesn't exist on disk is a deletion. Only flip the
+            // shrink-guard bypass when the deleted path's extension matches
+            // the inclusion rule used by `detect_code_files` (code files plus
+            // markdown-family documents that have AST extractors). A deleted
+            // `.gitignore` or `.env` is not a tracked-code deletion and must
+            // not suppress the guard. A path that exists but isn't in
+            // `code_set` (e.g. a touched README that lives outside the watch
+            // root) still earns eviction so its stale nodes drop out.
+            if !cand.exists() && is_tracked_code_path(&cand) {
                 had_tracked_deletion = true;
             }
             let rel = cand.strip_prefix(project_root).map_or_else(
