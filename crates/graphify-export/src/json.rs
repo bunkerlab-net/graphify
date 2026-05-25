@@ -20,6 +20,11 @@ const MAX_BACKUP_PRELOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Stream-hash `path` via a 64 KiB buffered reader. Returns `None` when the
 /// file can't be opened or read.
+///
+/// The 64 KiB read buffer is heap-allocated to stay under the workspace
+/// `clippy::large_stack_arrays` threshold (16 KiB). One allocation per file
+/// is negligible against the I/O cost; the same pattern is used in
+/// `graphify-detect/src/manifest.rs`.
 fn sha256_file(path: &Path) -> Option<[u8; 32]> {
     let mut hasher = Sha256::new();
     let mut reader = BufReader::new(File::open(path).ok()?);

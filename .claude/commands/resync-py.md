@@ -51,22 +51,22 @@ regardless of whether Rust changes follow.
    # No <target-ref> supplied — track the branch from .gitmodules
    git submodule update --init --remote graphify-py
 
-   # <target-ref> supplied — fetch and check out the specific ref
+   # <target-ref> supplied — fetch first, validate ancestry, THEN check out.
+   # Running the checkout before the validation would leave a detached HEAD on
+   # a foreign lineage if the ref turns out to be off-branch; the order here
+   # avoids that footgun.
    git submodule update --init graphify-py
    git -C graphify-py fetch origin --tags
+   git -C graphify-py merge-base --is-ancestor <target-ref> \
+       origin/$(git config -f .gitmodules submodule.graphify-py.branch) \
+       || { echo "<target-ref> is not on the tracked branch; ask the user before continuing"; exit 1; }
    git -C graphify-py checkout --detach <target-ref>
    ```
 
-   Refuse the `<target-ref>` form if the ref is not an ancestor of the tracked
-   branch's tip — silently jumping off the tracked branch is what the warning
-   above forbids. Verify with:
-
-   ```bash
-   git -C graphify-py merge-base --is-ancestor <target-ref> origin/$(git config -f .gitmodules submodule.graphify-py.branch)
-   ```
-
-   A non-zero exit means the ref is on a different lineage; stop and ask the
-   user before proceeding.
+   The `merge-base --is-ancestor` step is the load-bearing safeguard. A
+   non-zero exit means the ref is on a different lineage; stop and ask the
+   user before proceeding — silently jumping off the tracked branch is what
+   the warning above forbids.
 
 3. Identify the new commit hash:
 

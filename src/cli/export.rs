@@ -383,6 +383,7 @@ fn reconstruct_communities_from_graph(
 /// from the per-node `community` attribute on `graph`. This is the join point
 /// for the d778e2c fallback — every export command goes through here so the
 /// behaviour is uniform.
+#[must_use]
 fn load_analysis_with_community_fallback(
     sidecar_path: &std::path::Path,
     graph: &graphify_build::Graph,
