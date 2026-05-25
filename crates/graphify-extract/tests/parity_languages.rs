@@ -276,6 +276,147 @@ fn java_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+/// Helper used by the cross-language reference-context parity tests below.
+/// Maps a node label as it appears on graph edges back to its display label,
+/// stripping `()` suffixes and leading `.` characters so the assertions stay
+/// readable.
+fn normalise_label(label: &str) -> String {
+    label
+        .trim_end_matches("()")
+        .trim_start_matches('.')
+        .to_string()
+}
+
+/// Return the set of `(source_label, target_label)` pairs for edges matching
+/// `relation` (and optionally `context`). Used by reference-context tests so
+/// the assertion reads like Python's `_edge_labels(result, relation, context)`.
+fn edge_label_pairs(
+    result: &graphify_extract::types::FileResult,
+    relation: &str,
+    context: Option<&str>,
+) -> std::collections::HashSet<(String, String)> {
+    let id_to_label: std::collections::HashMap<&str, String> = result
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), normalise_label(&n.label)))
+        .collect();
+    result
+        .edges
+        .iter()
+        .filter(|e| e.relation == relation)
+        .filter(|e| match context {
+            Some(c) => e.context.as_deref() == Some(c),
+            None => true,
+        })
+        .map(|e| {
+            (
+                id_to_label
+                    .get(e.source.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| e.source.clone()),
+                id_to_label
+                    .get(e.target.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| e.target.clone()),
+            )
+        })
+        .collect()
+}
+
+/// C# `base_list` entries are split into `inherits` (base class) and
+/// `implements` (interface implementation). The pre-scan recognises `IProcessor`
+/// as an interface via both the in-file `interface IProcessor` declaration AND
+/// the `I<UpperLetter>…` naming convention.
+///
+/// Ports `tests/test_languages.py::test_csharp_splits_inherits_and_implements_edges`.
+#[test]
+fn csharp_splits_inherits_and_implements_edges() {
+    let result = extract_csharp(&fixtures().join("sample.cs"));
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    let implements = edge_label_pairs(&result, "implements", None);
+    assert!(
+        inherits.contains(&("DataProcessor".to_string(), "Processor".to_string())),
+        "expected DataProcessor inherits Processor, got inherits={inherits:?}"
+    );
+    assert!(
+        implements.contains(&("DataProcessor".to_string(), "IProcessor".to_string())),
+        "expected DataProcessor implements IProcessor, got implements={implements:?}"
+    );
+}
+
+/// Java's source-level `extends` keyword (class extending a base class) is
+/// normalised to the `inherits` relation. `implements` (class implementing
+/// an interface) keeps its name.
+///
+/// Ports `tests/test_languages.py::test_java_normalizes_inherits_and_implements`.
+#[test]
+fn java_normalises_inherits_and_implements() {
+    let result = extract_java(&fixtures().join("sample.java"));
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    let implements = edge_label_pairs(&result, "implements", None);
+    assert!(
+        inherits.contains(&("DataProcessor".to_string(), "BaseProcessor".to_string())),
+        "expected DataProcessor inherits BaseProcessor, got inherits={inherits:?}"
+    );
+    assert!(
+        implements.contains(&("DataProcessor".to_string(), "Processor".to_string())),
+        "expected DataProcessor implements Processor, got implements={implements:?}"
+    );
+}
+
+/// C# methods emit `references` edges tagged with `parameter_type`,
+/// `return_type`, `generic_arg` based on the method signature shape.
+///
+/// Ports `tests/test_languages.py::test_csharp_parameter_return_and_generic_contexts`.
+#[test]
+fn csharp_parameter_return_and_generic_contexts() {
+    let result = extract_csharp(&fixtures().join("sample.cs"));
+    let params = edge_label_pairs(&result, "references", Some("parameter_type"));
+    let returns = edge_label_pairs(&result, "references", Some("return_type"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        params.contains(&("Build".to_string(), "HttpClient".to_string())),
+        "expected Build(HttpClient) param edge, got {params:?}"
+    );
+    assert!(
+        returns.contains(&("Build".to_string(), "Result".to_string())),
+        "expected Build → Result return edge, got {returns:?}"
+    );
+    assert!(
+        generics.contains(&("Build".to_string(), "DataProcessor".to_string())),
+        "expected Build → DataProcessor generic_arg, got {generics:?}"
+    );
+}
+
+/// Java methods emit `references` edges with `parameter_type`, `return_type`,
+/// `generic_arg`, plus `attribute` for `@Override`-style annotations.
+///
+/// Ports `tests/test_languages.py::test_java_parameter_return_generic_and_attribute_contexts`.
+#[test]
+fn java_parameter_return_generic_and_attribute_contexts() {
+    let result = extract_java(&fixtures().join("sample.java"));
+    let params = edge_label_pairs(&result, "references", Some("parameter_type"));
+    let returns = edge_label_pairs(&result, "references", Some("return_type"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    let attrs = edge_label_pairs(&result, "references", Some("attribute"));
+    assert!(
+        params.contains(&("build".to_string(), "HttpClient".to_string())),
+        "expected build(HttpClient) param edge, got {params:?}"
+    );
+    assert!(
+        returns.contains(&("build".to_string(), "Result".to_string())),
+        "expected build → Result return edge, got {returns:?}"
+    );
+    assert!(
+        generics.contains(&("build".to_string(), "DataProcessor".to_string())),
+        "expected build → DataProcessor generic_arg, got {generics:?}"
+    );
+    assert!(
+        attrs.contains(&("build".to_string(), "Override".to_string())),
+        "expected build → Override attribute, got {attrs:?}"
+    );
+}
+
 #[test]
 fn groovy_extractor_produces_nodes() {
     let result = extract_groovy(&fixtures().join("sample.groovy"));

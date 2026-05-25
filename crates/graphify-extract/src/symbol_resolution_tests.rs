@@ -81,6 +81,61 @@ fn existing_edge_pairs_includes_relation() {
         },
     ];
     let pairs = existing_edge_pairs(&edges);
-    assert!(pairs.contains(&("a".to_string(), "b".to_string(), "contains".to_string())));
-    assert!(pairs.contains(&("a".to_string(), "b".to_string(), "calls".to_string())));
+    assert!(pairs.contains(&(
+        "a".to_string(),
+        "b".to_string(),
+        "contains".to_string(),
+        String::new()
+    )));
+    assert!(pairs.contains(&(
+        "a".to_string(),
+        "b".to_string(),
+        "calls".to_string(),
+        String::new()
+    )));
+}
+
+#[test]
+fn existing_edge_pairs_distinguishes_context() {
+    // Two `references` edges between the same nodes but with different
+    // contexts must both survive deduplication. Ports the dedup-key change
+    // in graphify-py `_apply_symbol_resolution_facts` (ab4e542).
+    let edges = vec![
+        Edge {
+            source: "a".to_string(),
+            target: "b".to_string(),
+            relation: "references".to_string(),
+            confidence: String::new(),
+            source_file: String::new(),
+            source_location: None,
+            weight: 0.0,
+            context: Some("parameter_type".to_string()),
+            confidence_score: None,
+        },
+        Edge {
+            source: "a".to_string(),
+            target: "b".to_string(),
+            relation: "references".to_string(),
+            confidence: String::new(),
+            source_file: String::new(),
+            source_location: None,
+            weight: 0.0,
+            context: Some("return_type".to_string()),
+            confidence_score: None,
+        },
+    ];
+    let pairs = existing_edge_pairs(&edges);
+    assert!(pairs.contains(&(
+        "a".to_string(),
+        "b".to_string(),
+        "references".to_string(),
+        "parameter_type".to_string()
+    )));
+    assert!(pairs.contains(&(
+        "a".to_string(),
+        "b".to_string(),
+        "references".to_string(),
+        "return_type".to_string()
+    )));
+    assert_eq!(pairs.len(), 2);
 }

@@ -271,7 +271,28 @@ const CONTEXT_HINTS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Normalise an explicit filter list (deduplicate, strip whitespace).
+/// Resolve a single token alias to its canonical context name (e.g. `"param"` →
+/// `"parameter_type"`, `"decorator"` → `"attribute"`). Returns `None` when the
+/// input is already canonical or unknown — callers fall back to the original.
+///
+/// Mirrors Python `_CONTEXT_FILTER_ALIASES`.
+fn context_filter_alias(key: &str) -> Option<&'static str> {
+    match key {
+        "param" | "params" | "parameter" | "parameters" | "argument" | "arguments" | "arg"
+        | "args" => Some("parameter_type"),
+        "return" | "returns" | "returned" => Some("return_type"),
+        "generic" | "generics" | "template" | "templates" => Some("generic_arg"),
+        "annotation" | "annotations" | "decorator" | "decorators" => Some("attribute"),
+        "calls" | "called" | "invoke" | "invocation" => Some("call"),
+        "fields" | "property" | "properties" | "member" | "members" => Some("field"),
+        "imports" | "imported" | "module" | "modules" => Some("import"),
+        "exports" | "exported" => Some("export"),
+        _ => None,
+    }
+}
+
+/// Normalise an explicit filter list (deduplicate, strip whitespace, resolve
+/// shorthand aliases to their canonical edge-context names).
 ///
 /// Mirrors Python `_normalize_context_filters`.
 #[must_use]
@@ -280,8 +301,12 @@ pub fn normalize_context_filters(filters: &[String]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     for value in filters {
         let key = strip_diacritics(value.trim()).to_lowercase();
-        if !key.is_empty() && seen.insert(key.clone()) {
-            normalized.push(key);
+        if key.is_empty() {
+            continue;
+        }
+        let canonical = context_filter_alias(&key).map_or(key, str::to_owned);
+        if seen.insert(canonical.clone()) {
+            normalized.push(canonical);
         }
     }
     normalized

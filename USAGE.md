@@ -99,6 +99,14 @@ Watch a folder and rebuild on file changes (Code/docs/images). Runs until interr
 graphify watch .
 ```
 
+The watch path and the post-commit hook share a shrink-guard that refuses to
+overwrite `graph.json` when the rebuilt node count drops without explanation —
+this catches silent corruption from half-finished extraction chunks. When the
+caller hands the rebuilder an explicit list of deleted paths (the post-commit
+hook does this from `git diff --name-only HEAD~1 HEAD`), the shrink is treated
+as intentional and the guard is skipped — no `--force` needed for delete-heavy
+commits.
+
 ### `cluster-only <path>`
 
 Rerun clustering on an existing `graph.json` and regenerate the report and HTML viz. Useful after tweaking cluster
@@ -127,6 +135,12 @@ graphify query "..." --dfs                          # depth-first instead of bre
 graphify query "..." --budget 4000                  # cap output at N tokens (default 2000)
 graphify query "..." --context CALLS --context IMPORTS_FROM   # repeatable edge-context filters
 ```
+
+`--context` accepts canonical edge-context names (`call`, `import`, `field`,
+`parameter_type`, `return_type`, `generic_arg`, `attribute`, `export`) and also
+common aliases — `param`/`params`/`parameter`/`argument` resolve to
+`parameter_type`, `return`/`returns` to `return_type`, `generic`/`template` to
+`generic_arg`, `annotation`/`decorator` to `attribute`. Case-insensitive.
 
 ### `path "<A>" "<B>"`
 
@@ -218,8 +232,12 @@ graphify export graphml    # GraphML for Gephi / yEd / Cytoscape
 graphify export wiki       # per-community markdown wiki under graphify-out/wiki/
 ```
 
-`export wiki` reads communities from `graphify-out/.graphify_analysis.json` and refuses to run if the sidecar is
-missing — run `graphify extract .` (or `cluster-only`) first to regenerate the community map.
+All `graphify export <html|obsidian|wiki|svg|graphml|neo4j>` subcommands prefer
+the analysis sidecar at `graphify-out/.graphify_analysis.json`. When the sidecar
+is missing or empty — which happens after the watch / post-commit rebuild path
+that only refreshes `graph.json` + `GRAPH_REPORT.md` — exports reconstruct the
+community map from the per-node `community` attribute on `graph.json`. `export
+wiki` only bails out when both sources are empty.
 
 ```bash
 graphify export neo4j                                            # → graphify-out/cypher.txt (import via cypher-shell)

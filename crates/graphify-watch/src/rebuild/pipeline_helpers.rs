@@ -258,6 +258,7 @@ pub(crate) fn run_no_cluster_path(
     existing_graph_data: &Value,
     out: &Path,
     force: bool,
+    had_explicit_deletions: bool,
     t_post: std::time::Instant,
 ) -> Result<bool, WatchError> {
     let edges = result
@@ -280,7 +281,13 @@ pub(crate) fn run_no_cluster_path(
     }
     let t_write = std::time::Instant::now();
     if !same_graph {
-        check_shrink(force, existing_graph_data, &candidate_data, None)?;
+        check_shrink(
+            force,
+            existing_graph_data,
+            &candidate_data,
+            None,
+            had_explicit_deletions,
+        )?;
         std::fs::write(existing_graph_path, json_text(&candidate_data).as_bytes())
             .map_err(WatchError::Io)?;
     }
@@ -507,6 +514,9 @@ pub(crate) fn compare_existing_report(report_path: &Path, report_content: &str) 
 pub(crate) struct CommitArgs<'a> {
     /// Bypass the shrink guard when `true`.
     pub force: bool,
+    /// Skip the shrink guard when the caller has declared deletions — the
+    /// smaller graph is expected and not a sign of silent corruption.
+    pub had_explicit_deletions: bool,
     /// The graph JSON that was on disk before this rebuild began.
     pub existing_graph_data: &'a Value,
     /// The newly built graph JSON to be committed.
@@ -537,6 +547,7 @@ pub(crate) fn commit_rebuild_outputs(args: &CommitArgs<'_>) -> Result<(), WatchE
         args.existing_graph_data,
         args.candidate_graph_data,
         Some(args.graph_tmp),
+        args.had_explicit_deletions,
     )?;
     let _ = backup_if_protected(args.out);
     std::fs::rename(args.graph_tmp, args.existing_graph_path).map_err(WatchError::Io)?;
@@ -607,6 +618,9 @@ pub(crate) struct FinaliseArgs<'a> {
     pub no_change: bool,
     /// Bypass the shrink guard when `true`.
     pub force: bool,
+    /// Skip the shrink guard when the caller has declared deletions — see
+    /// [`check_shrink`](crate::rebuild::shrink::check_shrink) for context.
+    pub had_explicit_deletions: bool,
     /// Final graph value including attached hyperedges.
     pub graph_with_hyper: &'a Graph,
     /// Community detection result mapping community ID → member node IDs.
@@ -645,6 +659,7 @@ pub(crate) fn finalise_rebuild(args: &FinaliseArgs<'_>) -> Result<(), WatchError
     } else {
         commit_rebuild_outputs(&CommitArgs {
             force: args.force,
+            had_explicit_deletions: args.had_explicit_deletions,
             existing_graph_data: args.existing_graph_data,
             candidate_graph_data: args.candidate_graph_data,
             graph_tmp: args.graph_tmp,

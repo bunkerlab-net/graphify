@@ -67,24 +67,30 @@ pub fn build_label_index(nodes: &[Node]) -> indexmap::IndexMap<String, Vec<Strin
     index
 }
 
-/// All existing `(source, target, relation)` edge triples.
+/// All existing `(source, target, relation, context)` edge tuples.
 ///
 /// Including the relation lets the resolver distinguish a semantically
 /// new `calls` edge from an existing `contains` edge between the same
-/// endpoints (#F5).
+/// endpoints (#F5). Including `context` (defaulting to the empty string
+/// when absent) further distinguishes `references/parameter_type` from
+/// `references/return_type` on the same `(source, target)` pair, so two
+/// reference edges with different contexts both survive deduplication —
+/// matches the Python change in `_apply_symbol_resolution_facts`
+/// (graphify-py @ ab4e542).
 #[must_use]
-pub fn existing_edge_pairs(edges: &[Edge]) -> HashSet<(String, String, String)> {
-    let mut triples: HashSet<(String, String, String)> = HashSet::new();
+pub fn existing_edge_pairs(edges: &[Edge]) -> HashSet<(String, String, String, String)> {
+    let mut tuples: HashSet<(String, String, String, String)> = HashSet::new();
     for edge in edges {
         if !edge.source.is_empty() && !edge.target.is_empty() {
-            triples.insert((
+            tuples.insert((
                 edge.source.clone(),
                 edge.target.clone(),
                 edge.relation.clone(),
+                edge.context.clone().unwrap_or_default(),
             ));
         }
     }
-    triples
+    tuples
 }
 
 /// Collect raw calls from all per-file fragments. Empty `raw_calls` slices

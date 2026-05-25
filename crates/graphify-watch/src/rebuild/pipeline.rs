@@ -77,6 +77,7 @@ pub(crate) fn rebuild_code_inner(
     )
     .map_err(WatchError::Io)?;
 
+    let had_explicit_deletions = !deleted_paths.is_empty();
     if no_cluster {
         return run_no_cluster_path(
             &result,
@@ -84,6 +85,7 @@ pub(crate) fn rebuild_code_inner(
             &existing_graph_data,
             &out,
             force,
+            had_explicit_deletions,
             t_post,
         );
     }
@@ -123,6 +125,7 @@ pub(crate) fn rebuild_code_inner(
     finalise_rebuild(&FinaliseArgs {
         no_change,
         force,
+        had_explicit_deletions,
         graph_with_hyper: &graph_with_hyper,
         communities: &communities,
         labels: &labels,

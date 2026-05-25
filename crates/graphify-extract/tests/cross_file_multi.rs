@@ -161,3 +161,238 @@ fn extract_with_cache_root_uses_provided_root() {
     let result = extract(&[path], Some(tmp.path()));
     assert!(!result.nodes.is_empty());
 }
+
+/// Python function definitions emit `references` edges with `parameter_type`,
+/// `return_type`, and `generic_arg` contexts depending on the annotation shape.
+///
+/// Ports `tests/test_python_import_resolution.py::test_python_parameter_return_and_generic_contexts`.
+#[test]
+fn python_parameter_return_and_generic_contexts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pkg = tmp.path().join("pkg");
+    fs::create_dir_all(&pkg).expect("create_dir_all");
+    let model = pkg.join("model.py");
+    fs::write(
+        &model,
+        "class Payload:\n    pass\n\nclass Result:\n    pass\n",
+    )
+    .expect("write model.py");
+    let service = pkg.join("service.py");
+    fs::write(
+        &service,
+        "from .model import Payload, Result\n\n\
+         def process(item: Payload) -> Result:\n    return Result()\n\n\
+         def process_many(items: list[Payload]) -> Result:\n    return Result()\n",
+    )
+    .expect("write service.py");
+
+    let result = extract(&[model.clone(), service.clone()], Some(tmp.path()));
+    let lookup_str =
+        |m: &indexmap::IndexMap<String, serde_json::Value>, key: &str| -> Option<String> {
+            m.get(key).and_then(|v| v.as_str()).map(str::to_string)
+        };
+    let id_to_label: std::collections::HashMap<String, String> = result
+        .nodes
+        .iter()
+        .filter_map(|n| Some((lookup_str(n, "id")?, lookup_str(n, "label")?)))
+        .collect();
+    let pairs: std::collections::HashSet<(String, String, Option<String>)> = result
+        .edges
+        .iter()
+        .filter(|e| lookup_str(e, "relation").as_deref() == Some("references"))
+        .map(|e| {
+            let src = lookup_str(e, "source").unwrap_or_default();
+            let tgt = lookup_str(e, "target").unwrap_or_default();
+            (
+                id_to_label.get(&src).cloned().unwrap_or(src),
+                id_to_label.get(&tgt).cloned().unwrap_or(tgt),
+                lookup_str(e, "context"),
+            )
+        })
+        .collect();
+
+    assert!(
+        pairs.contains(&(
+            "process()".to_string(),
+            "Payload".to_string(),
+            Some("parameter_type".to_string())
+        )),
+        "expected process() → Payload parameter_type edge, got {pairs:?}"
+    );
+    assert!(
+        pairs.contains(&(
+            "process()".to_string(),
+            "Result".to_string(),
+            Some("return_type".to_string())
+        )),
+        "expected process() → Result return_type edge, got {pairs:?}"
+    );
+    assert!(
+        pairs.contains(&(
+            "process_many()".to_string(),
+            "Payload".to_string(),
+            Some("generic_arg".to_string())
+        )),
+        "expected process_many() → Payload generic_arg edge, got {pairs:?}"
+    );
+}
+
+/// TypeScript class declarations emit `inherits` / `implements` edges from
+/// `class_heritage`, and method signatures emit `references` edges with
+/// `parameter_type`, `return_type`, `generic_arg` contexts.
+///
+/// Approximates `tests/test_js_import_resolution.py::test_ts_type_relationships_and_contexts`
+/// without exercising cross-file symbol-fact resolution (TS facts collection
+/// is not in the Rust port yet — this test pins the in-file shape so when
+/// that pass lands it can be extended to cross-file).
+#[test]
+fn ts_type_relationships_and_contexts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let lib = tmp.path().join("src").join("lib");
+    fs::create_dir_all(&lib).expect("create_dir_all");
+    let path = lib.join("impl.ts");
+    fs::write(
+        &path,
+        "interface IProcessor<T> {}\n\
+         abstract class BaseProcessor {}\n\
+         type Result<T> = { value: T };\n\
+         class Payload {}\n\
+         export abstract class DataProcessor extends BaseProcessor implements IProcessor<Payload> {\n  \
+             current!: Result<Payload>;\n  \
+             run(input: Payload): Result<Payload> { return this.current; }\n\
+         }\n",
+    )
+    .expect("write impl.ts");
+
+    let result = extract(&[path], Some(tmp.path()));
+    let lookup_str =
+        |m: &indexmap::IndexMap<String, serde_json::Value>, key: &str| -> Option<String> {
+            m.get(key).and_then(|v| v.as_str()).map(str::to_string)
+        };
+    let id_to_label: std::collections::HashMap<String, String> = result
+        .nodes
+        .iter()
+        .filter_map(|n| Some((lookup_str(n, "id")?, lookup_str(n, "label")?)))
+        .collect();
+    let label_of = |id: &str| -> String {
+        id_to_label
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| id.to_string())
+            .trim_end_matches("()")
+            .trim_start_matches('.')
+            .to_string()
+    };
+    let triples: std::collections::HashSet<(String, String, String, Option<String>)> = result
+        .edges
+        .iter()
+        .filter_map(|e| {
+            Some((
+                label_of(&lookup_str(e, "source")?),
+                label_of(&lookup_str(e, "target")?),
+                lookup_str(e, "relation")?,
+                lookup_str(e, "context"),
+            ))
+        })
+        .collect();
+
+    assert!(
+        triples.contains(&(
+            "DataProcessor".to_string(),
+            "BaseProcessor".to_string(),
+            "inherits".to_string(),
+            None,
+        )),
+        "expected DataProcessor inherits BaseProcessor, got {triples:?}"
+    );
+    assert!(
+        triples.contains(&(
+            "DataProcessor".to_string(),
+            "IProcessor".to_string(),
+            "implements".to_string(),
+            None,
+        )),
+        "expected DataProcessor implements IProcessor, got {triples:?}"
+    );
+    assert!(
+        triples.contains(&(
+            "run".to_string(),
+            "Payload".to_string(),
+            "references".to_string(),
+            Some("parameter_type".to_string()),
+        )),
+        "expected run → Payload parameter_type, got {triples:?}"
+    );
+    assert!(
+        triples.contains(&(
+            "run".to_string(),
+            "Result".to_string(),
+            "references".to_string(),
+            Some("return_type".to_string()),
+        )),
+        "expected run → Result return_type, got {triples:?}"
+    );
+    assert!(
+        triples.contains(&(
+            "run".to_string(),
+            "Payload".to_string(),
+            "references".to_string(),
+            Some("generic_arg".to_string()),
+        )),
+        "expected run → Payload generic_arg, got {triples:?}"
+    );
+}
+
+/// Every emitted reference edge carries the canonical shape the Python helper
+/// `_semantic_reference_edge` builds: `relation=references`,
+/// `confidence=EXTRACTED`, `weight=1.0`, a non-empty `source_file`, and an
+/// `Lnn` `source_location`.
+///
+/// Mirrors `tests/test_extract.py::test_semantic_reference_edges_carry_context_and_source`.
+#[test]
+fn semantic_reference_edges_carry_context_and_source() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("svc.py");
+    fs::write(
+        &path,
+        "class Foo:\n    pass\n\nclass Bar:\n    pass\n\ndef call(x: Foo) -> Bar: return Bar()\n",
+    )
+    .expect("write svc.py");
+
+    let result = extract(&[path], Some(tmp.path()));
+    let lookup_str =
+        |m: &indexmap::IndexMap<String, serde_json::Value>, key: &str| -> Option<String> {
+            m.get(key).and_then(|v| v.as_str()).map(str::to_string)
+        };
+    let ref_edge = result
+        .edges
+        .iter()
+        .find(|e| {
+            lookup_str(e, "relation").as_deref() == Some("references")
+                && lookup_str(e, "context").as_deref() == Some("parameter_type")
+        })
+        .expect("expected at least one parameter_type reference edge");
+
+    assert_eq!(
+        lookup_str(ref_edge, "confidence").as_deref(),
+        Some("EXTRACTED")
+    );
+    assert!(
+        ref_edge
+            .get("weight")
+            .and_then(serde_json::Value::as_f64)
+            .is_some_and(|w| (w - 1.0).abs() < f64::EPSILON),
+        "weight should be 1.0, got {:?}",
+        ref_edge.get("weight")
+    );
+    let source_file = lookup_str(ref_edge, "source_file").unwrap_or_default();
+    assert!(
+        source_file.ends_with("svc.py"),
+        "source_file should end with svc.py, got {source_file:?}"
+    );
+    let loc = lookup_str(ref_edge, "source_location").unwrap_or_default();
+    assert!(
+        loc.starts_with('L') && loc[1..].parse::<u32>().is_ok(),
+        "source_location should be `Lnn`, got {loc:?}"
+    );
+}

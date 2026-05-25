@@ -9,6 +9,7 @@ use chrono::Local;
 use graphify_build::Graph;
 use indexmap::{IndexMap, IndexSet};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BACKUP_ARTIFACTS, ExportError, confidence_score, node_community_map, strip_diacritics,
@@ -293,13 +294,20 @@ pub fn prune_dangling_edges(mut graph_data: Value) -> (Value, usize) {
 /// Never fails — backup failure prints a warning and returns `None`.
 /// Set `GRAPHIFY_NO_BACKUP=1` to disable.
 ///
+/// Same-day rate-limiting: if today's backup folder already exists and its
+/// `graph.json` content is byte-identical (sha256 match) to the source,
+/// returns the existing folder without re-copying. If content has changed,
+/// the existing folder is overwritten in place — one folder per day, always
+/// the latest pre-overwrite state.
+///
 /// Mirrors Python `backup_if_protected`.
 #[must_use]
 pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
     if std::env::var("GRAPHIFY_NO_BACKUP").is_ok_and(|v| !v.is_empty()) {
         return None;
     }
-    if !out_dir.join("graph.json").exists() {
+    let graph_src = out_dir.join("graph.json");
+    if !graph_src.exists() {
         return None;
     }
 
@@ -321,11 +329,19 @@ pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
     }
 
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let mut backup_dir = out_dir.join(&today);
-    let mut suffix = 2_u32;
-    while backup_dir.exists() {
-        backup_dir = out_dir.join(format!("{today}_{suffix}"));
-        suffix += 1;
+    let backup_dir = out_dir.join(&today);
+    let backup_graph = backup_dir.join("graph.json");
+
+    // Short-circuit: if today's backup already has identical graph.json
+    // content, nothing to do. Mirrors the Python `if src_hash == bak_hash`
+    // guard added in graphify-py 3efae38.
+    if backup_dir.exists()
+        && backup_graph.exists()
+        && let (Ok(src_bytes), Ok(bak_bytes)) =
+            (std::fs::read(&graph_src), std::fs::read(&backup_graph))
+        && Sha256::digest(&src_bytes) == Sha256::digest(&bak_bytes)
+    {
+        return Some(backup_dir);
     }
 
     let mut reasons = Vec::new();

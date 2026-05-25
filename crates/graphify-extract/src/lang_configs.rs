@@ -84,6 +84,7 @@ pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
     class_types: &[
         "class_declaration",
+        "abstract_class_declaration",
         "interface_declaration",
         "enum_declaration",
         "type_alias_declaration",
@@ -123,6 +124,7 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_typescript::LANGUAGE_TSX.into(),
     class_types: &[
         "class_declaration",
+        "abstract_class_declaration",
         "interface_declaration",
         "enum_declaration",
         "type_alias_declaration",

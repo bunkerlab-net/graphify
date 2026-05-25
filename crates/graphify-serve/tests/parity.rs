@@ -13,8 +13,8 @@ use graphify_prs::gh::GhClient;
 use graphify_prs::git::GitClient;
 use graphify_serve::graph::{
     bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, infer_context_filters,
-    load_graph, pick_seeds, query_graph_text, query_terms, resolve_context_filters, score_nodes,
-    subgraph_to_text,
+    load_graph, normalize_context_filters, pick_seeds, query_graph_text, query_terms,
+    resolve_context_filters, score_nodes, subgraph_to_text,
 };
 use graphify_serve::tools::{
     tool_get_pr_impact_with_clients, tool_list_prs_with_clients, tool_triage_prs_with_clients,
@@ -208,6 +208,41 @@ fn test_score_nodes_source_file_partial() {
     let scored = score_nodes(&g, &["cluster"], &mut cache);
     let nids: Vec<&str> = scored.iter().map(|(_, nid)| nid.as_str()).collect();
     assert!(nids.contains(&"n2"));
+}
+
+// ── _normalize_context_filters alias resolution ──────────────────────────────
+
+#[test]
+fn test_normalize_context_filters_resolves_aliases() {
+    let cases = [
+        ("param", "parameter_type"),
+        ("parameter", "parameter_type"),
+        ("return", "return_type"),
+        ("returns", "return_type"),
+        ("generic", "generic_arg"),
+        ("generics", "generic_arg"),
+        ("annotation", "attribute"),
+        ("decorator", "attribute"),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            normalize_context_filters(&[input.to_string()]),
+            vec![expected.to_string()],
+            "alias {input:?} should resolve to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn test_normalize_context_filters_passes_through_canonical() {
+    assert_eq!(
+        normalize_context_filters(&["parameter_type".to_string()]),
+        vec!["parameter_type".to_string()]
+    );
+    assert_eq!(
+        normalize_context_filters(&["field".to_string()]),
+        vec!["field".to_string()]
+    );
 }
 
 // ── _infer_context_filters ────────────────────────────────────────────────────

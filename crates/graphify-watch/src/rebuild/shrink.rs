@@ -12,11 +12,20 @@ use serde_json::Value;
 use crate::error::WatchError;
 
 /// Return `Ok(())` when the node count is acceptable, `Err` when the new graph
-/// has shrunk by more than 50% relative to the existing one.
+/// has shrunk relative to the existing one.
 ///
-/// The guard is bypassed when `force` is `true` or when there is no existing
-/// graph (empty `existing_data`).  If `tmp` is provided and the check fails,
-/// the temporary file is cleaned up before returning `Err`.
+/// The guard exists to catch SILENT shrinkage from failed extraction chunks
+/// (a half-written semantic pass leaving thousands of nodes unaccounted for).
+/// It is bypassed when:
+///
+/// - `force` is `true` (caller has explicitly opted out of the guard);
+/// - there is no existing graph (empty `existing_data`);
+/// - `had_explicit_deletions` is `true`, signalling that the caller already
+///   declared which files were removed (e.g. the post-commit hook saw a `D`
+///   in `git diff --name-only`) and the smaller graph is the expected outcome.
+///
+/// If `tmp` is provided and the check fails, the temporary file is cleaned up
+/// before returning `Err`.
 ///
 /// Ports `_check_shrink` from `watch.py:243-263`, but returns `Result` instead
 /// of a boolean to integrate naturally with `?` propagation.
@@ -24,14 +33,15 @@ use crate::error::WatchError;
 /// # Errors
 ///
 /// Returns [`WatchError::ShrinkRefused`] when the new graph has fewer nodes
-/// than the existing one and `force` is `false`.
+/// than the existing one and none of the bypass conditions apply.
 pub fn check_shrink(
     force: bool,
     existing_data: &Value,
     new_data: &Value,
     tmp: Option<&Path>,
+    had_explicit_deletions: bool,
 ) -> Result<(), WatchError> {
-    if force {
+    if force || had_explicit_deletions {
         return Ok(());
     }
     let existing_nodes = existing_data

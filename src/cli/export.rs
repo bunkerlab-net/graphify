@@ -60,7 +60,8 @@ fn export_graphml(graph: Option<std::path::PathBuf>) -> Result<()> {
     let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
     eprintln!("loading {} ...", path.display());
     let g = load_graph(&path)?;
-    let analysis = load_analysis_sidecar(&out_dir.join(".graphify_analysis.json"));
+    let analysis =
+        load_analysis_with_community_fallback(&out_dir.join(".graphify_analysis.json"), &g);
     let out = path.with_file_name("graph.graphml");
     eprintln!(
         "exporting GraphML ({} nodes, {} edges) ...",
@@ -77,7 +78,8 @@ fn export_svg(graph: Option<std::path::PathBuf>, labels: Option<std::path::PathB
     let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
     eprintln!("loading {} ...", path.display());
     let g = load_graph(&path)?;
-    let analysis = load_analysis_sidecar(&out_dir.join(".graphify_analysis.json"));
+    let analysis =
+        load_analysis_with_community_fallback(&out_dir.join(".graphify_analysis.json"), &g);
     let labels_path = labels.unwrap_or_else(|| out_dir.join(".graphify_labels.json"));
     let community_labels = load_community_labels(&labels_path);
     let labels_opt = (!community_labels.is_empty()).then_some(&community_labels);
@@ -101,7 +103,8 @@ fn export_html(
     let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
     eprintln!("loading {} ...", path.display());
     let g = load_graph(&path)?;
-    let analysis = load_analysis_sidecar(&out_dir.join(".graphify_analysis.json"));
+    let analysis =
+        load_analysis_with_community_fallback(&out_dir.join(".graphify_analysis.json"), &g);
     let labels_path = labels.unwrap_or_else(|| out_dir.join(".graphify_labels.json"));
     let community_labels = load_community_labels(&labels_path);
     let labels_opt = (!community_labels.is_empty()).then_some(&community_labels);
@@ -137,7 +140,8 @@ fn export_obsidian(
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
     eprintln!("loading {} ...", path.display());
     let g = load_graph(&path)?;
-    let analysis = load_analysis_sidecar(&parent.join(".graphify_analysis.json"));
+    let analysis =
+        load_analysis_with_community_fallback(&parent.join(".graphify_analysis.json"), &g);
     let labels_path = labels.unwrap_or_else(|| parent.join(".graphify_labels.json"));
     let community_labels = load_community_labels(&labels_path);
     let out_dir = out.unwrap_or_else(|| graphify_out_dir().join("obsidian"));
@@ -178,12 +182,17 @@ fn export_wiki(
     let analysis_path = out_dir.join(".graphify_analysis.json");
     let labels_path = labels.unwrap_or_else(|| out_dir.join(".graphify_labels.json"));
 
-    let analysis = load_analysis_sidecar(&analysis_path);
+    // The fallback applies here too: the wiki bail-out exists to prevent
+    // silent divergence when no community data is available, but per-node
+    // `community` attributes count as valid data — only bail when both the
+    // sidecar AND the reconstructed map are empty.
+    let analysis = load_analysis_with_community_fallback(&analysis_path, &g);
     let communities = analysis.communities;
     if communities.is_empty() {
         anyhow::bail!(
-            ".graphify_analysis.json is missing or empty — refusing to export wiki to \
-             prevent data loss.\nRun `graphify extract .` (or `graphify cluster-only .`) \
+            ".graphify_analysis.json is missing or empty and graph.json has no \
+             per-node community attribute — refusing to export wiki to prevent \
+             data loss.\nRun `graphify extract .` (or `graphify cluster-only .`) \
              to regenerate community data first."
         );
     }
@@ -306,7 +315,8 @@ fn export_neo4j(
         return Ok(());
     };
 
-    let analysis = load_analysis_sidecar(&out_dir.join(".graphify_analysis.json"));
+    let analysis =
+        load_analysis_with_community_fallback(&out_dir.join(".graphify_analysis.json"), &g);
     let resolved_password = password
         .or_else(|| std::env::var("NEO4J_PASSWORD").ok())
         .ok_or_else(|| {
@@ -334,6 +344,56 @@ struct AnalysisSidecar {
     communities: indexmap::IndexMap<i64, Vec<String>>,
     cohesion: indexmap::IndexMap<i64, f64>,
     gods: Vec<graphify_wiki::GodNodeData>,
+}
+
+/// Fall back to reconstructing the `cid → [node_ids]` map from the per-node
+/// `community` attribute on `graph.json` when the analysis sidecar is missing
+/// or empty.
+///
+/// The watch / post-commit rebuild path and some skill workflows only
+/// regenerate `graph.json` + `GRAPH_REPORT.md`, leaving
+/// `.graphify_analysis.json` stale or absent. The per-node attribute (written
+/// by `to_json` on every node) is still authoritative, so downstream
+/// subcommands (`html`, `obsidian`, `wiki`, `svg`, `graphml`, `neo4j`) can
+/// reconstruct the same shape they would have read from the sidecar.
+///
+/// Mirrors Python `__main__.py` (graphify-py @ d778e2c).
+fn reconstruct_communities_from_graph(
+    graph: &graphify_build::Graph,
+) -> indexmap::IndexMap<i64, Vec<String>> {
+    let mut out: indexmap::IndexMap<i64, Vec<String>> = indexmap::IndexMap::new();
+    for (node_id, attrs) in &graph.node_map {
+        let Some(raw) = attrs.get("community") else {
+            continue;
+        };
+        let cid = match raw {
+            serde_json::Value::Number(n) => n.as_i64(),
+            serde_json::Value::String(s) => s.parse::<i64>().ok(),
+            _ => None,
+        };
+        if let Some(cid) = cid {
+            out.entry(cid).or_default().push(node_id.clone());
+        }
+    }
+    out
+}
+
+/// Load the analysis sidecar and, if its `communities` map is empty, fill it
+/// from the per-node `community` attribute on `graph`. This is the join point
+/// for the d778e2c fallback — every export command goes through here so the
+/// behaviour is uniform.
+fn load_analysis_with_community_fallback(
+    sidecar_path: &std::path::Path,
+    graph: &graphify_build::Graph,
+) -> AnalysisSidecar {
+    let mut analysis = load_analysis_sidecar(sidecar_path);
+    if analysis.communities.is_empty() {
+        let reconstructed = reconstruct_communities_from_graph(graph);
+        if !reconstructed.is_empty() {
+            analysis.communities = reconstructed;
+        }
+    }
+    analysis
 }
 
 /// Load `.graphify_analysis.json` and extract the fields exports consume.

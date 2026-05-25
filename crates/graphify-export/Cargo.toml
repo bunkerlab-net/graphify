@@ -19,6 +19,7 @@ neo4rs = "0.8"
 rayon = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 
