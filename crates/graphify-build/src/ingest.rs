@@ -23,6 +23,7 @@ const PARALLEL_EDGE_THRESHOLD: usize = 1024;
 // so the match arms only need to enumerate the lowercase forms. Skipping the
 // `to_ascii_lowercase` call avoids the per-call `String` allocation on a hot
 // loop over every edge.
+#[must_use]
 fn language_family(ext: &str) -> Option<&'static str> {
     match ext {
         "py" | "pyi" => Some("py"),
