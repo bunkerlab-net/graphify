@@ -124,6 +124,44 @@ graphify cluster-only . --graph other/graph.json   # use a non-default graph loc
 
 All query commands default to `graphify-out/graph.json`; pass `--graph <path>` to point elsewhere.
 
+### Edge vocabulary
+
+Every edge in `graph.json` carries a `relation` and (optionally) a `context`.
+The query / affected / explain / serve commands filter on these.
+
+**Relations** (`--relation` on `affected`):
+
+| Relation       | Emitted by                                                                  |
+| -------------- | --------------------------------------------------------------------------- |
+| `contains`     | File node → top-level function / class.                                     |
+| `method`       | Class node → method.                                                        |
+| `calls`        | Function / method node → callee, resolved within the file or cross-file.    |
+| `imports`      | File node → imported module.                                                |
+| `imports_from` | File node → imported symbol from another file (`from x import y`).          |
+| `re_exports`   | Module → re-exported module (`export … from 'x'`).                          |
+| `inherits`     | Class → base class. Java's source-level `extends` is normalised here.       |
+| `implements`   | Class → interface (Java / C# / TypeScript).                                 |
+| `references`   | Function / method / class → type referenced in its signature or body.       |
+
+`references` edges always carry a `context` describing *how* the type is used.
+
+**Contexts** (`--context` on `query`, on `references` edges):
+
+| Context          | Where it comes from                                                   |
+| ---------------- | --------------------------------------------------------------------- |
+| `call`           | Call site.                                                            |
+| `field`          | Class field declaration of the referenced type.                       |
+| `parameter_type` | Function / method parameter typed with the referenced type.           |
+| `return_type`    | Function / method return type.                                        |
+| `generic_arg`    | Type argument to a generic (e.g. `Result<Payload>` → `Payload`).      |
+| `attribute`      | Java `@Annotation` / C# `[Attribute]` decoration.                     |
+| `import`         | Module / file referenced by an `import` statement.                    |
+| `export`         | Module re-exported by an `export … from` statement.                   |
+
+`parameter_type`, `return_type`, `generic_arg`, and `attribute` are emitted by
+the Python, C#, Java, and TypeScript extractors. Other languages emit the
+structural relations but skip the per-signature reference pass.
+
 ### `query "<question>"`
 
 BFS traversal that scores nodes against the question and returns a scoped subgraph (typically far smaller than
@@ -248,6 +286,22 @@ is missing or empty — which happens after the watch / post-commit rebuild path
 that only refreshes `graph.json` + `GRAPH_REPORT.md` — exports reconstruct the
 community map from the per-node `community` attribute on `graph.json`. `export
 wiki` only bails out when both sources are empty.
+
+### Protected-graph backups
+
+Before overwriting a graph that carries hand-curated state (semantic marker
+or per-community labels), `graphify` copies the existing
+`graphify-out/{graph.json,…}` into `graphify-out/<YYYY-MM-DD>/`. The backup is
+rate-limited to one folder per day via a `sha256` comparison of `graph.json`:
+
+- If today's backup already exists and its `graph.json` is byte-identical, the
+  command is a no-op.
+- If the content has changed since today's backup, the existing folder is
+  overwritten in place — there is always one backup folder per day, holding
+  the latest pre-overwrite state.
+- The legacy `<YYYY-MM-DD>_2`, `<YYYY-MM-DD>_3`, … accumulation is gone.
+
+Set `GRAPHIFY_NO_BACKUP=1` to disable backups entirely.
 
 ```bash
 graphify export neo4j                                            # → graphify-out/cypher.txt (import via cypher-shell)

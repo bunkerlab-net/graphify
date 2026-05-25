@@ -164,12 +164,36 @@ Per `AGENTS.md`:
 
 ### Phase 5 — Update documentation
 
-1. Update `///` doc-comments on all modified functions/modules to reflect new behaviour.
-2. Update `README.md` and `USAGE.md`:
-   - CLI reference (new commands/flags/subcommands)
-   - Supported extraction/detection formats
-   - Workspace tree (new crates)
-   - Any differences from `graphify-py` worth calling out
+> **Documentation is part of the port, not an afterthought.** Out-of-date
+> docs are how features get reinvented, options get rediscovered, and
+> users build the wrong mental model. Every behavioural change MUST be
+> reflected in the docs in the same PR. Treat this phase as load-bearing
+> — if you skip it, the resync is not done.
+>
+> Before opening the PR, re-read both `README.md` and `USAGE.md` cover
+> to cover and reconcile every CLI flag, format, alias, and skip rule
+> against the actual code. If you find drift that pre-dates this resync,
+> fix it too — out-of-date docs from a previous resync are still a bug.
+
+1. Update `///` doc-comments on all modified functions/modules to reflect new
+   behaviour. The first sentence is what `cargo doc` and `rustdoc-search`
+   surface, so make it useful.
+2. Update `README.md` and `USAGE.md`. Walk this checklist for every ported
+   change and tick each item explicitly:
+   - **CLI reference** — new subcommands, new flags, renamed flags, removed
+     flags, changed defaults, changed exit codes.
+   - **Supported extraction/detection formats** — new languages, new file
+     extensions, new ingestors (PDF/DOCX/audio/etc.), new skip rules.
+   - **Workspace tree** — new crates added to `crates/`, renames, removals.
+   - **Output schema** — new fields in `graph.json` / `.graphify_analysis.json` /
+     `.graphify_labels.json`, new sidecar files, new edge relations or contexts.
+   - **Behavioural callouts** — anything a user might notice change between
+     runs (rate-limited backups, shrink-guard bypass, fallback paths).
+   - **Divergences from `graphify-py`** — anywhere the Rust output differs
+     intentionally from the Python reference, name it and explain why.
+3. Re-read your diff and ask: *"if a user only reads the README/USAGE, would
+   they discover this change?"* If no, document it. If still no, document it
+   harder.
 
 ### Phase 6 — Commit
 
