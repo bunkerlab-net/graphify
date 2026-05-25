@@ -135,11 +135,13 @@ pub(super) fn ensure_named_node(
 
 /// Emit `references` edges with a `context` attribute from a function or
 /// method declaration's parameter list, return type, and decorations
-/// (annotations / attributes). Currently active for Python, C#, and Java.
+/// (annotations / attributes). Active for Python, C#, Java, JavaScript, and
+/// TypeScript (`.ts` and `.tsx`). Plain JS function declarations have no
+/// type annotations, so the TS/JS branch is effectively a no-op there.
 ///
 /// Mirrors the per-language reference passes added to `_extract_generic` in
 /// `graphify-py` @ ab4e542.
-#[allow(clippy::too_many_lines)] // linear per-language dispatch — splitting would hide the parallel shape between Python/C#/Java
+#[allow(clippy::too_many_lines)] // linear per-language dispatch — splitting would hide the parallel shape between Python/C#/Java/TS
 fn emit_function_reference_edges(
     ctx: &mut WalkCtx<'_, '_>,
     node: Node<'_>,

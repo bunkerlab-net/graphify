@@ -3,6 +3,8 @@
 //! Mirrors Python `to_json` / `prune_dangling_edges` / `backup_if_protected`
 //! from `graphify-py/graphify/export.py`.
 
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
@@ -10,6 +12,27 @@ use graphify_build::Graph;
 use indexmap::{IndexMap, IndexSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// Maximum `graph.json` size (in bytes) eligible for the backup-rate-limit
+/// short-circuit. Anything larger forces the normal backup path — we'd rather
+/// re-copy than stream-hash a multi-gigabyte file twice on every run.
+const MAX_BACKUP_PRELOAD_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Stream-hash `path` via a 64 KiB buffered reader. Returns `None` when the
+/// file can't be opened or read.
+fn sha256_file(path: &Path) -> Option<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    let mut reader = BufReader::new(File::open(path).ok()?);
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hasher.finalize().into())
+}
 
 use crate::{
     BACKUP_ARTIFACTS, ExportError, confidence_score, node_community_map, strip_diacritics,
@@ -335,13 +358,25 @@ pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
     // Short-circuit: if today's backup already has identical graph.json
     // content, nothing to do. Mirrors the Python `if src_hash == bak_hash`
     // guard added in graphify-py 3efae38.
-    if backup_dir.exists()
-        && backup_graph.exists()
-        && let (Ok(src_bytes), Ok(bak_bytes)) =
-            (std::fs::read(&graph_src), std::fs::read(&backup_graph))
-        && Sha256::digest(&src_bytes) == Sha256::digest(&bak_bytes)
-    {
-        return Some(backup_dir);
+    //
+    // Streaming sha256 (64 KiB chunks) keeps the comparison memory-bounded
+    // regardless of graph size, and a size-equality preflight catches the
+    // common "different bytes" case in O(1). Files exceeding
+    // `MAX_BACKUP_PRELOAD_BYTES` skip the short-circuit entirely — the user
+    // gets the normal backup path rather than paying for a full re-hash on
+    // every invocation.
+    if backup_dir.exists() && backup_graph.exists() {
+        let src_meta = std::fs::metadata(&graph_src).ok();
+        let bak_meta = std::fs::metadata(&backup_graph).ok();
+        if let (Some(s), Some(b)) = (src_meta, bak_meta)
+            && s.len() == b.len()
+            && s.len() <= MAX_BACKUP_PRELOAD_BYTES
+            && let (Some(src_hash), Some(bak_hash)) =
+                (sha256_file(&graph_src), sha256_file(&backup_graph))
+            && src_hash == bak_hash
+        {
+            return Some(backup_dir);
+        }
     }
 
     let mut reasons = Vec::new();

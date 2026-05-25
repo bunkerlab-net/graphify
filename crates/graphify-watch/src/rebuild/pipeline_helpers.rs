@@ -46,6 +46,22 @@ pub(crate) fn detect_phase(watch_path: &Path) -> (DetectResult, Vec<PathBuf>) {
     (detected, code_files)
 }
 
+/// Result of [`compute_extract_targets`]: which files to extract from, which
+/// paths to evict from the existing graph, and whether the change set declared
+/// a tracked-code-file deletion (relevant for the shrink-guard bypass).
+pub(crate) struct ExtractTargets {
+    /// Existing tracked code files that the caller wants re-extracted.
+    pub wanted: Vec<PathBuf>,
+    /// Paths to evict from any prior graph — covers both true deletions and
+    /// non-code paths in the change set whose nodes should drop out.
+    pub deleted_paths: Vec<String>,
+    /// `true` when the change set contained at least one path that no longer
+    /// exists on disk. The watch shrink-guard bypass is keyed off this flag
+    /// (not `!deleted_paths.is_empty()`) so a changed-but-untracked README
+    /// can't accidentally suppress the guard.
+    pub had_tracked_deletion: bool,
+}
+
 /// Compute the list of files to extract from + the list of deleted paths to evict.
 ///
 /// Returns `None` when there's nothing to do (no tracked files in the change set).
@@ -54,16 +70,21 @@ pub(crate) fn compute_extract_targets(
     code_files: &[PathBuf],
     watch_root: &Path,
     project_root: &Path,
-) -> Option<(Vec<PathBuf>, Vec<String>)> {
+) -> Option<ExtractTargets> {
     let Some(changed) = changed_paths else {
-        return Some((code_files.to_vec(), Vec::new()));
+        return Some(ExtractTargets {
+            wanted: code_files.to_vec(),
+            deleted_paths: Vec::new(),
+            had_tracked_deletion: false,
+        });
     };
     let code_set: std::collections::HashSet<PathBuf> = code_files
         .iter()
         .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
         .collect();
     let mut wanted: Vec<PathBuf> = Vec::new();
-    let mut deleted: Vec<String> = Vec::new();
+    let mut deleted_paths: Vec<String> = Vec::new();
+    let mut had_tracked_deletion = false;
     for raw in changed {
         let cand = if raw.is_absolute() {
             raw.canonicalize().unwrap_or_else(|_| raw.clone())
@@ -75,18 +96,29 @@ pub(crate) fn compute_extract_targets(
         if cand.exists() && code_set.contains(&cand) {
             wanted.push(cand);
         } else {
+            // A path that doesn't exist on disk is a true deletion. A path
+            // that exists but isn't in `code_set` (e.g. a touched README)
+            // still earns eviction so its stale nodes drop out, but it does
+            // NOT count as a tracked-file deletion for the shrink guard.
+            if !cand.exists() {
+                had_tracked_deletion = true;
+            }
             let rel = cand.strip_prefix(project_root).map_or_else(
                 |_| cand.to_string_lossy().into_owned(),
                 |p| p.to_string_lossy().into_owned(),
             );
-            deleted.push(rel);
+            deleted_paths.push(rel);
         }
     }
-    if wanted.is_empty() && deleted.is_empty() {
+    if wanted.is_empty() && deleted_paths.is_empty() {
         println!("[graphify watch] No tracked code files in change set - skipping rebuild.");
         return None;
     }
-    Some((wanted, deleted))
+    Some(ExtractTargets {
+        wanted,
+        deleted_paths,
+        had_tracked_deletion,
+    })
 }
 
 /// Run AST extraction on the given targets, returning the canonical result JSON.

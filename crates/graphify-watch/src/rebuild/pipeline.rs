@@ -49,11 +49,14 @@ pub(crate) fn rebuild_code_inner(
         return Ok(false);
     }
 
-    let Some((extract_targets, deleted_paths)) =
+    let Some(targets) =
         compute_extract_targets(changed_paths, &code_files, &watch_root, &project_root)
     else {
         return Ok(true);
     };
+    let extract_targets = targets.wanted;
+    let deleted_paths = targets.deleted_paths;
+    let had_explicit_deletions = targets.had_tracked_deletion;
 
     let commit = git_head(&watch_root);
     let mut result = extract_phase(&extract_targets, &watch_root);
@@ -77,7 +80,6 @@ pub(crate) fn rebuild_code_inner(
     )
     .map_err(WatchError::Io)?;
 
-    let had_explicit_deletions = !deleted_paths.is_empty();
     if no_cluster {
         return run_no_cluster_path(
             &result,
