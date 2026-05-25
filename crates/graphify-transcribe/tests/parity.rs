@@ -165,7 +165,7 @@ fn test_transcribe_force_reruns() {
     std::fs::write(&video, b"fake").expect("write fixture");
     let out_dir = tmp.path().join("transcripts");
     std::fs::create_dir_all(&out_dir).expect("create_dir_all");
-    std::fs::write(out_dir.join("talk.txt"), "Old transcript.").expect("test invariant");
+    std::fs::write(out_dir.join("talk.txt"), "Old transcript.").expect("write fixture");
 
     let runner = MockWhisperRunner {
         text: "New transcript segment.".to_string(),

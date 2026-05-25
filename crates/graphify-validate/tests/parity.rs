@@ -114,7 +114,7 @@ fn missing_node_field() {
 #[test]
 fn assert_valid_raises_on_errors() {
     let result = assert_valid(&json!({"nodes": "bad", "edges": []}));
-    let err = result.expect_err("expected Err");
+    let err = result.expect_err("assert_valid should reject a non-array nodes field");
     assert!(format!("{err}").contains("error"));
 }
 

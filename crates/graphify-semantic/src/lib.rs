@@ -367,10 +367,7 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
         let original_len = he_nodes.len();
         let filtered: Vec<Value> = he_nodes
             .iter()
-            .filter(|v| {
-                v.as_str()
-                    .is_some_and(|s| surviving_ids.contains(&s.to_string()))
-            })
+            .filter(|v| v.as_str().is_some_and(|s| surviving_ids.contains(s)))
             .cloned()
             .collect();
         if filtered.len() < 2 {

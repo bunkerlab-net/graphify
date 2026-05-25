@@ -168,7 +168,7 @@ fn sanitize_converts_sentence_rationale_to_attribute() {
 }
 
 #[test]
-fn sanitize_preserves_short_concept_nodes() {
+fn sanitize_removes_concept_file_type_nodes() {
     // Concept nodes are removed via `file_type` invalid check; this test
     // confirms that a non-sentence concept node is removed cleanly (no
     // rationale propagation).
