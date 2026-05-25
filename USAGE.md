@@ -143,7 +143,9 @@ The query / affected / explain / serve commands filter on these.
 | `implements`   | Class → interface (Java / C# / TypeScript).                                 |
 | `references`   | Function / method / class → type referenced in its signature or body.       |
 
-`references` edges always carry a `context` describing *how* the type is used.
+`references` edges typically carry a `context` describing *how* the type is
+used; older extractors (SQL, for one) still emit `references` without a
+`context`, so consumers should treat the field as optional.
 
 **Contexts** (`--context` on `query`, on `references` edges):
 

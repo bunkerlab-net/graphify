@@ -56,7 +56,10 @@ regardless of whether Rust changes follow.
    # a foreign lineage if the ref turns out to be off-branch; the order here
    # avoids that footgun.
    git submodule update --init graphify-py
-   git -C graphify-py fetch origin --tags
+   # Submodules are often single-branch clones, so the default `fetch origin`
+   # may not include other branches needed for the ancestry check. Spell out
+   # the refspec to fetch every branch AND every tag.
+   git -C graphify-py fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
    git -C graphify-py merge-base --is-ancestor <target-ref> \
        origin/$(git config -f .gitmodules submodule.graphify-py.branch) \
        || { echo "<target-ref> is not on the tracked branch; ask the user before continuing"; exit 1; }
