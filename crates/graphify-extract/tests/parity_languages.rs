@@ -334,6 +334,7 @@ fn edge_label_pairs(
 #[test]
 fn csharp_splits_inherits_and_implements_edges() {
     let result = extract_csharp(&fixtures().join("sample.cs"));
+    assert!(result.error.is_none(), "{:?}", result.error);
     let inherits = edge_label_pairs(&result, "inherits", None);
     let implements = edge_label_pairs(&result, "implements", None);
     assert!(
@@ -354,6 +355,7 @@ fn csharp_splits_inherits_and_implements_edges() {
 #[test]
 fn java_normalises_inherits_and_implements() {
     let result = extract_java(&fixtures().join("sample.java"));
+    assert!(result.error.is_none(), "{:?}", result.error);
     let inherits = edge_label_pairs(&result, "inherits", None);
     let implements = edge_label_pairs(&result, "implements", None);
     assert!(
@@ -373,6 +375,7 @@ fn java_normalises_inherits_and_implements() {
 #[test]
 fn csharp_parameter_return_and_generic_contexts() {
     let result = extract_csharp(&fixtures().join("sample.cs"));
+    assert!(result.error.is_none(), "{:?}", result.error);
     let params = edge_label_pairs(&result, "references", Some("parameter_type"));
     let returns = edge_label_pairs(&result, "references", Some("return_type"));
     let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
@@ -397,6 +400,7 @@ fn csharp_parameter_return_and_generic_contexts() {
 #[test]
 fn java_parameter_return_generic_and_attribute_contexts() {
     let result = extract_java(&fixtures().join("sample.java"));
+    assert!(result.error.is_none(), "{:?}", result.error);
     let params = edge_label_pairs(&result, "references", Some("parameter_type"));
     let returns = edge_label_pairs(&result, "references", Some("return_type"));
     let generics = edge_label_pairs(&result, "references", Some("generic_arg"));

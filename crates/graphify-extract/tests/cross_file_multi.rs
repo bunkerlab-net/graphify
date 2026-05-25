@@ -386,7 +386,8 @@ fn semantic_reference_edges_carry_context_and_source() {
     );
     let loc = lookup_str(ref_edge, "source_location").unwrap_or_default();
     assert!(
-        loc.starts_with('L') && loc[1..].parse::<u32>().is_ok(),
+        loc.strip_prefix('L')
+            .is_some_and(|rest| rest.parse::<u32>().is_ok()),
         "source_location should be `Lnn`, got {loc:?}"
     );
 }

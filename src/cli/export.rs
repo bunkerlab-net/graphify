@@ -358,6 +358,7 @@ struct AnalysisSidecar {
 /// reconstruct the same shape they would have read from the sidecar.
 ///
 /// Mirrors Python `__main__.py` (graphify-py @ d778e2c).
+#[must_use]
 fn reconstruct_communities_from_graph(
     graph: &graphify_build::Graph,
 ) -> indexmap::IndexMap<i64, Vec<String>> {
