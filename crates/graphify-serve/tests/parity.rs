@@ -271,6 +271,37 @@ fn test_normalize_context_filters_passes_through_canonical() {
     );
 }
 
+#[test]
+fn test_normalize_context_filters_is_case_insensitive() {
+    // Mixed casing of the same alias should fold to a single canonical entry.
+    assert_eq!(
+        normalize_context_filters(&["PARAM".to_string(), "param".to_string()]),
+        vec!["parameter_type".to_string()]
+    );
+}
+
+#[test]
+fn test_normalize_context_filters_deduplicates_aliases() {
+    // Three different surface forms collapse to the same canonical name and
+    // appear only once in the result.
+    assert_eq!(
+        normalize_context_filters(&[
+            "param".to_string(),
+            "parameter".to_string(),
+            "arg".to_string(),
+        ]),
+        vec!["parameter_type".to_string()]
+    );
+}
+
+#[test]
+fn test_normalize_context_filters_trims_whitespace() {
+    assert_eq!(
+        normalize_context_filters(&["  return  ".to_string()]),
+        vec!["return_type".to_string()]
+    );
+}
+
 // ── _infer_context_filters ────────────────────────────────────────────────────
 
 #[test]

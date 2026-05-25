@@ -136,11 +136,21 @@ graphify query "..." --budget 4000                  # cap output at N tokens (de
 graphify query "..." --context CALLS --context IMPORTS_FROM   # repeatable edge-context filters
 ```
 
-`--context` accepts canonical edge-context names (`call`, `import`, `field`,
-`parameter_type`, `return_type`, `generic_arg`, `attribute`, `export`) and also
-common aliases — `param`/`params`/`parameter`/`argument` resolve to
-`parameter_type`, `return`/`returns` to `return_type`, `generic`/`template` to
-`generic_arg`, `annotation`/`decorator` to `attribute`. Case-insensitive.
+`--context` accepts canonical edge-context names (`call`, `field`, `import`,
+`export`, `parameter_type`, `return_type`, `generic_arg`, `attribute`) and
+their aliases. Matching is case-insensitive and whitespace is trimmed. The
+full alias map:
+
+| Canonical name   | Accepted aliases                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `parameter_type` | `param`, `params`, `parameter`, `parameters`, `arg`, `args`, `argument`, `arguments` |
+| `return_type`    | `return`, `returns`, `returned`                                                      |
+| `generic_arg`    | `generic`, `generics`, `template`, `templates`                                       |
+| `attribute`      | `annotation`, `annotations`, `decorator`, `decorators`                               |
+| `call`           | `calls`, `called`, `invoke`, `invocation`                                            |
+| `field`          | `fields`, `property`, `properties`, `member`, `members`                              |
+| `import`         | `imports`, `imported`, `module`, `modules`                                           |
+| `export`         | `exports`, `exported`                                                                |
 
 ### `path "<A>" "<B>"`
 
