@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "graphify"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-affected"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-analyze"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "graphify-cluster",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-benchmark"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-build"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "caseless",
  "graphify-validate",
@@ -1553,7 +1553,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cache"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "hex",
  "indexmap",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cluster"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1581,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-dedup"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "caseless",
  "indexmap",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-detect"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "calamine",
  "graphify-google",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-diagnostics"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1633,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-export"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-extract"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-cache",
  "indexmap",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-global"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-google"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "hex",
  "regex",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-hooks"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "regex",
  "serde_json",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-html"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-ingest"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1772,7 +1772,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-llm"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -1793,14 +1793,14 @@ dependencies = [
 
 [[package]]
 name = "graphify-manifest"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-detect",
 ]
 
 [[package]]
 name = "graphify-multigraph-compat"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-prs"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-report"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1837,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-scip"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-security"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "ipnet",
  "mockito",
@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-semantic"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "indexmap",
  "regex",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-serve"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-transcribe"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-validate"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-watch"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-wiki"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "graphify-build",
  "indexmap",
