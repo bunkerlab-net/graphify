@@ -46,6 +46,7 @@ impl Drop for EnvGuard {
 // ── api_timeout ─────────────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_default_is_10_minutes() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_API_TIMEOUT");
@@ -53,6 +54,7 @@ fn api_timeout_default_is_10_minutes() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_honours_env_var() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "30");
@@ -60,6 +62,7 @@ fn api_timeout_honours_env_var() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_accepts_float() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "15.5");
@@ -67,6 +70,7 @@ fn api_timeout_accepts_float() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_ignores_invalid_value() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "not-a-number");
@@ -74,6 +78,7 @@ fn api_timeout_ignores_invalid_value() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_ignores_zero_or_negative() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "0");
@@ -85,6 +90,7 @@ fn api_timeout_ignores_zero_or_negative() {
 // ── resolve_max_tokens ──────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_returns_default_without_env() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_MAX_OUTPUT_TOKENS");
@@ -92,6 +98,7 @@ fn resolve_max_tokens_returns_default_without_env() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_honours_env_var() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_MAX_OUTPUT_TOKENS", "4096");
@@ -99,6 +106,7 @@ fn resolve_max_tokens_honours_env_var() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_ignores_invalid() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_MAX_OUTPUT_TOKENS", "not-a-num");
@@ -106,6 +114,7 @@ fn resolve_max_tokens_ignores_invalid() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_ignores_zero() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_MAX_OUTPUT_TOKENS", "0");
