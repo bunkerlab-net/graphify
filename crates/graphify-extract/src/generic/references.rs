@@ -205,6 +205,7 @@ pub(super) fn python_collect_type_refs(
 }
 
 /// Collect type references from each typed parameter under a `parameters` node.
+#[must_use]
 pub(super) fn python_collect_param_refs(
     params_node: Option<Node<'_>>,
     source: &[u8],
@@ -353,6 +354,7 @@ pub(super) fn csharp_collect_type_refs(
 /// Collect attribute names from a C# method's `attribute_list` children.
 ///
 /// `[Authorize, Route("/api")]` on a method produces `["Authorize", "Route"]`.
+#[must_use]
 pub(super) fn csharp_attribute_names(method_node: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
     let mut cur = method_node.walk();
@@ -695,6 +697,7 @@ pub(super) fn ts_collect_type_refs(
 /// qualified path (`Foo.Bar` → `"Bar"`).
 ///
 /// Mirrors Python `_ts_heritage_clause_entries`.
+#[must_use]
 pub(super) fn ts_heritage_clause_entries(clause: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = clause.walk();
@@ -757,6 +760,7 @@ pub(super) fn ts_heritage_clause_entries(clause: Node<'_>, source: &[u8]) -> Vec
 /// Collect annotation names from a Java method's `modifiers` child.
 ///
 /// `@Override @Deprecated public void foo()` yields `["Override", "Deprecated"]`.
+#[must_use]
 pub(super) fn java_method_annotation_names(method_node: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
     let Some(modifiers) = find_modifiers(method_node) else {
