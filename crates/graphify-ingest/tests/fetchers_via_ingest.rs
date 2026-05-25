@@ -47,7 +47,8 @@ fn ingest_webpage_via_fetcher() {
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let out = ingest(&server.url(), tmp.path(), None, None).expect("test invariant");
+    let out = ingest(&server.url(), tmp.path(), None, None)
+        .expect("ingest should succeed for valid webpage URL");
     let text = std::fs::read_to_string(&out).expect("read fixture");
     assert!(text.contains("Hello"));
 }
@@ -66,7 +67,7 @@ fn ingest_pdf_url_downloads_binary() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let url = format!("{}/file.pdf", server.url());
-    let out = ingest(&url, tmp.path(), None, None).expect("test invariant");
+    let out = ingest(&url, tmp.path(), None, None).expect("ingest should succeed for PDF download");
     assert!(out.extension().is_some_and(|e| e == "pdf"));
 }
 
@@ -84,7 +85,8 @@ fn ingest_image_url_downloads_with_inferred_extension() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let url = format!("{}/pic.png", server.url());
-    let out = ingest(&url, tmp.path(), None, None).expect("test invariant");
+    let out =
+        ingest(&url, tmp.path(), None, None).expect("ingest should succeed for image download");
     assert!(out.exists());
     assert!(out.extension().is_some_and(|e| e == "png"));
 }
@@ -119,8 +121,10 @@ fn ingest_with_existing_filename_dedups() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let url = format!("{}/same", server.url());
-    let a = ingest(&url, tmp.path(), None, None).expect("test invariant");
-    let b = ingest(&url, tmp.path(), None, None).expect("test invariant");
+    let a = ingest(&url, tmp.path(), None, None)
+        .expect("first ingest should succeed for deduplication test");
+    let b = ingest(&url, tmp.path(), None, None)
+        .expect("second ingest should succeed for deduplication test");
     assert_ne!(a, b);
 }
 

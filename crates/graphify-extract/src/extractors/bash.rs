@@ -2,21 +2,9 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::LazyLock;
 
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
-
-static BASH_SKIP: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac",
-        "in", "return", "exit", "break", "continue", "echo", "printf", "cd", "set", "local",
-        "export", "readonly", "declare", "unset", "shift", "read", "test", "[", "[[", ":", "true",
-        "false", "source", ".", "trap", "wait", "exec", "eval",
-    ]
-    .into_iter()
-    .collect()
-});
 
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
@@ -284,26 +272,15 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                 let cmd = read_text(cnn, source).trim().to_string();
                 if matches!(cmd.as_str(), "source" | ".") {
                     // Source shadowing: when the user has defined a function
-                    // literally named `source`, the builtin is shadowed and
-                    // `source ./helpers.sh` must be treated as a function
-                    // call (mirrors graphify-py extract.py source-command
-                    // dispatcher). The pre-scan above guarantees that
-                    // forward-declared shadowers are detected here.
+                    // literally named `source`, the builtin is shadowed. The
+                    // graphify-py reference deliberately falls through in
+                    // that case and lets `walk_calls` attribute the call —
+                    // we do the same here so attribution flows through
+                    // `walk_calls_top_level_bash` / `walk_calls_bash` rather
+                    // than emitting a divergent `file_nid → source` edge.
                     let shadowed = cmd == "source" && defined_functions.contains("source");
                     if shadowed {
-                        let tgt_nid = make_id(&[stem, "source"]);
-                        let line = node.start_position().row + 1;
-                        edges.push(Edge {
-                            source: file_nid.to_string(),
-                            target: tgt_nid,
-                            relation: "calls".to_string(),
-                            confidence: "EXTRACTED".to_string(),
-                            source_file: str_path.to_string(),
-                            source_location: Some(format!("L{line}")),
-                            weight: 1.0,
-                            context: Some("call".to_string()),
-                            confidence_score: None,
-                        });
+                        // intentionally no-op — see comment above.
                     } else {
                         // find path argument
                         let args: Vec<tree_sitter::Node<'_>> = {
@@ -515,6 +492,63 @@ fn is_literal_command_name(name: &str) -> bool {
         && !name.contains('&')
 }
 
+/// Emit a `calls` edge from `caller_nid` to the function targeted by
+/// `cmd_node` (a `command` AST node) — if and only if the command's name is
+/// a literal user-defined function and the edge hasn't already been seen.
+///
+/// Centralised so [`walk_calls_bash`] and [`walk_calls_top_level_bash`] share
+/// the literal/skip-list/defined-functions filter without drifting.
+fn emit_call_edge_if_valid(
+    ctx: &mut BashCallCtx<'_>,
+    cmd_node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_nid: &str,
+) {
+    if cmd_node.kind() != "command" || is_inside_expansion(cmd_node) {
+        return;
+    }
+    let cmd_name_node = cmd_node.child_by_field_name("name").or_else(|| {
+        let mut cur = cmd_node.walk();
+        if cur.goto_first_child() {
+            Some(cur.node())
+        } else {
+            None
+        }
+    });
+    let Some(cnn) = cmd_name_node else {
+        return;
+    };
+    let name = read_text(cnn, source).trim().to_string();
+    // `defined_functions` already constrains us to user-defined function
+    // names, so an extra `BASH_SKIP` filter would only create false
+    // negatives when a script shadows a builtin like `source` — see
+    // graphify-py `walk_calls`, which only checks `defined_functions`.
+    if name.is_empty() || !is_literal_command_name(&name) || !ctx.defined_functions.contains(&name)
+    {
+        return;
+    }
+    let tgt = make_id(&[ctx.stem, &name]);
+    if tgt.is_empty() {
+        return;
+    }
+    let key = (caller_nid.to_string(), tgt.clone());
+    if !ctx.seen_calls.insert(key) {
+        return;
+    }
+    let line = cmd_node.start_position().row + 1;
+    ctx.edges.push(Edge {
+        source: caller_nid.to_string(),
+        target: tgt,
+        relation: "calls".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: ctx.str_path.to_string(),
+        source_location: Some(format!("L{line}")),
+        weight: 1.0,
+        context: Some("call".to_string()),
+        confidence_score: None,
+    });
+}
+
 fn walk_calls_bash(
     ctx: &mut BashCallCtx<'_>,
     node: tree_sitter::Node<'_>,
@@ -523,50 +557,10 @@ fn walk_calls_bash(
     body_start: usize,
     body_end: usize,
 ) {
-    let str_path = ctx.str_path;
-    let stem = ctx.stem;
-    let defined_functions = ctx.defined_functions;
-    let edges = &mut *ctx.edges;
-    let seen_calls = &mut *ctx.seen_calls;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
-    if node.kind() == "command" && !is_inside_expansion(node) {
-        let cmd_name_node = node.child_by_field_name("name").or_else(|| {
-            let mut cur = node.walk();
-            if cur.goto_first_child() {
-                Some(cur.node())
-            } else {
-                None
-            }
-        });
-        if let Some(cnn) = cmd_name_node {
-            let name = read_text(cnn, source).trim().to_string();
-            if !name.is_empty()
-                && is_literal_command_name(&name)
-                && !BASH_SKIP.contains(name.as_str())
-                && defined_functions.contains(&name)
-            {
-                let tgt = make_id(&[stem, &name]);
-                let key = (func_nid.to_string(), tgt.clone());
-                if !tgt.is_empty() && !seen_calls.contains(&key) {
-                    seen_calls.insert(key);
-                    let line = node.start_position().row + 1;
-                    edges.push(Edge {
-                        source: func_nid.to_string(),
-                        target: tgt,
-                        relation: "calls".to_string(),
-                        confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
-                        source_location: Some(format!("L{line}")),
-                        weight: 1.0,
-                        context: Some("call".to_string()),
-                        confidence_score: None,
-                    });
-                }
-            }
-        }
-    }
+    emit_call_edge_if_valid(ctx, node, source, func_nid);
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
@@ -591,49 +585,7 @@ fn walk_calls_top_level_bash(
     source: &[u8],
     entry_nid: &str,
 ) {
-    let str_path = ctx.str_path;
-    let stem = ctx.stem;
-    let defined_functions = ctx.defined_functions;
-    let edges = &mut *ctx.edges;
-    let seen_calls = &mut *ctx.seen_calls;
-
-    if node.kind() == "command" && !is_inside_expansion(node) {
-        let cmd_name_node = node.child_by_field_name("name").or_else(|| {
-            let mut cur = node.walk();
-            if cur.goto_first_child() {
-                Some(cur.node())
-            } else {
-                None
-            }
-        });
-        if let Some(cnn) = cmd_name_node {
-            let name = read_text(cnn, source).trim().to_string();
-            if !name.is_empty()
-                && is_literal_command_name(&name)
-                && !BASH_SKIP.contains(name.as_str())
-                && defined_functions.contains(&name)
-            {
-                let tgt = make_id(&[stem, &name]);
-                let key = (entry_nid.to_string(), tgt.clone());
-                if !tgt.is_empty() && !seen_calls.contains(&key) {
-                    seen_calls.insert(key);
-                    let line = node.start_position().row + 1;
-                    edges.push(Edge {
-                        source: entry_nid.to_string(),
-                        target: tgt,
-                        relation: "calls".to_string(),
-                        confidence: "EXTRACTED".to_string(),
-                        source_file: str_path.to_string(),
-                        source_location: Some(format!("L{line}")),
-                        weight: 1.0,
-                        context: Some("call".to_string()),
-                        confidence_score: None,
-                    });
-                }
-            }
-        }
-    }
-
+    emit_call_edge_if_valid(ctx, node, source, entry_nid);
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {

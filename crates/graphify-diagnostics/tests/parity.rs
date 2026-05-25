@@ -209,8 +209,8 @@ fn diagnose_does_not_mutate_input() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn diagnose_file_reads_directed_flag_from_json() {
-    let dir = tempdir().expect("tempdir");
+fn diagnose_file_reads_directed_flag_from_json() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
     let path = dir.path().join("g.json");
     std::fs::write(
         &path,
@@ -220,15 +220,15 @@ fn diagnose_file_reads_directed_flag_from_json() {
             "links": [{"source": "a", "target": "b", "relation": "calls"}],
         })
         .to_string(),
-    )
-    .expect("test invariant");
-    let summary = diagnose_file(&path, None, 5, None).expect("diagnose");
+    )?;
+    let summary = diagnose_file(&path, None, 5, None)?;
     assert_eq!(summary["effective_directed"], json!(false));
+    Ok(())
 }
 
 #[test]
-fn diagnose_file_directed_override_wins() {
-    let dir = tempdir().expect("tempdir");
+fn diagnose_file_directed_override_wins() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
     let path = dir.path().join("g.json");
     std::fs::write(
         &path,
@@ -238,18 +238,24 @@ fn diagnose_file_directed_override_wins() {
             "links": [],
         })
         .to_string(),
-    )
-    .expect("test invariant");
-    let summary = diagnose_file(&path, Some(true), 5, None).expect("diagnose");
+    )?;
+    let summary = diagnose_file(&path, Some(true), 5, None)?;
     assert_eq!(summary["effective_directed"], json!(true));
+    Ok(())
 }
 
 #[test]
-fn diagnose_file_rejects_non_object_input() {
-    let dir = tempdir().expect("tempdir");
+fn diagnose_file_rejects_non_object_input() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
     let path = dir.path().join("g.json");
-    std::fs::write(&path, "[1, 2, 3]").expect("write fixture");
-    assert!(diagnose_file(&path, None, 5, None).is_err());
+    std::fs::write(&path, "[1, 2, 3]")?;
+    let err =
+        diagnose_file(&path, None, 5, None).expect_err("non-object JSON input must be rejected");
+    assert!(
+        matches!(err, graphify_diagnostics::DiagnosticsError::NotAnObject),
+        "expected NotAnObject, got {err:?}"
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

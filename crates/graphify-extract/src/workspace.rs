@@ -185,10 +185,23 @@ fn glob_workspace_pattern(root: &Path, pattern: &str) -> Vec<PathBuf> {
 
 /// Iterative directory walker for the `packages: - "dir/**"` recursive
 /// glob. Uses an explicit work stack so a pathologically-deep workspace
-/// (symlinked or otherwise) can't blow the call stack.
+/// (symlinked or otherwise) can't blow the call stack. Tracks canonical
+/// paths in a `visited` set so a symlink cycle (e.g. `a/b -> ../a`) can't
+/// loop forever — directories whose canonical form has already been seen
+/// are skipped silently.
 fn walk_subdirs(base: &Path, out: &mut Vec<PathBuf>) {
     let mut stack: Vec<PathBuf> = vec![base.to_path_buf()];
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     while let Some(dir) = stack.pop() {
+        // Canonicalise so a → b → a symlink cycles dedupe by target. If
+        // canonicalisation fails (broken link, permission denied, etc.),
+        // skip the directory rather than emit a misleading entry.
+        let Ok(canonical) = dir.canonicalize() else {
+            continue;
+        };
+        if !visited.insert(canonical) {
+            continue;
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };

@@ -992,7 +992,7 @@ fn test_gemini_uninstall_removes_hook() {
 }
 
 #[test]
-#[serial_test::serial(home_env)]
+#[serial(home_env)]
 fn test_gemini_uninstall_noop_if_not_installed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");
@@ -1218,7 +1218,7 @@ fn test_gemini_install_upgrades_stale_section() {
 }
 
 #[test]
-#[serial_test::serial(home_env)]
+#[serial(home_env)]
 fn test_vscode_install_upgrades_stale_section() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");
@@ -1398,7 +1398,7 @@ fn test_uninstall_opencode_plugin_noop_when_absent() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[serial_test::serial(home_env)]
+#[serial(home_env)]
 fn test_antigravity_install_writes_rules_and_workflow() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");
@@ -1416,7 +1416,7 @@ fn test_antigravity_install_writes_rules_and_workflow() {
 }
 
 #[test]
-#[serial_test::serial(home_env)]
+#[serial(home_env)]
 fn test_antigravity_uninstall_removes_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");
@@ -1439,7 +1439,7 @@ fn test_antigravity_uninstall_removes_files() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[serial_test::serial(home_env)]
+#[serial(home_env)]
 fn test_vscode_install_creates_copilot_instructions() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");
@@ -1462,7 +1462,7 @@ fn test_vscode_install_creates_copilot_instructions() {
 }
 
 #[test]
-#[serial_test::serial(home_env)]
+#[serial(home_env)]
 fn test_vscode_uninstall_removes_section() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");

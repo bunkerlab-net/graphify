@@ -17,7 +17,7 @@ pub const METADATA_MAX_LIST_ITEMS: usize = 50;
 
 #[allow(clippy::expect_used)] // literal pattern; cannot fail at runtime
 static CONTROL_CHARS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\x00-\x1f\x7f]").expect("literal pattern is valid"));
+    LazyLock::new(|| Regex::new(r"[\x00-\x1f\x7f]").expect("static CONTROL_CHARS regex"));
 
 /// Sanitise a single metadata string: strip control chars, HTML-escape with
 /// quote handling, cap at [`METADATA_MAX_VALUE_LEN`] code points.

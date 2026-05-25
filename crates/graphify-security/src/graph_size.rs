@@ -54,18 +54,20 @@ pub fn check_graph_file_size_cap_with(path: &Path, cap: u64) -> Result<(), Secur
 /// `f"{value:_d}"`. Implemented as a right-aligned chunked walk
 /// (`.rchunks(3).rev()`) so the separator placement is obvious at a
 /// glance.
+#[must_use]
 fn format_with_underscores(value: u64) -> String {
     let digits = value.to_string();
     // `digits` comes from `u64::to_string`, which only emits ASCII decimal
     // digits, so every 3-byte slice from `rchunks(3)` is guaranteed-valid
-    // UTF-8. The `unwrap_or("")` fallback in the map below is therefore
-    // unreachable in practice — kept only so this helper never panics on
-    // future refactors that change `digits`'s source.
+    // UTF-8. The `.expect` documents that invariant rather than masking a
+    // bug with `unwrap_or("")` — if it ever panics, something far worse
+    // has happened to `u64::to_string`.
+    #[allow(clippy::expect_used)] // invariant documented above
     let chunks: Vec<&str> = digits
         .as_bytes()
         .rchunks(3)
         .rev()
-        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .map(|c| std::str::from_utf8(c).expect("digits from u64::to_string must be valid UTF-8"))
         .collect();
     chunks.join("_")
 }

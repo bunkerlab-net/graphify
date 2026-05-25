@@ -198,6 +198,7 @@ fn split_env_s(value: &str, rest: &[String]) -> Vec<String> {
 
 /// Return the basename of a path-like interpreter string. Equivalent to
 /// `pathlib.Path(s).name` for the slash-separated shebang strings we see.
+#[must_use]
 fn basename(s: &str) -> String {
     Path::new(s)
         .file_name()

@@ -82,6 +82,12 @@ pub fn extract_corpus_parallel(
 /// Same as [`extract_corpus_parallel`] but also returns the total number
 /// of chunks attempted, so callers can detect "all chunks failed"
 /// (used by the CLI to exit non-zero in that case).
+///
+/// The returned tuple is `(merged_response, failed_chunk_count, total_chunk_count)`:
+/// - `merged_response` is the [`LlmResponse`] containing nodes/edges from every
+///   chunk that succeeded.
+/// - `failed_chunk_count` is the number of chunks that returned an error.
+/// - `total_chunk_count` is the number of chunks attempted overall.
 #[must_use]
 pub fn extract_corpus_parallel_with_total(
     files: &[PathBuf],

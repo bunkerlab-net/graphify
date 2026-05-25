@@ -337,6 +337,9 @@ pub fn make_scip_node_id(symbol: &str, source_file: &str) -> String {
     let raw = format!("{source_file}:{symbol}");
     let digest = Sha256::digest(raw.as_bytes());
     let hex_full = hex::encode(digest);
+    // SHA-256 always produces 32 bytes → 64 hex chars, so the 12-char
+    // prefix slice is always in-bounds. Documented so future refactors
+    // (e.g. switching hashers) keep the invariant explicit.
     let h = &hex_full[..12];
     let suffix_raw = symbol.split('#').next_back().unwrap_or(symbol);
     let suffix = IDENT_SAFE

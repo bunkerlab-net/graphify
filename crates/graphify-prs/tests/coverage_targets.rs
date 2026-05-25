@@ -88,39 +88,41 @@ fn args_parse_base_short() {
 
 #[test]
 fn args_parse_repo_long_and_short() {
-    let a = PrsArgs::parse(&["--repo", "owner/repo"]).expect("test invariant");
+    let a = PrsArgs::parse(&["--repo", "owner/repo"]).expect("--repo parse should succeed");
     assert_eq!(a.repo.as_deref(), Some("owner/repo"));
-    let b = PrsArgs::parse(&["-R", "owner/repo"]).expect("test invariant");
+    let b = PrsArgs::parse(&["-R", "owner/repo"]).expect("-R parse should succeed");
     assert_eq!(b.repo.as_deref(), Some("owner/repo"));
 }
 
 #[test]
 fn args_parse_graph_paths() {
-    let a = PrsArgs::parse(&["--graph", "/tmp/g.json"]).expect("test invariant");
+    let a = PrsArgs::parse(&["--graph", "/tmp/g.json"]).expect("--graph parse should succeed");
     assert_eq!(a.graph_path, Some(PathBuf::from("/tmp/g.json")));
-    let b = PrsArgs::parse(&["--graph=/tmp/g.json"]).expect("test invariant");
+    let b = PrsArgs::parse(&["--graph=/tmp/g.json"]).expect("--graph= parse should succeed");
     assert_eq!(b.graph_path, Some(PathBuf::from("/tmp/g.json")));
 }
 
 #[test]
 fn args_parse_limit() {
-    let a = PrsArgs::parse(&["--limit", "100"]).expect("test invariant");
+    let a = PrsArgs::parse(&["--limit", "100"]).expect("--limit parse should succeed");
     assert_eq!(a.limit, 100);
-    let b = PrsArgs::parse(&["--limit=25"]).expect("test invariant");
+    let b = PrsArgs::parse(&["--limit=25"]).expect("--limit= parse should succeed");
     assert_eq!(b.limit, 25);
     // Invalid limit silently ignored.
-    let c = PrsArgs::parse(&["--limit", "not-a-num"]).expect("test invariant");
+    let c = PrsArgs::parse(&["--limit", "not-a-num"])
+        .expect("invalid --limit value should still parse (falls back to default)");
     assert_eq!(c.limit, 50);
 }
 
 #[test]
 fn args_parse_pr_number_bareword() {
-    let a = PrsArgs::parse(&["42"]).expect("test invariant");
+    let a = PrsArgs::parse(&["42"]).expect("bareword PR number should parse");
     assert_eq!(a.pr_number, Some(42));
-    let b = PrsArgs::parse(&["#42"]).expect("test invariant");
+    let b = PrsArgs::parse(&["#42"]).expect("#-prefixed PR number should parse");
     assert_eq!(b.pr_number, Some(42));
     // Non-numeric does not set pr_number.
-    let c = PrsArgs::parse(&["abc"]).expect("test invariant");
+    let c = PrsArgs::parse(&["abc"])
+        .expect("non-numeric positional should still parse (pr_number stays None)");
     assert!(c.pr_number.is_none());
 }
 
