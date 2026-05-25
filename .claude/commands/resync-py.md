@@ -175,10 +175,16 @@ Per `AGENTS.md`:
 > against the actual code. If you find drift that pre-dates this resync,
 > fix it too — out-of-date docs from a previous resync are still a bug.
 
-1. Update `///` doc-comments on all modified functions/modules to reflect new
+1. **Bump the workspace version.** Update `workspace.package.version` in
+   the root `Cargo.toml` to the upstream `graphify-py` version this resync
+   tracks (run `cargo update --workspace` afterwards so `Cargo.lock`
+   picks up every `graphify-*` crate). The submodule pointer and the Rust
+   workspace version MUST stay in lockstep; a resync that bumps the
+   submodule but not the workspace version is half-done.
+2. Update `///` doc-comments on all modified functions/modules to reflect new
    behaviour. The first sentence is what `cargo doc` and `rustdoc-search`
    surface, so make it useful.
-2. Update `README.md` and `USAGE.md`. Walk this checklist for every ported
+3. Update `README.md` and `USAGE.md`. Walk this checklist for every ported
    change and tick each item explicitly:
    - **CLI reference** — new subcommands, new flags, renamed flags, removed
      flags, changed defaults, changed exit codes.
@@ -191,7 +197,7 @@ Per `AGENTS.md`:
      runs (rate-limited backups, shrink-guard bypass, fallback paths).
    - **Divergences from `graphify-py`** — anywhere the Rust output differs
      intentionally from the Python reference, name it and explain why.
-3. Re-read your diff and ask: *"if a user only reads the README/USAGE, would
+4. Re-read your diff and ask: *"if a user only reads the README/USAGE, would
    they discover this change?"* If no, document it. If still no, document it
    harder.
 
