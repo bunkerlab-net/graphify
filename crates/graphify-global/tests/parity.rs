@@ -2,9 +2,9 @@
 //!
 //! Each test function mirrors a Python test case at the same name.
 //!
-//! Allow `unwrap_used` / `expect_used` here — test code is allowed to panic
-//! rather than propagate errors via `?`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! Allow `expect_used` here — test code is allowed to panic with explicit
+//! messages rather than propagate errors via `?`.
+#![allow(clippy::expect_used)]
 
 use graphify_build::{Graph, GraphKind};
 use graphify_global::{
@@ -52,7 +52,7 @@ fn test_prefix_graph_preserves_label() {
 
     assert!(h.contains_node("repoA::userservice"));
     assert!(!h.contains_node("userservice"));
-    let data = h.node_data("repoA::userservice").unwrap();
+    let data = h.node_data("repoA::userservice").expect("test invariant");
     assert_eq!(
         data.get("label").and_then(Value::as_str),
         Some("UserService")
@@ -64,7 +64,7 @@ fn test_prefix_graph_preserves_label() {
 fn test_prefix_graph_sets_repo_and_local_id() {
     let g = make_graph(&[("userservice", &[("label", "UserService")])], &[]);
     let h = prefix_graph_for_global(&g, "repoA");
-    let data = h.node_data("repoA::userservice").unwrap();
+    let data = h.node_data("repoA::userservice").expect("test invariant");
     assert_eq!(data.get("repo").and_then(Value::as_str), Some("repoA"));
     assert_eq!(
         data.get("local_id").and_then(Value::as_str),
@@ -132,7 +132,7 @@ fn write_graph_file(dir: &std::path::Path, name: &str, graph: &Graph) -> std::pa
 // Mirrors: test_global_add_creates_global_graph
 #[test]
 fn test_global_add_creates_global_graph() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let g = make_graph(
         &[(
             "userservice",
@@ -146,7 +146,7 @@ fn test_global_add_creates_global_graph() {
     let graph_path = global_dir.join("global-graph.json");
     let manifest_path = global_dir.join("global-manifest.json");
 
-    let result = global_add(&src, "repoA", &graph_path, &manifest_path).unwrap();
+    let result = global_add(&src, "repoA", &graph_path, &manifest_path).expect("test invariant");
 
     assert!(!result.skipped);
     assert!(result.nodes_added > 0);
@@ -158,7 +158,7 @@ fn test_global_add_creates_global_graph() {
 // Mirrors: test_global_add_skip_on_unchanged_hash
 #[test]
 fn test_global_add_skip_on_unchanged_hash() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let g = make_graph(
         &[(
             "userservice",
@@ -172,8 +172,8 @@ fn test_global_add_skip_on_unchanged_hash() {
     let graph_path = global_dir.join("global-graph.json");
     let manifest_path = global_dir.join("global-manifest.json");
 
-    global_add(&src, "repoA", &graph_path, &manifest_path).unwrap();
-    let result2 = global_add(&src, "repoA", &graph_path, &manifest_path).unwrap();
+    global_add(&src, "repoA", &graph_path, &manifest_path).expect("test invariant");
+    let result2 = global_add(&src, "repoA", &graph_path, &manifest_path).expect("test invariant");
 
     assert!(result2.skipped);
 }
@@ -181,7 +181,7 @@ fn test_global_add_skip_on_unchanged_hash() {
 // Mirrors: test_global_add_two_repos_no_collision
 #[test]
 fn test_global_add_two_repos_no_collision() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let g1 = make_graph(
         &[(
             "userservice",
@@ -203,10 +203,10 @@ fn test_global_add_two_repos_no_collision() {
     let graph_path = global_dir.join("global-graph.json");
     let manifest_path = global_dir.join("global-manifest.json");
 
-    global_add(&src1, "repoA", &graph_path, &manifest_path).unwrap();
-    global_add(&src2, "repoB", &graph_path, &manifest_path).unwrap();
+    global_add(&src1, "repoA", &graph_path, &manifest_path).expect("test invariant");
+    global_add(&src2, "repoB", &graph_path, &manifest_path).expect("test invariant");
 
-    let merged = load_graph_from_file(&graph_path).unwrap();
+    let merged = load_graph_from_file(&graph_path).expect("test invariant");
     assert!(merged.contains_node("repoA::userservice"));
     assert!(merged.contains_node("repoB::userservice"));
     assert_eq!(merged.node_count(), 2); // no silent collapse
@@ -215,7 +215,7 @@ fn test_global_add_two_repos_no_collision() {
 // Mirrors: test_global_remove
 #[test]
 fn test_global_remove() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let g = make_graph(
         &[(
             "userservice",
@@ -229,8 +229,8 @@ fn test_global_remove() {
     let graph_path = global_dir.join("global-graph.json");
     let manifest_path = global_dir.join("global-manifest.json");
 
-    global_add(&src, "repoA", &graph_path, &manifest_path).unwrap();
-    let removed = global_remove("repoA", &graph_path, &manifest_path).unwrap();
+    global_add(&src, "repoA", &graph_path, &manifest_path).expect("test invariant");
+    let removed = global_remove("repoA", &graph_path, &manifest_path).expect("test invariant");
 
     assert!(removed > 0);
     let repos = global_list(&manifest_path);
@@ -240,7 +240,7 @@ fn test_global_remove() {
 // Mirrors: test_global_remove_unknown_tag_raises
 #[test]
 fn test_global_remove_unknown_tag_raises() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let global_dir = tmp.path().join(".graphify");
     let graph_path = global_dir.join("global-graph.json");
     let manifest_path = global_dir.join("global-manifest.json");
@@ -259,7 +259,7 @@ fn test_global_remove_unknown_tag_raises() {
 // the same and the result is skipped — skipping is correct when hash matches).
 #[test]
 fn test_global_add_collision_different_source_path() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let g = make_graph(&[("x", &[("label", "X"), ("source_file", "x.py")])], &[]);
     let src1 = write_graph_file(tmp.path(), "graph1.json", &g);
     // Write a graph with different content so the hash won't match.
@@ -276,9 +276,9 @@ fn test_global_add_collision_different_source_path() {
     let graph_path = global_dir.join("global-graph.json");
     let manifest_path = global_dir.join("global-manifest.json");
 
-    global_add(&src1, "myrepo", &graph_path, &manifest_path).unwrap();
+    global_add(&src1, "myrepo", &graph_path, &manifest_path).expect("test invariant");
     // Different source path and content — should warn and proceed (not skipped).
-    let result = global_add(&src2, "myrepo", &graph_path, &manifest_path).unwrap();
+    let result = global_add(&src2, "myrepo", &graph_path, &manifest_path).expect("test invariant");
     assert!(!result.skipped);
 }
 

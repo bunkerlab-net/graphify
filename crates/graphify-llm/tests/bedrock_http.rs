@@ -1,7 +1,7 @@
 //! Bedrock mockito tests. Honours `GRAPHIFY_BEDROCK_BASE_URL` so the regional
 //! AWS endpoint can be replaced with a local mock server.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_llm::bedrock::{call_bedrock, call_bedrock_plain, resolve_region};
 use serde_json::json;
@@ -42,6 +42,7 @@ impl Drop for EnvGuard {
 // ── resolve_region ─────────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_region_defaults_to_us_east_1() {
     let mut g = EnvGuard::new();
     g.remove("AWS_REGION");
@@ -50,6 +51,7 @@ fn resolve_region_defaults_to_us_east_1() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_region_uses_aws_region() {
     let mut g = EnvGuard::new();
     g.set("AWS_REGION", "eu-west-2");
@@ -57,6 +59,7 @@ fn resolve_region_uses_aws_region() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_region_falls_back_to_aws_default_region() {
     let mut g = EnvGuard::new();
     g.remove("AWS_REGION");
@@ -67,6 +70,7 @@ fn resolve_region_falls_back_to_aws_default_region() {
 // ── call_bedrock missing credentials ───────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn call_bedrock_missing_creds_errors() {
     let mut g = EnvGuard::new();
     g.remove("AWS_ACCESS_KEY_ID");
@@ -83,6 +87,7 @@ fn call_bedrock_missing_creds_errors() {
 // ── call_bedrock happy path via mock ───────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn call_bedrock_via_mock() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -112,7 +117,7 @@ fn call_bedrock_via_mock() {
         &[json!({"role": "user", "content": [{"text": "hi"}]})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
     assert_eq!(resp.input_tokens, 3);
     assert_eq!(resp.output_tokens, 5);
@@ -120,6 +125,7 @@ fn call_bedrock_via_mock() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_bedrock_max_tokens_maps_to_length() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -149,11 +155,12 @@ fn call_bedrock_max_tokens_maps_to_length() {
         &[json!({"role": "user", "content": [{"text": "hi"}]})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.finish_reason, "length");
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_bedrock_with_session_token() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -179,11 +186,12 @@ fn call_bedrock_with_session_token() {
         &[json!({"role": "user", "content": [{"text": "hi"}]})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_bedrock_plain_via_mock() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -202,7 +210,7 @@ fn call_bedrock_plain_via_mock() {
     g.set("AWS_ACCESS_KEY_ID", "fake");
     g.set("AWS_SECRET_ACCESS_KEY", "fake");
 
-    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32).unwrap();
+    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32).expect("test invariant");
     // call_bedrock_plain returns the first nodes[].label string, which may be
     // empty since the JSON we returned isn't extraction-shaped — just verify
     // the function runs without panicking.
@@ -211,6 +219,7 @@ fn call_bedrock_plain_via_mock() {
 // ── 5xx error path ─────────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn call_bedrock_http_error() {
     let mut server = mockito::Server::new();
     let _m = server

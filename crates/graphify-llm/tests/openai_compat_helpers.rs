@@ -1,11 +1,6 @@
 //! Coverage tests for the pure helper functions in `openai_compat`.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::openai_compat::{
     OpenAiRequest, api_timeout, call_openai_compat, derive_ollama_num_ctx, extraction_messages,
@@ -51,13 +46,15 @@ impl Drop for EnvGuard {
 // ── api_timeout ─────────────────────────────────────────────────────────────
 
 #[test]
-fn api_timeout_default_is_600s() {
+#[serial_test::serial(env)]
+fn api_timeout_default_is_10_minutes() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_API_TIMEOUT");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_honours_env_var() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "30");
@@ -65,6 +62,7 @@ fn api_timeout_honours_env_var() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_accepts_float() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "15.5");
@@ -72,24 +70,27 @@ fn api_timeout_accepts_float() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_ignores_invalid_value() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "not-a-number");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn api_timeout_ignores_zero_or_negative() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_API_TIMEOUT", "0");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
     g.set("GRAPHIFY_API_TIMEOUT", "-1");
-    assert_eq!(api_timeout(), Duration::from_secs(600));
+    assert_eq!(api_timeout(), Duration::from_mins(10));
 }
 
 // ── resolve_max_tokens ──────────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_returns_default_without_env() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_MAX_OUTPUT_TOKENS");
@@ -97,6 +98,7 @@ fn resolve_max_tokens_returns_default_without_env() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_honours_env_var() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_MAX_OUTPUT_TOKENS", "4096");
@@ -104,6 +106,7 @@ fn resolve_max_tokens_honours_env_var() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_ignores_invalid() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_MAX_OUTPUT_TOKENS", "not-a-num");
@@ -111,6 +114,7 @@ fn resolve_max_tokens_ignores_invalid() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn resolve_max_tokens_ignores_zero() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_MAX_OUTPUT_TOKENS", "0");
@@ -173,15 +177,15 @@ fn safe_parse_response_returns_empty_on_oversized() {
     big.push_str(&"\"x\":".repeat(1_000_000));
     big.push_str("\"end\"}");
     let v = safe_parse_response(&big);
-    assert!(v["nodes"].as_array().unwrap().is_empty());
-    assert!(v["edges"].as_array().unwrap().is_empty());
-    assert!(v["hyperedges"].as_array().unwrap().is_empty());
+    assert!(v["nodes"].as_array().expect("array field").is_empty());
+    assert!(v["edges"].as_array().expect("array field").is_empty());
+    assert!(v["hyperedges"].as_array().expect("array field").is_empty());
 }
 
 #[test]
 fn safe_parse_response_handles_markdown_fences() {
     let v = safe_parse_response("```json\n{\"nodes\":[],\"edges\":[]}\n```");
-    assert!(v["nodes"].as_array().unwrap().is_empty());
+    assert!(v["nodes"].as_array().expect("array field").is_empty());
 }
 
 // ── call_openai_compat with bad URL hits SSRF guard ────────────────────────

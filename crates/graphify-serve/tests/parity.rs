@@ -3,7 +3,7 @@
 //! All test cases from the Python test suite are ported here. We use
 //! `graphify_build::build_from_json` to construct `Graph` objects rather than
 //! the Python `networkx` constructors.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use graphify_prs::gh::GhClient;
 use graphify_prs::git::GitClient;
 use graphify_serve::graph::{
     bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, infer_context_filters,
-    load_graph, pick_seeds, query_graph_text, resolve_context_filters, score_nodes,
+    load_graph, pick_seeds, query_graph_text, query_terms, resolve_context_filters, score_nodes,
     subgraph_to_text,
 };
 use graphify_serve::tools::{
@@ -639,8 +639,9 @@ fn make_fake_gh() -> FakeGhClient {
 #[test]
 fn test_tool_list_prs_returns_pr_descriptors() {
     let gh = make_fake_gh();
-    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
-    let prs = result["prs"].as_array().unwrap();
+    let result =
+        tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
+    let prs = result["prs"].as_array().expect("array field");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0]["number"], 42);
     assert_eq!(prs[0]["title"], "Add feature X");
@@ -650,7 +651,8 @@ fn test_tool_list_prs_returns_pr_descriptors() {
 #[test]
 fn test_tool_list_prs_includes_count() {
     let gh = make_fake_gh();
-    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    let result =
+        tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
     assert_eq!(result["count"], 1);
 }
 
@@ -661,8 +663,9 @@ fn test_tool_list_prs_handles_empty() {
         files: vec![],
         default_branch: Some("main".to_string()),
     };
-    let result = tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
-    let prs = result["prs"].as_array().unwrap();
+    let result =
+        tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
+    let prs = result["prs"].as_array().expect("array field");
     assert!(prs.is_empty());
     assert_eq!(result["count"], 0);
 }
@@ -687,9 +690,9 @@ fn test_tool_get_pr_impact_lists_affected_nodes() {
     let gh = make_fake_gh();
     let graph = make_impact_graph();
     let args = json!({"pr_number": 42});
-    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).unwrap();
+    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).expect("test invariant");
     assert!(
-        result["affected_nodes"].as_u64().unwrap() > 0,
+        result["affected_nodes"].as_u64().expect("u64 field") > 0,
         "must report affected nodes when file matches"
     );
 }
@@ -703,9 +706,9 @@ fn test_tool_get_pr_impact_empty_when_no_match() {
     };
     let graph = make_impact_graph();
     let args = json!({"pr_number": 42});
-    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).unwrap();
+    let result = tool_get_pr_impact_with_clients(&graph, &args, &gh).expect("test invariant");
     assert_eq!(
-        result["affected_nodes"].as_u64().unwrap(),
+        result["affected_nodes"].as_u64().expect("u64 field"),
         0,
         "no overlap → zero affected nodes"
     );
@@ -714,7 +717,8 @@ fn test_tool_get_pr_impact_empty_when_no_match() {
 #[test]
 fn test_tool_triage_prs_returns_structured_output() {
     let gh = make_fake_gh();
-    let result = tool_triage_prs_with_clients(&json!({}), &gh, &FakeGitClient).unwrap();
+    let result =
+        tool_triage_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
     assert!(result.is_array(), "triage output must be a JSON array");
 }
 
@@ -724,11 +728,62 @@ fn test_tool_triage_prs_respects_limit() {
     // field must be respected (no more than `limit` items returned).
     let gh = make_fake_gh();
     let args = json!({"limit": 1});
-    let result = tool_triage_prs_with_clients(&args, &gh, &FakeGitClient).unwrap();
-    let items = result.as_array().unwrap();
+    let result = tool_triage_prs_with_clients(&args, &gh, &FakeGitClient).expect("test invariant");
+    let items = result.as_array().expect("array field");
     assert!(
         items.len() <= 1,
         "limit=1 must cap the result length; got {}",
         items.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// query_terms: keep short non-English tokens (#964)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_terms_filters_only_short_english_terms() {
+    assert_eq!(
+        query_terms("the quick brown"),
+        vec!["the", "quick", "brown"]
+    );
+    let r = query_terms("an ai bot");
+    assert_eq!(r, vec!["bot"]);
+}
+
+#[test]
+fn query_terms_keeps_short_non_english_terms() {
+    let r = query_terms("認証");
+    assert_eq!(r, vec!["認証"]);
+}
+
+#[test]
+fn query_terms_lowercases() {
+    let r = query_terms("AuthN AuthZ");
+    assert_eq!(r, vec!["authn", "authz"]);
+}
+
+// ---------------------------------------------------------------------------
+// load_graph: reject oversized files
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_load_graph_accepts_under_cap() {
+    // Smoke test of the happy path: a tiny well-formed graph round-trips
+    // through the size-cap-guarded loader. Boundary testing with a tiny
+    // cap lives in graphify-security's parity suite where the
+    // `_with(cap)` variant lets us trigger the error explicitly.
+    let dir = tempdir().expect("tempdir");
+    let graph_path = dir.path().join("graph.json");
+    // Canonical NetworkX `node_link_data` shape — `links` not `edges`,
+    // plus the `directed`/`multigraph` flags the loader inspects. Using
+    // the same shape as `test_load_graph_roundtrip` so this test exercises
+    // the real parse path rather than a degenerate minimal payload.
+    std::fs::write(
+        &graph_path,
+        br#"{"directed": true, "multigraph": false, "nodes": [], "links": []}"#,
+    )
+    .expect("write");
+    let result = load_graph(graph_path.to_str().expect("utf-8"));
+    assert!(result.is_ok(), "small graph should load: {result:?}");
 }

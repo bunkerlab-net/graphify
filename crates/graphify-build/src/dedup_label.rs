@@ -5,20 +5,33 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::Value;
+use unicode_normalization::UnicodeNormalization;
 
+// `\W` in the Rust `regex` crate is Unicode-aware by default, so `[\W_ ]+`
+// collapses runs of non-word characters while preserving CJK and other
+// Unicode letters — matching Python's
+// `re.sub(r"[\W_ ]+", " ", s, flags=re.UNICODE)`.
 #[allow(clippy::expect_used)] // literal pattern; build cannot panic.
-static NON_ALNUM: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[^a-z0-9 ]").expect("static non-alnum regex"));
+static NON_WORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\W_ ]+").expect("static non-word regex"));
 
 #[allow(clippy::expect_used)] // literal pattern; build cannot panic.
 static CHUNK_SUFFIX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_c\d+$").expect("static chunk-suffix regex"));
 
-/// Canonical dedup key — lowercase, alphanumeric only, whitespace trimmed.
+/// Canonical dedup key — Unicode-aware, preserves CJK/word characters.
+///
+/// Mirrors Python's
+/// `re.sub(r"[\W_ ]+", " ", unicodedata.normalize("NFKC", label).casefold(),
+/// flags=re.UNICODE).strip()`. Uses the `caseless` crate's full Unicode
+/// case folding (Python's `str.casefold()`) rather than
+/// `str::to_lowercase` so identifiers like `ß` and the Greek final
+/// sigma fold identically across the two languages.
 #[must_use]
 pub fn norm_label(label: &str) -> String {
-    let lower = label.to_lowercase();
-    let cleaned = NON_ALNUM.replace_all(&lower, "");
+    let nfkc = label.nfkc().collect::<String>();
+    let folded = caseless::default_case_fold_str(&nfkc);
+    let cleaned = NON_WORD.replace_all(&folded, " ");
     cleaned.trim().to_string()
 }
 

@@ -5,7 +5,7 @@
 //! matching) rather than specific community IDs, since Louvain is
 //! non-deterministic at the algorithm level and this port uses a different
 //! (but seeded) implementation.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_cluster::{cluster, cohesion_score, remap_communities_to_previous, score_all};
@@ -302,4 +302,93 @@ fn remap_empty_communities_returns_empty() {
     let previous: IndexMap<String, i64> = IndexMap::new();
     let result = remap_communities_to_previous(&communities, &previous);
     assert!(result.is_empty());
+}
+
+// ── Leiden vs Louvain backend selection ──────────────────────────────────────
+// The Python reference uses Leiden (graspologic) first, falls back to Louvain.
+// The Rust port ships Leiden in-process. These tests pin the structural
+// guarantees of both paths so a future refactor that swaps backends silently
+// fails loudly.
+
+// `GRAPHIFY_CLUSTER_BACKEND` is read by `run_partition` to override the default
+// Leiden backend with Louvain. Tests below toggle it via a guard so concurrent
+// test runs cannot leak the override into each other.
+#[allow(unsafe_code)]
+struct BackendGuard {
+    prev: Option<String>,
+}
+
+#[allow(unsafe_code)]
+impl BackendGuard {
+    fn set(value: &str) -> Self {
+        let prev = std::env::var(GRAPHIFY_CLUSTER_BACKEND).ok();
+        // SAFETY: test-only env-var manipulation. The guard restores the
+        // previous value on `Drop`, but restoration alone is *not*
+        // mutual-exclusion — without serialisation a concurrent test in
+        // the same process could read the env var between our `set_var`
+        // and the inner test's read. Mutual exclusion is enforced by
+        // the `#[serial_test::serial]` attribute on each test that uses
+        // this guard. Both responsibilities (cleanup + serialisation)
+        // are required for correctness here.
+        unsafe { std::env::set_var(GRAPHIFY_CLUSTER_BACKEND, value) };
+        Self { prev }
+    }
+}
+
+const GRAPHIFY_CLUSTER_BACKEND: &str = "GRAPHIFY_CLUSTER_BACKEND";
+
+#[allow(unsafe_code)]
+impl Drop for BackendGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            // SAFETY: see `set`. Restoration is cleanup-only; the
+            // serialisation guarantee comes from `#[serial_test::serial]`.
+            Some(v) => unsafe { std::env::set_var(GRAPHIFY_CLUSTER_BACKEND, v) },
+            None => unsafe { std::env::remove_var(GRAPHIFY_CLUSTER_BACKEND) },
+        }
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn leiden_backend_covers_all_nodes() {
+    let _g = BackendGuard::set("leiden");
+    let graph = make_graph();
+    let communities = cluster(&graph, 1.0, None);
+    let all_nodes: std::collections::HashSet<String> =
+        communities.values().flatten().cloned().collect();
+    let expected: std::collections::HashSet<String> =
+        graph.nodes().map(|(id, _)| id.clone()).collect();
+    assert_eq!(all_nodes, expected, "leiden must cover every input node");
+}
+
+#[test]
+#[serial_test::serial]
+fn louvain_backend_still_selectable_via_env() {
+    let _g = BackendGuard::set("louvain");
+    let graph = make_graph();
+    let communities = cluster(&graph, 1.0, None);
+    let all_nodes: std::collections::HashSet<String> =
+        communities.values().flatten().cloned().collect();
+    let expected: std::collections::HashSet<String> =
+        graph.nodes().map(|(id, _)| id.clone()).collect();
+    assert_eq!(
+        all_nodes, expected,
+        "louvain fallback (via GRAPHIFY_CLUSTER_BACKEND=louvain) must also cover every input node"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn unknown_backend_value_falls_back_to_leiden() {
+    let _g = BackendGuard::set("not-a-real-backend");
+    let graph = make_graph();
+    let communities = cluster(&graph, 1.0, None);
+    // Unrecognised backend names fall through to Leiden in `run_partition`,
+    // so the result must still be a valid partition (every node assigned).
+    let all_nodes: std::collections::HashSet<String> =
+        communities.values().flatten().cloned().collect();
+    let expected: std::collections::HashSet<String> =
+        graph.nodes().map(|(id, _)| id.clone()).collect();
+    assert_eq!(all_nodes, expected);
 }

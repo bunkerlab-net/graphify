@@ -4,6 +4,8 @@
 //! project convention that test code is colocated by name but separated from
 //! production code for readability.
 
+#![allow(clippy::expect_used)] // test-only — `.expect("...")` panics are the failure
+
 use super::*;
 use std::path::Path;
 

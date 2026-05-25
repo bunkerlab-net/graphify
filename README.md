@@ -98,11 +98,11 @@ For development conventions (lint policy, porting rules, test layout, definition
 ```text
 graphify/
 ├── src/                       # graphify CLI binary
-├── crates/                    # 24 focused workspace crates
+├── crates/                    # 29 focused workspace crates
 │   ├── graphify-detect/       # filesystem walking + file-type detection
 │   ├── graphify-extract/      # tree-sitter / document / media extractors
 │   ├── graphify-build/        # graph construction
-│   ├── graphify-cluster/      # deterministic Louvain clustering
+│   ├── graphify-cluster/      # community detection (Leiden, Louvain fallback)
 │   ├── graphify-analyze/      # god-nodes, cohesion, communities
 │   ├── graphify-report/       # GRAPH_REPORT.md generator
 │   ├── graphify-export/       # HTML / SVG / GraphML / Obsidian / Cypher / Neo4j
@@ -113,7 +113,12 @@ graphify/
 │   ├── graphify-global/       # ~/.graphify/global-graph.json
 │   ├── graphify-prs/          # GitHub PR triage
 │   ├── graphify-llm/          # LLM backend abstraction
-│   ├── graphify-security/     # SSRF guard, URL allowlist
+│   ├── graphify-security/     # SSRF guard, URL allowlist, graph-load size cap
+│   ├── graphify-affected/     # reverse-traversal impact analysis (`graphify affected`)
+│   ├── graphify-diagnostics/  # multigraph edge-collapse diagnostic
+│   ├── graphify-multigraph-compat/  # runtime keyed-edge capability probe
+│   ├── graphify-scip/         # SCIP-style JSON ingest
+│   ├── graphify-semantic/     # LLM extraction fragment validator
 │   └── ...                    # benchmark, cache, dedup, ingest, manifest, transcribe, validate, watch, google
 └── graphify-py/               # read-only git submodule — Python reference
 ```

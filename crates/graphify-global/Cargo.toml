@@ -11,6 +11,7 @@ description = "Cross-corpus global graph merging"
 [dependencies]
 chrono = { workspace = true }
 graphify-build = { workspace = true }
+graphify-security = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }

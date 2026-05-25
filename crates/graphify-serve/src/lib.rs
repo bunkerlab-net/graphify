@@ -19,5 +19,6 @@ mod state;
 pub mod tools;
 
 pub use error::ServeError;
+pub use graph::query_terms;
 pub use serve_fn::serve;
 pub use state::ReloadState;

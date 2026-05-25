@@ -2,12 +2,7 @@
 //! driven through a real openai backend with mockito (URL configured via
 //! `GRAPHIFY_OPENAI_BASE_URL`).
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::items_after_statements,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::items_after_statements, unsafe_code)]
 
 use std::fs;
 use std::path::PathBuf;
@@ -49,7 +44,7 @@ fn write_files(tmp: &tempfile::TempDir, count: usize) -> Vec<PathBuf> {
     let mut paths = vec![];
     for i in 0..count {
         let p = tmp.path().join(format!("file{i}.py"));
-        fs::write(&p, format!("def f{i}():\n    pass\n")).unwrap();
+        fs::write(&p, format!("def f{i}():\n    pass\n")).expect("test invariant");
         paths.push(p);
     }
     paths
@@ -82,9 +77,10 @@ fn extract_files_direct_via_openai_mock() {
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 2);
-    let resp = extract_files_direct(&files, "openai", Some("k"), Some("m"), tmp.path()).unwrap();
+    let resp = extract_files_direct(&files, "openai", Some("k"), Some("m"), tmp.path())
+        .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -104,11 +100,11 @@ fn extract_with_adaptive_retry_happy_path() {
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
     g.set("OPENAI_API_KEY", "k");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 1);
     let resp =
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 3, 0)
-            .unwrap();
+            .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -138,11 +134,11 @@ fn extract_with_adaptive_retry_truncated_chunk_bisects() {
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
     g.set("OPENAI_API_KEY", "k");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 4);
     let result =
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 3, 0)
-            .unwrap();
+            .expect("test invariant");
     // Bisect kept partial result; nodes set non-empty.
     assert!(!result.nodes.is_empty());
 }
@@ -168,12 +164,12 @@ fn extract_with_adaptive_retry_single_file_truncation_keeps_partial() {
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
     g.set("OPENAI_API_KEY", "k");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 1);
     // Single-file truncation: partial result kept (no further bisect possible).
     let result =
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 3, 0)
-            .unwrap();
+            .expect("test invariant");
     assert!(!result.nodes.is_empty());
     assert_eq!(result.finish_reason, "length");
 }
@@ -199,12 +195,12 @@ fn extract_with_adaptive_retry_truncation_at_max_depth() {
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
     g.set("OPENAI_API_KEY", "k");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 4);
     // Already at max_depth: keep partial result, don't recurse.
     let result =
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 2, 2)
-            .unwrap();
+            .expect("test invariant");
     assert!(!result.nodes.is_empty());
 }
 
@@ -233,7 +229,7 @@ fn extract_with_adaptive_retry_bisects_on_context_overflow() {
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
     g.set("OPENAI_API_KEY", "k");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 4);
     // Should not panic; bisects internally.
     let _ = extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 3, 0);
@@ -255,7 +251,7 @@ fn extract_corpus_parallel_happy_path() {
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 4);
     let cfg = CorpusConfig {
         backend: "openai",
@@ -286,7 +282,7 @@ fn extract_corpus_parallel_with_token_budget() {
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 3);
     let cfg = CorpusConfig {
         backend: "openai",
@@ -316,7 +312,7 @@ fn extract_corpus_parallel_with_callback() {
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let files = write_files(&tmp, 2);
     let cfg = CorpusConfig {
         backend: "openai",
@@ -336,7 +332,7 @@ fn extract_corpus_parallel_with_callback() {
         }
     });
     let _ = extract_corpus_parallel(&files, &cfg, Some(cb.as_ref()));
-    assert!(*count.lock().unwrap() >= 1);
+    assert!(*count.lock().expect("mutex") >= 1);
 }
 
 #[test]

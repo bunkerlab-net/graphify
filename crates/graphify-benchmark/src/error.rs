@@ -16,4 +16,8 @@ pub enum BenchmarkError {
     /// Error returned by the build layer.
     #[error(transparent)]
     Build(#[from] graphify_build::BuildError),
+
+    /// Security policy violation (e.g. graph-file size cap, SSRF guard).
+    #[error(transparent)]
+    Security(#[from] graphify_security::SecurityError),
 }

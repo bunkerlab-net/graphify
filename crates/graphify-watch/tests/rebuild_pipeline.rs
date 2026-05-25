@@ -4,7 +4,7 @@
 //! small synthetic codebase, exercising detect → extract → build → cluster →
 //! report → export.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use graphify_watch::{LockPolicy, RebuildOptions, rebuild_code};
 /// Create a small Python project in `dir`.
 fn write_python_project(dir: &Path) {
     let src = dir.join("src");
-    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&src).expect("create_dir_all");
 
     fs::write(
         src.join("models.py"),
@@ -26,39 +26,35 @@ class User:
     def greet(self):
         return f'Hello, {self.name}'
 
-
 class Admin(User):
     def ban(self, other):
         return f'banned {other}'
 ",
     )
-    .unwrap();
+    .expect("test invariant");
 
     fs::write(
         src.join("main.py"),
         r"
 from src.models import User, Admin
 
-
 def make_admin(name):
     return Admin(name)
-
 
 def main():
     u = make_admin('alice')
     print(u.greet())
 
-
 if __name__ == '__main__':
     main()
 ",
     )
-    .unwrap();
+    .expect("test invariant");
 }
 
 #[test]
 fn rebuild_code_produces_graph_and_report() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());
 
     let opts = RebuildOptions {
@@ -84,7 +80,7 @@ fn rebuild_code_produces_graph_and_report() {
 
 #[test]
 fn rebuild_code_idempotent_when_topology_unchanged() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());
 
     let opts = RebuildOptions {
@@ -93,9 +89,9 @@ fn rebuild_code_idempotent_when_topology_unchanged() {
         lock: LockPolicy::None,
     };
 
-    rebuild_code(tmp.path(), None, opts).unwrap();
+    rebuild_code(tmp.path(), None, opts).expect("test invariant");
     // Second call should still succeed (idempotent) without errors.
-    let _ = rebuild_code(tmp.path(), None, opts).unwrap();
+    let _ = rebuild_code(tmp.path(), None, opts).expect("test invariant");
 
     let graph = tmp.path().join("graphify-out").join("graph.json");
     assert!(graph.exists());
@@ -103,7 +99,7 @@ fn rebuild_code_idempotent_when_topology_unchanged() {
 
 #[test]
 fn rebuild_code_with_no_cluster_path() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());
 
     let opts = RebuildOptions {
@@ -121,9 +117,9 @@ fn rebuild_code_with_no_cluster_path() {
 
 #[test]
 fn rebuild_code_returns_false_when_no_code_files() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     // Only put a README.md (document, not code).
-    fs::write(tmp.path().join("README.md"), "# nothing\n").unwrap();
+    fs::write(tmp.path().join("README.md"), "# nothing\n").expect("test invariant");
 
     let opts = RebuildOptions {
         force: false,
@@ -133,16 +129,16 @@ fn rebuild_code_returns_false_when_no_code_files() {
 
     // README.md actually has a markdown extractor — see helpers::detect_code_files.
     // To get an empty code set we need to use a totally extension-less file.
-    fs::remove_file(tmp.path().join("README.md")).unwrap();
-    fs::write(tmp.path().join("notes"), "plain text\n").unwrap();
+    fs::remove_file(tmp.path().join("README.md")).expect("test invariant");
+    fs::write(tmp.path().join("notes"), "plain text\n").expect("test invariant");
 
-    let updated = rebuild_code(tmp.path(), None, opts).unwrap();
+    let updated = rebuild_code(tmp.path(), None, opts).expect("test invariant");
     assert!(!updated, "rebuild without code files should return false");
 }
 
 #[test]
 fn rebuild_code_with_changed_paths() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());
 
     let opts = RebuildOptions {
@@ -152,11 +148,11 @@ fn rebuild_code_with_changed_paths() {
     };
 
     // First full rebuild.
-    rebuild_code(tmp.path(), None, opts).unwrap();
+    rebuild_code(tmp.path(), None, opts).expect("test invariant");
 
     // Now do an incremental rebuild with a specific changed file.
     let changed: Vec<PathBuf> = vec![tmp.path().join("src/models.py")];
-    let _ = rebuild_code(tmp.path(), Some(&changed), opts).unwrap();
+    let _ = rebuild_code(tmp.path(), Some(&changed), opts).expect("test invariant");
 
     let out = tmp.path().join("graphify-out");
     assert!(out.join("graph.json").exists());
@@ -164,7 +160,7 @@ fn rebuild_code_with_changed_paths() {
 
 #[test]
 fn rebuild_code_with_force_flag() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());
 
     let opts = RebuildOptions {
@@ -173,13 +169,13 @@ fn rebuild_code_with_force_flag() {
         lock: LockPolicy::None,
     };
 
-    let updated = rebuild_code(tmp.path(), None, opts).unwrap();
+    let updated = rebuild_code(tmp.path(), None, opts).expect("test invariant");
     assert!(updated);
 }
 
 #[test]
 fn rebuild_code_with_try_acquire_lock() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());
 
     let opts = RebuildOptions {
@@ -188,6 +184,6 @@ fn rebuild_code_with_try_acquire_lock() {
         lock: LockPolicy::TryAcquire,
     };
 
-    let updated = rebuild_code(tmp.path(), None, opts).unwrap();
+    let updated = rebuild_code(tmp.path(), None, opts).expect("test invariant");
     assert!(updated);
 }

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::constants::{CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT};
 use crate::error::HooksError;
-use crate::git::{git_root, hooks_dir};
+use crate::git::{git_root, hooks_dir, user_hooks_dir};
 
 /// Install a single git hook file.
 ///
@@ -87,7 +87,7 @@ pub fn install(path: &Path) -> Result<String, HooksError> {
         HooksError::NotAGitRepo(resolved)
     })?;
 
-    let hdir = hooks_dir(&root)?;
+    let hdir = user_hooks_dir(&hooks_dir(&root)?);
 
     let commit_msg = install_hook(&hdir, "post-commit", HOOK_SCRIPT, HOOK_MARKER)?;
     let checkout_msg = install_hook(&hdir, "post-checkout", CHECKOUT_SCRIPT, CHECKOUT_MARKER)?;

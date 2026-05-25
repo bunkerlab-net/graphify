@@ -1,7 +1,7 @@
 //! Tests that drive the `fetchers` module through the public `ingest` function
 //! with `GRAPHIFY_TEST_ALLOW_PRIVATE_IPS=1` so mockito URLs pass the SSRF guard.
 
-#![allow(clippy::expect_used, clippy::unwrap_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_ingest::ingest;
 use serial_test::serial;
@@ -46,9 +46,10 @@ fn ingest_webpage_via_fetcher() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let tmp = tempfile::tempdir().unwrap();
-    let out = ingest(&server.url(), tmp.path(), None, None).unwrap();
-    let text = std::fs::read_to_string(&out).unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = ingest(&server.url(), tmp.path(), None, None)
+        .expect("ingest should succeed for valid webpage URL");
+    let text = std::fs::read_to_string(&out).expect("read fixture");
     assert!(text.contains("Hello"));
 }
 
@@ -64,9 +65,9 @@ fn ingest_pdf_url_downloads_binary() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let url = format!("{}/file.pdf", server.url());
-    let out = ingest(&url, tmp.path(), None, None).unwrap();
+    let out = ingest(&url, tmp.path(), None, None).expect("ingest should succeed for PDF download");
     assert!(out.extension().is_some_and(|e| e == "pdf"));
 }
 
@@ -82,9 +83,10 @@ fn ingest_image_url_downloads_with_inferred_extension() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let url = format!("{}/pic.png", server.url());
-    let out = ingest(&url, tmp.path(), None, None).unwrap();
+    let out =
+        ingest(&url, tmp.path(), None, None).expect("ingest should succeed for image download");
     assert!(out.exists());
     assert!(out.extension().is_some_and(|e| e == "png"));
 }
@@ -94,7 +96,7 @@ fn ingest_image_url_downloads_with_inferred_extension() {
 fn ingest_youtube_url_errors() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let result = ingest(
         "https://www.youtube.com/watch?v=abc",
         tmp.path(),
@@ -117,10 +119,12 @@ fn ingest_with_existing_filename_dedups() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let url = format!("{}/same", server.url());
-    let a = ingest(&url, tmp.path(), None, None).unwrap();
-    let b = ingest(&url, tmp.path(), None, None).unwrap();
+    let a = ingest(&url, tmp.path(), None, None)
+        .expect("first ingest should succeed for deduplication test");
+    let b = ingest(&url, tmp.path(), None, None)
+        .expect("second ingest should succeed for deduplication test");
     assert_ne!(a, b);
 }
 
@@ -141,7 +145,7 @@ fn ingest_tweet_url_via_fetch_tweet() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     // x.com URL → detected as tweet by detect_url_type.
     let url = "https://x.com/alice/status/12345";
     let _ = ingest(url, tmp.path(), Some("bob"), None);

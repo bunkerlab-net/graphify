@@ -157,6 +157,33 @@ graphify save-result \
     --nodes    AuthMiddleware request_context
 ```
 
+### `affected "<query>"`
+
+Reverse-traversal impact analysis: given a node label / ID / source-file substring, enumerate every node that
+depends on it (via `calls`, `imports`, `imports_from`, `re_exports`, `inherits`, etc.) up to a configurable depth.
+A fast pre-flight before refactors and bulk edits.
+
+```bash
+graphify affected "AuthMiddleware"
+graphify affected "AuthMiddleware" --depth 3                   # default 2
+graphify affected "AuthMiddleware" --relation calls --relation imports   # repeatable filter
+graphify affected "AuthMiddleware" --graph other-graph.json
+```
+
+### `diagnose multigraph`
+
+Read-only diagnostic that reports how many edges in the on-disk graph (or raw extraction) would be silently
+collapsed by the simple-graph builder. Useful when investigating whether a corpus is ready for an opt-in
+multigraph build.
+
+```bash
+graphify diagnose multigraph                                    # text report
+graphify diagnose multigraph --json                             # JSON envelope
+graphify diagnose multigraph --max-examples 10                  # cap high-multiplicity examples
+graphify diagnose multigraph --directed                         # force directed analysis
+graphify diagnose multigraph --extract-path graphify-py/graphify/extract.py
+```
+
 ---
 
 ## Visualisation and export
@@ -294,6 +321,23 @@ graphify pi install            # global Pi config
 
 Each has a matching `... uninstall`.
 
+#### Project-scoped installs (`--project`)
+
+Every platform install/uninstall subcommand accepts `--project`, which writes the skill under the current
+working directory (e.g. `./.claude/skills/graphify/SKILL.md`) instead of the home directory. The CLAUDE.md
+registration uses a relative path, and the installer prints a `git add` hint so the new files are easy to
+commit into the repo:
+
+```bash
+graphify claude install --project          # writes ./.claude/skills/graphify/SKILL.md
+graphify claude uninstall --project        # removes only the project-scoped install
+graphify install --platform claude --project   # same via the aggregate dispatcher
+```
+
+Use this for repos where every contributor should get the graphify skill installed automatically when they
+clone, without depending on the user-global home install. The user-global install (no `--project`) remains
+available and is untouched by the project flag.
+
 ### Aggregate install / uninstall
 
 ```bash
@@ -351,6 +395,9 @@ the LLM spend.
 | `GRAPHIFY_VIZ_NODE_LIMIT`   | Cap nodes before HTML export is skipped (default 5000).          |
 | `GRAPHIFY_GOOGLE_WORKSPACE` | Truthy value enables `.gdoc/.gsheet/.gslides` export by default. |
 | `GRAPHIFY_BEDROCK_MODEL`    | Override the default model for the Bedrock backend.              |
+| `GRAPHIFY_BEDROCK_BASE_URL` | Override the Bedrock Runtime endpoint URL (mainly for tests).    |
+| `GRAPHIFY_CLUSTER_PROGRESS` | Truthy value prints per-level cluster progress to stderr.        |
+| `GRAPHIFY_CLUSTER_BACKEND`  | `leiden` (default) or `louvain` to force the fallback.           |
 
 ### LLM backends
 
@@ -365,16 +412,23 @@ The active backend is auto-detected from environment variables:
 | `kimi`     | `MOONSHOT_API_KEY`                                                                           |
 | `deepseek` | `DEEPSEEK_API_KEY`                                                                           |
 | `ollama`   | local daemon — set `OLLAMA_HOST` if non-default                                              |
-| `bedrock`  | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`, `AWS_REGION`) |
+| `bedrock`  | Any AWS credential-chain entry — see paragraph below                                         |
+
+The Bedrock backend uses `aws-sdk-bedrockruntime`, which resolves credentials through the standard AWS provider chain:
+`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (with optional `AWS_SESSION_TOKEN`), `AWS_PROFILE` from
+`~/.aws/credentials`, `AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA, GitHub OIDC), `AWS_CONTAINER_CREDENTIALS_*` (ECS task
+roles), IMDS, and SSO. `AWS_REGION` alone is **not** sufficient to auto-select Bedrock — credentials must also be
+present, otherwise auto-detection falls through to the next backend.
 
 Force a backend with `--backend`; override its default model with `--model`.
 
 ### Determinism note
 
 `graph.json` is written with `serde_json` configured for `preserve_order`, so node and edge insertion order is preserved
-across runs. Cluster IDs come from a deterministic Louvain pass at resolution 1.0. Two extractions of the same input on
-the same machine should produce byte-identical JSON; cluster IDs can drift between machines with different rayon thread
-counts on graphs with degenerate communities.
+across runs. Cluster IDs come from a deterministic community-detection pass at resolution 1.0 — Leiden by default via
+`leiden-rs` with `random_seed=42`, or Louvain when `GRAPHIFY_CLUSTER_BACKEND=louvain` is set. Two extractions of the
+same input on the same machine should produce byte-identical JSON; cluster IDs can drift between machines with
+different rayon thread counts on graphs with degenerate communities.
 
 ---
 

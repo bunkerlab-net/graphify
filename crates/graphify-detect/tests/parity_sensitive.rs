@@ -1,7 +1,7 @@
 //! Parity tests for sensitive-file detection.
 //!
 //! Mirrors `graphify-py/tests/test_detect.py` — `_is_sensitive` tests.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_detect::is_sensitive;
 use std::path::Path;

@@ -57,9 +57,8 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: ${{ runner.os }}-cargo-test-${{ matrix.arch }}-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-${{ matrix.arch }}-
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-test-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-test-${{ steps.rustc.outputs.fingerprint }}-
 
       - name: Install Binstall
         env:

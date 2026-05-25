@@ -3,7 +3,7 @@
 //! Pure-logic and cache-path tests run without any external binaries.
 //! Tests that would require `whisper-cli` use an injected `MockWhisperRunner`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -136,13 +136,13 @@ fn test_build_whisper_prompt_nodes_without_labels() {
 
 #[test]
 fn test_transcribe_uses_cache() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let video = tmp.path().join("lecture.mp4");
-    std::fs::write(&video, b"fake").unwrap();
+    std::fs::write(&video, b"fake").expect("write fixture");
     let out_dir = tmp.path().join("transcripts");
-    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir).expect("create_dir_all");
     let cached = out_dir.join("lecture.txt");
-    std::fs::write(&cached, "Cached transcript content.").unwrap();
+    std::fs::write(&cached, "Cached transcript content.").expect("write fixture");
 
     // Pass a runner that would fail if invoked — proves the cache is used.
     let result = transcribe_with(
@@ -153,19 +153,19 @@ fn test_transcribe_uses_cache() {
         &MissingWhisperRunner,
         &UnreachableYtDlpRunner,
     )
-    .unwrap();
+    .expect("cache hit should be returned without invoking whisper");
 
     assert_eq!(result, cached);
 }
 
 #[test]
 fn test_transcribe_force_reruns() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let video = tmp.path().join("talk.mp4");
-    std::fs::write(&video, b"fake").unwrap();
+    std::fs::write(&video, b"fake").expect("write fixture");
     let out_dir = tmp.path().join("transcripts");
-    std::fs::create_dir_all(&out_dir).unwrap();
-    std::fs::write(out_dir.join("talk.txt"), "Old transcript.").unwrap();
+    std::fs::create_dir_all(&out_dir).expect("create_dir_all");
+    std::fs::write(out_dir.join("talk.txt"), "Old transcript.").expect("write fixture");
 
     let runner = MockWhisperRunner {
         text: "New transcript segment.".to_string(),
@@ -179,9 +179,9 @@ fn test_transcribe_force_reruns() {
         &runner,
         &UnreachableYtDlpRunner,
     )
-    .unwrap();
+    .expect("force=true should re-transcribe even when a cached transcript exists");
 
-    let content = std::fs::read_to_string(&result).unwrap();
+    let content = std::fs::read_to_string(&result).expect("read fixture");
     assert_eq!(content, "New transcript segment.");
 }
 
@@ -189,9 +189,9 @@ fn test_transcribe_force_reruns() {
 fn test_transcribe_missing_whisper_binary() {
     // Rust equivalent of Python's test_transcribe_missing_faster_whisper.
     // Injects a runner that returns BinaryMissing.
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let video = tmp.path().join("clip.mp4");
-    std::fs::write(&video, b"fake").unwrap();
+    std::fs::write(&video, b"fake").expect("write fixture");
 
     let err = transcribe_with(
         &video,
@@ -201,7 +201,7 @@ fn test_transcribe_missing_whisper_binary() {
         &MissingWhisperRunner,
         &UnreachableYtDlpRunner,
     )
-    .unwrap_err();
+    .expect_err("transcribe_with must surface BinaryMissing when whisper is absent");
 
     assert!(
         matches!(err, TranscribeError::BinaryMissing { .. }),
@@ -221,15 +221,15 @@ fn test_transcribe_all_empty() {
 
 #[test]
 fn test_transcribe_all_uses_cache() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let video = tmp.path().join("lecture.mp4");
-    std::fs::write(&video, b"fake").unwrap();
+    std::fs::write(&video, b"fake").expect("write fixture");
     let out_dir = tmp.path().join("transcripts");
-    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir).expect("create_dir_all");
     let cached = out_dir.join("lecture.txt");
-    std::fs::write(&cached, "Cached.").unwrap();
+    std::fs::write(&cached, "Cached.").expect("write fixture");
 
-    let results = transcribe_all(&[video.to_str().unwrap()], Some(&out_dir), None);
+    let results = transcribe_all(&[video.to_str().expect("utf-8 path")], Some(&out_dir), None);
     assert_eq!(results.len(), 1);
     assert!(results[0].contains("lecture.txt"));
 }
@@ -245,14 +245,14 @@ fn test_transcribe_all_skips_failed() {
     // AND whose transcript cache is absent, which triggers a BinaryMissing
     // error when the real whisper-cli is absent (or an I/O error). Either way,
     // the result must be an empty Vec (skipped).
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let broken = tmp.path().join("broken.mp4");
-    std::fs::write(&broken, b"fake").unwrap();
+    std::fs::write(&broken, b"fake").expect("write fixture");
 
     // transcribe_all calls the real `transcribe`; with no cached .txt and no
     // whisper-cli, it will fail. The function must swallow the error.
     let results = transcribe_all(
-        &[broken.to_str().unwrap()],
+        &[broken.to_str().expect("utf-8 path")],
         Some(&tmp.path().join("out")),
         None,
     );

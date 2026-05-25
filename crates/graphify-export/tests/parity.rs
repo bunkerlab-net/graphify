@@ -2,7 +2,7 @@
 //!
 //! 1:1 ports of `graphify-py/tests/test_export.py`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_build::build_from_json;
 use graphify_cluster::cluster;
@@ -20,8 +20,8 @@ use tempfile::tempdir;
 const EXTRACTION_JSON: &str = include_str!("../../../graphify-py/tests/fixtures/extraction.json");
 
 fn make_graph() -> graphify_build::Graph {
-    let val: Value = serde_json::from_str(EXTRACTION_JSON).unwrap();
-    build_from_json(val, false, None).unwrap()
+    let val: Value = serde_json::from_str(EXTRACTION_JSON).expect("valid JSON");
+    build_from_json(val, false, None).expect("build_from_json")
 }
 
 fn make_communities() -> IndexMap<i64, Vec<String>> {
@@ -35,9 +35,9 @@ fn make_communities() -> IndexMap<i64, Vec<String>> {
 fn test_to_json_creates_file() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.json");
-    to_json(&g, &communities, &out, true, None).unwrap();
+    to_json(&g, &communities, &out, true, None).expect("test invariant");
     assert!(out.exists());
 }
 
@@ -45,11 +45,11 @@ fn test_to_json_creates_file() {
 fn test_to_json_valid_json() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.json");
-    to_json(&g, &communities, &out, true, None).unwrap();
-    let text = std::fs::read_to_string(&out).unwrap();
-    let data: Value = serde_json::from_str(&text).unwrap();
+    to_json(&g, &communities, &out, true, None).expect("test invariant");
+    let text = std::fs::read_to_string(&out).expect("read fixture");
+    let data: Value = serde_json::from_str(&text).expect("valid JSON");
     assert!(data.get("nodes").is_some(), "nodes key missing");
     assert!(data.get("links").is_some(), "links key missing");
 }
@@ -58,12 +58,12 @@ fn test_to_json_valid_json() {
 fn test_to_json_nodes_have_community() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.json");
-    to_json(&g, &communities, &out, true, None).unwrap();
-    let text = std::fs::read_to_string(&out).unwrap();
-    let data: Value = serde_json::from_str(&text).unwrap();
-    let nodes = data["nodes"].as_array().unwrap();
+    to_json(&g, &communities, &out, true, None).expect("test invariant");
+    let text = std::fs::read_to_string(&out).expect("read fixture");
+    let data: Value = serde_json::from_str(&text).expect("valid JSON");
+    let nodes = data["nodes"].as_array().expect("array field");
     for node in nodes {
         assert!(
             node.get("community").is_some(),
@@ -77,19 +77,19 @@ fn test_to_json_nodes_have_community() {
 #[test]
 fn test_to_cypher_creates_file() {
     let g = make_graph();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("cypher.txt");
-    to_cypher(&g, &out).unwrap();
+    to_cypher(&g, &out).expect("test invariant");
     assert!(out.exists());
 }
 
 #[test]
 fn test_to_cypher_contains_merge_statements() {
     let g = make_graph();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("cypher.txt");
-    to_cypher(&g, &out).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_cypher(&g, &out).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(
         content.contains("MERGE"),
         "Cypher output missing MERGE statements"
@@ -102,9 +102,9 @@ fn test_to_cypher_contains_merge_statements() {
 fn test_to_graphml_creates_file() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.graphml");
-    to_graphml(&g, &communities, &out).unwrap();
+    to_graphml(&g, &communities, &out).expect("test invariant");
     assert!(out.exists());
 }
 
@@ -112,10 +112,10 @@ fn test_to_graphml_creates_file() {
 fn test_to_graphml_valid_xml() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.graphml");
-    to_graphml(&g, &communities, &out).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_graphml(&g, &communities, &out).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(content.contains("<graphml"), "GraphML missing <graphml");
     assert!(content.contains("<node"), "GraphML missing <node");
 }
@@ -124,10 +124,10 @@ fn test_to_graphml_valid_xml() {
 fn test_to_graphml_has_community_attribute() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.graphml");
-    to_graphml(&g, &communities, &out).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_graphml(&g, &communities, &out).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(
         content.contains("community"),
         "GraphML missing community attribute"
@@ -140,9 +140,9 @@ fn test_to_graphml_has_community_attribute() {
 fn test_to_html_creates_file() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.html");
-    to_html(&g, &communities, &out, None, None, None).unwrap();
+    to_html(&g, &communities, &out, None, None, None).expect("test invariant");
     assert!(out.exists());
 }
 
@@ -150,10 +150,10 @@ fn test_to_html_creates_file() {
 fn test_to_html_contains_visjs() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.html");
-    to_html(&g, &communities, &out, None, None, None).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_html(&g, &communities, &out, None, None, None).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(
         content.contains("vis-network"),
         "HTML missing vis-network reference"
@@ -164,10 +164,12 @@ fn test_to_html_contains_visjs() {
 fn test_to_html_contains_search() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.html");
-    to_html(&g, &communities, &out, None, None, None).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap().to_lowercase();
+    to_html(&g, &communities, &out, None, None, None).expect("test invariant");
+    let content = std::fs::read_to_string(&out)
+        .expect("read fixture")
+        .to_lowercase();
     assert!(content.contains("search"), "HTML missing 'search' element");
 }
 
@@ -179,10 +181,10 @@ fn test_to_html_contains_legend_with_labels() {
     for cid in communities.keys() {
         labels.insert(*cid, format!("Group {cid}"));
     }
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.html");
-    to_html(&g, &communities, &out, Some(&labels), None, None).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_html(&g, &communities, &out, Some(&labels), None, None).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(content.contains("Group 0"), "HTML legend missing 'Group 0'");
 }
 
@@ -190,10 +192,10 @@ fn test_to_html_contains_legend_with_labels() {
 fn test_to_html_contains_nodes_and_edges() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.html");
-    to_html(&g, &communities, &out, None, None, None).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_html(&g, &communities, &out, None, None, None).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(content.contains("RAW_NODES"), "HTML missing RAW_NODES");
     assert!(content.contains("RAW_EDGES"), "HTML missing RAW_EDGES");
 }
@@ -206,9 +208,9 @@ fn test_to_html_member_counts_accepted() {
         .iter()
         .map(|(cid, members)| (*cid, members.len()))
         .collect();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.html");
-    to_html(&g, &communities, &out, None, Some(&member_counts), None).unwrap();
+    to_html(&g, &communities, &out, None, Some(&member_counts), None).expect("test invariant");
     assert!(out.exists());
 }
 
@@ -218,20 +220,20 @@ fn test_to_html_member_counts_accepted() {
 fn test_to_canvas_file_paths_relative_to_vault() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.canvas");
-    to_canvas(&g, &communities, &out, None, None).unwrap();
-    let text = std::fs::read_to_string(&out).unwrap();
-    let data: Value = serde_json::from_str(&text).unwrap();
+    to_canvas(&g, &communities, &out, None, None).expect("test invariant");
+    let text = std::fs::read_to_string(&out).expect("read fixture");
+    let data: Value = serde_json::from_str(&text).expect("valid JSON");
     let file_nodes: Vec<&Value> = data["nodes"]
         .as_array()
-        .unwrap()
+        .expect("test invariant")
         .iter()
         .filter(|n| n.get("type").and_then(Value::as_str) == Some("file"))
         .collect();
     assert!(!file_nodes.is_empty(), "canvas should contain file nodes");
     for node in file_nodes {
-        let file = node["file"].as_str().unwrap();
+        let file = node["file"].as_str().expect("string field");
         assert!(
             !file.contains('/'),
             "file path should not contain '/': {file}"
@@ -250,32 +252,34 @@ fn test_to_canvas_file_paths_relative_to_vault() {
 #[test]
 #[serial(backup_env)]
 fn test_backup_no_graph_json() {
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     assert!(backup_if_protected(tmp.path()).is_none());
 }
 
 #[test]
 #[serial(backup_env)]
 fn test_backup_no_markers() {
-    let tmp = tempdir().unwrap();
-    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
     assert!(backup_if_protected(tmp.path()).is_none());
 }
 
 #[test]
 #[serial(backup_env)]
 fn test_backup_semantic_marker() {
-    let tmp = tempdir().unwrap();
-    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
-    std::fs::write(tmp.path().join("GRAPH_REPORT.md"), "# Report").unwrap();
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
+    std::fs::write(tmp.path().join("GRAPH_REPORT.md"), "# Report").expect("test invariant");
     std::fs::write(
         tmp.path().join(".graphify_semantic_marker"),
         r#"{"output_tokens": 1234}"#,
     )
-    .unwrap();
+    .expect("test invariant");
     let result = backup_if_protected(tmp.path());
     assert!(result.is_some(), "expected backup to be taken");
-    let backup_dir = result.unwrap();
+    let backup_dir = result.expect("test invariant");
     assert!(backup_dir.is_dir());
     assert!(backup_dir.join("graph.json").exists());
     assert!(backup_dir.join("GRAPH_REPORT.md").exists());
@@ -285,13 +289,14 @@ fn test_backup_semantic_marker() {
 #[test]
 #[serial(backup_env)]
 fn test_backup_curated_labels() {
-    let tmp = tempdir().unwrap();
-    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
     std::fs::write(
         tmp.path().join(".graphify_labels.json"),
         r#"{"0": "Auth Pipeline", "1": "Community 1"}"#,
     )
-    .unwrap();
+    .expect("test invariant");
     let result = backup_if_protected(tmp.path());
     assert!(result.is_some(), "expected backup for curated labels");
 }
@@ -299,28 +304,30 @@ fn test_backup_curated_labels() {
 #[test]
 #[serial(backup_env)]
 fn test_backup_default_labels_only() {
-    let tmp = tempdir().unwrap();
-    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
     std::fs::write(
         tmp.path().join(".graphify_labels.json"),
         r#"{"0": "Community 0", "1": "Community 1"}"#,
     )
-    .unwrap();
+    .expect("test invariant");
     assert!(backup_if_protected(tmp.path()).is_none());
 }
 
 #[test]
 #[serial(backup_env)]
 fn test_backup_same_day_collision() {
-    let tmp = tempdir().unwrap();
-    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
-    std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").unwrap();
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
+    std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").expect("test invariant");
     let b1 = backup_if_protected(tmp.path()).expect("first backup should succeed");
     let b2 = backup_if_protected(tmp.path()).expect("second backup should succeed");
     assert_ne!(b1, b2);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     assert_eq!(
-        b2.file_name().unwrap().to_string_lossy(),
+        b2.file_name().expect("has filename").to_string_lossy(),
         format!("{today}_2")
     );
 }
@@ -328,9 +335,10 @@ fn test_backup_same_day_collision() {
 #[test]
 #[serial(backup_env)]
 fn test_backup_env_disable() {
-    let tmp = tempdir().unwrap();
-    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
-    std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").unwrap();
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
+    std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").expect("test invariant");
     // SAFETY: nextest runs each test in a separate process, so env mutation is safe.
     unsafe {
         std::env::set_var("GRAPHIFY_NO_BACKUP", "1");
@@ -349,9 +357,9 @@ fn test_backup_env_disable() {
 fn test_to_svg_creates_file() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.svg");
-    to_svg(&g, &communities, &out, None, (8, 6)).unwrap();
+    to_svg(&g, &communities, &out, None, (8, 6)).expect("test invariant");
     assert!(out.exists());
 }
 
@@ -359,10 +367,10 @@ fn test_to_svg_creates_file() {
 fn test_to_svg_valid_svg() {
     let g = make_graph();
     let communities = make_communities();
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.svg");
-    to_svg(&g, &communities, &out, None, (8, 6)).unwrap();
-    let content = std::fs::read_to_string(&out).unwrap();
+    to_svg(&g, &communities, &out, None, (8, 6)).expect("test invariant");
+    let content = std::fs::read_to_string(&out).expect("read fixture");
     assert!(content.contains("<svg"), "SVG output missing <svg element");
     assert!(content.contains("</svg>"), "SVG output missing </svg>");
 }
@@ -380,7 +388,7 @@ fn test_prune_dangling_edges_removes_orphans() {
     });
     let (pruned, removed) = prune_dangling_edges(data);
     assert_eq!(removed, 1);
-    let links = pruned["links"].as_array().unwrap();
+    let links = pruned["links"].as_array().expect("array field");
     assert_eq!(links.len(), 1);
 }
 
@@ -394,7 +402,7 @@ fn test_prune_dangling_edges_all_valid() {
     });
     let (pruned, removed) = prune_dangling_edges(data);
     assert_eq!(removed, 0);
-    let links = pruned["links"].as_array().unwrap();
+    let links = pruned["links"].as_array().expect("array field");
     assert_eq!(links.len(), 1);
 }
 
@@ -402,25 +410,25 @@ fn test_prune_dangling_edges_all_valid() {
 
 #[test]
 fn test_attach_hyperedges_adds_to_graph() {
-    let val: Value = serde_json::from_str(EXTRACTION_JSON).unwrap();
-    let mut g = build_from_json(val, false, None).unwrap();
+    let val: Value = serde_json::from_str(EXTRACTION_JSON).expect("valid JSON");
+    let mut g = build_from_json(val, false, None).expect("build_from_json");
     let hyperedges =
         vec![json!({"id": "he1", "nodes": ["n_transformer", "n_attention"], "label": "group"})];
     attach_hyperedges(&mut g, &hyperedges);
-    let stored = g.graph_attrs["hyperedges"].as_array().unwrap();
+    let stored = g.graph_attrs["hyperedges"].as_array().expect("array field");
     assert_eq!(stored.len(), 1);
 }
 
 #[test]
 fn test_attach_hyperedges_deduplicates() {
-    let val: Value = serde_json::from_str(EXTRACTION_JSON).unwrap();
-    let mut g = build_from_json(val, false, None).unwrap();
+    let val: Value = serde_json::from_str(EXTRACTION_JSON).expect("valid JSON");
+    let mut g = build_from_json(val, false, None).expect("build_from_json");
     // First attach
     let he1 = vec![json!({"id": "he1"})];
     attach_hyperedges(&mut g, &he1);
     // Second attach with duplicate + new entry
     let both = vec![json!({"id": "he1"}), json!({"id": "he2"})];
     attach_hyperedges(&mut g, &both);
-    let stored = g.graph_attrs["hyperedges"].as_array().unwrap();
+    let stored = g.graph_attrs["hyperedges"].as_array().expect("array field");
     assert_eq!(stored.len(), 2, "he1 should not be duplicated");
 }

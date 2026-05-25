@@ -2,11 +2,11 @@
 //!
 //! Ports every test in `graphify-py/tests/test_dedup.py`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::float_cmp)] // test file
+#![allow(clippy::expect_used, clippy::float_cmp)] // test file
 
 use graphify_dedup::{
     DedupLlmBackend, JudgeResult, NoOpBackend, deduplicate_entities, entropy, is_variant_pair,
-    shingles, short_label_blocked,
+    norm, shingles, short_label_blocked,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -46,6 +46,36 @@ fn test_entropy_normal_label_high() {
 #[test]
 fn test_entropy_empty_string() {
     assert_eq!(entropy(""), 0.0);
+}
+
+// ── norm: NFKC + Unicode-aware (#937) ────────────────────────────────────────
+
+#[test]
+fn norm_preserves_cjk_word_chars() {
+    // CJK letters must survive the non-word collapse — they used to be stripped
+    // by the old `[^a-z0-9]+` regex, which silently zero-ed the dedup key.
+    assert_eq!(norm("認証"), "認証");
+    assert_eq!(norm("身份验证 API"), "身份验证 api");
+}
+
+#[test]
+fn norm_collapses_underscores_and_punctuation() {
+    assert_eq!(norm("foo___bar"), "foo bar");
+    assert_eq!(norm("foo--bar"), "foo bar");
+}
+
+#[test]
+fn norm_nfkc_normalizes_fullwidth() {
+    // Full-width Latin A "Ａ" (U+FF21) folds to ASCII "a" under NFKC + lower.
+    assert_eq!(norm("ＡＢＣ"), "abc");
+}
+
+#[test]
+fn norm_casefold_matches_python_for_german_sharp_s() {
+    // Python's str.casefold() maps "ß" -> "ss"; str::to_lowercase() does
+    // not. Pinning the casefold contract here so a regression to
+    // `to_lowercase` is caught immediately.
+    assert_eq!(norm("Straße"), "strasse");
 }
 
 // ── shingles ─────────────────────────────────────────────────────────────────
@@ -295,7 +325,7 @@ fn test_multiple_repos_error() {
     ];
     let result = deduplicate_entities(&nodes, &[], &empty_communities(), None);
     assert!(result.is_err());
-    let err = result.unwrap_err();
+    let err = result.expect_err("expected Err");
     let msg = err.to_string();
     assert!(msg.contains("multiple repos"), "error message was: {msg}");
 }

@@ -182,9 +182,18 @@ pub fn resolve_js_module_path(p: &Path) -> PathBuf {
             }
         }
     }
-    // Directory imports
+    // Directory imports. Order mirrors graphify-py `_JS_INDEX_FILES`,
+    // which includes `index.svelte` and `index.mjs` so Svelte + ESM
+    // workspaces resolve their barrel files correctly.
     if p.is_dir() {
-        for idx in ["index.ts", "index.tsx", "index.js", "index.jsx"] {
+        for idx in [
+            "index.ts",
+            "index.tsx",
+            "index.svelte",
+            "index.js",
+            "index.jsx",
+            "index.mjs",
+        ] {
             let c = p.join(idx);
             if c.is_file() {
                 return c;

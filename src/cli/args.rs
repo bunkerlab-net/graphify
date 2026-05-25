@@ -40,6 +40,11 @@ pub(crate) enum Command {
         platform: Option<String>,
         /// Optional positional platform (mutually exclusive with `--platform`).
         platform_positional: Option<String>,
+        /// Install the skill under the current project (./.{platform}/skills/...)
+        /// instead of the user-global home directory. Mirrors the Python
+        /// `--project` flag (#931).
+        #[arg(long)]
+        project: bool,
     },
 
     /// Remove graphify from all detected platforms in one shot.
@@ -291,6 +296,28 @@ pub(crate) enum Command {
         graph: Option<PathBuf>,
     },
 
+    /// Reverse-traversal impact analysis (`graphify affected <query>`).
+    Affected {
+        /// Node label, ID, or source file substring to use as the seed.
+        query: String,
+        /// Edge relation to follow (repeatable). Defaults to the canonical
+        /// impact relations (calls/references/imports/...).
+        #[arg(long = "relation")]
+        relations: Vec<String>,
+        /// Maximum BFS depth.
+        #[arg(long, default_value_t = 2)]
+        depth: usize,
+        /// Path to graph.json (default `graphify-out/graph.json`).
+        #[arg(long)]
+        graph: Option<PathBuf>,
+    },
+
+    /// Diagnose graph health (`graphify diagnose <subcommand>`).
+    Diagnose {
+        #[command(subcommand)]
+        cmd: DiagnoseCmd,
+    },
+
     /// Check semantic cache for a list of files.
     #[command(name = "cache-check")]
     CacheCheck {
@@ -505,7 +532,44 @@ pub(crate) enum ExportCmd {
 #[derive(Debug, Subcommand)]
 pub(crate) enum PlatformCmd {
     /// Install graphify integration for this platform.
-    Install,
+    Install {
+        /// Install under the current project instead of the home directory.
+        #[arg(long)]
+        project: bool,
+    },
     /// Uninstall graphify integration for this platform.
-    Uninstall,
+    Uninstall {
+        /// Uninstall only the project-scoped install (leave user-global
+        /// untouched).
+        #[arg(long)]
+        project: bool,
+    },
+}
+
+/// Subcommands for the `diagnose` command group.
+#[derive(Debug, Subcommand)]
+pub(crate) enum DiagnoseCmd {
+    /// `MultiDiGraph` edge-collapse risk report.
+    Multigraph {
+        /// Path to graph.json (default `graphify-out/graph.json`).
+        #[arg(long)]
+        graph: Option<PathBuf>,
+        /// Emit a JSON envelope instead of the line-by-line text report.
+        #[arg(long)]
+        json: bool,
+        /// Maximum number of edge-group examples to include.
+        #[arg(long = "max-examples", default_value_t = 5)]
+        max_examples: usize,
+        /// Force directed analysis (overrides the JSON's `directed` flag).
+        #[arg(long, conflicts_with = "undirected")]
+        directed: bool,
+        /// Force undirected analysis (overrides the JSON's `directed` flag).
+        #[arg(long, conflicts_with = "directed")]
+        undirected: bool,
+        /// Path to the Python extractor file scanned for `seen_*` producer
+        /// suppression sites. Optional — when omitted the producer-suppression
+        /// section is empty.
+        #[arg(long = "extract-path")]
+        extract_path: Option<PathBuf>,
+    },
 }

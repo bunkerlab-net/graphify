@@ -1,6 +1,6 @@
 //! Ollama mockito tests.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_llm::ollama::{call_ollama, call_ollama_plain, validate_ollama_base_url};
 use serde_json::json;
@@ -41,6 +41,7 @@ fn validate_ollama_base_url_doesnt_panic() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_via_mock() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -67,12 +68,13 @@ fn call_ollama_via_mock() {
         128,
         "hello world",
     )
-    .unwrap();
+    .expect("mock ollama server should return a valid graph response");
     assert_eq!(resp.nodes.len(), 1);
     assert_eq!(resp.input_tokens, 12);
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_plain_via_mock() {
     let mut server = mockito::Server::new();
     let body = json!({
@@ -90,11 +92,13 @@ fn call_ollama_plain_via_mock() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32).unwrap();
+    let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32)
+        .expect("mock ollama server should return a plain-text response");
     assert_eq!(out, "ollama answers");
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_low_token_warning_path() {
     // When output_tokens < 50, the helper emits a stderr warning.
     let mut server = mockito::Server::new();
@@ -122,11 +126,12 @@ fn call_ollama_low_token_warning_path() {
         64,
         "hi",
     )
-    .unwrap();
+    .expect("mock ollama server should return a response with low token count");
     assert_eq!(resp.output_tokens, 10);
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_ollama_http_error() {
     let mut server = mockito::Server::new();
     let _m = server

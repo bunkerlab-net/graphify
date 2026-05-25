@@ -208,9 +208,12 @@ pub(super) type GraphData = (
 /// Load graph.json. Returns `(nodes, edges, hyperedges, meta)`.
 ///
 /// # Errors
-/// Returns [`HtmlError::Io`] on file read error, or [`HtmlError::EmptyGraph`]
-/// if the JSON is malformed.
+/// Returns [`HtmlError::Io`] on file read error or malformed JSON (parse
+/// failures are wrapped into [`std::io::ErrorKind::InvalidData`] via
+/// `HtmlError::Io`, not into a separate parse variant), or
+/// [`HtmlError::Security`] if the file exceeds the memory-bomb size cap.
 pub fn load_graph(path: &Path) -> Result<GraphData, HtmlError> {
+    graphify_security::check_graph_file_size_cap(path)?;
     let text = std::fs::read_to_string(path)?;
     let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         HtmlError::Io(std::io::Error::new(

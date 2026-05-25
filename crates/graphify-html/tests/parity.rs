@@ -6,7 +6,7 @@
 //! ported here because they exercise the Python CLI binary — they have no
 //! direct Rust equivalent at the crate level.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ use graphify_html::callflow::{
 /// Mirrors `_make_graphify_out` from the Python test fixture.
 fn make_graphify_out(tmp: &tempfile::TempDir) -> std::path::PathBuf {
     let out = tmp.path().join("graphify-out");
-    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&out).expect("create_dir_all");
 
     let graph = serde_json::json!({
         "directed": false,
@@ -41,19 +41,19 @@ fn make_graphify_out(tmp: &tempfile::TempDir) -> std::path::PathBuf {
     });
     std::fs::write(
         out.join("graph.json"),
-        serde_json::to_string(&graph).unwrap(),
+        serde_json::to_string(&graph).expect("serialise JSON"),
     )
-    .unwrap();
+    .expect("test invariant");
     std::fs::write(
         out.join(".graphify_labels.json"),
         r#"{"0": "Runtime", "1": "Export"}"#,
     )
-    .unwrap();
+    .expect("test invariant");
     std::fs::write(
         out.join("GRAPH_REPORT.md"),
         "# Graph Report - sample\n\n## Summary\n- 3 nodes · 2 edges · 1 communities detected\n\n## God Nodes (most connected - your core abstractions)\n1. `Transformer` - 2 edges\n",
     )
-    .unwrap();
+    .expect("test invariant");
     out
 }
 
@@ -62,7 +62,7 @@ fn make_graphify_out(tmp: &tempfile::TempDir) -> std::path::PathBuf {
 /// Ports `test_write_callflow_html_creates_file_and_uses_report`.
 #[test]
 fn test_write_callflow_html_creates_file_and_uses_report() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let out = make_graphify_out(&tmp);
 
     let opts = CallflowOptions {
@@ -75,7 +75,7 @@ fn test_write_callflow_html_creates_file_and_uses_report() {
     let html_path = write_callflow_html(&opts).expect("write_callflow_html should succeed");
 
     assert_eq!(html_path, out.join("callflow.html"));
-    let content = std::fs::read_to_string(&html_path).unwrap();
+    let content = std::fs::read_to_string(&html_path).expect("read fixture");
 
     assert!(
         content.contains("mermaid"),

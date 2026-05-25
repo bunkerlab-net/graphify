@@ -32,7 +32,7 @@ pub use constants::{
     HOOK_SCRIPT, PYTHON_DETECT,
 };
 pub use error::HooksError;
-pub use git::{hooks_dir, hooks_dir_with};
+pub use git::{hooks_dir, hooks_dir_with, user_hooks_dir};
 pub use install::install;
 pub use status::status;
 pub use uninstall::uninstall;

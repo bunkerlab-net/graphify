@@ -446,37 +446,5 @@ pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePa
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_comment_line() {
-        assert_eq!(parse_gitignore_line("# this is a comment"), "");
-    }
-
-    #[test]
-    fn parse_blank_line() {
-        assert_eq!(parse_gitignore_line(""), "");
-    }
-
-    #[test]
-    fn parse_normal_pattern() {
-        assert_eq!(parse_gitignore_line("vendor/"), "vendor/");
-    }
-
-    #[test]
-    fn parse_escaped_hash() {
-        assert_eq!(parse_gitignore_line("path\\#hash.py"), "path#hash.py");
-    }
-
-    #[test]
-    fn glob_match_star() {
-        assert!(glob_match("foo.py", "*.py"));
-        assert!(!glob_match("foo/bar.py", "*.py"));
-    }
-
-    #[test]
-    fn glob_match_double_star() {
-        assert!(glob_match("a/b/c.py", "**/*.py"));
-    }
-}
+#[path = "ignore_tests.rs"]
+mod ignore_tests;

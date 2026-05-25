@@ -1,5 +1,5 @@
 //! Parity tests against `graphify-py/tests/test_cache.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::fs;
 use std::path::Path;

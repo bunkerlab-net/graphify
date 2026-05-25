@@ -23,7 +23,9 @@ pub(super) mod uninstall_all;
 // Re-export the platform-public surface so existing `super::common::{...}`
 // imports inside the per-platform files continue to resolve.
 pub use fs::{replace_or_append_section, resolve_graphify_exe};
-pub use install_skill::install_platform_skill;
+pub use install_skill::{
+    install_platform_skill, install_platform_skill_project, uninstall_platform_skill_project,
+};
 pub use markdown::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, ANTIGRAVITY_WORKFLOW, CLAUDE_MD_MARKER,
     CLAUDE_MD_SECTION, CURSOR_RULE, GEMINI_MD_SECTION, KIRO_STEERING, OPENCODE_PLUGIN_JS,

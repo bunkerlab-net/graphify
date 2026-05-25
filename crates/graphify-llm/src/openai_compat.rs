@@ -272,7 +272,7 @@ pub fn api_timeout() -> Duration {
     {
         return Duration::from_secs_f64(v);
     }
-    Duration::from_secs(600)
+    Duration::from_mins(10)
 }
 
 /// Return the configured max-output-tokens override.

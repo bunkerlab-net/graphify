@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::constants::{CHECKOUT_MARKER, CHECKOUT_MARKER_END, HOOK_MARKER, HOOK_MARKER_END};
 use crate::error::HooksError;
-use crate::git::{git_root, hooks_dir};
+use crate::git::{git_root, hooks_dir, user_hooks_dir};
 
 /// Remove the graphify section from a single git hook file.
 ///
@@ -74,7 +74,7 @@ pub fn uninstall(path: &Path) -> Result<String, HooksError> {
         HooksError::NotAGitRepo(resolved)
     })?;
 
-    let hdir = hooks_dir(&root)?;
+    let hdir = user_hooks_dir(&hooks_dir(&root)?);
 
     let commit_msg = uninstall_hook(&hdir, "post-commit", HOOK_MARKER, HOOK_MARKER_END)?;
     let checkout_msg =

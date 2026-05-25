@@ -1,0 +1,25 @@
+[package]
+name = "graphify-scip"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "SCIP-style JSON → graphify extraction format ingest"
+
+[dependencies]
+graphify-security = { workspace = true }
+hex = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -2,7 +2,7 @@
 //!
 //! All tests use injected fake clients; no live `gh` or `git` processes.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -607,7 +607,7 @@ fn test_parse_pr_list_basic() {
             "updatedAt": "2024-01-15T10:00:00Z"
         }
     ]"#;
-    let prs = parse_pr_list(json_bytes, "main").unwrap();
+    let prs = parse_pr_list(json_bytes, "main").expect("test invariant");
     assert_eq!(prs.len(), 1);
     let pr = &prs[0];
     assert_eq!(pr.number, 42);
@@ -632,7 +632,7 @@ fn test_parse_pr_list_null_author() {
             "updatedAt": "2024-01-15T10:00:00Z"
         }
     ]"#;
-    let prs = parse_pr_list(json_bytes, "main").unwrap();
+    let prs = parse_pr_list(json_bytes, "main").expect("test invariant");
     assert_eq!(prs[0].author, "?");
     assert_eq!(prs[0].review_decision, "");
     assert_eq!(prs[0].ci_status, "NONE");

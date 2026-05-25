@@ -17,7 +17,7 @@
 //! | `kimi` | Moonshot AI (Kimi K2) | `MOONSHOT_API_KEY` |
 //! | `deepseek` | `DeepSeek` Chat Completions | `DEEPSEEK_API_KEY` |
 //! | `ollama` | Local Ollama server | `OLLAMA_BASE_URL` (optional) |
-//! | `bedrock` | AWS Bedrock Converse API | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
+//! | `bedrock` | AWS Bedrock Converse API (`aws-sdk-bedrockruntime`) | Any AWS credential provider: env vars, profile, SSO, IMDS, ECS, web identity |
 //!
 //! Use [`router`] to obtain a boxed [`LlmBackend`] by name, or call backend
 //! functions directly for finer control.
@@ -62,7 +62,10 @@ pub use constants::{
 };
 pub use error::LlmError;
 pub use extract::extract_files_direct;
-pub use parallel::{ChunkDoneCb, CorpusConfig, extract_corpus_parallel, merge_into};
+pub use parallel::{
+    ChunkDoneCb, CorpusConfig, extract_corpus_parallel, extract_corpus_parallel_with_total,
+    merge_into,
+};
 pub use parse::{empty_fragment, parse_llm_json, response_is_hollow};
 pub use read::read_files;
 pub use response::{LlmBackend, LlmResponse};

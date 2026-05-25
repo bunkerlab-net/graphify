@@ -109,7 +109,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         extraction_json,
         sem_input_tokens,
         sem_output_tokens,
-    } = run_semantic_phase(path, &files, &extraction, &cfg);
+    } = run_semantic_phase(path, &files, &extraction, &cfg)?;
 
     std::fs::create_dir_all(&out_dir)?;
     write_scan_breadcrumb(path, &out_dir);
@@ -122,7 +122,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         path,
     )?;
     let graph_path = out_dir.join("graph.json");
-    let communities = run_cluster_phase(&graph, no_cluster, resolution, exclude_hubs);
+    let communities = run_cluster_phase(&graph, no_cluster, resolution, exclude_hubs)?;
     graphify_export::to_json(&graph, &communities, &graph_path, true, None)?;
     eprintln!("      wrote {}", graph_path.display());
     persist_semantic_marker(&out_dir, sem_output_tokens)?;
@@ -285,18 +285,18 @@ fn run_semantic_phase(
     files: &[std::path::PathBuf],
     extraction: &graphify_extract::ExtractOutput,
     cfg: &SemanticConfig<'_>,
-) -> SemanticOutcome {
+) -> Result<SemanticOutcome> {
     let Some(b) = cfg.backend else {
         let extraction_json = serde_json::json!({
             "nodes": extraction.nodes,
             "edges": extraction.edges,
             "hyperedges": [],
         });
-        return SemanticOutcome {
+        return Ok(SemanticOutcome {
             extraction_json,
             sem_input_tokens: 0,
             sem_output_tokens: 0,
-        };
+        });
     };
 
     // Semantic cache check — skip files already extracted to avoid re-spending
@@ -341,8 +341,8 @@ fn run_semantic_phase(
         uncached_files.len()
     );
     let sem_start = std::time::Instant::now();
-    let (mut sem_result, failed) =
-        graphify_llm::extract_corpus_parallel(&uncached_files, &llm_cfg, None);
+    let (mut sem_result, failed, total_chunks) =
+        graphify_llm::extract_corpus_parallel_with_total(&uncached_files, &llm_cfg, None);
     let sem_output_tokens = sem_result.output_tokens;
     let sem_input_tokens = sem_result.input_tokens;
     eprintln!(
@@ -353,6 +353,20 @@ fn run_semantic_phase(
         sem_result.edges.len(),
     );
 
+    // When every chunk failed, return an error rather than silently writing
+    // an AST-only graph. Mirrors graphify-py `__main__.py:_chunk_stats`
+    // ("all semantic chunks failed ... claude" exit path). The CLI top
+    // level translates the error to a non-zero process exit.
+    if !uncached_files.is_empty() && total_chunks > 0 && failed >= total_chunks {
+        let n_uncached = uncached_files.len();
+        anyhow::bail!(
+            "[graphify extract] error: all semantic chunks failed for backend '{b}' \
+             ({n_uncached} uncached files) - see per-chunk errors above. \
+             If you see 'requires the X package', run the matching install \
+             command (e.g. `pip install X`) and retry."
+        );
+    }
+
     save_semantic_cache_safe(&sem_result, path);
     merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);
     let extraction_json = serde_json::json!({
@@ -360,11 +374,11 @@ fn run_semantic_phase(
         "edges": sem_result.edges,
         "hyperedges": sem_result.hyperedges,
     });
-    SemanticOutcome {
+    Ok(SemanticOutcome {
         extraction_json,
         sem_input_tokens,
         sem_output_tokens,
-    }
+    })
 }
 
 /// Best-effort persistence of fresh semantic results into the cache. Warns on
@@ -461,29 +475,46 @@ fn run_cluster_phase(
     no_cluster: bool,
     resolution: f64,
     exclude_hubs: Option<f64>,
-) -> indexmap::IndexMap<i64, Vec<String>> {
+) -> Result<indexmap::IndexMap<i64, Vec<String>>> {
     if no_cluster {
         eprintln!("[4/6] clustering: skipped (--no-cluster)");
-        return indexmap::IndexMap::new();
+        return Ok(indexmap::IndexMap::new());
     }
     let hub_desc = exclude_hubs
         .map(|p| format!(", exclude-hubs={p}"))
         .unwrap_or_default();
+    // Mirror `crates/graphify-cluster::edge_list::run_partition`: the env
+    // var overrides default backend selection, anything else (including
+    // unset) resolves to Leiden. Match case-insensitively so values like
+    // `Louvain` or `LOUVAIN` agree with the lower-cased label-only check
+    // here and the partitioner-selection check in `edge_list.rs`.
+    let backend = std::env::var("GRAPHIFY_CLUSTER_BACKEND")
+        .ok()
+        .filter(|s| s.eq_ignore_ascii_case("louvain"))
+        .map_or("Leiden", |_| "Louvain");
     eprintln!(
-        "[4/6] clustering (Louvain, resolution={resolution}{hub_desc}) on {} nodes ...",
+        "[4/6] clustering ({backend}, resolution={resolution}{hub_desc}) on {} nodes ...",
         graph.node_count()
     );
     let cluster_start = std::time::Instant::now();
-    // Python's `--exclude-hubs` takes a 0.0–1.0 fraction; graphify_cluster expects
-    // a 0.0–100.0 percentile. Convert here so the CLI surface matches Python.
-    let hubs_pct = exclude_hubs.map(|p| p * 100.0);
+    // Python's `--exclude-hubs` takes a 0.0–1.0 fraction; graphify_cluster
+    // expects a 0.0–100.0 percentile. Reject out-of-range values up front
+    // so a stray `--exclude-hubs 95` doesn't silently become an absurd
+    // 9500% percentile inside the partitioner (mirrors `cluster_only`).
+    let hubs_pct = match exclude_hubs {
+        Some(p) if (0.0..=1.0).contains(&p) => Some(p * 100.0),
+        Some(p) => {
+            anyhow::bail!("--exclude-hubs must be a fraction in [0.0, 1.0]; got {p}");
+        }
+        None => None,
+    };
     let c = graphify_cluster::cluster(graph, resolution, hubs_pct);
     eprintln!(
         "      found {} communities in {:.1}s",
         c.len(),
         cluster_start.elapsed().as_secs_f64()
     );
-    c
+    Ok(c)
 }
 
 /// Drop a `.graphify_semantic_marker` so downstream consumers (e.g. wiki export)

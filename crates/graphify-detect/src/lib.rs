@@ -19,6 +19,7 @@ mod incremental;
 pub mod manifest;
 pub mod office;
 pub mod sensitive;
+pub mod shebang;
 pub mod walk;
 
 pub use error::DetectError;
@@ -35,4 +36,5 @@ pub use manifest::{
     md5_file, save_manifest_to_path,
 };
 pub use sensitive::{SKIP_DIRS, SKIP_FILES, is_noise_dir, is_sensitive};
+pub use shebang::{env_command_args, shebang_interpreter};
 pub use walk::{DetectResult, auto_follow_symlinks, collect_files, detect};

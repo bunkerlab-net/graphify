@@ -16,4 +16,9 @@ pub enum HtmlError {
     /// No sections could be derived from the graph.
     #[error("no sections defined")]
     NoSections,
+
+    /// Graph file exceeds the memory-bomb size cap. Mirrors Python's
+    /// `SystemExit(f"ERROR: {exc}")` from `callflow_html.load_graph`.
+    #[error(transparent)]
+    Security(#[from] graphify_security::SecurityError),
 }

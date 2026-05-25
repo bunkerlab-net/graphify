@@ -23,8 +23,10 @@
 
 mod error;
 mod fetch;
+mod graph_size;
 mod ip;
 mod label;
+mod metadata;
 mod path_guard;
 #[doc(hidden)]
 pub mod test_support;
@@ -32,6 +34,13 @@ mod url_guard;
 
 pub use error::SecurityError;
 pub use fetch::{MAX_FETCH_BYTES, MAX_TEXT_BYTES, safe_fetch, safe_fetch_text};
+pub use graph_size::{
+    MAX_GRAPH_FILE_BYTES, check_graph_file_size_cap, check_graph_file_size_cap_with,
+};
 pub use label::sanitize_label;
+pub use metadata::{
+    METADATA_MAX_LIST_ITEMS, METADATA_MAX_VALUE_LEN, sanitize_metadata, sanitize_metadata_map,
+    sanitize_metadata_string, sanitize_metadata_value,
+};
 pub use path_guard::validate_graph_path;
 pub use url_guard::validate_url;

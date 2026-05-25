@@ -1,7 +1,7 @@
 //! Coverage tests for `suggest_questions` exercising the 5 question sections:
 //! AMBIGUOUS edges, bridge nodes, god nodes, isolated nodes, low cohesion.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_analyze::suggest_questions;
 use graphify_build::build_from_json;
@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use serde_json::json;
 
 fn build_graph(j: serde_json::Value) -> graphify_build::Graph {
-    build_from_json(j, false, None).unwrap()
+    build_from_json(j, false, None).expect("build_from_json")
 }
 
 #[test]

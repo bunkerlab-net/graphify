@@ -2,7 +2,7 @@
 //! `tool_get_pr_impact`, `tool_triage_prs`) and resource renderers
 //! (`resource_audit`, `resource_surprises`, `resource_questions`).
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_build::{Graph, build_from_json};
 use graphify_prs::error::PrsError;
@@ -90,7 +90,7 @@ fn small_graph() -> Graph {
         false,
         None,
     )
-    .unwrap()
+    .expect("test invariant")
 }
 
 // ── tool_list_prs ──────────────────────────────────────────────────────────
@@ -104,9 +104,9 @@ fn tool_list_prs_returns_count_and_prs() {
     };
     let git = FakeGit;
     let args = json!({});
-    let v = tool_list_prs_with_clients(&args, &gh, &git).unwrap();
+    let v = tool_list_prs_with_clients(&args, &gh, &git).expect("test invariant");
     assert_eq!(v["count"], 2);
-    assert_eq!(v["prs"].as_array().unwrap().len(), 2);
+    assert_eq!(v["prs"].as_array().expect("array field").len(), 2);
 }
 
 #[test]
@@ -118,8 +118,8 @@ fn tool_list_prs_with_repo_and_base() {
     };
     let git = FakeGit;
     let args = json!({"repo": "owner/repo", "base": "main", "limit": 1});
-    let v = tool_list_prs_with_clients(&args, &gh, &git).unwrap();
-    assert!(v["count"].as_u64().unwrap() >= 1);
+    let v = tool_list_prs_with_clients(&args, &gh, &git).expect("test invariant");
+    assert!(v["count"].as_u64().expect("u64 field") >= 1);
 }
 
 #[test]
@@ -151,9 +151,9 @@ fn tool_get_pr_impact_returns_communities() {
     };
     let g = small_graph();
     let args = json!({"pr_number": 42});
-    let v = tool_get_pr_impact_with_clients(&g, &args, &gh).unwrap();
+    let v = tool_get_pr_impact_with_clients(&g, &args, &gh).expect("test invariant");
     assert_eq!(v["pr_number"], 42);
-    assert_eq!(v["files_changed"].as_array().unwrap().len(), 2);
+    assert_eq!(v["files_changed"].as_array().expect("array field").len(), 2);
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn tool_triage_prs_returns_actionable() {
     };
     let git = FakeGit;
     let args = json!({});
-    let v = tool_triage_prs_with_clients(&args, &gh, &git).unwrap();
+    let v = tool_triage_prs_with_clients(&args, &gh, &git).expect("test invariant");
     assert!(v.is_array());
 }
 
@@ -192,7 +192,7 @@ fn tool_triage_prs_with_explicit_base() {
     };
     let git = FakeGit;
     let args = json!({"base": "main", "limit": 5});
-    let v = tool_triage_prs_with_clients(&args, &gh, &git).unwrap();
+    let v = tool_triage_prs_with_clients(&args, &gh, &git).expect("test invariant");
     assert!(v.is_array());
 }
 
@@ -210,7 +210,8 @@ fn resource_audit_renders_percentages() {
 
 #[test]
 fn resource_audit_handles_empty_graph() {
-    let g = build_from_json(json!({"nodes": [], "edges": []}), false, None).unwrap();
+    let g =
+        build_from_json(json!({"nodes": [], "edges": []}), false, None).expect("test invariant");
     let out = resource_audit(&g);
     assert!(out.contains("Total edges"));
 }
@@ -251,29 +252,29 @@ fn resource_questions_renders_lines_or_empty_message() {
 
 #[test]
 fn load_community_labels_reads_existing_file() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let graph_path = tmp.path().join("graph.json");
-    std::fs::write(&graph_path, "{}").unwrap();
+    std::fs::write(&graph_path, "{}").expect("write fixture");
     std::fs::write(
         tmp.path().join(".graphify_labels.json"),
         r#"{"0": "Auth", "1": "Worker"}"#,
     )
-    .unwrap();
+    .expect("test invariant");
 
     let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
     communities.insert(0, vec![]);
     communities.insert(1, vec![]);
 
-    let labels = load_community_labels(graph_path.to_str().unwrap(), &communities);
+    let labels = load_community_labels(graph_path.to_str().expect("utf-8 path"), &communities);
     assert_eq!(labels.get(&0).map(String::as_str), Some("Auth"));
     assert_eq!(labels.get(&1).map(String::as_str), Some("Worker"));
 }
 
 #[test]
 fn load_community_labels_returns_empty_when_missing() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let graph_path = tmp.path().join("graph.json");
     let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
-    let labels = load_community_labels(graph_path.to_str().unwrap(), &communities);
+    let labels = load_community_labels(graph_path.to_str().expect("utf-8 path"), &communities);
     assert!(labels.is_empty());
 }

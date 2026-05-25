@@ -77,16 +77,39 @@ pub(crate) fn subgraph_edge_list(
     (nodes, edges)
 }
 
-/// Run Louvain on the given node/edge list and return
-/// `{node_id → community_id}`.
+/// Run the configured community-detection backend on `nodes`/`edges` and
+/// return `{node_id → community_id}`.
+///
+/// Backend selection mirrors `graphify-py/graphify/cluster.py::_partition`:
+/// Leiden is the primary (always available in Rust via `leiden-rs`), with
+/// Louvain retained as a fallback that can be selected via the
+/// `GRAPHIFY_CLUSTER_BACKEND=louvain` env var for debugging or quality
+/// comparison.
 pub(crate) fn run_partition(
     nodes: &[String],
     edges: &[(String, String, f64)],
     resolution: f64,
 ) -> IndexMap<String, i64> {
-    let raw = crate::louvain::partition(nodes, edges, resolution);
-    // community IDs from Louvain are small indices; casting usize→i64 is safe
-    // for any realistic graph (community index bounded by node count).
+    // Lowercase the env value so `GRAPHIFY_CLUSTER_BACKEND=Louvain` and
+    // similar capitalisations resolve to the same backend as the
+    // canonical lowercase form.
+    let backend = std::env::var("GRAPHIFY_CLUSTER_BACKEND")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| "leiden".to_string(), |s| s.to_ascii_lowercase());
+    if !matches!(backend.as_str(), "leiden" | "louvain") {
+        eprintln!(
+            "[graphify] cluster: unknown GRAPHIFY_CLUSTER_BACKEND={backend:?}; \
+             falling back to leiden"
+        );
+    }
+    let raw = match backend.as_str() {
+        "louvain" => crate::louvain::partition(nodes, edges, resolution),
+        _ => crate::leiden::partition(nodes, edges, resolution),
+    };
+    // community IDs from either backend are small indices; casting
+    // usize → i64 is safe for any realistic graph (community index bounded
+    // by node count).
     #[allow(clippy::cast_possible_wrap)] // community IDs are small indices bounded by node count
     raw.into_iter()
         .map(|(node, cid)| (node, cid as i64))

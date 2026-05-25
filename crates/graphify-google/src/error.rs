@@ -47,8 +47,10 @@ pub enum GoogleError {
     /// The `xlsx_to_markdown` callback is required for `.gsheet` but was not
     /// provided.
     #[error(
-        "Google Sheets export requires the office extra: \
-        pip install graphifyy[office,google]"
+        "Google Sheets export requires an `xlsx_to_markdown` callback. \
+         The Rust CLI wires one up automatically; if you're calling the \
+         conversion API directly, pass a callback that produces markdown \
+         from the temporary `.xlsx` file."
     )]
     XlsxCallbackMissing,
 

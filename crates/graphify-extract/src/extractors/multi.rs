@@ -813,6 +813,26 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         }
     }
 
+    // Disambiguate node IDs that collide across two or more distinct
+    // source files (e.g. two `Program.cs` files in different directories).
+    // Runs before cross-file call resolution so the call resolver sees
+    // already-qualified IDs.
+    crate::postprocess::disambiguate_colliding_node_ids(
+        &mut all_nodes,
+        &mut all_edges,
+        &mut all_raw_calls,
+        &root,
+    );
+
+    // Rewire cross-language inheritance stub nodes (no `source_file`) onto
+    // a unique real definition with the same label. Drops the stub when
+    // the rewire succeeds.
+    crate::postprocess::rewire_unique_stub_nodes(&mut all_nodes, &mut all_edges);
+
+    // Collapse Swift `extension Foo` nodes onto the canonical `class Foo`
+    // declaration. Mirrors `_merge_swift_extensions` in graphify-py.
+    crate::postprocess::merge_swift_extensions(paths, &mut all_nodes, &mut all_edges);
+
     // Cross-file call resolution via raw_calls
     // Build label → [nid] (skip rationale)
     let mut global_label_to_nids: HashMap<String, Vec<String>> = HashMap::new();

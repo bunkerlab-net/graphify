@@ -38,7 +38,11 @@ pub(crate) fn cmd_cluster_only(
     let hub_desc = exclude_hubs
         .map(|p| format!(", exclude-hubs={p}"))
         .unwrap_or_default();
-    eprintln!("[2/4] clustering (Louvain, resolution={resolution}{hub_desc}) ...");
+    let backend = std::env::var("GRAPHIFY_CLUSTER_BACKEND")
+        .ok()
+        .filter(|s| s.eq_ignore_ascii_case("louvain"))
+        .map_or("Leiden", |_| "Louvain");
+    eprintln!("[2/4] clustering ({backend}, resolution={resolution}{hub_desc}) ...");
     let cluster_start = std::time::Instant::now();
     // Forward exclude_hubs directly; convert 0.0–1.0 fraction to 0.0–100.0 percentile
     // as expected by graphify_cluster (mirroring Python's `--exclude-hubs` semantics).

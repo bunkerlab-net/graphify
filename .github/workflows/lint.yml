@@ -54,8 +54,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-lint-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-lint-
+          restore-keys: ${{ runner.os }}-cargo-lint-${{ steps.rustc.outputs.fingerprint }}-
 
       - run: cargo clippy --all-targets --all-features --workspace
       - run: cargo fmt --check --all

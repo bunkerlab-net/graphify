@@ -292,9 +292,9 @@ fn pascal_strip_comments(text: &str) -> String {
 /// for class and method extraction.
 fn pascal_split_sections(text: &str) -> (&str, usize, &str, usize) {
     #[allow(clippy::expect_used)] // literal patterns
-    let iface_re = Regex::new(r"(?i)\binterface\b").expect("static");
+    let iface_re = Regex::new(r"(?i)\binterface\b").expect("literal pattern is valid");
     #[allow(clippy::expect_used)]
-    let impl_re = Regex::new(r"(?i)\bimplementation\b").expect("static");
+    let impl_re = Regex::new(r"(?i)\bimplementation\b").expect("literal pattern is valid");
 
     let iface_m = iface_re.find(text);
     let impl_m = impl_re.find(text);
@@ -302,7 +302,8 @@ fn pascal_split_sections(text: &str) -> (&str, usize, &str, usize) {
         let iface_off = im.end();
         let impl_off = mm.end();
         #[allow(clippy::expect_used)]
-        let end_re = Regex::new(r"(?i)\b(initialization|finalization)\b").expect("static");
+        let end_re =
+            Regex::new(r"(?i)\b(initialization|finalization)\b").expect("literal pattern is valid");
         let impl_end = end_re
             .find(&text[impl_off..])
             .map_or(text.len(), |m| impl_off + m.start());
@@ -345,9 +346,9 @@ fn pascal_split_uses(s: &str) -> Vec<String> {
 /// Returns an empty `Vec` when no parenthesised base list is present.
 fn pascal_split_bases(s: &str) -> Vec<String> {
     #[allow(clippy::expect_used)]
-    let strip_re = Regex::new(r"<.*$").expect("static");
+    let strip_re = Regex::new(r"<.*$").expect("literal pattern is valid");
     #[allow(clippy::expect_used)]
-    let valid_re = Regex::new(r"^[A-Za-z_]\w*$").expect("static");
+    let valid_re = Regex::new(r"^[A-Za-z_]\w*$").expect("literal pattern is valid");
     let mut out: Vec<String> = Vec::new();
     let mut depth = 0usize;
     let mut buf = String::new();
@@ -384,7 +385,7 @@ fn pascal_split_bases(s: &str) -> Vec<String> {
 /// body_end)` as byte offsets, or `(start, start)` when no body is found.
 fn pascal_find_body(text: &str, start: usize) -> (usize, usize) {
     #[allow(clippy::expect_used)]
-    let begin_re = Regex::new(r"(?i)\bbegin\b").expect("static");
+    let begin_re = Regex::new(r"(?i)\bbegin\b").expect("literal pattern is valid");
     let Some(m) = begin_re.find(&text[start..]) else {
         return (0, 0);
     };
@@ -942,11 +943,14 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
 
     // Simple XML parse for .lpk using regex (avoid pulling in an XML crate)
     #[allow(clippy::expect_used)]
-    let pkg_name_re = Regex::new(r#"(?i)<Name\s+Value="([^"]+)""#).expect("static");
+    let pkg_name_re =
+        Regex::new(r#"(?i)<Name\s+Value="([^"]+)""#).expect("literal pattern is valid");
     #[allow(clippy::expect_used)]
-    let dep_name_re = Regex::new(r#"(?i)<PackageName\s+Value="([^"]+)""#).expect("static");
+    let dep_name_re =
+        Regex::new(r#"(?i)<PackageName\s+Value="([^"]+)""#).expect("literal pattern is valid");
     #[allow(clippy::expect_used)]
-    let unit_name_re = Regex::new(r#"(?i)<UnitName\s+Value="([^"]+)""#).expect("static");
+    let unit_name_re =
+        Regex::new(r#"(?i)<UnitName\s+Value="([^"]+)""#).expect("literal pattern is valid");
 
     let pkg_name = pkg_name_re
         .captures(&text)

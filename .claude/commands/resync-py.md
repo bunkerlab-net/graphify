@@ -119,7 +119,7 @@ After all units are complete, run the full workspace gates:
 ```bash
 cargo fmt
 cargo clippy --all-targets --all-features --workspace
-cargo nextest run
+cargo nextest run --workspace
 hk check
 ```
 
@@ -290,10 +290,10 @@ non-test code. When porting:
 
 ## Definition of done (per resync)
 
-- `cargo nextest run` passes across the workspace.
+- `cargo nextest run --workspace` passes across the workspace.
 - `cargo clippy --all-targets --all-features --workspace` is warning-free.
 - `hk check` passes.
-- `cargo llvm-cov nextest` shows ≥ 95% line + branch coverage for every crate
+- `cargo llvm-cov --workspace nextest` shows ≥ 95% line + branch coverage for every crate
   that was touched.
 - Every new parity test in `graphify-py/tests/test_<module>.py` has a Rust
   equivalent in the matching crate's `tests/parity.rs`.

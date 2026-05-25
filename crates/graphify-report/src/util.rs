@@ -7,16 +7,14 @@ use regex::Regex;
 /// Characters to strip from community labels when building Obsidian
 /// wikilinks. Regex literal is validated at compile-time via the
 /// `LazyLock` initialiser.
-static UNSAFE_CHARS: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::unwrap_used)] // reason: literal pattern is known-good at compile time
-    Regex::new(r#"[\\/*?:"<>|#^\[\]]"#).unwrap()
-});
+#[allow(clippy::expect_used)] // literal pattern; cannot fail at runtime
+static UNSAFE_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[\\/*?:"<>|#^\[\]]"#).expect("static UNSAFE_CHARS regex"));
 
 /// Strip `.md` / `.mdx` / `.markdown` suffix (case-insensitive).
-static MD_EXT: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::unwrap_used)] // reason: literal pattern is known-good at compile time
-    Regex::new(r"(?i)\.(md|mdx|markdown)$").unwrap()
-});
+#[allow(clippy::expect_used)] // literal pattern; cannot fail at runtime
+static MD_EXT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\.(md|mdx|markdown)$").expect("static MD_EXT regex"));
 
 /// Normalise a community label for use as a wikilink target.
 ///

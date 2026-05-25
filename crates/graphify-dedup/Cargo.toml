@@ -9,6 +9,7 @@ publish.workspace = true
 description = "MinHash + fuzzy-string deduplication of similar nodes"
 
 [dependencies]
+caseless = { workspace = true }
 indexmap = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
@@ -16,6 +17,7 @@ serde_json = { workspace = true }
 strsim = "0.11"
 thiserror = { workspace = true }
 twox-hash = "2"
+unicode-normalization = { workspace = true }
 
 [lints]
 workspace = true

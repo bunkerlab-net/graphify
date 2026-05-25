@@ -2,7 +2,7 @@
 //!
 //! Tests for `_safe` / `_hr` encoding-fallback behaviour are Python-specific
 //! (Rust stdout is always UTF-8) and are omitted with a note below.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_benchmark::{
     SAMPLE_QUESTIONS, format_benchmark, hr, print_benchmark, query_subgraph_tokens, run_benchmark,

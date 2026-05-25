@@ -25,6 +25,11 @@ members = [
   "crates/graphify-benchmark",
   "crates/graphify-llm",
   "crates/graphify-google",
+  "crates/graphify-affected",
+  "crates/graphify-diagnostics",
+  "crates/graphify-multigraph-compat",
+  "crates/graphify-scip",
+  "crates/graphify-semantic",
 ]
 default-members = ["."]
 exclude = [
@@ -33,16 +38,16 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.8.14"
+version = "0.8.17"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/bunkerlab-net/graphify"
 publish = false
 
 [workspace.dependencies]
 anyhow = "1"
-blake3 = "1"
+caseless = "0.2"
 chrono = { version = "0.4", default-features = false, features = [
   "clock",
   "serde",
@@ -63,6 +68,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serial_test = "3"
 sha2 = "0.11"
+shlex = "2"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1" }
@@ -98,6 +104,11 @@ graphify-transcribe = { path = "crates/graphify-transcribe" }
 graphify-validate = { path = "crates/graphify-validate" }
 graphify-watch = { path = "crates/graphify-watch" }
 graphify-wiki = { path = "crates/graphify-wiki" }
+graphify-affected = { path = "crates/graphify-affected" }
+graphify-diagnostics = { path = "crates/graphify-diagnostics" }
+graphify-multigraph-compat = { path = "crates/graphify-multigraph-compat" }
+graphify-scip = { path = "crates/graphify-scip" }
+graphify-semantic = { path = "crates/graphify-semantic" }
 
 [workspace.lints.rust]
 dead_code = "deny"
@@ -141,8 +152,11 @@ graphify-hooks = { workspace = true }
 graphify-html = { workspace = true }
 graphify-ingest = { workspace = true }
 graphify-llm = { workspace = true }
+graphify-affected = { workspace = true }
+graphify-diagnostics = { workspace = true }
 graphify-prs = { workspace = true }
 graphify-report = { workspace = true }
+graphify-security = { workspace = true }
 graphify-serve = { workspace = true }
 graphify-validate = { workspace = true }
 graphify-watch = { workspace = true }

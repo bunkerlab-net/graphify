@@ -4,6 +4,8 @@
 //! exactly which path shapes the heuristic catches and which it deliberately
 //! tolerates (e.g. `tokenizer.py`).
 
+#![allow(clippy::expect_used)] // test-only — `.expect("...")` panics are the failure
+
 use super::*;
 use std::path::Path;
 

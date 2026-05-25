@@ -1,6 +1,6 @@
 //! Coverage tests for `graphify_export::neo4j::{build_node_rows, build_edge_rows}`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_build::build_from_json;
 use graphify_export::neo4j::{build_edge_rows, build_node_rows};
@@ -24,7 +24,7 @@ fn small_graph() -> graphify_build::Graph {
         false,
         None,
     )
-    .unwrap()
+    .expect("test invariant")
 }
 
 #[test]
@@ -36,12 +36,18 @@ fn build_node_rows_captures_label_and_props() {
     let rows = build_node_rows(&g, &communities);
     assert_eq!(rows.len(), 3);
 
-    let r1 = rows.iter().find(|r| r.id == "n1").unwrap();
+    let r1 = rows
+        .iter()
+        .find(|r| r.id == "n1")
+        .expect("found in fixture");
     assert!(r1.label.contains("Code") || r1.label == "Entity");
     assert_eq!(r1.community, Some(0));
     assert!(r1.props.contains_key("source_file"));
 
-    let r2 = rows.iter().find(|r| r.id == "n2").unwrap();
+    let r2 = rows
+        .iter()
+        .find(|r| r.id == "n2")
+        .expect("found in fixture");
     assert!(r2.label.contains("Document") || r2.label == "Entity");
     assert_eq!(r2.community, Some(1));
 }
@@ -56,7 +62,7 @@ fn build_node_rows_missing_file_type_defaults_to_entity() {
         false,
         None,
     )
-    .unwrap();
+    .expect("test invariant");
     let communities = IndexMap::new();
     let rows = build_node_rows(&g, &communities);
     assert_eq!(rows.len(), 1);

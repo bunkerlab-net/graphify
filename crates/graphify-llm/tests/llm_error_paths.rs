@@ -1,12 +1,7 @@
 //! Error-path tests for `call_llm`, `extract_files_direct`, retry helpers, and
 //! parse helpers — covers code paths reachable without making real HTTP calls.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::{LlmError, LlmResponse, call_llm, empty_fragment, extract_files_direct};
 use serde_json::json;
@@ -65,6 +60,7 @@ fn call_llm_unknown_backend_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_missing_api_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -74,6 +70,7 @@ fn call_llm_missing_api_key_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_gemini_missing_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -82,6 +79,7 @@ fn call_llm_gemini_missing_key_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_kimi_missing_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -90,6 +88,7 @@ fn call_llm_kimi_missing_key_errors() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn call_llm_deepseek_missing_key_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -100,6 +99,7 @@ fn call_llm_deepseek_missing_key_errors() {
 // ── extract_files_direct ───────────────────────────────────────────────────
 
 #[test]
+#[serial_test::serial(env)]
 fn extract_files_direct_unknown_backend() {
     let result = extract_files_direct(
         &[],
@@ -112,6 +112,7 @@ fn extract_files_direct_unknown_backend() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn extract_files_direct_missing_api_key() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -120,6 +121,7 @@ fn extract_files_direct_missing_api_key() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn extract_files_direct_with_empty_string_api_key_still_errors() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -133,9 +135,9 @@ fn extract_files_direct_with_empty_string_api_key_still_errors() {
 #[test]
 fn empty_fragment_has_expected_shape() {
     let v = empty_fragment();
-    assert!(v["nodes"].as_array().unwrap().is_empty());
-    assert!(v["edges"].as_array().unwrap().is_empty());
-    assert!(v["hyperedges"].as_array().unwrap().is_empty());
+    assert!(v["nodes"].as_array().expect("array field").is_empty());
+    assert!(v["edges"].as_array().expect("array field").is_empty());
+    assert!(v["hyperedges"].as_array().expect("array field").is_empty());
 }
 
 // ── LlmResponse merging via retry helpers (only public surface) ───────────
@@ -211,7 +213,7 @@ fn looks_like_context_exceeded_dyn_works() {
 #[test]
 fn empty_fragment_round_trips_serialization() {
     let v = empty_fragment();
-    let text = serde_json::to_string(&v).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let text = serde_json::to_string(&v).expect("serialise JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
     assert_eq!(parsed, json!({"nodes": [], "edges": [], "hyperedges": []}));
 }

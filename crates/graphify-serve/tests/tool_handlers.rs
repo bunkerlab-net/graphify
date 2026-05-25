@@ -1,6 +1,6 @@
 //! Coverage tests for the MCP tool handler functions.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -39,7 +39,7 @@ fn graph_with_data() -> Graph {
         false,
         None,
     )
-    .unwrap()
+    .expect("test invariant")
 }
 
 fn arg_map(pairs: &[(&str, Value)]) -> Map<String, Value> {

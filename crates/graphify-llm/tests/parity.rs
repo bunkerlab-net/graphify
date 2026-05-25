@@ -10,12 +10,7 @@
 //! in Rust 2024; the `#![allow(unsafe_code)]` below permits their use in this
 //! test-only file (matching the convention in other `graphify-*` parity tests).
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::claude_cli::ClaudeRunner;
 use graphify_llm::ollama::resolve_num_ctx;
@@ -81,6 +76,11 @@ fn clear_backend_envs(g: &mut EnvGuard) {
         "AWS_PROFILE",
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
     ] {
         g.remove(key);
     }
@@ -91,6 +91,7 @@ fn clear_backend_envs(g: &mut EnvGuard) {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_gemini_accepts_gemini_api_key() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -101,6 +102,7 @@ fn test_gemini_accepts_gemini_api_key() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_gemini_accepts_google_api_key() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -111,6 +113,7 @@ fn test_gemini_accepts_google_api_key() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_backend_detection_prefers_gemini() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -123,6 +126,7 @@ fn test_backend_detection_prefers_gemini() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_openai_backend_detected() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -317,6 +321,7 @@ fn test_all_expected_backends_registered() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_ollama_from_base_url() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -326,6 +331,7 @@ fn test_detect_backend_ollama_from_base_url() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_kimi_beats_ollama() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -336,6 +342,7 @@ fn test_detect_backend_kimi_beats_ollama() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_claude_beats_ollama() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -346,6 +353,7 @@ fn test_detect_backend_claude_beats_ollama() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_detect_backend_none_without_envvars() {
     let mut g = EnvGuard::new();
     clear_backend_envs(&mut g);
@@ -354,10 +362,83 @@ fn test_detect_backend_none_without_envvars() {
 }
 
 // ---------------------------------------------------------------------------
+// Bedrock auto-detection — only triggers when credentials look configured.
+// The pre-port behaviour (auto-select Bedrock when *only* AWS_REGION was set)
+// led to every extraction chunk failing with "AWS credentials not
+// configured" because the SDK can't resolve credentials from a region.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_bedrock_aws_region_alone_is_not_enough() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_REGION", "us-east-1");
+    assert_eq!(
+        detect_backend(),
+        None,
+        "AWS_REGION alone must not auto-select Bedrock"
+    );
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_bedrock_static_creds() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_REGION", "us-east-1");
+    g.set("AWS_ACCESS_KEY_ID", "AKIAFAKE");
+    g.set("AWS_SECRET_ACCESS_KEY", "secret");
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_bedrock_access_key_without_secret_is_not_enough() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_REGION", "us-east-1");
+    g.set("AWS_ACCESS_KEY_ID", "AKIAFAKE");
+    // Missing AWS_SECRET_ACCESS_KEY — the SDK's env provider would fail.
+    assert_eq!(detect_backend(), None);
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_bedrock_via_profile() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_PROFILE", "graphify");
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_bedrock_via_web_identity() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/sts/token");
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_bedrock_via_ecs_relative_uri() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set(
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "/v2/credentials/abc",
+    );
+    assert_eq!(detect_backend().as_deref(), Some("bedrock"));
+}
+
+// ---------------------------------------------------------------------------
 // Ollama num_ctx resolution (resolve_num_ctx)
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_env_override() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_OLLAMA_NUM_CTX", "65536");
@@ -367,6 +448,7 @@ fn test_resolve_num_ctx_env_override() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_auto_at_least_floor() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_OLLAMA_NUM_CTX");
@@ -376,6 +458,7 @@ fn test_resolve_num_ctx_auto_at_least_floor() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_scales_with_small_budget() {
     let mut g = EnvGuard::new();
     g.remove("GRAPHIFY_OLLAMA_NUM_CTX");
@@ -392,6 +475,7 @@ fn test_resolve_num_ctx_scales_with_small_budget() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn test_resolve_num_ctx_invalid_env_falls_back_to_auto() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_OLLAMA_NUM_CTX", "not-a-number");
@@ -642,7 +726,7 @@ fn test_pack_chunks_by_tokens_single_chunk_for_small_files()
     let paths: Vec<std::path::PathBuf> = (0..3)
         .map(|i| {
             let p = dir.path().join(format!("f{i}.md"));
-            std::fs::write(&p, "hello").unwrap();
+            std::fs::write(&p, "hello").expect("write fixture");
             p
         })
         .collect();

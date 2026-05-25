@@ -1,12 +1,7 @@
 //! Mockito-driven tests for `call_openai_compat` covering happy path,
 //! parse errors, hollow-response detection, and finish-reason handling.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use std::time::Duration;
 
@@ -103,7 +98,7 @@ fn call_openai_compat_hollow_response_becomes_length() {
 
     let url = server.url();
     let req = make_req(&url, "openai");
-    let resp = call_openai_compat(&req).unwrap();
+    let resp = call_openai_compat(&req).expect("test invariant");
     assert_eq!(
         resp.finish_reason, "length",
         "hollow content should be reclassified"
@@ -188,7 +183,7 @@ fn call_openai_compat_real_truncation_preserved() {
 
     let url = server.url();
     let req = make_req(&url, "openai");
-    let resp = call_openai_compat(&req).unwrap();
+    let resp = call_openai_compat(&req).expect("test invariant");
     assert_eq!(resp.finish_reason, "length");
 }
 
@@ -214,7 +209,7 @@ fn call_openai_compat_with_disable_thinking() {
     let url = server.url();
     let mut req = make_req(&url, "kimi");
     req.disable_thinking = true;
-    let _ = call_openai_compat(&req).unwrap();
+    let _ = call_openai_compat(&req).expect("test invariant");
 }
 
 // ── ollama_options forwarded as extra_body ────────────────────────────────
@@ -239,7 +234,7 @@ fn call_openai_compat_with_ollama_options() {
         num_ctx: 8192,
         keep_alive: "5m".to_string(),
     });
-    let resp = call_openai_compat(&req).unwrap();
+    let resp = call_openai_compat(&req).expect("test invariant");
     assert_eq!(resp.finish_reason, "stop");
 }
 
@@ -262,7 +257,7 @@ fn call_openai_compat_with_reasoning_effort() {
     let url = server.url();
     let mut req = make_req(&url, "openai");
     req.reasoning_effort = Some("low");
-    let _ = call_openai_compat(&req).unwrap();
+    let _ = call_openai_compat(&req).expect("test invariant");
 }
 
 // ── Each public per-backend wrapper exercised once via call_openai_compat ─
@@ -286,7 +281,7 @@ fn call_gemini_via_compat_works_with_mock() {
 
     let url = server.url();
     let req = make_req(&url, "gemini");
-    let resp = call_openai_compat(&req).unwrap();
+    let resp = call_openai_compat(&req).expect("test invariant");
     assert_eq!(resp.finish_reason, "stop");
     assert_eq!(resp.nodes.len(), 1);
 }

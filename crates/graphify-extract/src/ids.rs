@@ -66,36 +66,5 @@ pub fn file_stem(path: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn make_id_strips_dots_and_underscores() {
-        assert_eq!(make_id1("_auth"), "auth");
-        assert_eq!(make_id(&[".httpx._client"]), "httpx_client");
-    }
-
-    #[test]
-    fn make_id_consistent() {
-        assert_eq!(make_id(&["foo", "Bar"]), make_id(&["foo", "Bar"]));
-    }
-
-    #[test]
-    fn make_id_no_leading_trailing_underscores() {
-        let result = make_id1("__init__");
-        assert!(!result.starts_with('_'));
-        assert!(!result.ends_with('_'));
-    }
-
-    #[test]
-    fn file_stem_qualifies_with_parent() {
-        let p = std::path::PathBuf::from("/project/auth/models.py");
-        assert_eq!(file_stem(&p), "auth.models");
-    }
-
-    #[test]
-    fn file_stem_root_level() {
-        let p = std::path::PathBuf::from("models.py");
-        assert_eq!(file_stem(&p), "models");
-    }
-}
+#[path = "ids_tests.rs"]
+mod ids_tests;

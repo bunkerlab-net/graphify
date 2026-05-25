@@ -2,12 +2,7 @@
 //! env var that, in combination with `GRAPHIFY_TEST_ALLOW_PRIVATE_IPS`, lets us
 //! mock the HTTP endpoint.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    unsafe_code
-)]
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::{
     call_llm,
@@ -84,7 +79,7 @@ fn openai_extraction_via_mock() {
         &[json!({"role":"user","content":"hi"})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -100,7 +95,7 @@ fn openai_plain_via_mock() {
     let mut g = allow_private();
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
 
-    let out = call_openai_plain("key", "gpt-test", "ping", 32).unwrap();
+    let out = call_openai_plain("key", "gpt-test", "ping", 32).expect("test invariant");
     assert_eq!(out, "plain answer");
 }
 
@@ -124,7 +119,7 @@ fn gemini_extraction_via_mock() {
         &[json!({"role":"user","content":"hi"})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -140,7 +135,7 @@ fn gemini_plain_via_mock() {
     let mut g = allow_private();
     g.set("GRAPHIFY_GEMINI_BASE_URL", &server.url());
 
-    let out = call_gemini_plain("key", "gemini-test", "ping", 32).unwrap();
+    let out = call_gemini_plain("key", "gemini-test", "ping", 32).expect("test invariant");
     assert_eq!(out, "gemini answer");
 }
 
@@ -164,7 +159,7 @@ fn kimi_extraction_via_mock() {
         &[json!({"role":"user","content":"hi"})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -188,7 +183,7 @@ fn deepseek_extraction_via_mock() {
         &[json!({"role":"user","content":"hi"})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
 }
 
@@ -204,7 +199,7 @@ fn deepseek_plain_via_mock() {
     let mut g = allow_private();
     g.set("GRAPHIFY_DEEPSEEK_BASE_URL", &server.url());
 
-    let out = call_deepseek_plain("key", "ds-test", "ping", 32).unwrap();
+    let out = call_deepseek_plain("key", "ds-test", "ping", 32).expect("test invariant");
     assert_eq!(out, "deepseek answer");
 }
 
@@ -233,7 +228,7 @@ fn claude_extraction_via_mock() {
         &[json!({"role":"user","content":"hi"})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
     assert_eq!(resp.input_tokens, 4);
     assert_eq!(resp.output_tokens, 9);
@@ -262,7 +257,7 @@ fn claude_max_tokens_stop_reason_maps_to_length() {
         &[json!({"role":"user","content":"hi"})],
         128,
     )
-    .unwrap();
+    .expect("test invariant");
     assert_eq!(resp.finish_reason, "length");
 }
 
@@ -281,7 +276,7 @@ fn call_llm_dispatch_openai_via_mock() {
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
     g.set("OPENAI_API_KEY", "test-key");
 
-    let out = call_llm("hi", "openai", 32).unwrap();
+    let out = call_llm("hi", "openai", 32).expect("test invariant");
     assert_eq!(out, "dispatched");
 }
 
@@ -298,7 +293,7 @@ fn call_llm_dispatch_gemini_via_mock() {
     g.set("GRAPHIFY_GEMINI_BASE_URL", &server.url());
     g.set("GEMINI_API_KEY", "test-key");
 
-    let out = call_llm("hi", "gemini", 32).unwrap();
+    let out = call_llm("hi", "gemini", 32).expect("test invariant");
     assert_eq!(out, "gemini response");
 }
 
@@ -315,7 +310,7 @@ fn call_llm_dispatch_kimi_via_mock() {
     g.set("GRAPHIFY_KIMI_BASE_URL", &server.url());
     g.set("MOONSHOT_API_KEY", "test-key");
 
-    let out = call_llm("hi", "kimi", 32).unwrap();
+    let out = call_llm("hi", "kimi", 32).expect("test invariant");
     assert_eq!(out, "kimi response");
 }
 
@@ -332,7 +327,7 @@ fn call_llm_dispatch_deepseek_via_mock() {
     g.set("GRAPHIFY_DEEPSEEK_BASE_URL", &server.url());
     g.set("DEEPSEEK_API_KEY", "test-key");
 
-    let out = call_llm("hi", "deepseek", 32).unwrap();
+    let out = call_llm("hi", "deepseek", 32).expect("test invariant");
     assert_eq!(out, "deepseek response");
 }
 
@@ -354,6 +349,6 @@ fn call_llm_dispatch_claude_via_mock() {
     g.set("GRAPHIFY_CLAUDE_BASE_URL", &server.url());
     g.set("ANTHROPIC_API_KEY", "test-key");
 
-    let out = call_llm("hi", "claude", 32).unwrap();
+    let out = call_llm("hi", "claude", 32).expect("test invariant");
     assert!(out.contains("claude"));
 }

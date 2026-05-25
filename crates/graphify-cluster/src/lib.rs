@@ -5,7 +5,7 @@
 //!
 //! # Primary entry points
 //!
-//! - [`cluster`] — run Louvain community detection on a graph and return a
+//! - [`cluster`] — run community detection on a graph and return a
 //!   `{community_id → [node_ids]}` mapping sorted by community size.
 //! - [`cohesion_score`] — compute the edge-density ratio for a single community.
 //! - [`score_all`] — efficiently compute cohesion scores for all communities in
@@ -15,13 +15,18 @@
 //!
 //! # Algorithm
 //!
-//! The Python reference attempts Leiden (graspologic) and falls back to
-//! `NetworkX`'s Louvain. This crate ships a pure-Rust Louvain
-//! implementation (see `louvain.rs`) seeded with `rand::rngs::StdRng` at
-//! seed 42 — the same seed the Python fallback uses. Leiden is
-//! intentionally **not** implemented; no suitable Rust crate exists in
-//! the workspace and the structural-correctness tests do not require
-//! identical community IDs.
+//! The Python reference attempts Leiden (graspologic) first and falls
+//! back to `NetworkX`'s Louvain when graspologic is not installed. This
+//! crate matches that priority: it ships Leiden via the `leiden-rs`
+//! crate as the default partitioner (see `leiden.rs`) and a hand-rolled
+//! Louvain (see `louvain.rs`) seeded at 42 as a backup. The backend can
+//! be forced via `GRAPHIFY_CLUSTER_BACKEND=louvain` for debugging.
+//!
+//! Leiden is preferred because it avoids the Phase-1 flip-flop pathology
+//! that surfaced on real-world ~16k-node graphs (where Louvain hit a
+//! 100-pass safety cap on tightly-coupled bridge nodes). Leiden's
+//! refinement phase guarantees connected sub-communities and its Fast
+//! Local Move algorithm bounds Phase-1 work to O(moves).
 //!
 //! See `.claude/local/notes/module_cluster.md` for a full rationale.
 
@@ -30,6 +35,7 @@ mod cohesion;
 mod constants;
 mod edge_list;
 mod hubs;
+mod leiden;
 mod louvain;
 mod remap;
 mod splits;

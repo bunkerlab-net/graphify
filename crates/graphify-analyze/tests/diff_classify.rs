@@ -1,7 +1,7 @@
 //! Coverage tests for `graph_diff`, `file_category`, `is_concept_node`,
 //! `is_json_key_node`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use graphify_analyze::{file_category, graph_diff, is_concept_node, is_json_key_node};
 use graphify_build::build_from_json;
@@ -9,7 +9,7 @@ use serde_json::json;
 
 #[allow(clippy::needless_pass_by_value)] // tests build literals each call
 fn graph(nodes: serde_json::Value, edges: serde_json::Value) -> graphify_build::Graph {
-    build_from_json(json!({"nodes": nodes, "edges": edges}), false, None).unwrap()
+    build_from_json(json!({"nodes": nodes, "edges": edges}), false, None).expect("test invariant")
 }
 
 // ── graph_diff ──────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ fn graph_diff_no_changes() {
     let g = graph(json!([{"id": "a", "label": "A"}]), json!([]));
     let v = graph_diff(&g, &g);
     assert_eq!(v["summary"], "no changes");
-    assert_eq!(v["new_nodes"].as_array().unwrap().len(), 0);
+    assert_eq!(v["new_nodes"].as_array().expect("array field").len(), 0);
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn graph_diff_added_nodes_and_edges() {
         json!([{"source": "a", "target": "b", "relation": "calls", "confidence": "EXTRACTED"}]),
     );
     let v = graph_diff(&g_old, &g_new);
-    let summary = v["summary"].as_str().unwrap();
+    let summary = v["summary"].as_str().expect("string field");
     assert!(summary.contains("new node"));
     assert!(summary.contains("new edge"));
 }
@@ -43,7 +43,7 @@ fn graph_diff_removed_nodes() {
     );
     let g_new = graph(json!([{"id": "a", "label": "A"}]), json!([]));
     let v = graph_diff(&g_old, &g_new);
-    let s = v["summary"].as_str().unwrap();
+    let s = v["summary"].as_str().expect("string field");
     assert!(s.contains("node removed") || s.contains("edge removed"));
 }
 
@@ -62,7 +62,7 @@ fn graph_diff_multiple_changes_pluralizes() {
         ]),
     );
     let v = graph_diff(&g_old, &g_new);
-    let s = v["summary"].as_str().unwrap();
+    let s = v["summary"].as_str().expect("string field");
     assert!(s.contains("3 new nodes"));
     assert!(s.contains("2 new edges"));
 }

@@ -1,5 +1,5 @@
 //! Parity tests against `graphify-py/tests/test_ingest.py`.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::time::Duration;
 
@@ -231,11 +231,16 @@ fn test_filename_format() {
     .expect("save ok");
     assert!(
         out.file_name()
-            .unwrap()
+            .expect("path from save_query_result always has a filename")
             .to_string_lossy()
             .starts_with("query_")
     );
-    assert_eq!(out.extension().unwrap().to_string_lossy(), "md");
+    assert_eq!(
+        out.extension()
+            .expect("path from save_query_result should have .md extension")
+            .to_string_lossy(),
+        "md"
+    );
 }
 
 #[test]
@@ -503,8 +508,9 @@ fn fetch_text_type_allow_private(
     let contrib = contributor.or(author).unwrap_or("unknown");
     let now = chrono::Utc::now().to_rfc3339();
 
-    let re_title = regex::Regex::new(r"(?si)<title[^>]*>(.*?)</title>").unwrap();
-    let re_ws = regex::Regex::new(r"\s+").unwrap();
+    let re_title = regex::Regex::new(r"(?si)<title[^>]*>(.*?)</title>")
+        .expect("title extraction regex should compile");
+    let re_ws = regex::Regex::new(r"\s+").expect("whitespace regex should compile");
     let title = re_title.captures(&html).and_then(|c| c.get(1)).map_or_else(
         || url.to_string(),
         |m| re_ws.replace_all(m.as_str(), " ").trim().to_string(),
