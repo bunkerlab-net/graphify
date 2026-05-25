@@ -106,7 +106,7 @@ pub(super) fn emit_swift_inheritance(
 ///
 /// Mirrors Python `_csharp_pre_scan_interfaces`.
 #[must_use]
-pub fn csharp_pre_scan_interfaces(root: Node<'_>, source: &[u8]) -> HashSet<String> {
+pub(super) fn csharp_pre_scan_interfaces(root: Node<'_>, source: &[u8]) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut stack: Vec<Node<'_>> = vec![root];
     while let Some(n) = stack.pop() {

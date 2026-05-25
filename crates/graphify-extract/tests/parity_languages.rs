@@ -280,6 +280,7 @@ fn java_extractor_produces_nodes() {
 /// Maps a node label as it appears on graph edges back to its display label,
 /// stripping `()` suffixes and leading `.` characters so the assertions stay
 /// readable.
+#[must_use]
 fn normalise_label(label: &str) -> String {
     label
         .trim_end_matches("()")
@@ -290,6 +291,7 @@ fn normalise_label(label: &str) -> String {
 /// Return the set of `(source_label, target_label)` pairs for edges matching
 /// `relation` (and optionally `context`). Used by reference-context tests so
 /// the assertion reads like Python's `_edge_labels(result, relation, context)`.
+#[must_use]
 fn edge_label_pairs(
     result: &graphify_extract::types::FileResult,
     relation: &str,

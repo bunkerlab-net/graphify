@@ -14,7 +14,7 @@ use super::names::read_text_owned;
 /// Role of a collected type reference. `Direct` = used as the type itself
 /// (e.g. `def f(x: Foo)`), `Generic` = used as a type argument to a generic
 /// (e.g. `def f(x: list[Foo])`).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RefRole {
     Direct,
     Generic,

@@ -87,16 +87,15 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     // ── Structural walk ───────────────────────────────────────────────────────
     // Pre-scan C# files for declared interface names so the inheritance pass can
     // split `inherits` from `implements`. Empty for every other language.
-    let csharp_interface_names: HashSet<String> =
-        if config.lang_id == super::generic::config::LangId::CSharp {
-            super::generic::inherit::csharp_pre_scan_interfaces(root, &source)
-        } else {
-            HashSet::new()
-        };
+    let csharp_interface_names: HashSet<String> = if config.lang_id == config::LangId::CSharp {
+        inherit::csharp_pre_scan_interfaces(root, &source)
+    } else {
+        HashSet::new()
+    };
 
     let mut cur = root.walk();
     if cur.goto_first_child() {
-        let mut walk_ctx = super::generic::walk::WalkCtx {
+        let mut walk_ctx = walk::WalkCtx {
             config,
             file_nid: &file_nid,
             stem: &stem,

@@ -7,6 +7,12 @@ use std::fs;
 
 use graphify_extract::extract;
 
+/// Read a string value from an extract-output edge or node by key.
+#[must_use]
+fn lookup_str(m: &indexmap::IndexMap<String, serde_json::Value>, key: &str) -> Option<String> {
+    m.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
 #[test]
 fn java_cross_file_imports_resolve() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -187,10 +193,6 @@ fn python_parameter_return_and_generic_contexts() {
     .expect("write service.py");
 
     let result = extract(&[model.clone(), service.clone()], Some(tmp.path()));
-    let lookup_str =
-        |m: &indexmap::IndexMap<String, serde_json::Value>, key: &str| -> Option<String> {
-            m.get(key).and_then(|v| v.as_str()).map(str::to_string)
-        };
     let id_to_label: std::collections::HashMap<String, String> = result
         .nodes
         .iter()
@@ -265,10 +267,6 @@ fn ts_type_relationships_and_contexts() {
     .expect("write impl.ts");
 
     let result = extract(&[path], Some(tmp.path()));
-    let lookup_str =
-        |m: &indexmap::IndexMap<String, serde_json::Value>, key: &str| -> Option<String> {
-            m.get(key).and_then(|v| v.as_str()).map(str::to_string)
-        };
     let id_to_label: std::collections::HashMap<String, String> = result
         .nodes
         .iter()
@@ -360,10 +358,6 @@ fn semantic_reference_edges_carry_context_and_source() {
     .expect("write svc.py");
 
     let result = extract(&[path], Some(tmp.path()));
-    let lookup_str =
-        |m: &indexmap::IndexMap<String, serde_json::Value>, key: &str| -> Option<String> {
-            m.get(key).and_then(|v| v.as_str()).map(str::to_string)
-        };
     let ref_edge = result
         .edges
         .iter()

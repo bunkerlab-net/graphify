@@ -362,7 +362,7 @@ fn reconstruct_communities_from_graph(
     graph: &graphify_build::Graph,
 ) -> indexmap::IndexMap<i64, Vec<String>> {
     let mut out: indexmap::IndexMap<i64, Vec<String>> = indexmap::IndexMap::new();
-    for (node_id, attrs) in &graph.node_map {
+    for (node_id, attrs) in graph.nodes() {
         let Some(raw) = attrs.get("community") else {
             continue;
         };
