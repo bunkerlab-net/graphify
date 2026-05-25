@@ -12,7 +12,7 @@ description = "Runtime probe for MultiDiGraph keyed-edge support (NetworkX parit
 graphify-build = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true, features = ["preserve_order"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

@@ -11,7 +11,7 @@ description = "Security helpers: URL validation, safe fetch, path guards, label 
 [dependencies]
 ipnet = "2"
 regex = { workspace = true }
-serde_json = { workspace = true, features = ["preserve_order"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 ureq = { workspace = true }
 url = { workspace = true }
