@@ -87,10 +87,10 @@ fn test_convert_gdoc_to_markdown_sidecar() {
         None::<fn(&std::path::Path) -> Result<String, std::io::Error>>,
         Some(fake_export),
     )
-    .expect("test invariant");
+    .expect("convert_google_workspace_file should succeed");
 
     assert!(out.is_some());
-    let out_path = out.expect("test invariant");
+    let out_path = out.expect("conversion should produce output path");
     assert_eq!(out_path.extension().and_then(|e| e.to_str()), Some("md"));
     let content = std::fs::read_to_string(&out_path).expect("read fixture");
     assert!(
@@ -129,10 +129,11 @@ fn test_convert_gsheet_uses_xlsx_markdown_callback() {
         ),
         Some(fake_export),
     )
-    .expect("test invariant");
+    .expect("convert_google_workspace_file should succeed for gsheet");
 
     assert!(out.is_some());
-    let content = std::fs::read_to_string(out.expect("test invariant")).expect("test invariant");
+    let content = std::fs::read_to_string(out.expect("conversion should produce output path"))
+        .expect("failed to read converted gsheet output");
     assert!(content.contains("## Sheet: Main"));
 }
 
@@ -246,7 +247,8 @@ fn test_read_google_shortcut_missing_file_id_error() {
     let tmp = TempDir::new().expect("tempdir");
     let shortcut = write_shortcut(&tmp, "empty.gdoc", r#"{"url":""}"#);
 
-    let err = read_google_shortcut(&shortcut).expect_err("expected Err");
+    let err = read_google_shortcut(&shortcut)
+        .expect_err("read_google_shortcut should reject a shortcut without a Drive file ID");
     let msg = err.to_string();
     assert!(
         msg.contains("does not include a Drive file ID"),

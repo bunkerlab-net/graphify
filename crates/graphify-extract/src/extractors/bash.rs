@@ -272,16 +272,14 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                 let cmd = read_text(cnn, source).trim().to_string();
                 if matches!(cmd.as_str(), "source" | ".") {
                     // Source shadowing: when the user has defined a function
-                    // literally named `source`, the builtin is shadowed. The
-                    // graphify-py reference deliberately falls through in
-                    // that case and lets `walk_calls` attribute the call —
-                    // we do the same here so attribution flows through
-                    // `walk_calls_top_level_bash` / `walk_calls_bash` rather
-                    // than emitting a divergent `file_nid → source` edge.
+                    // literally named `source`, the builtin is shadowed and
+                    // we deliberately do *not* emit an import edge here —
+                    // graphify-py falls through in the same case so that
+                    // `walk_calls` can attribute the call. Skip the
+                    // import-edge branch when shadowed; otherwise emit the
+                    // usual `imports_from` / `imports` edge.
                     let shadowed = cmd == "source" && defined_functions.contains("source");
-                    if shadowed {
-                        // intentionally no-op — see comment above.
-                    } else {
+                    if !shadowed {
                         // find path argument
                         let args: Vec<tree_sitter::Node<'_>> = {
                             let mut a = vec![];
@@ -482,14 +480,9 @@ fn is_inside_expansion(node: tree_sitter::Node<'_>) -> bool {
 /// metacharacter rather than a real function call. Mirrors the
 /// `literal(node)` helper added in `graphify-py/graphify/extract.py`.
 fn is_literal_command_name(name: &str) -> bool {
-    !name.contains('$')
-        && !name.contains('`')
-        && !name.contains("$(")
-        && !name.contains("<(")
-        && !name.contains('>')
-        && !name.contains('|')
-        && !name.contains(';')
-        && !name.contains('&')
+    // Single-character bans cover the multi-char shell metacharacters too:
+    // `$(...)` and `${...}` are caught by `$`, `<(...)` by `<`, and so on.
+    !name.contains(['$', '`', '<', '>', '|', ';', '&'])
 }
 
 /// Emit a `calls` edge from `caller_nid` to the function targeted by

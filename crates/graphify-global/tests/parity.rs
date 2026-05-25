@@ -2,8 +2,8 @@
 //!
 //! Each test function mirrors a Python test case at the same name.
 //!
-//! Allow `unwrap_used` / `expect_used` here — test code is allowed to panic
-//! rather than propagate errors via `?`.
+//! Allow `expect_used` here — test code is allowed to panic with explicit
+//! messages rather than propagate errors via `?`.
 #![allow(clippy::expect_used)]
 
 use graphify_build::{Graph, GraphKind};
