@@ -1,6 +1,6 @@
 [package]
+edition = "2021"
 name = "crate_a"
 version = "0.1.0"
-edition = "2021"
 
 [workspace]

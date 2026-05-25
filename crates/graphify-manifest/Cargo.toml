@@ -1,12 +1,12 @@
 [package]
-name = "graphify-manifest"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Re-exports of manifest helpers from graphify-detect (Python compat shim)"
+edition.workspace = true
+license.workspace = true
+name = "graphify-manifest"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 graphify-detect = { workspace = true }

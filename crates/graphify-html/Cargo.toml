@@ -1,12 +1,12 @@
 [package]
-name = "graphify-html"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "HTML generators (tree view, call-flow Mermaid)"
+edition.workspace = true
+license.workspace = true
+name = "graphify-html"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 chrono = { workspace = true }

@@ -1,12 +1,12 @@
 [package]
-name = "graphify-ingest"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "URL / PDF / Office document ingestion into corpus"
+edition.workspace = true
+license.workspace = true
+name = "graphify-ingest"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 chrono = { workspace = true }

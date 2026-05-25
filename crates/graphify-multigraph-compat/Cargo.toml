@@ -1,12 +1,12 @@
 [package]
-name = "graphify-multigraph-compat"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Runtime probe for MultiDiGraph keyed-edge support (NetworkX parity check)"
+edition.workspace = true
+license.workspace = true
+name = "graphify-multigraph-compat"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 graphify-build = { workspace = true }

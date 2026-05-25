@@ -1,12 +1,12 @@
 [package]
-name = "graphify-build"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Graph assembly from extraction dicts"
+edition.workspace = true
+license.workspace = true
+name = "graphify-build"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 caseless = { workspace = true }
