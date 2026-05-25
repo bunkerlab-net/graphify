@@ -58,6 +58,6 @@ pub fn uninstall_all(project_dir: &Path, purge: bool) -> Result<String, HooksErr
         }
     }
 
-    msgs.push("\nDone. Run 'pip uninstall graphifyy' to remove the package itself.".to_string());
+    msgs.push("\nDone. Run 'cargo uninstall graphify' to remove the package itself.".to_string());
     Ok(msgs.join("\n"))
 }
