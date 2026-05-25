@@ -302,6 +302,17 @@ fn test_normalize_context_filters_trims_whitespace() {
     );
 }
 
+#[test]
+fn test_normalize_context_filters_skips_empty_and_whitespace_only() {
+    // Empty strings and whitespace-only strings collapse to no entries — the
+    // canonical-name list must not be polluted by `--context ""` or
+    // `--context "   "`.
+    assert_eq!(
+        normalize_context_filters(&[String::new(), "  ".to_string()]),
+        Vec::<String>::new()
+    );
+}
+
 // ── _infer_context_filters ────────────────────────────────────────────────────
 
 #[test]
