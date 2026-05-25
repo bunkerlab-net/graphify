@@ -1,5 +1,6 @@
 ---
 description: Resync graphify with graphify-py
+argument-hint: "[target-ref]"
 ---
 
 # Resync graphify with graphify-py
@@ -10,8 +11,15 @@ Rust workspace.
 ## How to use
 
 ```bash
-/resync-py
+/resync-py                 # advance to the tip of the tracked branch
+/resync-py <target-ref>    # advance to a specific commit, tag, or branch
 ```
+
+`<target-ref>` is optional and defaults to the latest commit on the branch
+recorded in `.gitmodules` (currently `v8`). When supplied, it MUST be a ref
+that already exists in the upstream `graphify-py` remote (e.g. `v0.8.18`,
+`3efae38`, or a branch like `v8`). The skill resolves the ref inside the
+submodule, then continues with the rest of the workflow.
 
 ## Instructions
 
@@ -35,11 +43,30 @@ regardless of whether Rust changes follow.
    git config -f .gitmodules submodule.graphify-py.branch    # should print: v8
    ```
 
-2. Advance the submodule along the tracked branch:
+2. Advance the submodule. Without an argument, follow the tracked branch from
+   `.gitmodules`; with an argument, fetch and check out the requested ref
+   inside the submodule:
 
    ```bash
+   # No <target-ref> supplied — track the branch from .gitmodules
    git submodule update --init --remote graphify-py
+
+   # <target-ref> supplied — fetch and check out the specific ref
+   git submodule update --init graphify-py
+   git -C graphify-py fetch origin --tags
+   git -C graphify-py checkout --detach <target-ref>
    ```
+
+   Refuse the `<target-ref>` form if the ref is not an ancestor of the tracked
+   branch's tip — silently jumping off the tracked branch is what the warning
+   above forbids. Verify with:
+
+   ```bash
+   git -C graphify-py merge-base --is-ancestor <target-ref> origin/$(git config -f ../.gitmodules submodule.graphify-py.branch)
+   ```
+
+   A non-zero exit means the ref is on a different lineage; stop and ask the
+   user before proceeding.
 
 3. Identify the new commit hash:
 
@@ -174,9 +201,8 @@ issues), do not silently skip Phase 7:
 - Re-try the command once after sanity-checking connectivity, auth/token, and
   CLI version (`coderabbit --version`).
 - If it still fails, document the failure and any manual verification you ran in
-  a follow-up commit message and the PR body. Escalate to the user (the project
-  owner, addressed as "Tech Priest" in conversation per the global
-  `CLAUDE.md`) before pushing.
+  a follow-up commit message and the PR body. Escalate to the user before
+  pushing.
 
 Address every issue CodeRabbit raises:
 
@@ -194,8 +220,7 @@ If a finding looks like a false positive or you disagree with it:
 - Document the deviation in the commit message of a follow-up commit (or the PR
   body once Phase 8 opens the PR), quoting the relevant CodeRabbit finding text
   and the reason it does not apply.
-- Escalate when uncertain: ask the user (the project owner; see `CLAUDE.md`
-  for the project's preferred form of address) to confirm the dispute before
+- Escalate when uncertain: ask the user to confirm the dispute before
   pushing, rather than silently dismissing the finding.
 - Re-run `coderabbit review --agent --base main --type committed` after
   documenting the dispute so the new commit is on record.
@@ -249,8 +274,8 @@ port of `graphify-py/tests/test_<module>.py`.
 | `graphify/skill*.md`             | N/A (agent skill docs) |
 
 If `graphify-py` adds a brand-new top-level module with no matching crate,
-escalate to the Tech Priest before introducing a new workspace member — adding
-a crate edits the workspace root `Cargo.toml`, which `AGENTS.md` flags as a
+escalate to the user before introducing a new workspace member — adding a
+crate edits the workspace root `Cargo.toml`, which `AGENTS.md` flags as a
 gated change.
 
 ## Common porting patterns
