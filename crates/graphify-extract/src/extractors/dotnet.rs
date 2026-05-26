@@ -662,7 +662,14 @@ pub fn extract_razor(path: &Path) -> FileResult {
 
     // @code { ... } method extraction. Find each `@code {` opening, walk
     // braces to locate the matching close, then scan the block body for
-    // method declarations.
+    // method declarations. The brace counter intentionally does NOT
+    // track string literals or comments — this matches graphify-py's
+    // `extract_razor` byte-for-byte. A C# string like `"}{"` inside a
+    // method body could in theory confuse the counter, but the regex
+    // method scanner below only fires on lines that look like method
+    // declarations, so any false `block_end` would just truncate the
+    // search range, not produce spurious nodes. Adding lexer state here
+    // would diverge from Python parity.
     let stem = file_stem(path);
     let src_bytes = src.as_bytes();
     for cap in RAZOR_CODE_BLOCK_RE.find_iter(&src) {
