@@ -773,6 +773,7 @@ fn segment_chinese_bigram(text: &str) -> Vec<String> {
 /// Return `true` if `term` should survive the short-English filter — Chinese
 /// (and any other non-ASCII) terms pass; ASCII-lowercase terms must exceed
 /// two characters. Mirrors Python `_is_searchable`.
+#[must_use]
 fn is_searchable(term: &str) -> bool {
     if term.chars().all(|c| c.is_ascii_lowercase()) {
         return term.chars().count() > 2;
