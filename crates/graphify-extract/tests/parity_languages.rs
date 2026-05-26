@@ -695,6 +695,62 @@ fn razor_code_methods() {
 }
 
 #[test]
+fn fsproj_extractor_produces_nodes() {
+    // `.fsproj` (F#) routes through `extract_csproj` — same MSBuild
+    // schema, different file extension. Smoke-tests the dispatch path.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = tmp.path().join("Lib.fsproj");
+    std::fs::write(
+        &fixture,
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  \
+         <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>\n  \
+         <ItemGroup><PackageReference Include=\"FSharp.Core\" Version=\"8.0.0\" /></ItemGroup>\n\
+         </Project>\n",
+    )
+    .expect("write fsproj fixture");
+    let r = extract_csproj(&fixture);
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert!(!r.nodes.is_empty());
+    assert!(labels(&r).contains(&"net8.0"));
+}
+
+#[test]
+fn vbproj_extractor_produces_nodes() {
+    // `.vbproj` (VB.NET) — same path as `extract_csproj`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = tmp.path().join("Lib.vbproj");
+    std::fs::write(
+        &fixture,
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  \
+         <PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup>\n  \
+         <ItemGroup><PackageReference Include=\"Newtonsoft.Json\" Version=\"13.0.3\" /></ItemGroup>\n\
+         </Project>\n",
+    )
+    .expect("write vbproj fixture");
+    let r = extract_csproj(&fixture);
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert!(!r.nodes.is_empty());
+    assert!(labels(&r).iter().any(|l| l.contains("Newtonsoft.Json")));
+}
+
+#[test]
+fn cshtml_extractor_produces_nodes() {
+    // `.cshtml` (Razor Pages / MVC views) routes to `extract_razor`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = tmp.path().join("Index.cshtml");
+    std::fs::write(
+        &fixture,
+        "@page\n@model IndexModel\n@using MyApp.Services\n\
+         <h1>Hello</h1>\n",
+    )
+    .expect("write cshtml fixture");
+    let r = extract_razor(&fixture);
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert!(!r.nodes.is_empty());
+    assert!(relations(&r).contains("imports"));
+}
+
+#[test]
 fn razor_code_block_brace_counter_ignores_strings_and_comments() {
     // Regression for the brace-counter divergence from graphify-py: a
     // method body with `"}{"` or a `}` inside a `// ...` comment used
