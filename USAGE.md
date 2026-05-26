@@ -34,7 +34,7 @@ This is the Rust reimplementation of the Python `graphify` reference; the CLI su
 
 ## Install
 
-Requires Rust 1.90 or newer.
+Requires Rust 1.95 or newer.
 
 ```bash
 cargo install --git https://github.com/bunkerlab-net/graphify.git
@@ -149,34 +149,34 @@ The query / affected / explain / serve commands filter on these.
 
 **Relations** (`--relation` on `affected`):
 
-| Relation       | Emitted by                                                                  |
-| -------------- | --------------------------------------------------------------------------- |
-| `contains`     | File node → top-level function / class.                                     |
-| `method`       | Class node → method.                                                        |
-| `calls`        | Function / method node → callee, resolved within the file or cross-file.    |
-| `imports`      | File node → imported module.                                                |
-| `imports_from` | File node → imported symbol from another file (`from x import y`).          |
-| `re_exports`   | Module → re-exported module (`export … from 'x'`).                          |
-| `inherits`     | Class → base class. Java's source-level `extends` is normalised here.       |
-| `implements`   | Class → interface (Java / C# / TypeScript).                                 |
-| `references`   | Function / method / class → type referenced in its signature or body.       |
+| Relation       | Emitted by                                                               |
+| -------------- | ------------------------------------------------------------------------ |
+| `contains`     | File node → top-level function / class.                                  |
+| `method`       | Class node → method.                                                     |
+| `calls`        | Function / method node → callee, resolved within the file or cross-file. |
+| `imports`      | File node → imported module.                                             |
+| `imports_from` | File node → imported symbol from another file (`from x import y`).       |
+| `re_exports`   | Module → re-exported module (`export … from 'x'`).                       |
+| `inherits`     | Class → base class. Java's source-level `extends` is normalised here.    |
+| `implements`   | Class → interface (Java / C# / TypeScript).                              |
+| `references`   | Function / method / class → type referenced in its signature or body.    |
 
-`references` edges typically carry a `context` describing *how* the type is
+`references` edges typically carry a `context` describing _how_ the type is
 used; older extractors (SQL, for one) still emit `references` without a
 `context`, so consumers should treat the field as optional.
 
 **Contexts** (`--context` on `query`, on `references` edges):
 
-| Context          | Where it comes from                                                   |
-| ---------------- | --------------------------------------------------------------------- |
-| `call`           | Call site.                                                            |
-| `field`          | Class field declaration of the referenced type.                       |
-| `parameter_type` | Function / method parameter typed with the referenced type.           |
-| `return_type`    | Function / method return type.                                        |
-| `generic_arg`    | Type argument to a generic (e.g. `Result<Payload>` → `Payload`).      |
-| `attribute`      | Java `@Annotation` / C# `[Attribute]` decoration.                     |
-| `import`         | Module / file referenced by an `import` statement.                    |
-| `export`         | Module re-exported by an `export … from` statement.                   |
+| Context          | Where it comes from                                              |
+| ---------------- | ---------------------------------------------------------------- |
+| `call`           | Call site.                                                       |
+| `field`          | Class field declaration of the referenced type.                  |
+| `parameter_type` | Function / method parameter typed with the referenced type.      |
+| `return_type`    | Function / method return type.                                   |
+| `generic_arg`    | Type argument to a generic (e.g. `Result<Payload>` → `Payload`). |
+| `attribute`      | Java `@Annotation` / C# `[Attribute]` decoration.                |
+| `import`         | Module / file referenced by an `import` statement.               |
+| `export`         | Module re-exported by an `export … from` statement.              |
 
 `parameter_type`, `return_type`, `generic_arg`, and `attribute` are emitted by
 the Python, C#, Java, and TypeScript extractors. Other languages emit the
@@ -508,15 +508,15 @@ the LLM spend.
 The semantic-extraction layer routes to one of: `gemini`, `kimi`, `claude`, `openai`, `deepseek`, `ollama`, `bedrock`.
 The active backend is auto-detected from environment variables:
 
-| Backend    | Required env                                                                                 |
-| ---------- | -------------------------------------------------------------------------------------------- |
-| `openai`   | `OPENAI_API_KEY`                                                                             |
-| `gemini`   | `GOOGLE_API_KEY`                                                                             |
-| `claude`   | `ANTHROPIC_API_KEY`                                                                          |
-| `kimi`     | `MOONSHOT_API_KEY`                                                                           |
-| `deepseek` | `DEEPSEEK_API_KEY`                                                                           |
-| `ollama`   | local daemon — set `OLLAMA_HOST` if non-default                                              |
-| `bedrock`  | Any AWS credential-chain entry — see paragraph below                                         |
+| Backend    | Required env                                         |
+| ---------- | ---------------------------------------------------- |
+| `openai`   | `OPENAI_API_KEY`                                     |
+| `gemini`   | `GOOGLE_API_KEY`                                     |
+| `claude`   | `ANTHROPIC_API_KEY`                                  |
+| `kimi`     | `MOONSHOT_API_KEY`                                   |
+| `deepseek` | `DEEPSEEK_API_KEY`                                   |
+| `ollama`   | local daemon — set `OLLAMA_HOST` if non-default      |
+| `bedrock`  | Any AWS credential-chain entry — see paragraph below |
 
 The Bedrock backend uses `aws-sdk-bedrockruntime`, which resolves credentials through the standard AWS provider chain:
 `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (with optional `AWS_SESSION_TOKEN`), `AWS_PROFILE` from
