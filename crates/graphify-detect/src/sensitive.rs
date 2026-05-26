@@ -222,8 +222,13 @@ pub static SKIP_FILES: std::sync::LazyLock<std::collections::HashSet<&'static st
     });
 
 /// Return `true` if this directory name looks like a venv, cache, or dep dir.
+///
+/// `parent_name` is the immediate parent directory's name; when `Some`, an
+/// extra rule fires: a directory literally named `worktrees` nested directly
+/// inside a dotted directory (e.g. `.claude/worktrees/`, `.git/worktrees/`)
+/// is treated as noise. Ports graphify-py #1023.
 #[must_use]
-pub fn is_noise_dir(name: &str) -> bool {
+pub fn is_noise_dir(name: &str, parent_name: Option<&str>) -> bool {
     if SKIP_DIRS.contains(name) {
         return true;
     }
@@ -231,6 +236,9 @@ pub fn is_noise_dir(name: &str) -> bool {
         return true;
     }
     if name.ends_with(".egg-info") {
+        return true;
+    }
+    if name == "worktrees" && parent_name.is_some_and(|p| p.starts_with('.')) {
         return true;
     }
     false

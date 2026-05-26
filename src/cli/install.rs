@@ -9,9 +9,10 @@ use anyhow::Result;
 use graphify_hooks::platform::{
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
     claude_uninstall, copilot_install, copilot_uninstall, cursor_install, cursor_uninstall,
-    gemini_install, gemini_uninstall, install_platform_skill, install_platform_skill_project,
-    kiro_install, kiro_uninstall, pi_install, pi_uninstall, uninstall_all,
-    uninstall_platform_skill_project, vscode_install, vscode_uninstall,
+    devin_install, devin_project_install, devin_project_uninstall, devin_uninstall, gemini_install,
+    gemini_uninstall, install_platform_skill, install_platform_skill_project, kiro_install,
+    kiro_uninstall, pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project,
+    vscode_install, vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
@@ -52,6 +53,12 @@ pub(crate) fn cmd_uninstall(purge: bool) -> Result<()> {
 pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let msg = match (platform, cmd) {
+        // Devin has bespoke project-scope handling (writes .windsurf/rules),
+        // so its `--project` branch is matched before the generic one.
+        ("devin", PlatformCmd::Install { project: true }) => devin_project_install(&cwd)?,
+        ("devin", PlatformCmd::Uninstall { project: true }) => devin_project_uninstall(&cwd)?,
+        ("devin", PlatformCmd::Install { .. }) => devin_install()?,
+        ("devin", PlatformCmd::Uninstall { .. }) => devin_uninstall()?,
         (p, PlatformCmd::Install { project: true }) => install_platform_skill_project(p, &cwd)?,
         (p, PlatformCmd::Uninstall { project: true }) => uninstall_platform_skill_project(p, &cwd)?,
         ("claude", PlatformCmd::Install { .. }) => claude_install(&cwd)?,

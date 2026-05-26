@@ -1,14 +1,32 @@
 # Using `graphify`
 
 `graphify` turns a folder of source code, documentation, papers, images, or videos into a queryable knowledge graph.
-Point it at a directory, get back three files:
+Point it at a directory and you get back a `graphify-out/` folder. The three files most people interact with directly:
 
 ```text
 graphify-out/
-├── graph.json       full graph — query without re-reading your files
-├── graph.html       open in any browser — interactive viz
-└── GRAPH_REPORT.md  key concepts, surprising connections, suggested questions
+├── graph.json                  full graph — query without re-reading your files
+├── graph.html                  open in any browser — interactive viz
+└── GRAPH_REPORT.md             key concepts, surprising connections, suggested questions
 ```
+
+A handful of sidecars accompany them to make incremental runs cheap and to persist
+analysis state between invocations:
+
+```text
+graphify-out/
+├── manifest.json               per-file fingerprint for incremental updates
+├── .graphify_root              marker so child runs find the project root
+├── .graphify_analysis.json     analysis sidecar feeding GRAPH_REPORT.md
+├── .graphify_labels.json       community label cache (skip the LLM next time)
+├── stage_02_extract.json       cached extraction output for incremental runs
+└── .graphify_semantic_marker   set when semantic extraction has already run
+```
+
+Optional output lands under `graphify-out/` only when you opt in: `wiki/`
+(`graphify export wiki`), `GRAPH_TREE.html` (`graphify tree`), `cypher.txt`
+(`graphify export neo4j`), `<YYYY-MM-DD>/` backups (created automatically when
+`graph.json` is overwritten), and `memory/` (Q&A saved by `graphify save-result`).
 
 This is the Rust reimplementation of the Python `graphify` reference; the CLI surface is 1:1 with `python -m graphify`.
 
@@ -401,6 +419,8 @@ graphify hermes install        # AGENTS.md section (Hermes)
 graphify kiro install          # .kiro/steering/graphify.md
 graphify antigravity install   # .antigravity/ rules
 graphify pi install            # global Pi config
+graphify devin install         # ~/.config/devin/skills/graphify/SKILL.md (Devin CLI)
+graphify devin install --project  # .devin/skills/... + .windsurf/rules/graphify.md
 ```
 
 Each has a matching `... uninstall`.

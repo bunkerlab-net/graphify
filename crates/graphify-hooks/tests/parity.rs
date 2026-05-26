@@ -1595,6 +1595,258 @@ fn uninstall_platform_skill_project_when_not_installed_is_silent() {
 }
 
 // ---------------------------------------------------------------------------
+// devin_install / devin_uninstall / devin_project_install / devin_project_uninstall
+// Ports graphify-py tests/test_devin.py
+// ---------------------------------------------------------------------------
+
+use graphify_hooks::platform::{
+    devin_install, devin_project_install, devin_project_uninstall, devin_uninstall,
+};
+
+#[test]
+#[serial(home_env)]
+fn test_devin_install_user_creates_skill_file() {
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_install().expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    let skill = home.path().join(".config/devin/skills/graphify/SKILL.md");
+    assert!(skill.exists(), "skill missing at {}", skill.display());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_install_user_does_not_write_rules() {
+    // User-scope install must NOT write `.windsurf/rules/graphify.md`
+    // anywhere on the project tree — that file is project-scoped only.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_install().expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(!dir.path().join(".windsurf/rules/graphify.md").exists());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_install_project_creates_skill_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_project_install(dir.path()).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(dir.path().join(".devin/skills/graphify/SKILL.md").exists());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_install_project_creates_rules_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_project_install(dir.path()).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    let rules = dir.path().join(".windsurf/rules/graphify.md");
+    assert!(rules.exists());
+    let body = fs::read_to_string(&rules).expect("read rules");
+    assert!(body.contains("graphify query"));
+    assert!(body.contains("graphify-out/"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_rules_install_idempotent() {
+    // Two installs with identical rule content must leave the file
+    // unchanged — mirrors graphify-py `_devin_rules_install` idempotency.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_project_install(dir.path()).expect("test invariant");
+    let msg = devin_project_install(dir.path()).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(msg.contains("already configured"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_uninstall_user_removes_skill_file() {
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_install().expect("test invariant");
+    devin_uninstall().expect("test invariant");
+    let skill = home.path().join(".config/devin/skills/graphify/SKILL.md");
+    let still_exists = skill.exists();
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(!still_exists);
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_uninstall_user_noop_when_not_installed() {
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    let msg = devin_uninstall().expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(msg.contains("nothing to remove"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_uninstall_project_removes_skill_and_rules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_project_install(dir.path()).expect("test invariant");
+    devin_project_uninstall(dir.path()).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(!dir.path().join(".devin/skills/graphify/SKILL.md").exists());
+    assert!(!dir.path().join(".windsurf/rules/graphify.md").exists());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_uninstall_project_does_not_touch_user_scope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    devin_install().expect("user install");
+    devin_project_install(dir.path()).expect("project install");
+    devin_project_uninstall(dir.path()).expect("project uninstall");
+    let user_skill_exists = home
+        .path()
+        .join(".config/devin/skills/graphify/SKILL.md")
+        .exists();
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        user_skill_exists,
+        "user-scope skill must survive project uninstall"
+    );
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_project_uninstall_noop_when_clean() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    let msg = devin_project_uninstall(dir.path()).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(msg.contains("nothing to remove"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_install_platform_skill_user_scope() {
+    // `install_platform_skill("devin")` is the entry path triggered by
+    // `graphify install --platform devin`. It must write the user-scope
+    // skill at `~/.config/devin/skills/graphify/SKILL.md`.
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    install_platform_skill("devin").expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        home.path()
+            .join(".config/devin/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(home_env)]
+fn test_devin_install_platform_skill_project_scope() {
+    // The `install_platform_skill_project` path is the default branch in
+    // `cmd_platform` for `--project` installs of other platforms; devin
+    // bypasses it (see `cli/install.rs`) but the helper should still
+    // accept "devin" and write to the project-scoped location.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    install_platform_skill_project("devin", dir.path()).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    // `install_platform_skill_project` uses the home-relative path,
+    // which for devin is `.config/devin/...`. This branch exists only
+    // for parity with other platforms — production callers route devin
+    // through `devin_project_install`.
+    assert!(
+        dir.path()
+            .join(".config/devin/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Helper trait for .read_to_string_unwrap() on Path
 // ---------------------------------------------------------------------------
 

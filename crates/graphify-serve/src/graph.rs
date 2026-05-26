@@ -732,12 +732,88 @@ pub fn shortest_path(graph: &Graph, src: &str, tgt: &str) -> Option<Vec<String>>
 
 // ── Main query entry point ────────────────────────────────────────────────────
 
+/// Return `true` when `c` is a CJK Unified Ideograph (U+4E00..=U+9FFF).
+fn is_chinese_char(c: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&c)
+}
+
+/// Return `true` when `text` contains at least one CJK Unified Ideograph.
+/// Mirrors Python `_has_chinese` (#1026) — the helper is scoped to Chinese
+/// on purpose: Hiragana/Katakana/Hangul segmentation accuracy with bigrams
+/// is poor and `jieba`-style dictionaries don't ship with that script
+/// support, so non-Chinese non-ASCII text falls through as a single term.
+#[must_use]
+fn has_chinese(text: &str) -> bool {
+    text.chars().any(is_chinese_char)
+}
+
+/// Bigram-based Chinese segmentation fallback.
+///
+/// Walks `text` collecting bigrams only **within** contiguous runs of
+/// Chinese characters, then appends the original unsegmented term so
+/// exact-substring searches still hit.
+///
+/// Divergence from `graphify-py` `_segment_chinese` (intentional): the
+/// Python bigram fallback walks raw character pairs without checking
+/// script boundaries, so an input like `"a前b"` produces noisy
+/// cross-script bigrams `["a前", "前b"]`. That noise is invisible in
+/// Python because jieba (when installed) tokenises mixed-script input
+/// directly, but the Rust port has only the bigram path. Run-scoped
+/// bigrams keep the search terms relevant — single-character Chinese
+/// runs surrounded by other scripts emit no bigrams (no useful pair to
+/// emit) and the original term is preserved either way.
+#[must_use]
+fn segment_chinese_bigram(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut segments: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if is_chinese_char(chars[i]) {
+            let mut j = i;
+            while j < chars.len() && is_chinese_char(chars[j]) {
+                j += 1;
+            }
+            // Bigrams within this Chinese run only.
+            if j - i >= 2 {
+                for k in i..j - 1 {
+                    segments.push(chars[k..=k + 1].iter().collect());
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    // Append the unsegmented term so an exact match against an indexed
+    // label still resolves. Mirrors `_segment_chinese`'s `text not in
+    // segments` tail-append (and gives us a search term even when the
+    // run-scoped walk produced none — e.g. for `"a前b"`).
+    if chars.len() > 1 && !segments.iter().any(|s| s == text) {
+        segments.push(text.to_string());
+    }
+    if segments.is_empty() {
+        segments.push(text.to_string());
+    }
+    segments
+}
+
+/// Return `true` if `term` should survive the short-English filter — Chinese
+/// (and any other non-ASCII) terms pass; ASCII-lowercase terms must exceed
+/// two characters. Mirrors Python `_is_searchable`.
+#[must_use]
+fn is_searchable(term: &str) -> bool {
+    if term.chars().all(|c| c.is_ascii_lowercase()) {
+        return term.chars().count() > 2;
+    }
+    true
+}
+
 /// Split a query string into searchable terms.
 ///
 /// Terms are lowercased; short tokens (≤ 2 chars) are dropped only when
-/// they are entirely English (ASCII `a-z`). Non-ASCII short tokens such as
-/// CJK characters are kept so non-English queries remain searchable (#964).
-/// Mirrors Python `_query_terms` in `serve.py`.
+/// they are entirely English (ASCII `a-z`). Chinese sub-strings are
+/// bigram-segmented so substring matches resolve against indexed labels.
+/// Mirrors Python `_query_terms` in `serve.py` (#964, #1026).
 #[must_use]
 pub fn query_terms(question: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -746,9 +822,16 @@ pub fn query_terms(question: &str) -> Vec<String> {
         if lower.is_empty() {
             continue;
         }
-        let is_english_only = lower.chars().all(|c| c.is_ascii_lowercase());
-        if !is_english_only || lower.chars().count() > 2 {
-            out.push(lower);
+        let candidates: Vec<String> = if has_chinese(&lower) {
+            segment_chinese_bigram(&lower)
+        } else {
+            vec![lower]
+        };
+        for seg in candidates {
+            let trimmed = seg.trim();
+            if !trimmed.is_empty() && is_searchable(trimmed) {
+                out.push(trimmed.to_string());
+            }
         }
     }
     out

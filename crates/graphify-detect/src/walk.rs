@@ -190,7 +190,11 @@ fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> Vec<PathBuf> {
         }
         let path = entry.path();
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if is_noise_dir(dir_name) {
+        let parent_name = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
+        if is_noise_dir(dir_name, parent_name) {
             return false;
         }
         let has_negation = ignore_patterns.iter().any(|(_, p)| p.starts_with('!'));
@@ -321,9 +325,13 @@ fn walk_dir(
     // Recurse into subdirs with noise-dir pruning
     for subdir in subdirs {
         let dir_name = subdir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let parent_name = subdir
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
 
         if !in_memory_tree {
-            if is_noise_dir(dir_name) {
+            if is_noise_dir(dir_name, parent_name) {
                 continue;
             }
             let has_negation = ctx.ignore_patterns.iter().any(|(_, p)| p.starts_with('!'));

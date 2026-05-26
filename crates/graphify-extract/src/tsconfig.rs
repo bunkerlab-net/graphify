@@ -63,11 +63,25 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
 
     let mut aliases: IndexMap<String, String> = IndexMap::new();
 
-    // Follow extends chain
-    if let Some(extends) = data.get("extends").and_then(serde_json::Value::as_str)
-        && !extends.starts_with('@')
-    {
-        let mut extended = base_dir.join(extends);
+    // Follow extends chain. TypeScript 5.0 allows `extends` to be either a
+    // string or an array of paths; for an array, parents are processed in
+    // order with later entries overriding earlier ones (the extending config's
+    // own `paths` still wins over all parents). Ports graphify-py #1017 — the
+    // previous string-only handling raised an error on array `extends`, which
+    // dropped every file whose imports relied on those aliases.
+    let extends_list: Vec<&str> = match data.get("extends") {
+        Some(serde_json::Value::String(s)) => vec![s.as_str()],
+        Some(serde_json::Value::Array(arr)) => {
+            arr.iter().filter_map(serde_json::Value::as_str).collect()
+        }
+        _ => Vec::new(),
+    };
+    for ext in extends_list {
+        // Skip scoped npm package configs (e.g. `@tsconfig/svelte`) — not on disk.
+        if ext.is_empty() || ext.starts_with('@') {
+            continue;
+        }
+        let mut extended = base_dir.join(ext);
         if extended.extension().is_none() {
             extended = extended.with_extension("json");
         }
