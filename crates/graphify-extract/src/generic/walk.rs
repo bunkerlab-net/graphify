@@ -19,6 +19,7 @@ use crate::types::{Edge, Node as GNode};
 use super::config::{LangConfig, LangId};
 use super::inherit::{
     emit_cpp_inheritance, emit_csharp_inheritance, emit_java_inheritance, emit_swift_inheritance,
+    emit_ts_inheritance,
 };
 use super::js_extra::js_extra_walk;
 use super::names::{get_cpp_func_name, read_csharp_type_name, read_text_owned};
@@ -130,6 +131,182 @@ pub(super) fn ensure_named_node(
     nid2
 }
 
+// ── Function-level reference edges ────────────────────────────────────────────
+
+/// Emit `references` edges with a `context` attribute from a function or
+/// method declaration's parameter list, return type, and decorations
+/// (annotations / attributes). Active for Python, C#, Java, JavaScript, and
+/// TypeScript (`.ts` and `.tsx`). Plain JS function declarations have no
+/// type annotations, so the TS/JS branch is effectively a no-op there.
+///
+/// Mirrors the per-language reference passes added to `_extract_generic` in
+/// `graphify-py` @ ab4e542.
+#[allow(clippy::too_many_lines)] // linear per-language dispatch — splitting would hide the parallel shape between Python/C#/Java/TS
+fn emit_function_reference_edges(
+    ctx: &mut WalkCtx<'_, '_>,
+    node: Node<'_>,
+    source: &[u8],
+    func_nid: &str,
+    line: u32,
+) {
+    use super::references::{
+        RefRole, csharp_attribute_names, csharp_collect_type_refs, java_collect_type_refs,
+        java_method_annotation_names, python_collect_param_refs, python_collect_type_refs,
+        ts_collect_type_refs,
+    };
+
+    let lang = ctx.config.lang_id;
+    if !matches!(
+        lang,
+        LangId::Python
+            | LangId::CSharp
+            | LangId::Java
+            | LangId::TypeScript
+            | LangId::TypeScriptX
+            | LangId::JavaScript
+    ) {
+        return;
+    }
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+
+    // Helper: lazily ensure the target node exists and emit the edge.
+    // Skips self-references (e.g. a recursive call where the parameter type
+    // is the enclosing class itself — the structural pass already handles
+    // those via `method` edges).
+    let emit_ref = |ctx: &mut WalkCtx<'_, '_>, ref_name: &str, ctx_kind: &str| {
+        let target =
+            super::inherit::emit_base_node(ref_name, line, stem, str_path, ctx.nodes, ctx.seen_ids);
+        if target == func_nid {
+            return;
+        }
+        add_edge(
+            func_nid,
+            &target,
+            "references",
+            line,
+            str_path,
+            Some(ctx_kind),
+            ctx.edges,
+        );
+    };
+
+    match lang {
+        LangId::Python => {
+            let params_node = node.child_by_field_name("parameters");
+            for (name, role) in python_collect_param_refs(params_node, source) {
+                emit_ref(ctx, &name, role.into_context("parameter_type"));
+            }
+            if let Some(return_type_node) = node.child_by_field_name("return_type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                python_collect_type_refs(return_type_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+        }
+        LangId::CSharp => {
+            if let Some(params_node) = node.child_by_field_name("parameters") {
+                let mut cur = params_node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        if cur.node().kind() == "parameter"
+                            && let Some(type_node) = cur.node().child_by_field_name("type")
+                        {
+                            let mut refs: Vec<(String, RefRole)> = Vec::new();
+                            csharp_collect_type_refs(type_node, source, false, &mut refs);
+                            for (name, role) in refs {
+                                emit_ref(ctx, &name, role.into_context("parameter_type"));
+                            }
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(return_node) = node.child_by_field_name("returns") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                csharp_collect_type_refs(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+            for attr_name in csharp_attribute_names(node, source) {
+                emit_ref(ctx, &attr_name, "attribute");
+            }
+        }
+        LangId::Java => {
+            if let Some(params_node) = node.child_by_field_name("parameters") {
+                let mut cur = params_node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        if cur.node().kind() == "formal_parameter"
+                            && let Some(type_node) = cur.node().child_by_field_name("type")
+                        {
+                            let mut refs: Vec<(String, RefRole)> = Vec::new();
+                            java_collect_type_refs(type_node, source, false, &mut refs);
+                            for (name, role) in refs {
+                                emit_ref(ctx, &name, role.into_context("parameter_type"));
+                            }
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(return_node) = node.child_by_field_name("type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                java_collect_type_refs(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+            for anno_name in java_method_annotation_names(node, source) {
+                emit_ref(ctx, &anno_name, "attribute");
+            }
+        }
+        LangId::TypeScript | LangId::TypeScriptX | LangId::JavaScript => {
+            // TS/TSX method signatures expose params via a `parameters` field
+            // whose children are `required_parameter` / `optional_parameter`,
+            // each carrying a `type` field of kind `type_annotation`. The
+            // return type sits on the function node itself via the
+            // `return_type` field. Plain JS function declarations have no
+            // type annotations and are silently no-ops.
+            if let Some(params_node) = node.child_by_field_name("parameters") {
+                let mut cur = params_node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        if matches!(
+                            cur.node().kind(),
+                            "required_parameter" | "optional_parameter"
+                        ) && let Some(type_node) = cur.node().child_by_field_name("type")
+                        {
+                            let mut refs: Vec<(String, RefRole)> = Vec::new();
+                            ts_collect_type_refs(type_node, source, false, &mut refs);
+                            for (name, role) in refs {
+                                emit_ref(ctx, &name, role.into_context("parameter_type"));
+                            }
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(return_type_node) = node.child_by_field_name("return_type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                ts_collect_type_refs(return_type_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── Structural walk ───────────────────────────────────────────────────────────
 
 /// Shared state threaded through every structural-walk recursion.
@@ -142,6 +319,11 @@ pub(super) struct WalkCtx<'a, 'tree> {
     pub edges: &'a mut Vec<Edge>,
     pub seen_ids: &'a mut HashSet<String>,
     pub function_bodies: &'a mut Vec<(String, Node<'tree>)>,
+    /// Set of identifiers declared as `interface` in the current C# compilation
+    /// unit. Pre-computed before the structural walk so the inheritance emitter
+    /// can split `inherits` (class extension) from `implements` (interface
+    /// implementation) on `base_list` entries. Empty for non-C# files.
+    pub csharp_interface_names: &'a HashSet<String>,
 }
 
 /// Recursive structural AST walk that emits nodes and edges for classes,
@@ -270,6 +452,14 @@ pub(super) fn walk<'tree>(
         // C++ base_class_clause
         if config.lang_id == LangId::Cpp {
             emit_cpp_inheritance(ctx, node, source, &class_nid, line);
+        }
+
+        // TS/JS class_heritage (extends_clause + implements_clause)
+        if matches!(
+            config.lang_id,
+            LangId::TypeScript | LangId::TypeScriptX | LangId::JavaScript
+        ) {
+            emit_ts_inheritance(ctx, node, source, &class_nid, line);
         }
 
         // Find body and recurse
@@ -436,6 +626,8 @@ pub(super) fn walk<'tree>(
             None,
             ctx.edges,
         );
+
+        emit_function_reference_edges(ctx, node, source, &func_nid, line);
 
         if let Some(body) = find_body(node, config) {
             ctx.function_bodies.push((func_nid, body));

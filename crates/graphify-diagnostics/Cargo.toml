@@ -1,12 +1,12 @@
 [package]
-name = "graphify-diagnostics"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "MultiDiGraph migration diagnostic — edge-collapse risk report"
+edition.workspace = true
+license.workspace = true
+name = "graphify-diagnostics"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 graphify-build = { workspace = true }

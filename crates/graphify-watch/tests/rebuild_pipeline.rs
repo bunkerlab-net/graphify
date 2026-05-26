@@ -187,3 +187,79 @@ fn rebuild_code_with_try_acquire_lock() {
     let updated = rebuild_code(tmp.path(), None, opts).expect("test invariant");
     assert!(updated);
 }
+
+/// End-to-end probe of the explicit-deletion bypass.
+///
+/// Mirrors `tests/test_watch.py::test_rebuild_code_prunes_deleted_file_nodes`:
+/// build a graph from two files, delete one, then call `rebuild_code` with the
+/// deleted path in `changed_paths`. The post-commit hook does this whenever a
+/// commit removes a tracked file. Without the bypass the shrink guard would
+/// refuse to overwrite; with the bypass the deleted file's nodes are pruned
+/// and the surviving file's nodes remain.
+#[test]
+fn rebuild_code_prunes_deleted_file_nodes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let keep = tmp.path().join("keep.py");
+    let drop_file = tmp.path().join("drop.py");
+    fs::write(&keep, "def keep_fn():\n    return 1\n").expect("write keep.py");
+    fs::write(&drop_file, "def drop_fn():\n    return 2\n").expect("write drop.py");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: true,
+        lock: LockPolicy::None,
+    };
+
+    // Initial build covers both files.
+    let updated = rebuild_code(tmp.path(), None, opts).expect("initial rebuild");
+    assert!(updated);
+    let graph_path = tmp.path().join("graphify-out").join("graph.json");
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&graph_path).expect("read graph.json"))
+            .expect("parse graph.json");
+    let before_sources: std::collections::HashSet<String> = before["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .filter_map(|n| {
+            n.get("source_file")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        before_sources.iter().any(|s| s.ends_with("drop.py")),
+        "drop.py should appear before deletion (sources: {before_sources:?})"
+    );
+
+    // Delete drop.py and re-run with the path in the change list.
+    std::fs::remove_file(&drop_file).expect("remove drop.py");
+    let updated = rebuild_code(tmp.path(), Some(&[PathBuf::from("drop.py")]), opts)
+        .expect("rebuild after deletion should succeed");
+    assert!(
+        updated,
+        "rebuild should succeed even though the graph shrinks"
+    );
+
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&graph_path).expect("read graph.json"))
+            .expect("parse graph.json");
+    let after_sources: std::collections::HashSet<String> = after["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .filter_map(|n| {
+            n.get("source_file")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        !after_sources.iter().any(|s| s.ends_with("drop.py")),
+        "deleted file's nodes should be pruned (sources: {after_sources:?})"
+    );
+    assert!(
+        after_sources.iter().any(|s| s.ends_with("keep.py")),
+        "surviving file's nodes should remain (sources: {after_sources:?})"
+    );
+}

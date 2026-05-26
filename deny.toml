@@ -1,10 +1,10 @@
 [bans]
+allow-wildcard-paths = true
 multiple-versions = "allow"
 wildcards = "deny"
-allow-wildcard-paths = true
 
 [sources]
-unknown-registry = "deny"
-unknown-git = "deny"
-allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+unknown-git = "deny"
+unknown-registry = "deny"

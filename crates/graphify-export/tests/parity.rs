@@ -317,18 +317,42 @@ fn test_backup_default_labels_only() {
 
 #[test]
 #[serial(backup_env)]
-fn test_backup_same_day_collision() {
+fn test_backup_same_day_no_accumulation() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
         .expect("test invariant");
     std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").expect("test invariant");
     let b1 = backup_if_protected(tmp.path()).expect("first backup should succeed");
     let b2 = backup_if_protected(tmp.path()).expect("second backup should succeed");
-    assert_ne!(b1, b2);
+    // Same content on same day → reuse existing folder, no _2 suffix.
+    assert_eq!(b1, b2);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     assert_eq!(
-        b2.file_name().expect("has filename").to_string_lossy(),
-        format!("{today}_2")
+        b1.file_name().expect("has filename").to_string_lossy(),
+        today
+    );
+}
+
+#[test]
+#[serial(backup_env)]
+fn test_backup_same_day_changed_content() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("graph.json"), r#"{"nodes":[],"links":[]}"#)
+        .expect("test invariant");
+    std::fs::write(tmp.path().join(".graphify_semantic_marker"), "{}").expect("test invariant");
+    let b1 = backup_if_protected(tmp.path()).expect("first backup should succeed");
+    // Change graph.json content, then re-back up — the existing folder is
+    // overwritten in place; we still get one folder per day.
+    std::fs::write(
+        tmp.path().join("graph.json"),
+        r#"{"nodes":[{"id":"x"}],"links":[]}"#,
+    )
+    .expect("test invariant");
+    let b2 = backup_if_protected(tmp.path()).expect("second backup should succeed");
+    assert_eq!(b1, b2);
+    assert_eq!(
+        std::fs::read_to_string(b2.join("graph.json")).expect("read backed-up graph.json"),
+        r#"{"nodes":[{"id":"x"}],"links":[]}"#
     );
 }
 

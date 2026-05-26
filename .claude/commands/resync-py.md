@@ -1,3 +1,8 @@
+---
+description: Resync graphify with graphify-py
+argument-hint: "[target-ref]"
+---
+
 # Resync graphify with graphify-py
 
 Analyse all commits in `./graphify-py` since the last pinned submodule commit and port the applicable changes to this
@@ -6,8 +11,15 @@ Rust workspace.
 ## How to use
 
 ```bash
-/resync-py
+/resync-py                 # advance to the tip of the tracked branch
+/resync-py <target-ref>    # advance to a specific commit, tag, or branch
 ```
+
+`<target-ref>` is optional and defaults to the latest commit on the branch
+recorded in `.gitmodules` (currently `v8`). When supplied, it MUST be a ref
+that already exists in the upstream `graphify-py` remote (e.g. `v0.8.18`,
+`3efae38`, or a branch like `v8`). The skill resolves the ref inside the
+submodule, then continues with the rest of the workflow.
 
 ## Instructions
 
@@ -31,11 +43,33 @@ regardless of whether Rust changes follow.
    git config -f .gitmodules submodule.graphify-py.branch    # should print: v8
    ```
 
-2. Advance the submodule along the tracked branch:
+2. Advance the submodule. Without an argument, follow the tracked branch from
+   `.gitmodules`; with an argument, fetch and check out the requested ref
+   inside the submodule:
 
    ```bash
+   # No <target-ref> supplied — track the branch from .gitmodules
    git submodule update --init --remote graphify-py
+
+   # <target-ref> supplied — fetch first, validate ancestry, THEN check out.
+   # Running the checkout before the validation would leave a detached HEAD on
+   # a foreign lineage if the ref turns out to be off-branch; the order here
+   # avoids that footgun.
+   git submodule update --init graphify-py
+   # Submodules are often single-branch clones, so the default `fetch origin`
+   # may not include other branches needed for the ancestry check. Spell out
+   # the refspec to fetch every branch AND every tag.
+   git -C graphify-py fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+   git -C graphify-py merge-base --is-ancestor <target-ref> \
+       origin/$(git config -f .gitmodules submodule.graphify-py.branch) \
+       || { echo "<target-ref> is not on the tracked branch; ask the user before continuing"; exit 1; }
+   git -C graphify-py checkout --detach <target-ref>
    ```
+
+   The `merge-base --is-ancestor` step is the load-bearing safeguard. A
+   non-zero exit means the ref is on a different lineage; stop and ask the
+   user before proceeding — silently jumping off the tracked branch is what
+   the warning above forbids.
 
 3. Identify the new commit hash:
 
@@ -133,12 +167,42 @@ Per `AGENTS.md`:
 
 ### Phase 5 — Update documentation
 
-1. Update `///` doc-comments on all modified functions/modules to reflect new behaviour.
-2. Update `README.md` and `USAGE.md`:
-   - CLI reference (new commands/flags/subcommands)
-   - Supported extraction/detection formats
-   - Workspace tree (new crates)
-   - Any differences from `graphify-py` worth calling out
+> **Documentation is part of the port, not an afterthought.** Out-of-date
+> docs are how features get reinvented, options get rediscovered, and
+> users build the wrong mental model. Every behavioural change MUST be
+> reflected in the docs in the same PR. Treat this phase as load-bearing
+> — if you skip it, the resync is not done.
+>
+> Before opening the PR, re-read both `README.md` and `USAGE.md` cover
+> to cover and reconcile every CLI flag, format, alias, and skip rule
+> against the actual code. If you find drift that pre-dates this resync,
+> fix it too — out-of-date docs from a previous resync are still a bug.
+
+1. **Bump the workspace version.** Update `workspace.package.version` in
+   the root `Cargo.toml` to the upstream `graphify-py` version this resync
+   tracks (run `cargo update --workspace` afterwards so `Cargo.lock`
+   picks up every `graphify-*` crate). The submodule pointer and the Rust
+   workspace version MUST stay in lockstep; a resync that bumps the
+   submodule but not the workspace version is half-done.
+2. Update `///` doc-comments on all modified functions/modules to reflect new
+   behaviour. The first sentence is what `cargo doc` and `rustdoc-search`
+   surface, so make it useful.
+3. Update `README.md` and `USAGE.md`. Walk this checklist for every ported
+   change and tick each item explicitly:
+   - **CLI reference** — new subcommands, new flags, renamed flags, removed
+     flags, changed defaults, changed exit codes.
+   - **Supported extraction/detection formats** — new languages, new file
+     extensions, new ingestors (PDF/DOCX/audio/etc.), new skip rules.
+   - **Workspace tree** — new crates added to `crates/`, renames, removals.
+   - **Output schema** — new fields in `graph.json` / `.graphify_analysis.json` /
+     `.graphify_labels.json`, new sidecar files, new edge relations or contexts.
+   - **Behavioural callouts** — anything a user might notice change between
+     runs (rate-limited backups, shrink-guard bypass, fallback paths).
+   - **Divergences from `graphify-py`** — anywhere the Rust output differs
+     intentionally from the Python reference, name it and explain why.
+4. Re-read your diff and ask: *"if a user only reads the README/USAGE, would
+   they discover this change?"* If no, document it. If still no, document it
+   harder.
 
 ### Phase 6 — Commit
 
@@ -170,9 +234,8 @@ issues), do not silently skip Phase 7:
 - Re-try the command once after sanity-checking connectivity, auth/token, and
   CLI version (`coderabbit --version`).
 - If it still fails, document the failure and any manual verification you ran in
-  a follow-up commit message and the PR body. Escalate to the user (the project
-  owner, addressed as "Tech Priest" in conversation per the global
-  `CLAUDE.md`) before pushing.
+  a follow-up commit message and the PR body. Escalate to the user before
+  pushing.
 
 Address every issue CodeRabbit raises:
 
@@ -190,8 +253,7 @@ If a finding looks like a false positive or you disagree with it:
 - Document the deviation in the commit message of a follow-up commit (or the PR
   body once Phase 8 opens the PR), quoting the relevant CodeRabbit finding text
   and the reason it does not apply.
-- Escalate when uncertain: ask the user (the project owner; see `CLAUDE.md`
-  for the project's preferred form of address) to confirm the dispute before
+- Escalate when uncertain: ask the user to confirm the dispute before
   pushing, rather than silently dismissing the finding.
 - Re-run `coderabbit review --agent --base main --type committed` after
   documenting the dispute so the new commit is on record.
@@ -245,8 +307,8 @@ port of `graphify-py/tests/test_<module>.py`.
 | `graphify/skill*.md`             | N/A (agent skill docs) |
 
 If `graphify-py` adds a brand-new top-level module with no matching crate,
-escalate to the Tech Priest before introducing a new workspace member — adding
-a crate edits the workspace root `Cargo.toml`, which `AGENTS.md` flags as a
+escalate to the user before introducing a new workspace member — adding a
+crate edits the workspace root `Cargo.toml`, which `AGENTS.md` flags as a
 gated change.
 
 ## Common porting patterns

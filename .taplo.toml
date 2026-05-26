@@ -4,4 +4,4 @@
 exclude = ["graphify-py/**/*.toml"]
 
 [formatting]
-reorder_keys = false
+reorder_keys = true

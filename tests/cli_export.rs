@@ -254,6 +254,108 @@ fn update_with_force() {
         .success();
 }
 
+// ── export html: communities fallback when analysis sidecar is absent ─────
+
+/// The watch / post-commit rebuild path only regenerates `graph.json` +
+/// `GRAPH_REPORT.md`; `.graphify_analysis.json` is left stale or absent. Some
+/// skill workflows also clean up temp files after `graphify extract`. In both
+/// cases the per-node `community` attribute on `graph.json` (written by
+/// `to_json`) is intact, but pre-d778e2c every downstream export would silently
+/// produce a degraded artifact. These tests pin the fallback so the reconstruction
+/// always happens.
+///
+/// Ports `tests/test_cli_export.py::test_export_html_falls_back_to_node_community_attribute`.
+#[test]
+fn export_html_falls_back_to_node_community_attribute() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out)?;
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+    // Simulate the watch-rebuild / cleanup case: graph.json survives, the
+    // analysis sidecar is missing entirely.
+    assert!(!out.join(".graphify_analysis.json").exists());
+
+    cli()
+        .arg("export")
+        .arg("html")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    assert!(
+        out.join("graph.html").exists(),
+        "graph.html should be generated from the fallback"
+    );
+    assert!(out.join("graph.html").metadata()?.len() > 0);
+    Ok(())
+}
+
+/// Ports `tests/test_cli_export.py::test_export_html_fallback_recovers_multiple_communities`.
+#[test]
+fn export_html_fallback_recovers_multiple_communities() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out)?;
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+
+    // Count distinct `community` values on the graph nodes — this is what the
+    // fallback will reconstruct.
+    let graph: serde_json::Value = serde_json::from_slice(&fs::read(&graph_path)?)?;
+    let cids: std::collections::HashSet<i64> = graph["nodes"]
+        .as_array()
+        .ok_or("graph.json `nodes` field missing or not an array")?
+        .iter()
+        .filter_map(|n| n.get("community").and_then(serde_json::Value::as_i64))
+        .collect();
+    assert_eq!(cids.len(), 2, "fixture should have 2 distinct communities");
+
+    cli()
+        .arg("export")
+        .arg("html")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    assert!(out.join("graph.html").exists());
+    Ok(())
+}
+
+/// Ports `tests/test_cli_export.py::test_export_html_no_community_data_at_all_still_succeeds`.
+#[test]
+fn export_html_no_community_data_at_all_still_succeeds() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out)?;
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+
+    // Strip the `community` attribute from every node — emulates a hand-built
+    // graph.json or an older `to_json`.
+    let mut graph: serde_json::Value = serde_json::from_slice(&fs::read(&graph_path)?)?;
+    let nodes = graph["nodes"]
+        .as_array_mut()
+        .ok_or("graph.json `nodes` field missing or not an array")?;
+    for n in nodes {
+        if let Some(obj) = n.as_object_mut() {
+            obj.remove("community");
+        }
+    }
+    fs::write(&graph_path, serde_json::to_string(&graph)?)?;
+
+    // Should NOT crash. The renderer may emit an empty / degraded view, but
+    // the exit code stays clean.
+    cli()
+        .arg("export")
+        .arg("html")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    Ok(())
+}
+
 // ── path/explain on missing graph ──────────────────────────────────────────
 
 #[test]

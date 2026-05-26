@@ -1,12 +1,12 @@
 [package]
-name = "graphify-benchmark"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Corpus-vs-subgraph token benchmark"
+edition.workspace = true
+license.workspace = true
+name = "graphify-benchmark"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 graphify-build = { workspace = true }

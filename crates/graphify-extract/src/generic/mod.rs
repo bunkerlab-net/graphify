@@ -18,6 +18,7 @@ pub mod config;
 mod inherit;
 mod js_extra;
 mod names;
+mod references;
 mod walk;
 
 pub use config::{ImportHandlerFn, LangConfig, LangId, ResolveFnNameFn};
@@ -84,9 +85,17 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     );
 
     // ── Structural walk ───────────────────────────────────────────────────────
+    // Pre-scan C# files for declared interface names so the inheritance pass can
+    // split `inherits` from `implements`. Empty for every other language.
+    let csharp_interface_names: HashSet<String> = if config.lang_id == config::LangId::CSharp {
+        inherit::csharp_pre_scan_interfaces(root, &source)
+    } else {
+        HashSet::new()
+    };
+
     let mut cur = root.walk();
     if cur.goto_first_child() {
-        let mut walk_ctx = super::generic::walk::WalkCtx {
+        let mut walk_ctx = walk::WalkCtx {
             config,
             file_nid: &file_nid,
             stem: &stem,
@@ -95,6 +104,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             edges: &mut edges,
             seen_ids: &mut seen_ids,
             function_bodies: &mut function_bodies,
+            csharp_interface_names: &csharp_interface_names,
         };
         loop {
             let child = cur.node();

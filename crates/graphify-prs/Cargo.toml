@@ -1,12 +1,12 @@
 [package]
-name = "graphify-prs"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "GitHub PR analysis"
+edition.workspace = true
+license.workspace = true
+name = "graphify-prs"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 chrono = { workspace = true }

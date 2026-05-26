@@ -99,6 +99,14 @@ Watch a folder and rebuild on file changes (Code/docs/images). Runs until interr
 graphify watch .
 ```
 
+The watch path and the post-commit hook share a shrink-guard that refuses to
+overwrite `graph.json` when the rebuilt node count drops without explanation —
+this catches silent corruption from half-finished extraction chunks. When the
+caller hands the rebuilder an explicit list of deleted paths (the post-commit
+hook does this from `git diff --name-only HEAD~1 HEAD`), the shrink is treated
+as intentional and the guard is skipped — no `--force` needed for delete-heavy
+commits.
+
 ### `cluster-only <path>`
 
 Rerun clustering on an existing `graph.json` and regenerate the report and HTML viz. Useful after tweaking cluster
@@ -116,6 +124,46 @@ graphify cluster-only . --graph other/graph.json   # use a non-default graph loc
 
 All query commands default to `graphify-out/graph.json`; pass `--graph <path>` to point elsewhere.
 
+### Edge vocabulary
+
+Every edge in `graph.json` carries a `relation` and (optionally) a `context`.
+The query / affected / explain / serve commands filter on these.
+
+**Relations** (`--relation` on `affected`):
+
+| Relation       | Emitted by                                                                  |
+| -------------- | --------------------------------------------------------------------------- |
+| `contains`     | File node → top-level function / class.                                     |
+| `method`       | Class node → method.                                                        |
+| `calls`        | Function / method node → callee, resolved within the file or cross-file.    |
+| `imports`      | File node → imported module.                                                |
+| `imports_from` | File node → imported symbol from another file (`from x import y`).          |
+| `re_exports`   | Module → re-exported module (`export … from 'x'`).                          |
+| `inherits`     | Class → base class. Java's source-level `extends` is normalised here.       |
+| `implements`   | Class → interface (Java / C# / TypeScript).                                 |
+| `references`   | Function / method / class → type referenced in its signature or body.       |
+
+`references` edges typically carry a `context` describing *how* the type is
+used; older extractors (SQL, for one) still emit `references` without a
+`context`, so consumers should treat the field as optional.
+
+**Contexts** (`--context` on `query`, on `references` edges):
+
+| Context          | Where it comes from                                                   |
+| ---------------- | --------------------------------------------------------------------- |
+| `call`           | Call site.                                                            |
+| `field`          | Class field declaration of the referenced type.                       |
+| `parameter_type` | Function / method parameter typed with the referenced type.           |
+| `return_type`    | Function / method return type.                                        |
+| `generic_arg`    | Type argument to a generic (e.g. `Result<Payload>` → `Payload`).      |
+| `attribute`      | Java `@Annotation` / C# `[Attribute]` decoration.                     |
+| `import`         | Module / file referenced by an `import` statement.                    |
+| `export`         | Module re-exported by an `export … from` statement.                   |
+
+`parameter_type`, `return_type`, `generic_arg`, and `attribute` are emitted by
+the Python, C#, Java, and TypeScript extractors. Other languages emit the
+structural relations but skip the per-signature reference pass.
+
 ### `query "<question>"`
 
 BFS traversal that scores nodes against the question and returns a scoped subgraph (typically far smaller than
@@ -127,6 +175,22 @@ graphify query "..." --dfs                          # depth-first instead of bre
 graphify query "..." --budget 4000                  # cap output at N tokens (default 2000)
 graphify query "..." --context CALLS --context IMPORTS_FROM   # repeatable edge-context filters
 ```
+
+`--context` accepts canonical edge-context names (`call`, `field`, `import`,
+`export`, `parameter_type`, `return_type`, `generic_arg`, `attribute`) and
+their aliases. Matching is case-insensitive and whitespace is trimmed. The
+full alias map:
+
+| Canonical name   | Accepted aliases                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `parameter_type` | `param`, `params`, `parameter`, `parameters`, `arg`, `args`, `argument`, `arguments` |
+| `return_type`    | `return`, `returns`, `returned`                                                      |
+| `generic_arg`    | `generic`, `generics`, `template`, `templates`                                       |
+| `attribute`      | `annotation`, `annotations`, `decorator`, `decorators`                               |
+| `call`           | `calls`, `called`, `invoke`, `invocation`                                            |
+| `field`          | `fields`, `property`, `properties`, `member`, `members`                              |
+| `import`         | `imports`, `imported`, `module`, `modules`                                           |
+| `export`         | `exports`, `exported`                                                                |
 
 ### `path "<A>" "<B>"`
 
@@ -218,8 +282,28 @@ graphify export graphml    # GraphML for Gephi / yEd / Cytoscape
 graphify export wiki       # per-community markdown wiki under graphify-out/wiki/
 ```
 
-`export wiki` reads communities from `graphify-out/.graphify_analysis.json` and refuses to run if the sidecar is
-missing — run `graphify extract .` (or `cluster-only`) first to regenerate the community map.
+All `graphify export <html|obsidian|wiki|svg|graphml|neo4j>` subcommands prefer
+the analysis sidecar at `graphify-out/.graphify_analysis.json`. When the sidecar
+is missing or empty — which happens after the watch / post-commit rebuild path
+that only refreshes `graph.json` + `GRAPH_REPORT.md` — exports reconstruct the
+community map from the per-node `community` attribute on `graph.json`. `export
+wiki` only bails out when both sources are empty.
+
+### Protected-graph backups
+
+Before overwriting a graph that carries hand-curated state (semantic marker
+or per-community labels), `graphify` copies the existing
+`graphify-out/{graph.json,…}` into `graphify-out/<YYYY-MM-DD>/`. The backup is
+rate-limited to one folder per day via a `sha256` comparison of `graph.json`:
+
+- If today's backup already exists and its `graph.json` is byte-identical, the
+  command is a no-op.
+- If the content has changed since today's backup, the existing folder is
+  overwritten in place — there is always one backup folder per day, holding
+  the latest pre-overwrite state.
+- The legacy `<YYYY-MM-DD>_2`, `<YYYY-MM-DD>_3`, … accumulation is gone.
+
+Set `GRAPHIFY_NO_BACKUP=1` to disable backups entirely.
 
 ```bash
 graphify export neo4j                                            # → graphify-out/cypher.txt (import via cypher-shell)

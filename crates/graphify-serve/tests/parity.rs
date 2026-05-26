@@ -13,8 +13,8 @@ use graphify_prs::gh::GhClient;
 use graphify_prs::git::GitClient;
 use graphify_serve::graph::{
     bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, infer_context_filters,
-    load_graph, pick_seeds, query_graph_text, query_terms, resolve_context_filters, score_nodes,
-    subgraph_to_text,
+    load_graph, normalize_context_filters, pick_seeds, query_graph_text, query_terms,
+    resolve_context_filters, score_nodes, subgraph_to_text,
 };
 use graphify_serve::tools::{
     tool_get_pr_impact_with_clients, tool_list_prs_with_clients, tool_triage_prs_with_clients,
@@ -208,6 +208,109 @@ fn test_score_nodes_source_file_partial() {
     let scored = score_nodes(&g, &["cluster"], &mut cache);
     let nids: Vec<&str> = scored.iter().map(|(_, nid)| nid.as_str()).collect();
     assert!(nids.contains(&"n2"));
+}
+
+// ── _normalize_context_filters alias resolution ──────────────────────────────
+
+#[test]
+fn test_normalize_context_filters_resolves_aliases() {
+    let cases = [
+        ("param", "parameter_type"),
+        ("params", "parameter_type"),
+        ("parameter", "parameter_type"),
+        ("parameters", "parameter_type"),
+        ("argument", "parameter_type"),
+        ("arguments", "parameter_type"),
+        ("arg", "parameter_type"),
+        ("args", "parameter_type"),
+        ("return", "return_type"),
+        ("returns", "return_type"),
+        ("returned", "return_type"),
+        ("generic", "generic_arg"),
+        ("generics", "generic_arg"),
+        ("template", "generic_arg"),
+        ("templates", "generic_arg"),
+        ("annotation", "attribute"),
+        ("annotations", "attribute"),
+        ("decorator", "attribute"),
+        ("decorators", "attribute"),
+        ("calls", "call"),
+        ("called", "call"),
+        ("invoke", "call"),
+        ("invocation", "call"),
+        ("fields", "field"),
+        ("property", "field"),
+        ("properties", "field"),
+        ("member", "field"),
+        ("members", "field"),
+        ("imports", "import"),
+        ("imported", "import"),
+        ("module", "import"),
+        ("modules", "import"),
+        ("exports", "export"),
+        ("exported", "export"),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            normalize_context_filters(&[input.to_string()]),
+            vec![expected.to_string()],
+            "alias {input:?} should resolve to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn test_normalize_context_filters_passes_through_canonical() {
+    assert_eq!(
+        normalize_context_filters(&["parameter_type".to_string()]),
+        vec!["parameter_type".to_string()]
+    );
+    assert_eq!(
+        normalize_context_filters(&["field".to_string()]),
+        vec!["field".to_string()]
+    );
+}
+
+#[test]
+fn test_normalize_context_filters_is_case_insensitive() {
+    // Mixed casing of the same alias should fold to a single canonical entry.
+    assert_eq!(
+        normalize_context_filters(&["PARAM".to_string(), "param".to_string()]),
+        vec!["parameter_type".to_string()]
+    );
+}
+
+#[test]
+fn test_normalize_context_filters_deduplicates_aliases() {
+    // Three different surface forms collapse to the same canonical name and
+    // appear only once in the result.
+    assert_eq!(
+        normalize_context_filters(&[
+            "param".to_string(),
+            "parameter".to_string(),
+            "arg".to_string(),
+        ]),
+        vec!["parameter_type".to_string()]
+    );
+}
+
+#[test]
+fn test_normalize_context_filters_trims_whitespace() {
+    assert_eq!(
+        normalize_context_filters(&["  return  ".to_string()]),
+        vec!["return_type".to_string()]
+    );
+}
+
+#[test]
+fn test_normalize_context_filters_skips_empty_and_whitespace_only() {
+    // Empty strings and whitespace-only strings collapse to no entries — the
+    // canonical-name list must not be polluted by `--context ""` or
+    // `--context "   "`.
+    assert_eq!(
+        normalize_context_filters(&[String::new(), "  ".to_string()]),
+        Vec::<String>::new()
+    );
 }
 
 // ── _infer_context_filters ────────────────────────────────────────────────────

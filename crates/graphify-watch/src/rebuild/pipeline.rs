@@ -49,11 +49,14 @@ pub(crate) fn rebuild_code_inner(
         return Ok(false);
     }
 
-    let Some((extract_targets, deleted_paths)) =
+    let Some(targets) =
         compute_extract_targets(changed_paths, &code_files, &watch_root, &project_root)
     else {
         return Ok(true);
     };
+    let extract_targets = targets.wanted;
+    let deleted_paths = targets.deleted_paths;
+    let had_explicit_deletions = targets.had_tracked_deletion;
 
     let commit = git_head(&watch_root);
     let mut result = extract_phase(&extract_targets, &watch_root);
@@ -84,6 +87,7 @@ pub(crate) fn rebuild_code_inner(
             &existing_graph_data,
             &out,
             force,
+            had_explicit_deletions,
             t_post,
         );
     }
@@ -123,6 +127,7 @@ pub(crate) fn rebuild_code_inner(
     finalise_rebuild(&FinaliseArgs {
         no_change,
         force,
+        had_explicit_deletions,
         graph_with_hyper: &graph_with_hyper,
         communities: &communities,
         labels: &labels,

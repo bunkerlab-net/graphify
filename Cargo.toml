@@ -1,49 +1,49 @@
 [workspace]
-resolver = "3"
-members = [
-  "crates/graphify-validate",
-  "crates/graphify-manifest",
-  "crates/graphify-security",
-  "crates/graphify-cache",
-  "crates/graphify-detect",
-  "crates/graphify-dedup",
-  "crates/graphify-build",
-  "crates/graphify-cluster",
-  "crates/graphify-analyze",
-  "crates/graphify-report",
-  "crates/graphify-export",
-  "crates/graphify-extract",
-  "crates/graphify-ingest",
-  "crates/graphify-hooks",
-  "crates/graphify-wiki",
-  "crates/graphify-html",
-  "crates/graphify-global",
-  "crates/graphify-prs",
-  "crates/graphify-transcribe",
-  "crates/graphify-serve",
-  "crates/graphify-watch",
-  "crates/graphify-benchmark",
-  "crates/graphify-llm",
-  "crates/graphify-google",
-  "crates/graphify-affected",
-  "crates/graphify-diagnostics",
-  "crates/graphify-multigraph-compat",
-  "crates/graphify-scip",
-  "crates/graphify-semantic",
-]
 default-members = ["."]
 exclude = [
   "tests/fixtures/inputs/per_language_samples/crate_a",
   "tests/fixtures/inputs/per_language_samples/crate_b",
 ]
+members = [
+  "crates/graphify-affected",
+  "crates/graphify-analyze",
+  "crates/graphify-benchmark",
+  "crates/graphify-build",
+  "crates/graphify-cache",
+  "crates/graphify-cluster",
+  "crates/graphify-dedup",
+  "crates/graphify-detect",
+  "crates/graphify-diagnostics",
+  "crates/graphify-export",
+  "crates/graphify-extract",
+  "crates/graphify-global",
+  "crates/graphify-google",
+  "crates/graphify-hooks",
+  "crates/graphify-html",
+  "crates/graphify-ingest",
+  "crates/graphify-llm",
+  "crates/graphify-manifest",
+  "crates/graphify-multigraph-compat",
+  "crates/graphify-prs",
+  "crates/graphify-report",
+  "crates/graphify-scip",
+  "crates/graphify-security",
+  "crates/graphify-semantic",
+  "crates/graphify-serve",
+  "crates/graphify-transcribe",
+  "crates/graphify-validate",
+  "crates/graphify-watch",
+  "crates/graphify-wiki",
+]
+resolver = "3"
 
 [workspace.package]
-version = "0.8.17"
 edition = "2024"
-rust-version = "1.95"
 license = "Apache-2.0"
-repository = "https://github.com/bunkerlab-net/graphify"
 publish = false
+repository = "https://github.com/bunkerlab-net/graphify"
+rust-version = "1.95"
+version = "0.8.18"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -80,6 +80,7 @@ url = "2"
 walkdir = "2"
 
 # Internal workspace crates
+graphify-affected = { path = "crates/graphify-affected" }
 graphify-analyze = { path = "crates/graphify-analyze" }
 graphify-benchmark = { path = "crates/graphify-benchmark" }
 graphify-build = { path = "crates/graphify-build" }
@@ -87,6 +88,7 @@ graphify-cache = { path = "crates/graphify-cache" }
 graphify-cluster = { path = "crates/graphify-cluster" }
 graphify-dedup = { path = "crates/graphify-dedup" }
 graphify-detect = { path = "crates/graphify-detect" }
+graphify-diagnostics = { path = "crates/graphify-diagnostics" }
 graphify-export = { path = "crates/graphify-export" }
 graphify-extract = { path = "crates/graphify-extract" }
 graphify-global = { path = "crates/graphify-global" }
@@ -96,19 +98,17 @@ graphify-html = { path = "crates/graphify-html" }
 graphify-ingest = { path = "crates/graphify-ingest" }
 graphify-llm = { path = "crates/graphify-llm" }
 graphify-manifest = { path = "crates/graphify-manifest" }
+graphify-multigraph-compat = { path = "crates/graphify-multigraph-compat" }
 graphify-prs = { path = "crates/graphify-prs" }
 graphify-report = { path = "crates/graphify-report" }
+graphify-scip = { path = "crates/graphify-scip" }
 graphify-security = { path = "crates/graphify-security" }
+graphify-semantic = { path = "crates/graphify-semantic" }
 graphify-serve = { path = "crates/graphify-serve" }
 graphify-transcribe = { path = "crates/graphify-transcribe" }
 graphify-validate = { path = "crates/graphify-validate" }
 graphify-watch = { path = "crates/graphify-watch" }
 graphify-wiki = { path = "crates/graphify-wiki" }
-graphify-affected = { path = "crates/graphify-affected" }
-graphify-diagnostics = { path = "crates/graphify-diagnostics" }
-graphify-multigraph-compat = { path = "crates/graphify-multigraph-compat" }
-graphify-scip = { path = "crates/graphify-scip" }
-graphify-semantic = { path = "crates/graphify-semantic" }
 
 [workspace.lints.rust]
 dead_code = "deny"
@@ -122,14 +122,14 @@ pedantic = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 
 [package]
-name = "graphify"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
+edition.workspace = true
+license.workspace = true
+name = "graphify"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [[bin]]
 name = "graphify"
@@ -138,6 +138,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+graphify-affected = { workspace = true }
 graphify-analyze = { workspace = true }
 graphify-benchmark = { workspace = true }
 graphify-build = { workspace = true }
@@ -145,6 +146,7 @@ graphify-cache = { workspace = true }
 graphify-cluster = { workspace = true }
 graphify-dedup = { workspace = true }
 graphify-detect = { workspace = true }
+graphify-diagnostics = { workspace = true }
 graphify-export = { workspace = true }
 graphify-extract = { workspace = true }
 graphify-global = { workspace = true }
@@ -152,8 +154,6 @@ graphify-hooks = { workspace = true }
 graphify-html = { workspace = true }
 graphify-ingest = { workspace = true }
 graphify-llm = { workspace = true }
-graphify-affected = { workspace = true }
-graphify-diagnostics = { workspace = true }
 graphify-prs = { workspace = true }
 graphify-report = { workspace = true }
 graphify-security = { workspace = true }
@@ -175,5 +175,5 @@ tempfile = { workspace = true }
 workspace = true
 
 [profile.release]
-lto = "thin"
 codegen-units = 1
+lto = "thin"

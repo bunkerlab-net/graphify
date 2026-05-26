@@ -161,35 +161,35 @@ fn relativize_noop_on_non_object_payload() {
 fn check_shrink_allows_growth() {
     let existing = json!({"nodes": [{"id": "a"}]});
     let new = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
-    assert!(check_shrink(false, &existing, &new, None).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, false).is_ok());
 }
 
 #[test]
 fn check_shrink_allows_same() {
     let existing = json!({"nodes": [{"id": "a"}]});
     let new = json!({"nodes": [{"id": "b"}]});
-    assert!(check_shrink(false, &existing, &new, None).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, false).is_ok());
 }
 
 #[test]
 fn check_shrink_refuses_shrink() {
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(false, &existing, &new, None).is_err());
+    assert!(check_shrink(false, &existing, &new, None, false).is_err());
 }
 
 #[test]
 fn check_shrink_force_overrides() {
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(true, &existing, &new, None).is_ok());
+    assert!(check_shrink(true, &existing, &new, None, false).is_ok());
 }
 
 #[test]
 fn check_shrink_no_existing_passes() {
     let existing = json!({"nodes": []});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(false, &existing, &new, None).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, false).is_ok());
 }
 
 #[test]
@@ -199,8 +199,31 @@ fn check_shrink_cleans_up_tmp_file_on_failure() {
     fs::write(&tmp_path, "{}").expect("write fixture");
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(false, &existing, &new, Some(&tmp_path)).is_err());
+    assert!(check_shrink(false, &existing, &new, Some(&tmp_path), false).is_err());
     assert!(!tmp_path.exists(), "tmp file should be cleaned up");
+}
+
+#[test]
+fn check_shrink_allows_explicit_deletions() {
+    let existing =
+        json!({"nodes": (0..100).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
+    let new = json!({"nodes": (0..80).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
+    assert!(check_shrink(false, &existing, &new, None, true).is_ok());
+}
+
+#[test]
+fn check_shrink_keeps_tmp_when_deletions_declared() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp_path = tmp.path().join("graph.tmp.json");
+    fs::write(&tmp_path, "{}").expect("write fixture");
+    let existing =
+        json!({"nodes": (0..100).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
+    let new = json!({"nodes": (0..80).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
+    assert!(check_shrink(false, &existing, &new, Some(&tmp_path), true).is_ok());
+    assert!(
+        tmp_path.exists(),
+        "tmp file must NOT be deleted when shrink is intentional — caller is about to swap it into place"
+    );
 }
 
 // ── node_community_map ───────────────────────────────────────────────────────

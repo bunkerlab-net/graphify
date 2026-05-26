@@ -1,12 +1,12 @@
 [package]
-name = "graphify-transcribe"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Video transcription (whisper-cli + yt-dlp shell-out)"
+edition.workspace = true
+license.workspace = true
+name = "graphify-transcribe"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 graphify-security = { workspace = true }

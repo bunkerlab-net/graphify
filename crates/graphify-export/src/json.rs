@@ -3,12 +3,41 @@
 //! Mirrors Python `to_json` / `prune_dangling_edges` / `backup_if_protected`
 //! from `graphify-py/graphify/export.py`.
 
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
 use graphify_build::Graph;
 use indexmap::{IndexMap, IndexSet};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+/// Maximum `graph.json` size (in bytes) eligible for the backup-rate-limit
+/// short-circuit. Anything larger forces the normal backup path — we'd rather
+/// re-copy than stream-hash a multi-gigabyte file twice on every run.
+const MAX_BACKUP_PRELOAD_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Stream-hash `path` via a 64 KiB buffered reader. Returns `None` when the
+/// file can't be opened or read.
+///
+/// The 64 KiB read buffer is heap-allocated to stay under the workspace
+/// `clippy::large_stack_arrays` threshold (16 KiB). One allocation per file
+/// is negligible against the I/O cost; the same pattern is used in
+/// `graphify-detect/src/manifest.rs`.
+fn sha256_file(path: &Path) -> Option<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    let mut reader = BufReader::new(File::open(path).ok()?);
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hasher.finalize().into())
+}
 
 use crate::{
     BACKUP_ARTIFACTS, ExportError, confidence_score, node_community_map, strip_diacritics,
@@ -293,13 +322,20 @@ pub fn prune_dangling_edges(mut graph_data: Value) -> (Value, usize) {
 /// Never fails — backup failure prints a warning and returns `None`.
 /// Set `GRAPHIFY_NO_BACKUP=1` to disable.
 ///
+/// Same-day rate-limiting: if today's backup folder already exists and its
+/// `graph.json` content is byte-identical (sha256 match) to the source,
+/// returns the existing folder without re-copying. If content has changed,
+/// the existing folder is overwritten in place — one folder per day, always
+/// the latest pre-overwrite state.
+///
 /// Mirrors Python `backup_if_protected`.
 #[must_use]
 pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
     if std::env::var("GRAPHIFY_NO_BACKUP").is_ok_and(|v| !v.is_empty()) {
         return None;
     }
-    if !out_dir.join("graph.json").exists() {
+    let graph_src = out_dir.join("graph.json");
+    if !graph_src.exists() {
         return None;
     }
 
@@ -321,11 +357,31 @@ pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
     }
 
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let mut backup_dir = out_dir.join(&today);
-    let mut suffix = 2_u32;
-    while backup_dir.exists() {
-        backup_dir = out_dir.join(format!("{today}_{suffix}"));
-        suffix += 1;
+    let backup_dir = out_dir.join(&today);
+    let backup_graph = backup_dir.join("graph.json");
+
+    // Short-circuit: if today's backup already has identical graph.json
+    // content, nothing to do. Mirrors the Python `if src_hash == bak_hash`
+    // guard added in graphify-py 3efae38.
+    //
+    // Streaming sha256 (64 KiB chunks) keeps the comparison memory-bounded
+    // regardless of graph size, and a size-equality preflight catches the
+    // common "different bytes" case in O(1). Files exceeding
+    // `MAX_BACKUP_PRELOAD_BYTES` skip the short-circuit entirely — the user
+    // gets the normal backup path rather than paying for a full re-hash on
+    // every invocation.
+    if backup_dir.exists() && backup_graph.exists() {
+        let src_meta = std::fs::metadata(&graph_src).ok();
+        let bak_meta = std::fs::metadata(&backup_graph).ok();
+        if let (Some(s), Some(b)) = (src_meta, bak_meta)
+            && s.len() == b.len()
+            && s.len() <= MAX_BACKUP_PRELOAD_BYTES
+            && let (Some(src_hash), Some(bak_hash)) =
+                (sha256_file(&graph_src), sha256_file(&backup_graph))
+            && src_hash == bak_hash
+        {
+            return Some(backup_dir);
+        }
     }
 
     let mut reasons = Vec::new();

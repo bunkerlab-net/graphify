@@ -1,12 +1,12 @@
 [package]
-name = "graphify-semantic"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish.workspace = true
 description = "Semantic-extraction fragment validation + cleanup"
+edition.workspace = true
+license.workspace = true
+name = "graphify-semantic"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 indexmap = { workspace = true }

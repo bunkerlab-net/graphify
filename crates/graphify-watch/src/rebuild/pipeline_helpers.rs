@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use graphify_build::{Graph, build_from_json};
 use graphify_cluster::{cluster, remap_communities_to_previous, score_all};
+use graphify_detect::{FileType, classify_file};
 use graphify_export::{backup_if_protected, to_html, to_json};
 use graphify_extract::extract;
 use indexmap::IndexMap;
@@ -46,6 +47,39 @@ pub(crate) fn detect_phase(watch_path: &Path) -> (DetectResult, Vec<PathBuf>) {
     (detected, code_files)
 }
 
+/// `true` when `path` would have been pulled into the rebuild's `code_files`
+/// set if it still existed on disk. Mirrors the inclusion rule used in
+/// [`crate::rebuild::helpers::detect_code_files`]: any `FileType::Code` plus
+/// the markdown-family documents (`.md` / `.mdx` / `.qmd`) that have AST
+/// extractors. Used to narrow the shrink-guard bypass — a deleted
+/// `.gitignore` or `.env` is not a tracked-code deletion.
+fn is_tracked_code_path(path: &Path) -> bool {
+    if matches!(classify_file(path), Some(FileType::Code)) {
+        return true;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    matches!(ext, "md" | "mdx" | "qmd")
+}
+
+/// Result of [`compute_extract_targets`]: which files to extract from, which
+/// paths to evict from the existing graph, and whether the change set declared
+/// a tracked-code-file deletion (relevant for the shrink-guard bypass).
+pub(crate) struct ExtractTargets {
+    /// Existing tracked code files that the caller wants re-extracted.
+    pub wanted: Vec<PathBuf>,
+    /// Paths to evict from any prior graph — covers both true deletions and
+    /// non-code paths in the change set whose nodes should drop out.
+    pub deleted_paths: Vec<String>,
+    /// `true` when the change set contained at least one path that no longer
+    /// exists on disk. The watch shrink-guard bypass is keyed off this flag
+    /// (not `!deleted_paths.is_empty()`) so a changed-but-untracked README
+    /// can't accidentally suppress the guard.
+    pub had_tracked_deletion: bool,
+}
+
 /// Compute the list of files to extract from + the list of deleted paths to evict.
 ///
 /// Returns `None` when there's nothing to do (no tracked files in the change set).
@@ -54,16 +88,21 @@ pub(crate) fn compute_extract_targets(
     code_files: &[PathBuf],
     watch_root: &Path,
     project_root: &Path,
-) -> Option<(Vec<PathBuf>, Vec<String>)> {
+) -> Option<ExtractTargets> {
     let Some(changed) = changed_paths else {
-        return Some((code_files.to_vec(), Vec::new()));
+        return Some(ExtractTargets {
+            wanted: code_files.to_vec(),
+            deleted_paths: Vec::new(),
+            had_tracked_deletion: false,
+        });
     };
     let code_set: std::collections::HashSet<PathBuf> = code_files
         .iter()
         .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
         .collect();
     let mut wanted: Vec<PathBuf> = Vec::new();
-    let mut deleted: Vec<String> = Vec::new();
+    let mut deleted_paths: Vec<String> = Vec::new();
+    let mut had_tracked_deletion = false;
     for raw in changed {
         let cand = if raw.is_absolute() {
             raw.canonicalize().unwrap_or_else(|_| raw.clone())
@@ -75,18 +114,33 @@ pub(crate) fn compute_extract_targets(
         if cand.exists() && code_set.contains(&cand) {
             wanted.push(cand);
         } else {
+            // A path that doesn't exist on disk is a deletion. Only flip the
+            // shrink-guard bypass when the deleted path's extension matches
+            // the inclusion rule used by `detect_code_files` (code files plus
+            // markdown-family documents that have AST extractors). A deleted
+            // `.gitignore` or `.env` is not a tracked-code deletion and must
+            // not suppress the guard. A path that exists but isn't in
+            // `code_set` (e.g. a touched README that lives outside the watch
+            // root) still earns eviction so its stale nodes drop out.
+            if !cand.exists() && is_tracked_code_path(&cand) {
+                had_tracked_deletion = true;
+            }
             let rel = cand.strip_prefix(project_root).map_or_else(
                 |_| cand.to_string_lossy().into_owned(),
                 |p| p.to_string_lossy().into_owned(),
             );
-            deleted.push(rel);
+            deleted_paths.push(rel);
         }
     }
-    if wanted.is_empty() && deleted.is_empty() {
+    if wanted.is_empty() && deleted_paths.is_empty() {
         println!("[graphify watch] No tracked code files in change set - skipping rebuild.");
         return None;
     }
-    Some((wanted, deleted))
+    Some(ExtractTargets {
+        wanted,
+        deleted_paths,
+        had_tracked_deletion,
+    })
 }
 
 /// Run AST extraction on the given targets, returning the canonical result JSON.
@@ -258,6 +312,7 @@ pub(crate) fn run_no_cluster_path(
     existing_graph_data: &Value,
     out: &Path,
     force: bool,
+    had_explicit_deletions: bool,
     t_post: std::time::Instant,
 ) -> Result<bool, WatchError> {
     let edges = result
@@ -280,7 +335,13 @@ pub(crate) fn run_no_cluster_path(
     }
     let t_write = std::time::Instant::now();
     if !same_graph {
-        check_shrink(force, existing_graph_data, &candidate_data, None)?;
+        check_shrink(
+            force,
+            existing_graph_data,
+            &candidate_data,
+            None,
+            had_explicit_deletions,
+        )?;
         std::fs::write(existing_graph_path, json_text(&candidate_data).as_bytes())
             .map_err(WatchError::Io)?;
     }
@@ -507,6 +568,9 @@ pub(crate) fn compare_existing_report(report_path: &Path, report_content: &str) 
 pub(crate) struct CommitArgs<'a> {
     /// Bypass the shrink guard when `true`.
     pub force: bool,
+    /// Skip the shrink guard when the caller has declared deletions — the
+    /// smaller graph is expected and not a sign of silent corruption.
+    pub had_explicit_deletions: bool,
     /// The graph JSON that was on disk before this rebuild began.
     pub existing_graph_data: &'a Value,
     /// The newly built graph JSON to be committed.
@@ -537,6 +601,7 @@ pub(crate) fn commit_rebuild_outputs(args: &CommitArgs<'_>) -> Result<(), WatchE
         args.existing_graph_data,
         args.candidate_graph_data,
         Some(args.graph_tmp),
+        args.had_explicit_deletions,
     )?;
     let _ = backup_if_protected(args.out);
     std::fs::rename(args.graph_tmp, args.existing_graph_path).map_err(WatchError::Io)?;
@@ -607,6 +672,9 @@ pub(crate) struct FinaliseArgs<'a> {
     pub no_change: bool,
     /// Bypass the shrink guard when `true`.
     pub force: bool,
+    /// Skip the shrink guard when the caller has declared deletions — see
+    /// [`check_shrink`](crate::rebuild::shrink::check_shrink) for context.
+    pub had_explicit_deletions: bool,
     /// Final graph value including attached hyperedges.
     pub graph_with_hyper: &'a Graph,
     /// Community detection result mapping community ID → member node IDs.
@@ -645,6 +713,7 @@ pub(crate) fn finalise_rebuild(args: &FinaliseArgs<'_>) -> Result<(), WatchError
     } else {
         commit_rebuild_outputs(&CommitArgs {
             force: args.force,
+            had_explicit_deletions: args.had_explicit_deletions,
             existing_graph_data: args.existing_graph_data,
             candidate_graph_data: args.candidate_graph_data,
             graph_tmp: args.graph_tmp,
