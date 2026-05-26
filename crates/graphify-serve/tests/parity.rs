@@ -867,6 +867,48 @@ fn query_terms_lowercases() {
 }
 
 // ---------------------------------------------------------------------------
+// query_terms: Chinese segmentation (#1026)
+//
+// Ports graphify-py `tests/test_serve.py` Chinese segmentation cases that
+// exercise the fallback path (the Rust port ships without `jieba`, so
+// bigram fallback is the only segmentation path; tests that assert
+// dictionary-quality cuts like `["包", "管理器"]` from `"包管理器"` would
+// require jieba and are intentionally not ported).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_terms_chinese_mixed_falls_back_to_bigrams() {
+    // Mixed Chinese + English input: the English terms come through as-is
+    // (short stopwords dropped), Chinese sub-strings split into character
+    // bigrams plus the original term. "前端" (2 chars) yields itself.
+    let r = query_terms("前端 router 路由配置");
+    assert!(r.iter().any(|t| t == "前端"));
+    assert!(r.iter().any(|t| t == "router"));
+    assert!(r.iter().any(|t| t == "路由"));
+    assert!(r.iter().any(|t| t == "配置"));
+}
+
+#[test]
+fn query_terms_non_chinese_scripts_are_not_segmented() {
+    // Hiragana, Katakana, and Hangul live outside the CJK Unified
+    // Ideographs range (U+4E00–U+9FFF) the segmenter keys on — they
+    // pass through as a single search term.
+    let r = query_terms("かなカナ한글");
+    assert_eq!(r, vec!["かなカナ한글"]);
+}
+
+#[test]
+fn query_terms_chinese_includes_original_term() {
+    // The original 4-char string should still appear in the term list
+    // alongside the bigrams so an exact-substring match against an
+    // indexed label still resolves.
+    let r = query_terms("页面路由");
+    assert!(r.iter().any(|t| t == "页面"));
+    assert!(r.iter().any(|t| t == "路由"));
+    assert!(r.iter().any(|t| t == "页面路由"));
+}
+
+// ---------------------------------------------------------------------------
 // load_graph: reject oversized files
 // ---------------------------------------------------------------------------
 

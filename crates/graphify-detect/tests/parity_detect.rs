@@ -209,6 +209,25 @@ fn detect_skips_worktrees_dir() {
 }
 
 #[test]
+fn detect_skips_nested_worktrees_dir() {
+    // graphify-py #1023: files inside `.claude/worktrees/` (nested placement
+    // within a dotted parent) are never indexed.
+    let tmp = tempdir().expect("tempdir");
+    let wt = tmp
+        .path()
+        .join(".claude")
+        .join("worktrees")
+        .join("feature-branch");
+    std::fs::create_dir_all(&wt).expect("create_dir_all");
+    std::fs::write(wt.join("main.py"), "x = 1").expect("test invariant");
+    std::fs::write(tmp.path().join("app.py"), "y = 2").expect("test invariant");
+    let result = detect(tmp.path(), None, None);
+    let code = &result.files["code"];
+    assert!(code.iter().any(|f| f.contains("app.py")));
+    assert!(!code.iter().any(|f| f.contains("worktrees")));
+}
+
+#[test]
 fn detect_graphifyignore_excludes_file() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(

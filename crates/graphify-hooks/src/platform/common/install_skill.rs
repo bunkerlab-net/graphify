@@ -114,6 +114,12 @@ fn skill_for(platform: &str) -> Result<(&'static str, &'static str), HooksError>
         "hermes" => (SKILL_CLAW_MD, ".hermes/skills/graphify/SKILL.md"),
         "kiro" => (SKILL_KIRO_MD, ".kiro/skills/graphify/SKILL.md"),
         "pi" => (SKILL_PI_MD, ".pi/agent/skills/graphify/SKILL.md"),
+        // Devin user-scope skill lives under `~/.config/devin/...`, but the
+        // home-relative prefix differs from `.devin/...` used at project
+        // scope. The project-scope install (devin install --project) is
+        // handled by `devin_project_install`, which also writes
+        // `.windsurf/rules/graphify.md`.
+        "devin" => (SKILL_MD, ".config/devin/skills/graphify/SKILL.md"),
         "antigravity" => (SKILL_MD, ".agents/skills/graphify/SKILL.md"),
         "antigravity-windows" => (SKILL_WINDOWS_MD, ".agents/skills/graphify/SKILL.md"),
         other => return Err(HooksError::UnknownPlatform(other.to_string())),

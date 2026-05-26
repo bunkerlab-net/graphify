@@ -31,7 +31,7 @@ pub(crate) enum Command {
     /// Install the graphify skill to a platform config directory.
     Install {
         /// Target platform (claude, windows, codex, opencode, aider, claw, droid,
-        /// trae, trae-cn, gemini, cursor, antigravity, hermes, kiro, pi).
+        /// trae, trae-cn, gemini, cursor, antigravity, hermes, kiro, pi, devin).
         ///
         /// Accepts either `graphify install --platform <name>` or the
         /// positional shorthand `graphify install <name>` for parity with
@@ -409,6 +409,11 @@ pub(crate) enum Command {
     },
     /// Install or uninstall graphify integration for Hermes.
     Hermes {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
+    /// Install or uninstall graphify integration for Devin CLI.
+    Devin {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },

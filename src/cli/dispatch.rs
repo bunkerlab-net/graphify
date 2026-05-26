@@ -84,6 +84,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         Command::Trae { cmd: c } => cli::install::cmd_platform("trae", &c),
         Command::TraeCn { cmd: c } => cli::install::cmd_platform("trae-cn", &c),
         Command::Hermes { cmd: c } => cli::install::cmd_platform("hermes", &c),
+        Command::Devin { cmd: c } => cli::install::cmd_platform("devin", &c),
     }
 }
 

@@ -5,6 +5,7 @@
 pub mod bash;
 pub mod blade;
 pub mod dart;
+pub mod dotnet;
 pub mod elixir;
 pub mod fortran;
 pub mod go;
@@ -392,6 +393,9 @@ pub use dart::extract_dart;
 
 // ── Blade ─────────────────────────────────────────────────────────────────────
 pub use blade::extract_blade;
+
+// ── .NET (.sln / .csproj / .razor) ────────────────────────────────────────────
+pub use dotnet::{extract_csproj, extract_razor, extract_sln};
 
 // ── Python rationale extraction ───────────────────────────────────────────────
 

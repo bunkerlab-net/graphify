@@ -172,7 +172,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "hex",
- "http 1.4.0",
+ "http 1.4.1",
  "sha1 0.10.6",
  "time",
  "tokio",
@@ -233,7 +233,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "fastrand",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 1.0.1",
  "percent-encoding",
  "pin-project-lite",
@@ -262,7 +262,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body-util",
  "regex-lite",
  "tracing",
@@ -287,7 +287,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "regex-lite",
  "tracing",
 ]
@@ -311,7 +311,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "regex-lite",
  "tracing",
 ]
@@ -336,7 +336,7 @@ dependencies = [
  "aws-types",
  "fastrand",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "regex-lite",
  "tracing",
 ]
@@ -357,7 +357,7 @@ dependencies = [
  "hex",
  "hmac",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "percent-encoding",
  "sha2 0.11.0",
  "time",
@@ -399,7 +399,7 @@ dependencies = [
  "bytes-utils",
  "futures-core",
  "futures-util",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 1.0.1",
  "http-body-util",
  "percent-encoding",
@@ -418,7 +418,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "h2",
- "http 1.4.0",
+ "http 1.4.1",
  "hyper",
  "hyper-rustls",
  "hyper-util",
@@ -478,7 +478,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 0.4.6",
  "http-body 1.0.1",
  "http-body-util",
@@ -499,7 +499,7 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "pin-project-lite",
  "tokio",
  "tracing",
@@ -525,7 +525,7 @@ checksum = "7442cb268338f0eb8278140a107c046756aa01093d8ef5e99628d34ae09c94f5"
 dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "http 1.4.0",
+ "http 1.4.1",
 ]
 
 [[package]]
@@ -539,7 +539,7 @@ dependencies = [
  "bytes-utils",
  "futures-core",
  "http 0.2.12",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 0.4.6",
  "http-body 1.0.1",
  "http-body-util",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "graphify"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-affected"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-analyze"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "graphify-cluster",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-benchmark"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-build"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "caseless",
  "graphify-validate",
@@ -1553,7 +1553,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cache"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "hex",
  "indexmap",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cluster"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1581,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-dedup"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "caseless",
  "indexmap",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-detect"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "calamine",
  "graphify-google",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-diagnostics"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1633,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-export"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1654,10 +1654,11 @@ dependencies = [
 
 [[package]]
 name = "graphify-extract"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-cache",
  "indexmap",
+ "quick-xml 0.40.1",
  "rayon",
  "regex",
  "serde",
@@ -1697,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-global"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1713,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-google"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "hex",
  "regex",
@@ -1726,7 +1727,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-hooks"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "regex",
  "serde_json",
@@ -1738,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-html"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1755,7 +1756,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-ingest"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1772,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-llm"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -1793,14 +1794,14 @@ dependencies = [
 
 [[package]]
 name = "graphify-manifest"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-detect",
 ]
 
 [[package]]
 name = "graphify-multigraph-compat"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1811,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-prs"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1824,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-report"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1837,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-scip"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1852,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-security"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "ipnet",
  "mockito",
@@ -1866,7 +1867,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-semantic"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "indexmap",
  "regex",
@@ -1878,7 +1879,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-serve"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1894,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-transcribe"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1907,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-validate"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",
@@ -1915,7 +1916,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-watch"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1937,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-wiki"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1957,7 +1958,7 @@ dependencies = [
  "fnv",
  "futures-core",
  "futures-sink",
- "http 1.4.0",
+ "http 1.4.1",
  "indexmap",
  "slab",
  "tokio",
@@ -2054,9 +2055,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "1.4.0"
+version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3ba2a386d7f85a81f119ad7498ebe444d2e22c2af0b86b069416ace48b3311a"
+checksum = "8be7462df143984c4598a256ef469b251d7d7f9e271135073e78fc535414f3d0"
 dependencies = [
  "bytes",
  "itoa",
@@ -2080,7 +2081,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1efedce1fb8e6913f23e0c92de8e62cd5b772a67e7b3946df930a62566c93184"
 dependencies = [
  "bytes",
- "http 1.4.0",
+ "http 1.4.1",
 ]
 
 [[package]]
@@ -2091,7 +2092,7 @@ checksum = "b021d93e26becf5dc7e1b75b1bed1fd93124b374ceb73f43d4d4eafec896a64a"
 dependencies = [
  "bytes",
  "futures-core",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 1.0.1",
  "pin-project-lite",
 ]
@@ -2128,7 +2129,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "h2",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 1.0.1",
  "httparse",
  "httpdate",
@@ -2145,7 +2146,7 @@ version = "0.27.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33ca68d021ef39cf6463ab54c1d0f5daf03377b70561305bb89a8f83aab66e0f"
 dependencies = [
- "http 1.4.0",
+ "http 1.4.1",
  "hyper",
  "hyper-util",
  "rustls",
@@ -2165,7 +2166,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 1.0.1",
  "hyper",
  "ipnet",
@@ -2398,9 +2399,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.24"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f00b5dbd620d61dfdcb6007c9c1f6054ebd75319f163d886a9055cec1155073d"
+checksum = "392c70591e8749fe235ddaf513e6f58b26bce3dcc16524cecc8936f75afa161e"
 dependencies = [
  "jiff-static",
  "jiff-tzdb-platform",
@@ -2408,14 +2409,14 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.61.2",
+ "windows-link",
 ]
 
 [[package]]
 name = "jiff-static"
-version = "0.2.24"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e000de030ff8022ea1da3f466fbb0f3a809f5e51ed31f6dd931c35181ad8e6d7"
+checksum = "47b605b0c050d845fc355bb11eb3f9a8deddc218ea60c76e61aa1f2adfb2c96a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2589,9 +2590,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.29"
+version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 
 [[package]]
 name = "lopdf"
@@ -2720,7 +2721,7 @@ dependencies = [
  "bytes",
  "colored",
  "futures-core",
- "http 1.4.0",
+ "http 1.4.1",
  "http-body 1.0.1",
  "http-body-util",
  "hyper",
@@ -4488,7 +4489,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
 dependencies = [
  "base64",
- "http 1.4.0",
+ "http 1.4.1",
  "httparse",
  "log",
 ]

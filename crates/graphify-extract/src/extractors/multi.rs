@@ -22,11 +22,12 @@ use serde_json::Value;
 
 use crate::extractors::{
     extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
-    extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go, extract_groovy,
-    extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
-    extract_lazarus_package, extract_lua, extract_markdown, extract_objc, extract_pascal,
-    extract_php, extract_powershell, extract_python, extract_ruby, extract_rust, extract_scala,
-    extract_sql, extract_svelte, extract_swift, extract_verilog, extract_zig,
+    extract_csproj, extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go,
+    extract_groovy, extract_java, extract_js, extract_json, extract_julia, extract_kotlin,
+    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown, extract_objc,
+    extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
+    extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte, extract_swift,
+    extract_verilog, extract_zig,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
@@ -85,6 +86,9 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "lpk" => Some(extract_lazarus_package),
         "sh" | "bash" => Some(extract_bash),
         "json" => Some(extract_json),
+        "sln" => Some(extract_sln),
+        "csproj" | "fsproj" | "vbproj" => Some(extract_csproj),
+        "razor" | "cshtml" => Some(extract_razor),
         _ => None,
     }
 }

@@ -8,12 +8,12 @@
 use std::path::{Path, PathBuf};
 
 use graphify_extract::{
-    extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp, extract_dart,
-    extract_delphi_form, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
-    extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package, extract_lua,
-    extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell, extract_ruby,
-    extract_rust, extract_scala, extract_sql, extract_svelte, extract_swift, extract_verilog,
-    extract_zig,
+    extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp, extract_csproj,
+    extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go, extract_groovy,
+    extract_java, extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package,
+    extract_lua, extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell,
+    extract_razor, extract_ruby, extract_rust, extract_scala, extract_sln, extract_sql,
+    extract_svelte, extract_swift, extract_verilog, extract_zig,
 };
 
 fn fixtures() -> PathBuf {
@@ -549,4 +549,148 @@ fn extractors_handle_missing_file() {
     assert!(extract_lazarus_form(&bogus).error.is_some());
     assert!(extract_lazarus_package(&bogus).error.is_some());
     assert!(extract_delphi_form(&bogus).error.is_some());
+}
+
+// ── .NET project files (.sln, .csproj, .razor) ───────────────────────────────
+//
+// Ports the parity assertions from graphify-py `tests/test_dotnet.py` and the
+// `# -- .NET project files (.sln, .csproj, .razor) --` section of
+// `tests/test_languages.py`. The fixtures (`sample.sln`, `sample.csproj`,
+// `sample.razor`) are copied verbatim from graphify-py so node labels and
+// edge counts stay in lockstep.
+
+fn labels(r: &graphify_extract::FileResult) -> Vec<&str> {
+    r.nodes.iter().map(|n| n.label.as_str()).collect()
+}
+
+fn relations(r: &graphify_extract::FileResult) -> std::collections::HashSet<&str> {
+    r.edges.iter().map(|e| e.relation.as_str()).collect()
+}
+
+#[test]
+fn sln_extracts_projects() {
+    let r = extract_sln(&fixtures().join("sample.sln"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let ls: std::collections::HashSet<&str> = labels(&r).into_iter().collect();
+    assert!(ls.contains("WebApi"));
+    assert!(ls.contains("Domain"));
+    assert!(ls.contains("Tests"));
+}
+
+#[test]
+fn sln_contains_edges() {
+    let r = extract_sln(&fixtures().join("sample.sln"));
+    let contains: Vec<_> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .collect();
+    assert_eq!(contains.len(), 3);
+}
+
+#[test]
+fn sln_project_dependency() {
+    let r = extract_sln(&fixtures().join("sample.sln"));
+    assert!(relations(&r).contains("imports"));
+}
+
+#[test]
+fn csproj_packages() {
+    let r = extract_csproj(&fixtures().join("sample.csproj"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let ls = labels(&r);
+    assert!(ls.iter().any(|l| l.contains("MediatR")));
+    assert!(ls.iter().any(|l| l.contains("FluentValidation")));
+    assert!(ls.iter().any(|l| l.contains("Swashbuckle")));
+}
+
+#[test]
+fn csproj_project_references() {
+    let r = extract_csproj(&fixtures().join("sample.csproj"));
+    let imports: Vec<_> = r.edges.iter().filter(|e| e.relation == "imports").collect();
+    assert_eq!(imports.len(), 6); // 4 packages + 2 project refs
+}
+
+#[test]
+fn csproj_target_framework() {
+    let r = extract_csproj(&fixtures().join("sample.csproj"));
+    assert!(labels(&r).contains(&"net8.0"));
+}
+
+#[test]
+fn csproj_sdk() {
+    let r = extract_csproj(&fixtures().join("sample.csproj"));
+    assert!(labels(&r).contains(&"Microsoft.NET.Sdk.Web"));
+}
+
+#[test]
+fn csproj_invalid_xml() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let bad = tmp.path().join("bad.csproj");
+    std::fs::write(&bad, "<Project><Invalid></Project>").expect("write fixture");
+    let r = extract_csproj(&bad);
+    assert!(r.error.is_some());
+}
+
+#[test]
+fn razor_using_and_inject() {
+    let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(targets.iter().any(|t| t.contains("microsoft")));
+    assert!(
+        targets
+            .iter()
+            .any(|t| t.to_lowercase().contains("counterservice"))
+    );
+}
+
+#[test]
+fn razor_components() {
+    let r = extract_razor(&fixtures().join("sample.razor"));
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "calls")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(targets.iter().any(|t| t.contains("weatherdisplay")));
+    assert!(targets.iter().any(|t| t.contains("datagrid")));
+}
+
+#[test]
+fn razor_page_route() {
+    let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(labels(&r).iter().any(|l| l.contains("/counter")));
+}
+
+#[test]
+fn razor_inherits() {
+    let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(relations(&r).contains("inherits"));
+}
+
+#[test]
+fn razor_code_methods() {
+    let r = extract_razor(&fixtures().join("sample.razor"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"IncrementCount"));
+    assert!(ls.contains(&"LoadData"));
+}
+
+#[test]
+fn razor_missing_file() {
+    let r = extract_razor(Path::new("/nonexistent/file.razor"));
+    assert!(r.error.is_some());
+}
+
+#[test]
+fn razor_no_dangling_edges() {
+    let r = extract_razor(&fixtures().join("sample.razor"));
+    assert_no_dangling_edges(&r);
 }

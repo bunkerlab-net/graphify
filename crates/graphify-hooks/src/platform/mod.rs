@@ -11,6 +11,7 @@ pub mod codex;
 pub mod common;
 pub mod copilot;
 pub mod cursor;
+pub mod devin;
 pub mod gemini;
 pub mod kiro;
 pub mod opencode;
@@ -32,6 +33,7 @@ pub use common::{
 };
 pub use copilot::{copilot_install, copilot_uninstall};
 pub use cursor::{cursor_install, cursor_uninstall};
+pub use devin::{devin_install, devin_project_install, devin_project_uninstall, devin_uninstall};
 pub use gemini::{gemini_install, gemini_uninstall, install_gemini_hook, uninstall_gemini_hook};
 pub use kiro::{kiro_install, kiro_uninstall};
 pub use opencode::{install_opencode_plugin, uninstall_opencode_plugin};

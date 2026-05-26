@@ -765,6 +765,44 @@ fn extract_js_resolves_pnpm_workspace_package() {
 }
 
 #[test]
+fn extract_ts_tsconfig_array_extends_alias_resolves_existing_ts_file() {
+    // graphify-py #1017: TypeScript 5.0 allows `extends` as an array; later
+    // entries override earlier ones. Before the fix, an array `extends`
+    // raised an error inside the alias loader, which silently dropped every
+    // file that depended on those aliases. The fix is in
+    // `crates/graphify-extract/src/tsconfig.rs::read_tsconfig_aliases`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write_file(
+        &root.join("tsconfig.base.json"),
+        "{\"compilerOptions\": {\"strict\": true}}",
+    );
+    write_file(
+        &root.join("tsconfig.paths.json"),
+        "{\"compilerOptions\": {\"baseUrl\": \".\", \"paths\": {\"$lib/*\": [\"src/lib/*\"]}}}",
+    );
+    write_file(
+        &root.join("tsconfig.json"),
+        "{\"extends\": [\"./tsconfig.base.json\", \"./tsconfig.paths.json\"]}",
+    );
+    let target = root.join("src/lib/types/type-helpers.ts");
+    write_file(&target, "export type Helper = string\n");
+    let importer = root.join("src/routes/page.ts");
+    write_file(
+        &importer,
+        "import type { Helper } from '$lib/types/type-helpers'\nconst value: Helper = 'x'\n",
+    );
+
+    let result = extract_js(&importer);
+    let targets = import_targets(&result, Some("imports_from"));
+    let target_canon = target.canonicalize().unwrap_or(target);
+    assert!(
+        targets.contains(&make_id1(&target_canon.to_string_lossy())),
+        "type-helpers.ts not in alias-resolved targets: {targets:?}"
+    );
+}
+
+#[test]
 fn extract_js_pure_export_no_from_not_treated_as_reexport() {
     // `export { x }` with no `from` clause is a local re-bind — must NOT
     // emit a re_exports edge.

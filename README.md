@@ -2,14 +2,34 @@
 
 Turn any folder of source code, documentation, papers, images, or videos into a queryable knowledge graph.
 
-Point `graphify` at a directory and you get back three files:
+Point `graphify` at a directory and you get back a `graphify-out/` folder. The
+three files most people interact with directly:
 
 ```text
 graphify-out/
-├── graph.json       full graph — query without re-reading your files
-├── graph.html       open in any browser — interactive viz
-└── GRAPH_REPORT.md  key concepts, surprising connections, suggested questions
+├── graph.json                  full graph — query without re-reading your files
+├── graph.html                  open in any browser — interactive viz
+└── GRAPH_REPORT.md             key concepts, surprising connections, suggested questions
 ```
+
+A handful of sidecars alongside them carry intermediate state for incremental
+runs, the report, and assistant integration:
+
+```text
+graphify-out/
+├── manifest.json               per-file fingerprint for incremental updates
+├── .graphify_root              marker so child runs find the project root
+├── .graphify_analysis.json     analysis sidecar feeding GRAPH_REPORT.md
+├── .graphify_labels.json       community label cache (skip the LLM next time)
+├── stage_02_extract.json       cached extraction output for incremental runs
+└── .graphify_semantic_marker   set when semantic extraction has already run
+```
+
+Additional output is written under `graphify-out/` only when you ask for it:
+`wiki/` (per-community articles, `graphify export wiki`), `GRAPH_TREE.html`
+(`graphify tree`), `cypher.txt` (`graphify export neo4j`), `<YYYY-MM-DD>/`
+backups (when `graph.json` is overwritten), and `memory/` (saved Q&A from
+`graphify save-result`).
 
 Then ask it questions instead of grepping:
 
@@ -27,11 +47,13 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 
 - **26+ languages**, parsed with tree-sitter: Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, C#, Ruby, PHP,
   Swift, Kotlin, Scala, Bash, Lua, Elixir, Haskell, OCaml, Zig, Solidity, R, Julia, HTML, CSS, SQL, …
+  Also reads .NET project files (`.sln`, `.csproj`, `.fsproj`, `.vbproj`) and Razor components
+  (`.razor`, `.cshtml`) for package, project-reference, target-framework, and `@code` extraction.
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
 - **Local-first** — `graph.json` lives next to your code; no daemon, no cloud, no account.
 - **Optional LLM-driven semantic extraction** through OpenAI, Anthropic, Gemini, DeepSeek, Moonshot, Ollama, or Bedrock.
 - **AI-assistant integration** — drop-in installers for Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, VS Code,
-  OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Pi, Google Antigravity, and more.
+  OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Pi, Devin CLI, Google Antigravity, and more.
 - **MCP server** for any MCP-capable assistant (`graphify serve`).
 - **Git hooks + merge driver** so two branches editing the same `graph.json` produce a union-merged result.
 - **Cross-repo global graph** — aggregate every project you care about into one `~/.graphify/global-graph.json`.

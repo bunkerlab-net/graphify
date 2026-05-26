@@ -517,3 +517,45 @@ fn test_to_wiki_stale_nodes_prints_warning() {
     assert!(article.contains("parse"));
     assert!(!article.contains("stale1"));
 }
+
+#[test]
+fn test_community_article_handles_null_source_file() {
+    // Regression for graphify-py #1016: a node with `source_file=None`
+    // (Value::Null in Rust) must not crash rendering when collecting
+    // the set of distinct source files for the community article.
+    let dir = tempdir().expect("tempdir");
+
+    let mut g = Graph::new(GraphKind::Graph);
+
+    let mut n1 = IndexMap::new();
+    n1.insert("label".to_string(), Value::String("parse".to_string()));
+    n1.insert("file_type".to_string(), Value::String("code".to_string()));
+    n1.insert("source_file".to_string(), Value::Null);
+    g.add_node("n1", n1);
+
+    let mut n2 = IndexMap::new();
+    n2.insert("label".to_string(), Value::String("validate".to_string()));
+    n2.insert("file_type".to_string(), Value::String("code".to_string()));
+    n2.insert(
+        "source_file".to_string(),
+        Value::String("parser.py".to_string()),
+    );
+    g.add_node("n2", n2);
+
+    let mut e12 = IndexMap::new();
+    e12.insert("relation".to_string(), Value::String("calls".to_string()));
+    e12.insert(
+        "confidence".to_string(),
+        Value::String("EXTRACTED".to_string()),
+    );
+    e12.insert("weight".to_string(), Value::from(1.0_f64));
+    g.add_edge("n1", "n2", e12);
+
+    let mut comms = IndexMap::new();
+    comms.insert(0_i64, vec!["n1".to_string(), "n2".to_string()]);
+    let mut labels = IndexMap::new();
+    labels.insert(0_i64, "Parsing Layer".to_string());
+
+    to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("must not raise");
+    assert!(dir.path().join("index.md").exists());
+}
