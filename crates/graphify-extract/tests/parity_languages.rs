@@ -582,6 +582,7 @@ fn sln_extracts_projects() {
 #[test]
 fn sln_contains_edges() {
     let r = extract_sln(&fixtures().join("sample.sln"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     let contains: Vec<_> = r
         .edges
         .iter()
@@ -593,6 +594,7 @@ fn sln_contains_edges() {
 #[test]
 fn sln_project_dependency() {
     let r = extract_sln(&fixtures().join("sample.sln"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     assert!(relations(&r).contains("imports"));
 }
 
@@ -609,6 +611,7 @@ fn csproj_packages() {
 #[test]
 fn csproj_project_references() {
     let r = extract_csproj(&fixtures().join("sample.csproj"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     let imports: Vec<_> = r.edges.iter().filter(|e| e.relation == "imports").collect();
     assert_eq!(imports.len(), 6); // 4 packages + 2 project refs
 }
@@ -616,12 +619,14 @@ fn csproj_project_references() {
 #[test]
 fn csproj_target_framework() {
     let r = extract_csproj(&fixtures().join("sample.csproj"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     assert!(labels(&r).contains(&"net8.0"));
 }
 
 #[test]
 fn csproj_sdk() {
     let r = extract_csproj(&fixtures().join("sample.csproj"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     assert!(labels(&r).contains(&"Microsoft.NET.Sdk.Web"));
 }
 
@@ -655,6 +660,7 @@ fn razor_using_and_inject() {
 #[test]
 fn razor_components() {
     let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     let targets: std::collections::HashSet<&str> = r
         .edges
         .iter()
@@ -668,18 +674,21 @@ fn razor_components() {
 #[test]
 fn razor_page_route() {
     let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     assert!(labels(&r).iter().any(|l| l.contains("/counter")));
 }
 
 #[test]
 fn razor_inherits() {
     let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     assert!(relations(&r).contains("inherits"));
 }
 
 #[test]
 fn razor_code_methods() {
     let r = extract_razor(&fixtures().join("sample.razor"));
+    assert!(r.error.is_none(), "{:?}", r.error);
     let ls = labels(&r);
     assert!(ls.contains(&"IncrementCount"));
     assert!(ls.contains(&"LoadData"));
@@ -687,7 +696,13 @@ fn razor_code_methods() {
 
 #[test]
 fn razor_missing_file() {
-    let r = extract_razor(Path::new("/nonexistent/file.razor"));
+    // Build a guaranteed-nonexistent path inside a tempdir so the assertion
+    // holds on Windows (where `/nonexistent/...` would otherwise resolve
+    // against the current drive). The tempdir is dropped at scope end; the
+    // child path inside it never gets created.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing = tmp.path().join("does_not_exist.razor");
+    let r = extract_razor(&missing);
     assert!(r.error.is_some());
 }
 

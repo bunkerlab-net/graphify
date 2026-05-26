@@ -245,10 +245,18 @@ fn attr_ci(start: &BytesStart<'_>, attr: &str) -> Option<String> {
                 .ok()
                 .flatten()
         })
+        // `normalized_value` decodes XML entities (`&amp;` → `&`, `&#x2F;`
+        // → `/`, etc.) and collapses whitespace per the XML attribute-value
+        // normalization rules. Python's ElementTree returns already-decoded
+        // attribute text, so we match that here — a
+        // `PackageReference Include="A&amp;B"` becomes the literal `A&B`
+        // node label instead of `A&amp;B`.
         .and_then(|a| {
-            std::str::from_utf8(&a.value)
+            // Treat the document as XML 1.0 when the declaration was
+            // omitted (csproj files almost never carry an `<?xml ?>` prolog).
+            a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
                 .ok()
-                .map(std::string::ToString::to_string)
+                .map(std::borrow::Cow::into_owned)
         })
 }
 

@@ -58,9 +58,16 @@ pub fn devin_install() -> Result<String, HooksError> {
 
 /// Remove graphify skill for the Devin CLI at user scope.
 ///
+/// Skill removal is best-effort: the shared `remove_skill` helper swallows
+/// filesystem errors so callers see a clean "skill removed" message even
+/// if a leftover empty directory could not be reaped. Matches the
+/// behaviour of `pi_uninstall`.
+///
 /// # Errors
 ///
-/// Returns `HooksError::Io` on filesystem failures.
+/// Currently never returns an error. The `Result` return type is kept for
+/// symmetry with [`devin_install`] and [`devin_project_uninstall`], which
+/// can fail when reading or writing `.windsurf/rules/graphify.md`.
 pub fn devin_uninstall() -> Result<String, HooksError> {
     let skill_dst = user_skill_path();
     if skill_dst.exists() {
@@ -108,9 +115,15 @@ pub fn devin_project_install(project_dir: &Path) -> Result<String, HooksError> {
 /// Uninstall graphify for Devin under `project_dir`: removes the
 /// project-scoped skill plus `.windsurf/rules/graphify.md`.
 ///
+/// Skill removal is best-effort (see [`devin_uninstall`]). The rules file
+/// removal does propagate I/O errors so a permissions failure on
+/// `.windsurf/rules/graphify.md` is surfaced.
+///
 /// # Errors
 ///
-/// Returns `HooksError::Io` on filesystem failures.
+/// Returns `HooksError::Io` if removing `.windsurf/rules/graphify.md`
+/// fails. Failures while reaping the skill file itself are swallowed by
+/// the shared `remove_skill` helper.
 pub fn devin_project_uninstall(project_dir: &Path) -> Result<String, HooksError> {
     let mut msgs: Vec<String> = Vec::new();
 
