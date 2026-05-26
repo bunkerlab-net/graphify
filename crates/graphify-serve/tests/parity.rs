@@ -908,6 +908,20 @@ fn query_terms_chinese_includes_original_term() {
     assert!(r.iter().any(|t| t == "页面路由"));
 }
 
+#[test]
+fn query_terms_chinese_mixed_script_does_not_bigram_across_scripts() {
+    // A mixed-script token like "a前b" must not produce noisy
+    // cross-script bigrams ("a前", "前b") — only same-script bigrams
+    // are emitted, and the unsegmented original term is preserved.
+    // Divergence note: graphify-py's `_segment_chinese` bigram fallback
+    // walks raw character pairs without script awareness; the Rust
+    // port tightens this since the bigram path is its only segmenter.
+    let r = query_terms("a前b");
+    assert!(!r.iter().any(|t| t == "a前"));
+    assert!(!r.iter().any(|t| t == "前b"));
+    assert!(r.iter().any(|t| t == "a前b"));
+}
+
 // ---------------------------------------------------------------------------
 // load_graph: reject oversized files
 // ---------------------------------------------------------------------------

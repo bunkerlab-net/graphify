@@ -669,30 +669,20 @@ pub fn extract_razor(path: &Path) -> FileResult {
     }
 
     // @code { ... } method extraction. Find each `@code {` opening, walk
-    // braces to locate the matching close, then scan the block body for
-    // method declarations. The brace counter intentionally does NOT
-    // track string literals or comments — this matches graphify-py's
-    // `extract_razor` byte-for-byte. A C# string like `"}{"` inside a
-    // method body could in theory confuse the counter, but the regex
-    // method scanner below only fires on lines that look like method
-    // declarations, so any false `block_end` would just truncate the
-    // search range, not produce spurious nodes. Adding lexer state here
-    // would diverge from Python parity.
+    // braces tracking C# lexical context (line comments, block comments,
+    // regular strings, verbatim strings, char literals) so braces inside
+    // those don't confuse the depth counter.
+    //
+    // Divergence from `graphify-py` `extract_razor` (intentional): the
+    // Python brace counter is purely structural, which means a method
+    // body containing `"}{"` would truncate `block_end` early and
+    // silently drop every method below that point. Run-aware scanning
+    // costs O(n) extra work but produces the right block boundary.
     let stem = file_stem(path);
     let src_bytes = src.as_bytes();
     for cap in RAZOR_CODE_BLOCK_RE.find_iter(&src) {
         let block_start = cap.end();
-        let mut depth: i32 = 1;
-        let mut pos = block_start;
-        while pos < src_bytes.len() && depth > 0 {
-            match src_bytes[pos] {
-                b'{' => depth += 1,
-                b'}' => depth -= 1,
-                _ => {}
-            }
-            pos += 1;
-        }
-        let block_end = if depth == 0 { pos - 1 } else { pos };
+        let block_end = find_csharp_block_end(src_bytes, block_start);
         if block_end <= block_start {
             continue;
         }
@@ -735,4 +725,129 @@ pub fn extract_razor(path: &Path) -> FileResult {
         raw_calls: Vec::new(),
         error: None,
     }
+}
+
+/// Find the byte index of the closing `}` that matches the opening `{` of
+/// an `@code {` block.
+///
+/// Walks `src` from `start` tracking C# lexical state: line comments,
+/// block comments, regular strings (with `\` escape), verbatim strings
+/// (with `""` escape), interpolated strings, and char literals. Braces
+/// inside any of those don't count toward the depth.
+///
+/// Returns the byte offset of the matching `}` (the byte one past the
+/// last byte of the block body). When the closing `}` is missing,
+/// returns `src.len()` so the caller fails open and still scans
+/// whatever body it has.
+#[allow(clippy::too_many_lines)] // linear state-machine dispatch; splitting per-state would just spread the transition table
+fn find_csharp_block_end(src: &[u8], start: usize) -> usize {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Code,
+        LineComment,
+        BlockComment,
+        String,
+        VerbatimString,
+        Char,
+    }
+    let mut state = State::Code;
+    let mut depth: i32 = 1;
+    let mut pos = start;
+    while pos < src.len() {
+        let b = src[pos];
+        match state {
+            State::Code => {
+                let next = src.get(pos + 1).copied().unwrap_or(0);
+                if b == b'/' && next == b'/' {
+                    state = State::LineComment;
+                    pos += 2;
+                    continue;
+                }
+                if b == b'/' && next == b'*' {
+                    state = State::BlockComment;
+                    pos += 2;
+                    continue;
+                }
+                if (b == b'@' || b == b'$') && next == b'"' {
+                    // `@"..."` is verbatim (no `\` escape, `""` is the
+                    // embedded-quote). `$"..."` is interpolated — the
+                    // embedded text between holes honours the regular
+                    // `\"` escape, so route it through the regular
+                    // string state.
+                    state = if b == b'@' {
+                        State::VerbatimString
+                    } else {
+                        State::String
+                    };
+                    pos += 2;
+                    continue;
+                }
+                if b == b'"' {
+                    state = State::String;
+                    pos += 1;
+                    continue;
+                }
+                if b == b'\'' {
+                    state = State::Char;
+                    pos += 1;
+                    continue;
+                }
+                if b == b'{' {
+                    depth += 1;
+                } else if b == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return pos;
+                    }
+                }
+                pos += 1;
+            }
+            State::LineComment => {
+                if b == b'\n' {
+                    state = State::Code;
+                }
+                pos += 1;
+            }
+            State::BlockComment => {
+                if b == b'*' && src.get(pos + 1).copied() == Some(b'/') {
+                    state = State::Code;
+                    pos += 2;
+                } else {
+                    pos += 1;
+                }
+            }
+            State::String => {
+                if b == b'\\' && pos + 1 < src.len() {
+                    // Skip the escaped char (covers `\"`, `\\`, `\n`, ...).
+                    pos += 2;
+                } else if b == b'"' {
+                    state = State::Code;
+                    pos += 1;
+                } else {
+                    pos += 1;
+                }
+            }
+            State::VerbatimString => {
+                if b == b'"' && src.get(pos + 1).copied() == Some(b'"') {
+                    pos += 2;
+                } else if b == b'"' {
+                    state = State::Code;
+                    pos += 1;
+                } else {
+                    pos += 1;
+                }
+            }
+            State::Char => {
+                if b == b'\\' && pos + 1 < src.len() {
+                    pos += 2;
+                } else if b == b'\'' {
+                    state = State::Code;
+                    pos += 1;
+                } else {
+                    pos += 1;
+                }
+            }
+        }
+    }
+    src.len()
 }

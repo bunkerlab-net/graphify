@@ -695,6 +695,37 @@ fn razor_code_methods() {
 }
 
 #[test]
+fn razor_code_block_brace_counter_ignores_strings_and_comments() {
+    // Regression for the brace-counter divergence from graphify-py: a
+    // method body with `"}{"` or a `}` inside a `// ...` comment used
+    // to truncate `block_end` early, silently dropping every method
+    // declared further down the @code block. The state-machine scan
+    // in `find_csharp_block_end` should keep both methods discoverable.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = tmp.path().join("Bug.razor");
+    std::fs::write(
+        &fixture,
+        "@page \"/bug\"\n\n@code {\n    \
+         private string s = \"}{\";\n    \
+         // method body terminator: }\n    \
+         private void First() { Console.WriteLine(\"}\"); }\n    \
+         public async Task Second() { return; }\n}\n",
+    )
+    .expect("write razor fixture");
+    let r = extract_razor(&fixture);
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let ls = labels(&r);
+    assert!(
+        ls.contains(&"First"),
+        "First missing — brace counter truncated early: {ls:?}"
+    );
+    assert!(
+        ls.contains(&"Second"),
+        "Second missing — brace counter truncated early: {ls:?}"
+    );
+}
+
+#[test]
 fn razor_missing_file() {
     // Build a guaranteed-nonexistent path inside a tempdir so the assertion
     // holds on Windows (where `/nonexistent/...` would otherwise resolve
