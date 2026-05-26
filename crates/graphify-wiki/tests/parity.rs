@@ -558,4 +558,9 @@ fn test_community_article_handles_null_source_file() {
 
     to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("must not raise");
     assert!(dir.path().join("index.md").exists());
+    // The community article itself must also be emitted — the regression
+    // would have crashed before reaching this point.
+    let article = std::fs::read_to_string(dir.path().join("Parsing_Layer.md"))
+        .expect("community article must exist");
+    assert!(article.contains("parse") || article.contains("validate"));
 }

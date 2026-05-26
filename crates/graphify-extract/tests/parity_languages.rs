@@ -559,10 +559,12 @@ fn extractors_handle_missing_file() {
 // `sample.razor`) are copied verbatim from graphify-py so node labels and
 // edge counts stay in lockstep.
 
+#[must_use]
 fn labels(r: &graphify_extract::FileResult) -> Vec<&str> {
     r.nodes.iter().map(|n| n.label.as_str()).collect()
 }
 
+#[must_use]
 fn relations(r: &graphify_extract::FileResult) -> std::collections::HashSet<&str> {
     r.edges.iter().map(|e| e.relation.as_str()).collect()
 }

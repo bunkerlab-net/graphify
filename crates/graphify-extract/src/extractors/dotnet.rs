@@ -16,6 +16,13 @@ use std::sync::LazyLock;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 
+/// `MSBuild` project files (`.csproj` / `.fsproj` / `.vbproj`) larger than this
+/// are skipped with an error. Real-world projects are well under 2 MiB; the
+/// cap protects the extractor against accidentally being pointed at a
+/// committed binary or a multi-megabyte generated artefact. Matches the
+/// literal 2 MiB constant in `graphify-py` `extract.py::extract_csproj`,
+/// so the cap is intentionally not configurable — raising or lowering it
+/// across the Python/Rust pair belongs in a separate parity-bumping change.
 const CSPROJ_MAX_BYTES: u64 = 2_097_152;
 
 /// Text events between an opening element tag and its matching close get
