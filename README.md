@@ -61,7 +61,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 
 ## Install
 
-Requires Rust 1.90 or newer (`rustup toolchain install stable`).
+Requires Rust 1.95 or newer (`rustup toolchain install stable`).
 
 ```bash
 cargo install --git https://github.com/bunkerlab-net/graphify.git
