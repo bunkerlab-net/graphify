@@ -145,6 +145,7 @@ fn resolve_edge_id(
 ///
 /// String values are used verbatim; missing keys sort as empty strings. Mirrors
 /// the `sorted(..., key=...)` call in graphify-py `build_from_json`.
+#[must_use]
 fn edge_sort_key(edge: &Value) -> (String, String, String) {
     let obj = edge.as_object();
     let field = |primary: &str, fallback: &str| -> String {
@@ -161,6 +162,7 @@ fn edge_sort_key(edge: &Value) -> (String, String, String) {
 
 /// Stringify a JSON value for sort comparison: strings verbatim, null → empty,
 /// anything else via its JSON representation.
+#[must_use]
 fn value_to_sort_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
