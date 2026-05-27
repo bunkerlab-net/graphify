@@ -690,7 +690,7 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
             exact.push(nid.clone());
         } else if node_term.starts_with(&term) || nid_term.starts_with(&term) {
             prefix.push(nid.clone());
-        } else if node_term.contains(&term) {
+        } else if node_term.contains(&term) || nid_term.contains(&term) {
             substring.push(nid.clone());
         }
     }
