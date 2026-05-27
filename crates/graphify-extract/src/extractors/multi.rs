@@ -902,9 +902,11 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         .collect();
 
     for rc in &all_raw_calls {
-        if crate::builtins::is_language_builtin_global(&rc.callee) {
-            continue;
-        }
+        // No built-in pre-filter here: the per-language extractors already drop
+        // *unresolved* built-in calls at the source, so any raw_call that reaches
+        // this cross-file pass is a genuine unresolved symbol. Filtering on the
+        // name alone would wrongly suppress a project symbol that happens to
+        // share a built-in name and resolves uniquely below.
         if rc.is_member_call {
             continue;
         }

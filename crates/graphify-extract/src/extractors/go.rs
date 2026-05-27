@@ -545,9 +545,12 @@ fn walk_calls_go(
                     }
                     _ => {}
                 }
-                if let Some(cn) = callee_name
-                    && !crate::builtins::is_language_builtin_global(&cn)
-                {
+                // Built-in suppression applies only to unqualified identifier
+                // calls; a selector call (`obj.len()`, `pkg.len()`) names a method
+                // or package function, not the language built-in, so it must not
+                // be filtered.
+                let is_unqualified = func_node.kind() == "identifier";
+                if let Some(cn) = callee_name {
                     let tgt_nid = label_to_nid.get(&cn.to_lowercase()).cloned();
                     if let Some(tgt) = tgt_nid {
                         if tgt != caller_nid {
@@ -567,7 +570,8 @@ fn walk_calls_go(
                                 });
                             }
                         }
-                    } else {
+                    } else if !(is_unqualified && crate::builtins::is_language_builtin_global(&cn))
+                    {
                         raw_calls.push(RawCall {
                             caller_nid: caller_nid.to_string(),
                             callee: cn,

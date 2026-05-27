@@ -258,6 +258,7 @@ impl McpBuilder {
 /// Return the first arg that looks like an npm or pypi package id, else `None`.
 ///
 /// Skips short flags (`-y`, `--yes`) and option arguments (`--local-timezone=UTC`).
+#[must_use]
 fn detect_package_from_args(args: &[Value]) -> Option<String> {
     for raw in args {
         let Value::String(raw) = raw else {
@@ -281,6 +282,7 @@ fn detect_package_from_args(args: &[Value]) -> Option<String> {
 ///
 /// Scoped (`@scope/name@1.2.3`) has at most two `@`; the second is the version
 /// separator. Unscoped (`name@1.2.3`) splits on the first `@`.
+#[must_use]
 fn strip_version(pkg: &str) -> String {
     if let Some(rest) = pkg.strip_prefix('@') {
         // `rest` drops the leading scope `@`, so an `@` found at index `rel`

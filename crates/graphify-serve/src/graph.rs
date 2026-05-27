@@ -665,7 +665,11 @@ pub fn subgraph_to_text<S: BuildHasher>(
 ///
 /// Ordered: exact, prefix, substring.
 ///
-/// Mirrors Python `_find_node`.
+/// Both the query and the node label/ID are run through [`search_tokens`] so
+/// punctuated names (`foo.bar`, `foo()`, `pkg::Type`) match a tokenised query.
+/// This diverges from graphify-py `_find_node`, which compares the tokenised
+/// query against the *raw* label/ID and so silently misses punctuated names —
+/// a real search-recall bug not worth replicating.
 #[must_use]
 pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     let term = search_tokens(label).join(" ");
@@ -677,17 +681,15 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     let mut substring: Vec<String> = Vec::new();
 
     for (nid, attrs) in graph.nodes() {
-        let norm_label = get_norm_label(attrs);
-        let bare_label = norm_label.trim_end_matches(['(', ')']).to_string();
-        let nid_lower = nid.to_lowercase();
-        if term == norm_label || term == bare_label || term == nid_lower {
+        // Token-join both sides; `search_tokens` already strips trailing `()`
+        // and other punctuation, so no separate `bare_label` is needed.
+        let node_term = search_tokens(&get_norm_label(attrs)).join(" ");
+        let nid_term = search_tokens(&nid.to_lowercase()).join(" ");
+        if term == node_term || term == nid_term {
             exact.push(nid.clone());
-        } else if norm_label.starts_with(&term)
-            || bare_label.starts_with(&term)
-            || nid_lower.starts_with(&term)
-        {
+        } else if node_term.starts_with(&term) || nid_term.starts_with(&term) {
             prefix.push(nid.clone());
-        } else if norm_label.contains(&term) {
+        } else if node_term.contains(&term) {
             substring.push(nid.clone());
         }
     }

@@ -390,9 +390,9 @@ fn walk_calls_rust(
             }
             _ => {}
         }
-        if let Some(cn) = callee_name
-            && !crate::builtins::is_language_builtin_global(&cn)
-        {
+        if let Some(cn) = callee_name {
+            // Resolve first so a built-in name backing a real local symbol is
+            // kept; only drop unresolved built-ins (god-node guard, #726).
             let tgt_nid = ctx.label_to_nid.get(&cn.to_lowercase()).cloned();
             if let Some(tgt) = tgt_nid {
                 if tgt != caller_nid {
@@ -414,6 +414,7 @@ fn walk_calls_rust(
                 }
             } else if !is_scoped_call
                 && !RUST_TRAIT_METHOD_BLOCKLIST.contains(cn.to_lowercase().as_str())
+                && !crate::builtins::is_language_builtin_global(&cn)
             {
                 ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),

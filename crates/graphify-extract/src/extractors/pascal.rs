@@ -913,6 +913,15 @@ pub fn extract_delphi_form(path: &Path) -> FileResult {
 #[must_use]
 #[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 pub fn extract_lazarus_package(path: &Path) -> FileResult {
+    // Check the on-disk size before reading so an oversized file can't force a
+    // multi-megabyte allocation just to be rejected.
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > crate::extractors::PROJECT_XML_MAX_BYTES => {
+            return FileResult::error("package file too large");
+        }
+        Ok(_) => {}
+        Err(e) => return FileResult::error(e.to_string()),
+    }
     let raw = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => return FileResult::error(e.to_string()),

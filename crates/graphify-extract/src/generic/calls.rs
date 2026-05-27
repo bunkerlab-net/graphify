@@ -80,8 +80,11 @@ pub(super) fn walk_calls(
 
         if let Some(callee) = callee_name
             && !callee.is_empty()
-            && !crate::builtins::is_language_builtin_global(&callee)
         {
+            // Resolve first: a built-in name (`len`, `String`, ...) that maps to a
+            // real local symbol is a genuine call and must be kept. Only drop
+            // built-ins when they DON'T resolve, so they can't become cross-file
+            // god-nodes via the raw-call pass (#726).
             let tgt_nid = ctx.label_to_nid.get(&callee.to_lowercase()).cloned();
             if let Some(tgt) = tgt_nid {
                 if tgt != caller_nid {
@@ -101,7 +104,7 @@ pub(super) fn walk_calls(
                         });
                     }
                 }
-            } else {
+            } else if !crate::builtins::is_language_builtin_global(&callee) {
                 ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: callee.clone(),
