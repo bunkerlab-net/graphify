@@ -439,6 +439,9 @@ fn cluster_only_remaps_labels_to_previous_cids() {
         .filter_map(|k| k.parse::<i64>().ok())
         .collect();
 
+    // Non-empty intersection mirrors graphify-py's `assert overlap`: the remap
+    // guarantees at least one prior cid survives. Asserting both survive would
+    // over-constrain beyond the reference test and couple to partitioner output.
     assert!(
         actual_cids.intersection(&label_cids).next().is_some(),
         "after cluster-only, at least one prior label cid must still appear in \

@@ -1,10 +1,13 @@
 //! Public shell-script constants for the post-commit / post-checkout git hooks.
 //!
 //! These mirror their Python counterparts so an installed hook produced by the
-//! Rust binary matches the Python reference. The one intentional divergence is
-//! a 1 MiB cap on the rebuild log: graphify-py appends to
-//! `~/.cache/graphify-rebuild.log` unbounded, which grows without limit across
-//! commits; the Rust hooks truncate to the most recent 1 MiB before appending.
+//! Rust binary matches the Python reference. Two intentional divergences:
+//! - A 1 MiB cap on the rebuild log: graphify-py appends to
+//!   `~/.cache/graphify-rebuild.log` unbounded, which grows without limit
+//!   across commits; the Rust hooks truncate to the most recent 1 MiB first.
+//! - `GRAPHIFY_SKIP_HOOK=1` is honoured by *both* hooks; graphify-py only wired
+//!   it into post-commit, so its post-checkout hook ignored the opt-out.
+//!
 //! Tests assert on the contents.
 
 /// Start marker for the post-commit hook section.
@@ -191,6 +194,8 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 [ -d \"$GIT_DIR/rebase-apply\" ] && exit 0
 [ -f \"$GIT_DIR/MERGE_HEAD\" ] && exit 0
 [ -f \"$GIT_DIR/CHERRY_PICK_HEAD\" ] && exit 0
+
+[ \"${GRAPHIFY_SKIP_HOOK:-0}\" = \"1\" ] && exit 0
 
 # Detect the correct Python interpreter (handles pipx, venv, system installs)
 GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
