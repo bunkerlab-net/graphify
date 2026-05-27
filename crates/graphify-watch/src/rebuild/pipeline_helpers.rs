@@ -261,6 +261,11 @@ pub(crate) fn merge_with_existing_graph(
         // current set of code files on disk, evicting nodes whose source file
         // was deleted since the last run (#1007). Non-code nodes (docs/papers/
         // images) are left to the LLM re-extraction path and skipped here.
+        // Files outside `project_root` are intentionally dropped: graph nodes
+        // only ever carry project-relative `source_file` paths, so a code file
+        // living outside the root can't match any node and need not be tracked.
+        // `canonicalize` falls back to the raw path; `norm_source_file` keeps
+        // the relative form normalised so it compares equal to node paths.
         let current_sources: std::collections::HashSet<String> = code_files
             .iter()
             .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))

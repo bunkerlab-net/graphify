@@ -13,6 +13,16 @@ use crate::normalize::norm_source_file;
 
 static PERF_LOG: LazyLock<bool> = LazyLock::new(|| std::env::var("GRAPHIFY_PERF_LOG").is_ok());
 
+/// Canonicalise a root path to a string for `source_file` relativisation,
+/// falling back to the path as-is when it cannot be resolved (e.g. a
+/// non-existent root in tests).
+fn canonicalize_root_to_string(root: &Path) -> String {
+    root.canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Build a graph from a single extraction dict.
 ///
 /// Mirrors Python `build_from_json(extraction, directed=False, root=None)`.
@@ -37,12 +47,7 @@ pub fn build_from_json(
     directed: bool,
     root: Option<&Path>,
 ) -> Result<Graph, BuildError> {
-    let root_str = root.map(|p| {
-        p.canonicalize()
-            .unwrap_or_else(|_| p.to_path_buf())
-            .to_string_lossy()
-            .into_owned()
-    });
+    let root_str = root.map(canonicalize_root_to_string);
     let kind = if directed {
         GraphKind::DiGraph
     } else {
@@ -294,12 +299,7 @@ pub fn build_merge_with_graph_cap(
 /// paths still match nodes relativised at build time (#1007). `.canonicalize()`
 /// resolves symlinked roots and redundant `..`/`.` segments.
 fn prune_deleted_sources(graph: &mut Graph, pruned: &[String], root: Option<&Path>) {
-    let root_str = root.map(|p| {
-        p.canonicalize()
-            .unwrap_or_else(|_| p.to_path_buf())
-            .to_string_lossy()
-            .into_owned()
-    });
+    let root_str = root.map(canonicalize_root_to_string);
     let mut prune_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     for p in pruned {
         if p.is_empty() {

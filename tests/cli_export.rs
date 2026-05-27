@@ -401,8 +401,8 @@ fn cluster_only_remaps_labels_to_previous_cids() {
                 {{"id":"c","label":"C","file_type":"code","source_file":"c.py","community":{sentinel_b}}},
                 {{"id":"d","label":"D","file_type":"code","source_file":"d.py","community":{sentinel_b}}}
             ],"edges":[
-                {{"source":"a","target":"b","relation":"calls","confidence":"EXTRACTED","source_file":"a.py"}},
-                {{"source":"c","target":"d","relation":"calls","confidence":"EXTRACTED","source_file":"c.py"}}
+                {{"source":"a","target":"b","context":"CALLS","confidence":"EXTRACTED","source_file":"a.py"}},
+                {{"source":"c","target":"d","context":"CALLS","confidence":"EXTRACTED","source_file":"c.py"}}
             ]}}"#
         ),
     )

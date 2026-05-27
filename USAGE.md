@@ -151,7 +151,7 @@ The query / affected / explain / serve commands filter on these.
 
 | Relation       | Emitted by                                                               |
 | -------------- | ------------------------------------------------------------------------ |
-| `contains`     | File node → top-level function / class.                                  |
+| `contains`     | File / config node → contained entity (function, class, `mcp_server`).   |
 | `method`       | Class node → method.                                                     |
 | `calls`        | Function / method node → callee, resolved within the file or cross-file. |
 | `imports`      | File node → imported module.                                             |
@@ -160,7 +160,6 @@ The query / affected / explain / serve commands filter on these.
 | `inherits`     | Class → base class. Java's source-level `extends` is normalised here.    |
 | `implements`   | Class → interface (Java / C# / TypeScript).                              |
 | `references`   | Function / method / class → type referenced in its signature or body.    |
-| `contains`     | MCP config file → declared `mcp_server`.                                 |
 | `requires_env` | MCP server → env-var *name* it depends on (values are never read).       |
 
 `references` edges typically carry a `context` describing *how* the type is

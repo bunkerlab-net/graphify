@@ -1,8 +1,11 @@
 //! Public shell-script constants for the post-commit / post-checkout git hooks.
 //!
-//! The strings here are byte-identical to their Python counterparts so an
-//! installed hook produced by the Rust binary matches the Python reference
-//! exactly. Tests assert on the contents.
+//! These mirror their Python counterparts so an installed hook produced by the
+//! Rust binary matches the Python reference. The one intentional divergence is
+//! a 1 MiB cap on the rebuild log: graphify-py appends to
+//! `~/.cache/graphify-rebuild.log` unbounded, which grows without limit across
+//! commits; the Rust hooks truncate to the most recent 1 MiB before appending.
+//! Tests assert on the contents.
 
 /// Start marker for the post-commit hook section.
 pub const HOOK_MARKER: &str = "# graphify-hook-start";
@@ -49,7 +52,8 @@ if [ -z \"$GRAPHIFY_PYTHON\" ]; then
 fi
 ";
 
-/// The full post-commit hook script, byte-identical to Python's `_HOOK_SCRIPT`.
+/// The full post-commit hook script. Mirrors Python's `_HOOK_SCRIPT` except for
+/// the 1 MiB rebuild-log cap (see the module-level note).
 pub const HOOK_SCRIPT: &str = "# graphify-hook-start
 # Auto-rebuilds the knowledge graph after each commit (code files only, no LLM needed).
 # Installed by: graphify hook install
@@ -116,6 +120,13 @@ export GRAPHIFY_CHANGED=\"$CHANGED\"
 # Full repo rebuilds can take hours; blocking the post-commit hook stalls the shell.
 _GRAPHIFY_LOG=\"${HOME}/.cache/graphify-rebuild.log\"
 mkdir -p \"$(dirname \"$_GRAPHIFY_LOG\")\"
+# Cap the rebuild log so the append below can't grow it without bound across
+# commits; keep the most recent 1 MiB. (Divergence from graphify-py, which
+# appends unbounded.)
+_GRAPHIFY_LOG_MAX_BYTES=1048576
+if [ -f \"$_GRAPHIFY_LOG\" ] && [ \"$(wc -c < \"$_GRAPHIFY_LOG\" 2>/dev/null || echo 0)\" -gt \"$_GRAPHIFY_LOG_MAX_BYTES\" ]; then
+    tail -c \"$_GRAPHIFY_LOG_MAX_BYTES\" \"$_GRAPHIFY_LOG\" > \"$_GRAPHIFY_LOG.tmp\" 2>/dev/null && mv -f \"$_GRAPHIFY_LOG.tmp\" \"$_GRAPHIFY_LOG\"
+fi
 echo \"[graphify hook] launching background rebuild (log: $_GRAPHIFY_LOG)\"
 nohup $GRAPHIFY_PYTHON -c \"
 import os, signal, sys
@@ -149,7 +160,8 @@ disown 2>/dev/null || true
 # graphify-hook-end
 ";
 
-/// The full post-checkout hook script, byte-identical to Python's `_CHECKOUT_SCRIPT`.
+/// The full post-checkout hook script. Mirrors Python's `_CHECKOUT_SCRIPT`
+/// except for the 1 MiB rebuild-log cap (see the module-level note).
 pub const CHECKOUT_SCRIPT: &str = "# graphify-checkout-hook-start
 # Auto-rebuilds the knowledge graph (code only) when switching branches.
 # Installed by: graphify hook install
@@ -213,6 +225,13 @@ fi
 
 _GRAPHIFY_LOG=\"${HOME}/.cache/graphify-rebuild.log\"
 mkdir -p \"$(dirname \"$_GRAPHIFY_LOG\")\"
+# Cap the rebuild log so the append below can't grow it without bound across
+# checkouts; keep the most recent 1 MiB. (Divergence from graphify-py, which
+# appends unbounded.)
+_GRAPHIFY_LOG_MAX_BYTES=1048576
+if [ -f \"$_GRAPHIFY_LOG\" ] && [ \"$(wc -c < \"$_GRAPHIFY_LOG\" 2>/dev/null || echo 0)\" -gt \"$_GRAPHIFY_LOG_MAX_BYTES\" ]; then
+    tail -c \"$_GRAPHIFY_LOG_MAX_BYTES\" \"$_GRAPHIFY_LOG\" > \"$_GRAPHIFY_LOG.tmp\" 2>/dev/null && mv -f \"$_GRAPHIFY_LOG.tmp\" \"$_GRAPHIFY_LOG\"
+fi
 echo \"[graphify] Branch switched - launching background rebuild (log: $_GRAPHIFY_LOG)\"
 nohup $GRAPHIFY_PYTHON -c \"
 from graphify.watch import _rebuild_code, _apply_resource_limits
