@@ -77,6 +77,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         Command::Pi { cmd: c } => cli::install::cmd_platform("pi", &c),
         Command::Antigravity { cmd: c } => cli::install::cmd_platform("antigravity", &c),
         Command::Codex { cmd: c } => cli::install::cmd_platform("codex", &c),
+        Command::Amp { cmd: c } => cli::install::cmd_platform("amp", &c),
         Command::Opencode { cmd: c } => cli::install::cmd_platform("opencode", &c),
         Command::Aider { cmd: c } => cli::install::cmd_platform("aider", &c),
         Command::Claw { cmd: c } => cli::install::cmd_platform("claw", &c),

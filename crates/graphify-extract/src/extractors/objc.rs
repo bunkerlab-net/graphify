@@ -65,6 +65,7 @@ pub fn extract_objc(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     });
 
     let root = tree.root_node();
@@ -235,6 +236,7 @@ fn walk_objc(
                     file_type: "code".to_string(),
                     source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
+                    metadata: None,
                 });
             }
             ctx.edges.push(Edge {
@@ -341,6 +343,7 @@ fn walk_objc(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                     ctx.edges.push(Edge {
                         source: ctx.file_nid.to_string(),
@@ -403,6 +406,7 @@ fn walk_objc(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -450,6 +454,7 @@ fn walk_objc(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {

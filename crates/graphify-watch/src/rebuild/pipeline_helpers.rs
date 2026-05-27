@@ -2,8 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use graphify_build::{Graph, build_from_json};
+use graphify_build::{Graph, build_from_json, norm_source_file};
 use graphify_cluster::{cluster, remap_communities_to_previous, score_all};
+use graphify_detect::extensions::CODE_EXTENSIONS;
 use graphify_detect::{FileType, classify_file};
 use graphify_export::{backup_if_protected, to_html, to_json};
 use graphify_extract::extract;
@@ -16,6 +17,7 @@ use crate::canonical::{
 use crate::error::WatchError;
 use crate::rebuild::community::node_community_map;
 use crate::rebuild::helpers::{build_analysis, detect_code_files, graph_to_topology_value};
+use crate::rebuild::relativize::relativize_source_files;
 use crate::rebuild::shrink::check_shrink;
 
 /// Re-export of [`graphify_detect::DetectResult`] used throughout the pipeline.
@@ -125,9 +127,11 @@ pub(crate) fn compute_extract_targets(
             if !cand.exists() && is_tracked_code_path(&cand) {
                 had_tracked_deletion = true;
             }
-            let rel = cand.strip_prefix(project_root).map_or_else(
-                |_| cand.to_string_lossy().into_owned(),
-                |p| p.to_string_lossy().into_owned(),
+            // Normalise to a root-relative POSIX path so it matches nodes whose
+            // source_file was relativised at build time (#1007).
+            let rel = norm_source_file(
+                &cand.to_string_lossy(),
+                Some(&project_root.to_string_lossy()),
             );
             deleted_paths.push(rel);
         }
@@ -174,10 +178,19 @@ pub(crate) fn extract_phase(extract_targets: &[PathBuf], watch_root: &Path) -> V
     result
 }
 
+/// Outcome of [`merge_with_existing_graph`].
+pub(crate) struct MergeOutcome {
+    /// The (relativised) existing graph JSON, or `Value::Null` when absent.
+    pub existing_graph_data: Value,
+    /// `true` when the full-re-extraction reconciliation evicted at least one
+    /// node from a deleted source file. Feeds the shrink-guard bypass.
+    pub evicted_deleted_sources: bool,
+}
+
 /// Merge AST-extracted nodes/edges with preserved entries from any prior `graph.json`.
 ///
 /// Returns the existing graph JSON (or `Value::Null` when absent) so the caller can
-/// reuse it for downstream comparisons.
+/// reuse it for downstream comparisons, plus whether a deleted source was evicted.
 #[allow(clippy::too_many_lines)] // single-pass merge — splitting would obscure ordering
 pub(crate) fn merge_with_existing_graph(
     result: &mut Value,
@@ -185,8 +198,9 @@ pub(crate) fn merge_with_existing_graph(
     has_changed_paths: bool,
     deleted_paths: &[String],
     extract_targets: &[PathBuf],
+    code_files: &[PathBuf],
     project_root: &Path,
-) -> Value {
+) -> MergeOutcome {
     // Reject oversized graph files before reading them into memory — mirrors
     // the size-cap guard added in `graphify-py/graphify/watch.py`. Surface
     // the rejection on stderr so the user knows we skipped the merge.
@@ -195,14 +209,26 @@ pub(crate) fn merge_with_existing_graph(
             "[graphify watch] skipping merge with existing graph at {}: {err}",
             existing_graph_path.display()
         );
-        return Value::Null;
+        return MergeOutcome {
+            existing_graph_data: Value::Null,
+            evicted_deleted_sources: false,
+        };
     }
     let Ok(text) = std::fs::read_to_string(existing_graph_path) else {
-        return Value::Null;
+        return MergeOutcome {
+            existing_graph_data: Value::Null,
+            evicted_deleted_sources: false,
+        };
     };
-    let Ok(existing) = serde_json::from_str::<Value>(&text) else {
-        return Value::Null;
+    let Ok(mut existing) = serde_json::from_str::<Value>(&text) else {
+        return MergeOutcome {
+            existing_graph_data: Value::Null,
+            evicted_deleted_sources: false,
+        };
     };
+    // Relativise the existing graph's source_file paths before reconciliation so
+    // they compare equal to the freshly-extracted (relative) paths (#1007).
+    relativize_source_files(&mut existing, project_root);
     let existing_graph_data = existing.clone();
 
     let new_ast_ids: std::collections::HashSet<String> = result
@@ -215,15 +241,60 @@ pub(crate) fn merge_with_existing_graph(
         })
         .unwrap_or_default();
 
+    let project_root_str = project_root.to_string_lossy().into_owned();
     let mut evict_sources: std::collections::HashSet<String> =
         deleted_paths.iter().cloned().collect();
+    // True once the full-re-extraction reconciliation discovers a stale node.
+    // The watch shrink-guard bypass keys off this (mirrors Python's
+    // `bool(deleted_paths)` after reconciliation) so legitimate file deletions
+    // don't trip the "refusing to shrink" guard.
+    let mut evicted_deleted_sources = false;
     if has_changed_paths {
         for p in extract_targets {
-            let rel = p.strip_prefix(project_root).map_or_else(
-                |_| p.to_string_lossy().into_owned(),
-                |r| r.to_string_lossy().into_owned(),
-            );
-            evict_sources.insert(rel);
+            evict_sources.insert(norm_source_file(
+                &p.to_string_lossy(),
+                Some(&project_root_str),
+            ));
+        }
+    } else {
+        // Full re-extraction: reconcile existing code-file nodes against the
+        // current set of code files on disk, evicting nodes whose source file
+        // was deleted since the last run (#1007). Non-code nodes (docs/papers/
+        // images) are left to the LLM re-extraction path and skipped here.
+        // Files outside `project_root` are intentionally dropped: graph nodes
+        // only ever carry project-relative `source_file` paths, so a code file
+        // living outside the root can't match any node and need not be tracked.
+        // `canonicalize` falls back to the raw path; `norm_source_file` keeps
+        // the relative form normalised so it compares equal to node paths.
+        let current_sources: std::collections::HashSet<String> = code_files
+            .iter()
+            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+            .filter_map(|abs| abs.strip_prefix(project_root).map(Path::to_path_buf).ok())
+            .map(|rel| norm_source_file(&rel.to_string_lossy(), Some(&project_root_str)))
+            .collect();
+        if let Some(nodes) = existing.get("nodes").and_then(Value::as_array) {
+            for n in nodes {
+                let Some(sf) = n.get("source_file").and_then(Value::as_str) else {
+                    continue;
+                };
+                if sf.is_empty() {
+                    continue;
+                }
+                let ext_is_code = Path::new(sf)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_lowercase)
+                    .is_some_and(|e| CODE_EXTENSIONS.contains(&e.as_str()));
+                if !ext_is_code {
+                    continue;
+                }
+                let norm = norm_source_file(sf, Some(&project_root_str));
+                if !current_sources.contains(&norm) {
+                    evict_sources.insert(sf.to_string());
+                    evict_sources.insert(norm);
+                    evicted_deleted_sources = true;
+                }
+            }
         }
     }
 
@@ -302,7 +373,10 @@ pub(crate) fn merge_with_existing_graph(
         "input_tokens": 0,
         "output_tokens": 0,
     });
-    existing_graph_data
+    MergeOutcome {
+        existing_graph_data,
+        evicted_deleted_sources,
+    }
 }
 
 /// Execute the `--no-cluster` shortcut: write `graph.json` only, no clustering or report.

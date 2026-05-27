@@ -376,6 +376,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Amp.
+    Amp {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
     /// Install or uninstall graphify integration for Opencode.
     Opencode {
         #[command(subcommand)]

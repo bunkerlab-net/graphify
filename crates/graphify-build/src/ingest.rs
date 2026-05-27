@@ -141,6 +141,36 @@ fn resolve_edge_id(
 /// dominated `build_from_json`. The optimised path borrows the source map
 /// when the canonical `source`/`target` keys are already present, falling
 /// back to the clone path only for legacy `from`/`to` inputs.
+/// Deterministic sort key for an edge: `(source|from, target|to, relation)`.
+///
+/// String values are used verbatim; missing keys sort as empty strings. Mirrors
+/// the `sorted(..., key=...)` call in graphify-py `build_from_json`.
+#[must_use]
+fn edge_sort_key(edge: &Value) -> (String, String, String) {
+    let obj = edge.as_object();
+    let field = |primary: &str, fallback: &str| -> String {
+        obj.and_then(|o| o.get(primary).or_else(|| o.get(fallback)))
+            .map(value_to_sort_string)
+            .unwrap_or_default()
+    };
+    let relation = obj
+        .and_then(|o| o.get("relation"))
+        .map(value_to_sort_string)
+        .unwrap_or_default();
+    (field("source", "from"), field("target", "to"), relation)
+}
+
+/// Stringify a JSON value for sort comparison: strings verbatim, null → empty,
+/// anything else via its JSON representation.
+#[must_use]
+fn value_to_sort_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
 pub(crate) fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<&str>) {
     let Some(edges) = extraction
         .as_object()
@@ -242,11 +272,25 @@ pub(crate) fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<
         Some((resolved_src, resolved_tgt, attrs))
     };
 
+    // Iterate edges in a deterministic order. The graph is undirected and
+    // stores direction in `_src`/`_tgt`; when two edges collapse onto the same
+    // node pair the last write wins, so an unstable order would flip those
+    // fields run-to-run and churn the serialized graph. Sorting on
+    // (source, target, relation) — matching graphify-py — fixes the outcome.
+    let mut sorted_edges: Vec<&Value> = edges.iter().collect();
+    sorted_edges.sort_by_cached_key(|e| edge_sort_key(e));
+
     let resolved: Vec<(String, String, IndexMap<String, Value>)> =
-        if edges.len() >= PARALLEL_EDGE_THRESHOLD {
-            edges.par_iter().filter_map(resolve_edge).collect()
+        if sorted_edges.len() >= PARALLEL_EDGE_THRESHOLD {
+            sorted_edges
+                .par_iter()
+                .filter_map(|e| resolve_edge(e))
+                .collect()
         } else {
-            edges.iter().filter_map(resolve_edge).collect()
+            sorted_edges
+                .iter()
+                .filter_map(|e| resolve_edge(e))
+                .collect()
         };
 
     // Bulk insert — O(N + E) instead of the O(N²) shape that

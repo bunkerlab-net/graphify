@@ -39,6 +39,7 @@ pub(super) fn emit_base_node(
             file_type: "code".to_string(),
             source_file: String::new(),
             source_location: None,
+            metadata: None,
         });
         seen_ids.insert(nid2.clone());
     }

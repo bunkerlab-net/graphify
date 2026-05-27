@@ -19,6 +19,10 @@ pub struct Node {
     pub source_file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_location: Option<String>,
+    /// Optional extractor-specific metadata (e.g. MCP config nodes carry
+    /// `{"mcp_kind": "mcp_server"}`). Omitted from output when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<IndexMap<String, Value>>,
 }
 
 /// A graph edge emitted by any extractor.

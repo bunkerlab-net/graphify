@@ -24,6 +24,10 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 
 /// Extract functions, classes, methods, and using statements from a `.ps1` file.
 #[must_use]
+// Single-pass tree-sitter extractor: node/edge emission shares accumulator
+// state across function/class/method branches, so splitting into helpers
+// would separate related logic.
+#[allow(clippy::too_many_lines)]
 pub fn extract_powershell(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {
         Ok(b) => b,
@@ -76,6 +80,7 @@ pub fn extract_powershell(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     });
 
     let root = tree.root_node();
@@ -230,6 +235,7 @@ fn walk_ps(
                         file_type: "code".to_string(),
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 edges.push(Edge {
@@ -278,6 +284,7 @@ fn walk_ps(
                         file_type: "code".to_string(),
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 edges.push(Edge {
@@ -346,6 +353,7 @@ fn walk_ps(
                         file_type: "code".to_string(),
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 edges.push(Edge {

@@ -12,6 +12,7 @@ pub mod go;
 pub mod json_lang;
 pub mod julia;
 pub mod markdown;
+pub mod mcp;
 pub mod multi;
 pub mod objc;
 pub mod pascal;
@@ -39,6 +40,29 @@ const RATIONALE_PREFIXES: &[&str] = &[
     "# TODO:",
     "# FIXME:",
 ];
+
+/// Size cap for project XML files (`.csproj` / `.fsproj` / `.vbproj` / `.lpk`).
+/// Real files are well under 2 MiB; anything larger is malformed or hostile.
+/// Mirrors `_PROJECT_XML_MAX_BYTES` in `graphify-py`.
+pub(crate) const PROJECT_XML_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Reject project XML that declares a DTD or entities.
+///
+/// Defense in depth against billion-laughs style entity-expansion `DoS`.
+/// Legitimate `MSBuild` and Lazarus package files never contain a `<!DOCTYPE`
+/// or `<!ENTITY` declaration, so this is a zero-false-positive screen.
+/// Mirrors `_project_xml_is_safe` in `graphify-py`.
+#[must_use]
+pub(crate) fn project_xml_is_safe(src: &[u8]) -> bool {
+    // Scan the raw bytes with an ASCII case-insensitive window match rather
+    // than allocating a lowercase copy of the whole (up to 2 MiB) file.
+    fn contains_ci(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+    }
+    !contains_ci(src, b"<!doctype") && !contains_ci(src, b"<!entity")
+}
 
 // ── Python ────────────────────────────────────────────────────────────────────
 
@@ -152,6 +176,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
             file_type: "code".to_string(),
             source_file: str_path.clone(),
             source_location: Some("L1".to_string()),
+            metadata: None,
         });
         seen_ids.insert(file_nid.clone());
     }
@@ -182,6 +207,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     file_type: "code".to_string(),
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{lineno}")),
+                    metadata: None,
                 });
             }
             edges.push(Edge {
@@ -215,6 +241,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     file_type: "code".to_string(),
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{lineno}")),
+                    metadata: None,
                 });
             }
             edges.push(Edge {
@@ -244,6 +271,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                         file_type: "code".to_string(),
                         source_file: str_path.clone(),
                         source_location: Some(format!("L{lineno}")),
+                        metadata: None,
                     });
                 }
                 edges.push(Edge {
@@ -391,6 +419,9 @@ pub use svelte::{extract_astro, extract_svelte};
 // ── Dart ──────────────────────────────────────────────────────────────────────
 pub use dart::extract_dart;
 
+// ── MCP config (.mcp.json / claude_desktop_config.json / ...) ─────────────────
+pub use mcp::{extract_mcp_config, is_mcp_config_path};
+
 // ── Blade ─────────────────────────────────────────────────────────────────────
 pub use blade::extract_blade;
 
@@ -459,6 +490,7 @@ fn extract_python_rationale(path: &Path, result: &mut FileResult) {
                 file_type: "rationale".to_string(),
                 source_file: str_path.clone(),
                 source_location: Some(format!("L{line}")),
+                metadata: None,
             });
         }
         edges.push(Edge {

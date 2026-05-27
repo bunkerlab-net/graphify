@@ -151,7 +151,7 @@ The query / affected / explain / serve commands filter on these.
 
 | Relation       | Emitted by                                                               |
 | -------------- | ------------------------------------------------------------------------ |
-| `contains`     | File node → top-level function / class.                                  |
+| `contains`     | File / config node → contained entity (function, class, `mcp_server`).   |
 | `method`       | Class node → method.                                                     |
 | `calls`        | Function / method node → callee, resolved within the file or cross-file. |
 | `imports`      | File node → imported module.                                             |
@@ -160,8 +160,9 @@ The query / affected / explain / serve commands filter on these.
 | `inherits`     | Class → base class. Java's source-level `extends` is normalised here.    |
 | `implements`   | Class → interface (Java / C# / TypeScript).                              |
 | `references`   | Function / method / class → type referenced in its signature or body.    |
+| `requires_env` | MCP server → env-var *name* it depends on (values are never read).       |
 
-`references` edges typically carry a `context` describing _how_ the type is
+`references` edges typically carry a `context` describing *how* the type is
 used; older extractors (SQL, for one) still emit `references` without a
 `context`, so consumers should treat the field as optional.
 
@@ -177,6 +178,8 @@ used; older extractors (SQL, for one) still emit `references` without a
 | `attribute`      | Java `@Annotation` / C# `[Attribute]` decoration.                |
 | `import`         | Module / file referenced by an `import` statement.               |
 | `export`         | Module re-exported by an `export … from` statement.              |
+| `command`        | MCP server → its executable (`npx`, `uvx`, …).                   |
+| `package`        | MCP server → npm / pypi package parsed from its args.            |
 
 `parameter_type`, `return_type`, `generic_arg`, and `attribute` are emitted by
 the Python, C#, Java, and TypeScript extractors. Other languages emit the
@@ -409,7 +412,10 @@ graphify cursor install        # .cursor/rules/graphify.mdc
 graphify vscode install        # .github/copilot-instructions.md + skill copy
 graphify copilot install       # ~/.copilot/skills (GitHub Copilot CLI)
 graphify codex install         # AGENTS.md section
+graphify amp install           # AGENTS.md section (Amp)
 graphify opencode install      # AGENTS.md + tool.execute.before plugin
+                               #   user scope: ~/.config/opencode/skills/graphify/SKILL.md
+                               #   --project:  ./.opencode/skills/graphify/SKILL.md
 graphify aider install         # AGENTS.md section
 graphify claw install          # AGENTS.md section (OpenClaw)
 graphify droid install         # AGENTS.md section (Factory Droid)
