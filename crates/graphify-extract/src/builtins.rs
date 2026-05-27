@@ -3,8 +3,11 @@
 //! `len(x)`).
 //!
 //! Without filtering they become god-nodes accumulating spurious edges from
-//! every call site. The filter is applied at same-file and cross-file call
-//! resolution. Mirrors Python `_LANGUAGE_BUILTIN_GLOBALS` (issue #726).
+//! every call site. The filter is applied only to *unresolved* unqualified
+//! calls during resolution, across all languages. The set is multi-language
+//! (JavaScript/TypeScript ECMAScript + browser/Node globals, plus Python
+//! built-in callables) and mirrors Python `_LANGUAGE_BUILTIN_GLOBALS`, which
+//! is likewise multi-language (issue #726).
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
