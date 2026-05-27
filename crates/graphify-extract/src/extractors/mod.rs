@@ -54,8 +54,14 @@ pub(crate) const PROJECT_XML_MAX_BYTES: u64 = 2 * 1024 * 1024;
 /// Mirrors `_project_xml_is_safe` in `graphify-py`.
 #[must_use]
 pub(crate) fn project_xml_is_safe(src: &[u8]) -> bool {
-    let lowered = String::from_utf8_lossy(src).to_ascii_lowercase();
-    !lowered.contains("<!doctype") && !lowered.contains("<!entity")
+    // Scan the raw bytes with an ASCII case-insensitive window match rather
+    // than allocating a lowercase copy of the whole (up to 2 MiB) file.
+    fn contains_ci(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+    }
+    !contains_ci(src, b"<!doctype") && !contains_ci(src, b"<!entity")
 }
 
 // ── Python ────────────────────────────────────────────────────────────────────

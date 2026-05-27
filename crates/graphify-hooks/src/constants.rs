@@ -128,7 +128,7 @@ mkdir -p \"$(dirname \"$_GRAPHIFY_LOG\")\"
 # appends unbounded.)
 _GRAPHIFY_LOG_MAX_BYTES=1048576
 if [ -f \"$_GRAPHIFY_LOG\" ] && [ \"$(wc -c < \"$_GRAPHIFY_LOG\" 2>/dev/null || echo 0)\" -gt \"$_GRAPHIFY_LOG_MAX_BYTES\" ]; then
-    tail -c \"$_GRAPHIFY_LOG_MAX_BYTES\" \"$_GRAPHIFY_LOG\" > \"$_GRAPHIFY_LOG.tmp\" 2>/dev/null && mv -f \"$_GRAPHIFY_LOG.tmp\" \"$_GRAPHIFY_LOG\"
+    { tail -c \"$_GRAPHIFY_LOG_MAX_BYTES\" \"$_GRAPHIFY_LOG\" > \"$_GRAPHIFY_LOG.tmp\" 2>/dev/null && mv -f \"$_GRAPHIFY_LOG.tmp\" \"$_GRAPHIFY_LOG\"; } || rm -f \"$_GRAPHIFY_LOG.tmp\"
 fi
 echo \"[graphify hook] launching background rebuild (log: $_GRAPHIFY_LOG)\"
 nohup $GRAPHIFY_PYTHON -c \"
@@ -235,7 +235,7 @@ mkdir -p \"$(dirname \"$_GRAPHIFY_LOG\")\"
 # appends unbounded.)
 _GRAPHIFY_LOG_MAX_BYTES=1048576
 if [ -f \"$_GRAPHIFY_LOG\" ] && [ \"$(wc -c < \"$_GRAPHIFY_LOG\" 2>/dev/null || echo 0)\" -gt \"$_GRAPHIFY_LOG_MAX_BYTES\" ]; then
-    tail -c \"$_GRAPHIFY_LOG_MAX_BYTES\" \"$_GRAPHIFY_LOG\" > \"$_GRAPHIFY_LOG.tmp\" 2>/dev/null && mv -f \"$_GRAPHIFY_LOG.tmp\" \"$_GRAPHIFY_LOG\"
+    { tail -c \"$_GRAPHIFY_LOG_MAX_BYTES\" \"$_GRAPHIFY_LOG\" > \"$_GRAPHIFY_LOG.tmp\" 2>/dev/null && mv -f \"$_GRAPHIFY_LOG.tmp\" \"$_GRAPHIFY_LOG\"; } || rm -f \"$_GRAPHIFY_LOG.tmp\"
 fi
 echo \"[graphify] Branch switched - launching background rebuild (log: $_GRAPHIFY_LOG)\"
 nohup $GRAPHIFY_PYTHON -c \"
