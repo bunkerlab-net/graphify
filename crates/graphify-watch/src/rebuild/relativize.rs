@@ -41,9 +41,11 @@ pub fn relativize_source_files(payload: &mut Value, root: &Path) {
                 .canonicalize()
                 .unwrap_or_else(|_| source_path.clone());
             if let Ok(rel) = resolved.strip_prefix(root) {
+                // `.as_posix()` parity: emit forward slashes so graph.json paths
+                // are stable across platforms.
                 map.insert(
                     "source_file".to_string(),
-                    Value::String(rel.to_string_lossy().into_owned()),
+                    Value::String(rel.to_string_lossy().replace('\\', "/")),
                 );
             }
         }

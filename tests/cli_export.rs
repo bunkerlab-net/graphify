@@ -374,3 +374,74 @@ fn path_errors_when_graph_missing() {
                 .or(contains("No such")),
         );
 }
+
+// ── cluster-only remaps labels to previous cids (#1027) ──────────────────────
+
+#[test]
+fn cluster_only_remaps_labels_to_previous_cids() {
+    // cluster-only must invoke remap_communities_to_previous so an existing
+    // .graphify_labels.json keeps tracking the same conceptual community after
+    // re-clustering. Without the remap, the partitioner renumbers communities
+    // to 0,1,... and the prior sentinel-keyed labels are orphaned (#1027).
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    let labels_path = out.join(".graphify_labels.json");
+
+    // Two disconnected pairs → 2 communities. Tag the first pair with sentinel
+    // 4242 and the second with 9999, then key the labels file on those ids.
+    let (sentinel_a, sentinel_b) = (4242, 9999);
+    fs::write(
+        &graph_path,
+        format!(
+            r#"{{"nodes":[
+                {{"id":"a","label":"A","file_type":"code","source_file":"a.py","community":{sentinel_a}}},
+                {{"id":"b","label":"B","file_type":"code","source_file":"b.py","community":{sentinel_a}}},
+                {{"id":"c","label":"C","file_type":"code","source_file":"c.py","community":{sentinel_b}}},
+                {{"id":"d","label":"D","file_type":"code","source_file":"d.py","community":{sentinel_b}}}
+            ],"edges":[
+                {{"source":"a","target":"b","relation":"calls","confidence":"EXTRACTED","source_file":"a.py"}},
+                {{"source":"c","target":"d","relation":"calls","confidence":"EXTRACTED","source_file":"c.py"}}
+            ]}}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &labels_path,
+        format!(r#"{{"{sentinel_a}":"First Group","{sentinel_b}":"Second Group"}}"#),
+    )
+    .unwrap();
+
+    cli()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let final_graph: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&graph_path).unwrap()).unwrap();
+    let final_labels: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&labels_path).unwrap()).unwrap();
+
+    let actual_cids: std::collections::HashSet<i64> = final_graph
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|n| n.get("community").and_then(serde_json::Value::as_i64))
+        .collect();
+    let label_cids: std::collections::HashSet<i64> = final_labels
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter_map(|k| k.parse::<i64>().ok())
+        .collect();
+
+    assert!(
+        actual_cids.intersection(&label_cids).next().is_some(),
+        "after cluster-only, at least one prior label cid must still appear in \
+         graph.json community attrs. actual={actual_cids:?} labels={label_cids:?}"
+    );
+}

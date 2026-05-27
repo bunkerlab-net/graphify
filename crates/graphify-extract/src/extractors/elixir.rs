@@ -46,6 +46,9 @@ fn read_text(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
 
 /// Extract modules, functions, imports, and calls from a `.ex`/`.exs` file.
 #[must_use]
+// Single-pass tree-sitter extractor: node/edge emission shares accumulator
+// state across module/function/call branches, so splitting fragments locality.
+#[allow(clippy::too_many_lines)]
 pub fn extract_elixir(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {
         Ok(b) => b,
@@ -98,6 +101,7 @@ pub fn extract_elixir(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     });
 
     let root = tree.root_node();
@@ -265,6 +269,7 @@ fn walk_elixir(
                     file_type: "code".to_string(),
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
+                    metadata: None,
                 });
             }
             edges.push(Edge {
@@ -333,6 +338,7 @@ fn walk_elixir(
                     file_type: "code".to_string(),
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
+                    metadata: None,
                 });
             }
             let relation = if parent_module_nid.is_some() {
@@ -488,7 +494,9 @@ fn walk_calls_elixir(
         }
     }
 
-    if let Some(cn) = callee_name {
+    if let Some(cn) = callee_name
+        && !crate::builtins::is_language_builtin_global(&cn)
+    {
         let tgt_nid = label_to_nid.get(&cn.to_lowercase()).cloned();
         if let Some(tgt) = tgt_nid {
             if tgt != caller_nid {

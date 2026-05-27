@@ -13,7 +13,7 @@ use graphify_extract::{
     extract_java, extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package,
     extract_lua, extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell,
     extract_razor, extract_ruby, extract_rust, extract_scala, extract_sln, extract_sql,
-    extract_svelte, extract_swift, extract_verilog, extract_zig,
+    extract_svelte, extract_swift, extract_verilog, extract_zig, file_stem, make_id,
 };
 
 fn fixtures() -> PathBuf {
@@ -485,6 +485,50 @@ fn dart_extractor_produces_nodes() {
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no dart nodes");
     assert_no_dangling_edges(&result);
+}
+
+#[test]
+fn dart_child_node_ids_are_stem_based() {
+    // Child node IDs must be built from file_stem, not the absolute path, so
+    // graph.json stays machine-independent (graphify-py #999).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("mydir");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let src_file = dir.join("sample.dart");
+    std::fs::write(&src_file, b"class MyClass {}\nvoid myFunc() {}\n").expect("write");
+
+    let result = extract_dart(&src_file);
+    let stem = file_stem(&src_file); // -> "mydir.sample"
+    let expected_class_nid = make_id(&[&stem, "MyClass"]); // -> "mydir_sample_myclass"
+    let expected_func_nid = make_id(&[&stem, "myFunc"]); // -> "mydir_sample_myfunc"
+
+    let node_ids: std::collections::HashSet<&str> =
+        result.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        node_ids.contains(expected_class_nid.as_str()),
+        "class nid {expected_class_nid} not in {node_ids:?}"
+    );
+    assert!(
+        node_ids.contains(expected_func_nid.as_str()),
+        "func nid {expected_func_nid} not in {node_ids:?}"
+    );
+
+    // No child node ID should leak a path separator fragment.
+    let stem_prefix = stem.replace('.', "_");
+    let file_label = src_file
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for node in &result.nodes {
+        if node.label == file_label {
+            continue;
+        }
+        assert!(
+            node.id.starts_with(&stem_prefix),
+            "child id {} lacks stem prefix {stem_prefix}",
+            node.id
+        );
+    }
 }
 
 #[test]

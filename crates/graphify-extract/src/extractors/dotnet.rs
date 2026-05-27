@@ -114,6 +114,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: None,
+        metadata: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -144,6 +145,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: abs_proj.clone(),
                 source_location: None,
+                metadata: None,
             });
             edges.push(Edge {
                 source: file_nid.clone(),
@@ -272,6 +274,9 @@ pub fn extract_csproj(path: &Path) -> FileResult {
     if bytes.len() as u64 > CSPROJ_MAX_BYTES {
         return FileResult::error("project file too large");
     }
+    if !crate::extractors::project_xml_is_safe(&bytes) {
+        return FileResult::error("refusing XML with DOCTYPE/ENTITY declaration");
+    }
 
     let str_path = path.to_string_lossy().into_owned();
     let file_nid = make_id1(&str_path);
@@ -284,6 +289,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: None,
+        metadata: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -341,6 +347,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                                 file_type: "code".to_string(),
                                 source_file: str_path.clone(),
                                 source_location: None,
+                                metadata: None,
                             });
                         }
                         edges.push(Edge {
@@ -379,6 +386,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                                 file_type: "code".to_string(),
                                 source_file: abs_ref,
                                 source_location: None,
+                                metadata: None,
                             });
                         }
                         edges.push(Edge {
@@ -453,6 +461,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                 file_type: "concept".to_string(),
                 source_file: str_path.clone(),
                 source_location: None,
+                metadata: None,
             });
             edges.push(Edge {
                 source: file_nid.clone(),
@@ -494,6 +503,7 @@ fn add_framework_node(
         file_type: "concept".to_string(),
         source_file: str_path.to_string(),
         source_location: None,
+        metadata: None,
     });
     edges.push(Edge {
         source: file_nid.to_string(),
@@ -530,6 +540,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: None,
+        metadata: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -552,6 +563,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: str_path.clone(),
                 source_location: Some(format!("L{line}")),
+                metadata: None,
             });
         }
         edges.push(Edge {
@@ -633,6 +645,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     file_type: "concept".to_string(),
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{i}")),
+                    metadata: None,
                 });
                 edges.push(Edge {
                     source: file_nid.clone(),
@@ -703,6 +716,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     file_type: "code".to_string(),
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{method_line}")),
+                    metadata: None,
                 });
             }
             edges.push(Edge {

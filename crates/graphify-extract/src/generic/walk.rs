@@ -46,6 +46,7 @@ pub(super) fn add_node(
             file_type: "code".to_string(),
             source_file: str_path.to_string(),
             source_location: Some(format!("L{line}")),
+            metadata: None,
         });
     }
 }
@@ -418,6 +419,7 @@ pub(super) fn walk<'tree>(
                                     file_type: "code".to_string(),
                                     source_file: String::new(),
                                     source_location: None,
+                                    metadata: None,
                                 });
                                 ctx.seen_ids.insert(bn.clone());
                             }

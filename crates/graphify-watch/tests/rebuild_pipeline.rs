@@ -159,6 +159,47 @@ fn rebuild_code_with_changed_paths() {
 }
 
 #[test]
+fn rebuild_code_evicts_nodes_from_deleted_files() {
+    // #1007: `graphify update` (full re-extraction, changed_paths=None) must
+    // remove nodes and edges from files deleted since the last run.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::write(
+        corpus.join("auth.py"),
+        "def login(): pass\ndef logout(): pass\n",
+    )
+    .expect("write auth.py");
+    fs::write(corpus.join("utils.py"), "def format_date(): pass\n").expect("write utils.py");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(corpus, None, opts).expect("first rebuild"));
+
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let before = fs::read_to_string(&graph_path).expect("read graph");
+    assert!(
+        before.contains("format_date()"),
+        "format_date should be present before deletion"
+    );
+
+    fs::remove_file(corpus.join("utils.py")).expect("remove utils.py");
+    assert!(rebuild_code(corpus, None, opts).expect("second rebuild"));
+
+    let after = fs::read_to_string(&graph_path).expect("read graph");
+    assert!(
+        !after.contains("format_date()"),
+        "stale function node from deleted file must be evicted"
+    );
+    assert!(
+        after.contains("login()"),
+        "node from surviving file must be kept"
+    );
+}
+
+#[test]
 fn rebuild_code_with_force_flag() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_python_project(tmp.path());

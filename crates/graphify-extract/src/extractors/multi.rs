@@ -24,10 +24,10 @@ use crate::extractors::{
     extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
     extract_csproj, extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go,
     extract_groovy, extract_java, extract_js, extract_json, extract_julia, extract_kotlin,
-    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown, extract_objc,
-    extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
-    extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte, extract_swift,
-    extract_verilog, extract_zig,
+    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown,
+    extract_mcp_config, extract_objc, extract_pascal, extract_php, extract_powershell,
+    extract_python, extract_razor, extract_ruby, extract_rust, extract_scala, extract_sln,
+    extract_sql, extract_svelte, extract_swift, extract_verilog, extract_zig, is_mcp_config_path,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
@@ -48,6 +48,12 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
     let name = path.file_name().map_or("", |n| n.to_str().unwrap_or(""));
     if name.ends_with(".blade.php") {
         return Some(extract_blade);
+    }
+    // MCP config files (.mcp.json, claude_desktop_config.json, ...) are routed
+    // by filename before generic .json dispatch so they get MCP-aware nodes
+    // (servers, commands, packages, env vars) instead of opaque JSON keys.
+    if is_mcp_config_path(path) {
+        return Some(extract_mcp_config);
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
@@ -77,7 +83,7 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "svelte" => Some(extract_svelte),
         "astro" => Some(extract_astro),
         "dart" => Some(extract_dart),
-        "v" | "sv" => Some(extract_verilog),
+        "v" | "sv" | "svh" => Some(extract_verilog),
         "sql" => Some(extract_sql),
         "md" | "mdx" | "qmd" => Some(extract_markdown),
         "pas" | "pp" | "dpr" | "dpk" | "lpr" | "inc" => Some(extract_pascal),
@@ -896,6 +902,9 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         .collect();
 
     for rc in &all_raw_calls {
+        if crate::builtins::is_language_builtin_global(&rc.callee) {
+            continue;
+        }
         if rc.is_member_call {
             continue;
         }

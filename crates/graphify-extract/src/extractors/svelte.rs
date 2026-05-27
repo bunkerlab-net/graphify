@@ -215,6 +215,7 @@ fn add_import_edge(
             file_type: "code".to_string(),
             source_file: stub_source_file,
             source_location: None,
+            metadata: None,
         });
         result.edges.push(Edge {
             source: file_node_id.to_string(),

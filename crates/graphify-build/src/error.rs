@@ -24,4 +24,8 @@ pub enum BuildError {
     /// JSON serialisation / deserialisation error.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// The existing graph file exceeded the memory-bomb size cap.
+    #[error(transparent)]
+    Security(#[from] graphify_security::SecurityError),
 }

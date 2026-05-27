@@ -54,6 +54,11 @@ pub const HOOK_SCRIPT: &str = "# graphify-hook-start
 # Auto-rebuilds the knowledge graph after each commit (code files only, no LLM needed).
 # Installed by: graphify hook install
 
+# Deterministic clustering: networkx louvain iterates string-keyed sets whose
+# order is randomized per-process by PYTHONHASHSEED, so community assignments
+# churn run-to-run. Pinning it makes graphify-out reproducible.
+export PYTHONHASHSEED=0
+
 # Skip during rebase/merge/cherry-pick to avoid blocking --continue with unstaged changes
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 [ -d \"$GIT_DIR/rebase-merge\" ] && exit 0
@@ -61,8 +66,16 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 [ -f \"$GIT_DIR/MERGE_HEAD\" ] && exit 0
 [ -f \"$GIT_DIR/CHERRY_PICK_HEAD\" ] && exit 0
 
+[ \"${GRAPHIFY_SKIP_HOOK:-0}\" = \"1\" ] && exit 0
+
 CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD 2>/dev/null)
 if [ -z \"$CHANGED\" ]; then
+    exit 0
+fi
+
+# Skip when only graphify-out/ artifacts changed (avoids rebuild loop when graph outputs are tracked in git)
+_NON_GRAPH=$(echo \"$CHANGED\" | grep -v '^graphify-out/' || true)
+if [ -z \"$_NON_GRAPH\" ]; then
     exit 0
 fi
 
@@ -131,7 +144,7 @@ except TimeoutError as exc:
 except Exception as exc:
     print(f'[graphify hook] Rebuild failed: {exc}')
     sys.exit(1)
-\" > \"$_GRAPHIFY_LOG\" 2>&1 < /dev/null &
+\" >> \"$_GRAPHIFY_LOG\" 2>&1 < /dev/null &
 disown 2>/dev/null || true
 # graphify-hook-end
 ";
@@ -140,6 +153,11 @@ disown 2>/dev/null || true
 pub const CHECKOUT_SCRIPT: &str = "# graphify-checkout-hook-start
 # Auto-rebuilds the knowledge graph (code only) when switching branches.
 # Installed by: graphify hook install
+
+# Deterministic clustering: networkx louvain iterates string-keyed sets whose
+# order is randomized per-process by PYTHONHASHSEED, so community assignments
+# churn run-to-run. Pinning it makes graphify-out reproducible.
+export PYTHONHASHSEED=0
 
 PREV_HEAD=$1
 NEW_HEAD=$2
@@ -217,7 +235,7 @@ except TimeoutError as exc:
 except Exception as exc:
     print(f'[graphify] Rebuild failed: {exc}')
     sys.exit(1)
-\" > \"$_GRAPHIFY_LOG\" 2>&1 < /dev/null &
+\" >> \"$_GRAPHIFY_LOG\" 2>&1 < /dev/null &
 disown 2>/dev/null || true
 # graphify-checkout-hook-end
 ";

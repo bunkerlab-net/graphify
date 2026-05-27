@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::ids::{make_id, make_id1};
+use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 
 static DART_SKIP: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -33,6 +33,9 @@ static IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Extract classes, mixins, functions, and imports from a `.dart` file using regex.
 #[must_use]
+// Single-pass regex extractor: the file/class/function/import passes share the
+// `defined`/`nodes`/`edges` accumulators, so splitting would fragment that state.
+#[allow(clippy::too_many_lines)]
 pub fn extract_dart(path: &Path) -> FileResult {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -40,6 +43,8 @@ pub fn extract_dart(path: &Path) -> FileResult {
     };
 
     let str_path = path.to_string_lossy().into_owned();
+    // Use the stem (not str(path)) for child IDs to keep them machine-independent.
+    let stem = file_stem(path);
 
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
@@ -55,12 +60,13 @@ pub fn extract_dart(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: None,
+        metadata: None,
     });
 
     // Classes and mixins
     for cap in CLASS_RE.captures_iter(&src) {
         let name = cap.get(1).map_or("", |m| m.as_str());
-        let nid = make_id(&[&str_path, name]);
+        let nid = make_id(&[&stem, name]);
         if defined.insert(nid.clone()) {
             nodes.push(Node {
                 id: nid.clone(),
@@ -68,6 +74,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: str_path.clone(),
                 source_location: None,
+                metadata: None,
             });
             edges.push(Edge {
                 source: file_nid.clone(),
@@ -89,7 +96,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
         if DART_SKIP.contains(name) {
             continue;
         }
-        let nid = make_id(&[&str_path, name]);
+        let nid = make_id(&[&stem, name]);
         if defined.insert(nid.clone()) {
             nodes.push(Node {
                 id: nid.clone(),
@@ -97,6 +104,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: str_path.clone(),
                 source_location: None,
+                metadata: None,
             });
             edges.push(Edge {
                 source: file_nid.clone(),
@@ -123,6 +131,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: str_path.clone(),
                 source_location: None,
+                metadata: None,
             });
         }
         edges.push(Edge {

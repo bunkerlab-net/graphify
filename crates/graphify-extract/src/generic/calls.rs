@@ -80,6 +80,7 @@ pub(super) fn walk_calls(
 
         if let Some(callee) = callee_name
             && !callee.is_empty()
+            && !crate::builtins::is_language_builtin_global(&callee)
         {
             let tgt_nid = ctx.label_to_nid.get(&callee.to_lowercase()).cloned();
             if let Some(tgt) = tgt_nid {

@@ -12,9 +12,9 @@ use graphify_prs::error::PrsError;
 use graphify_prs::gh::GhClient;
 use graphify_prs::git::GitClient;
 use graphify_serve::graph::{
-    bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, infer_context_filters,
-    load_graph, normalize_context_filters, pick_seeds, query_graph_text, query_terms,
-    resolve_context_filters, score_nodes, subgraph_to_text,
+    bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, find_node,
+    infer_context_filters, load_graph, normalize_context_filters, pick_seeds, query_graph_text,
+    query_terms, resolve_context_filters, score_nodes, subgraph_to_text,
 };
 use graphify_serve::tools::{
     tool_get_pr_impact_with_clients, tool_list_prs_with_clients, tool_triage_prs_with_clients,
@@ -208,6 +208,32 @@ fn test_score_nodes_source_file_partial() {
     let scored = score_nodes(&g, &["cluster"], &mut cache);
     let nids: Vec<&str> = scored.iter().map(|(_, nid)| nid.as_str()).collect();
     assert!(nids.contains(&"n2"));
+}
+
+#[test]
+fn test_score_nodes_ignores_trailing_punctuation() {
+    let g = make_graph();
+    let mut cache = HashMap::new();
+    let scored = score_nodes(&g, &["extract?"], &mut cache);
+    assert_eq!(scored[0].1, "n1");
+}
+
+#[test]
+fn test_find_node_ignores_trailing_punctuation() {
+    let g = make_graph();
+    assert_eq!(find_node(&g, "extract?"), vec!["n1".to_string()]);
+}
+
+#[test]
+fn test_query_terms_strips_search_punctuation() {
+    assert_eq!(
+        query_terms("what calls extract?"),
+        vec![
+            "what".to_string(),
+            "calls".to_string(),
+            "extract".to_string()
+        ]
+    );
 }
 
 // ── _normalize_context_filters alias resolution ──────────────────────────────

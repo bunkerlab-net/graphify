@@ -588,6 +588,26 @@ fn test_install_opencode() {
 }
 
 #[test]
+fn test_install_opencode_project_uses_dot_opencode() {
+    // Project scope writes under `.opencode/`, not `.config/opencode/` (#1042).
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_platform_skill_project("opencode", dir.path()).expect("test invariant");
+    assert!(
+        dir.path()
+            .join(".opencode/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(home_env)]
+fn test_install_amp() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "amp");
+    assert!(dir.path().join(".amp/skills/graphify/SKILL.md").exists());
+}
+
+#[test]
 #[serial(home_env)]
 fn test_install_claw() {
     let dir = tempfile::tempdir().expect("tempdir");

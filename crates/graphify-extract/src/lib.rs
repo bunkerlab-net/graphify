@@ -15,6 +15,7 @@
 //! - **`ids.rs`** — deterministic node-ID helpers.
 //! - **`tsconfig.rs`** — TypeScript `tsconfig.json` alias resolution.
 
+mod builtins;
 pub mod error;
 pub mod generic;
 pub mod ids;
@@ -31,14 +32,15 @@ mod extractors;
 
 pub use error::ExtractError;
 pub use extractors::extract;
+pub use extractors::mcp::MCP_CONFIG_FILENAMES;
 pub use extractors::{
     extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
     extract_csproj, extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go,
     extract_groovy, extract_java, extract_js, extract_json, extract_julia, extract_kotlin,
-    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown, extract_objc,
-    extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
-    extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte, extract_swift,
-    extract_verilog, extract_zig,
+    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown,
+    extract_mcp_config, extract_objc, extract_pascal, extract_php, extract_powershell,
+    extract_python, extract_razor, extract_ruby, extract_rust, extract_scala, extract_sln,
+    extract_sql, extract_svelte, extract_swift, extract_verilog, extract_zig, is_mcp_config_path,
 };
 pub use ids::{file_stem, make_id, make_id1};
 pub use types::{Edge, ExtractOutput, FileResult, Node, RawCall};

@@ -48,12 +48,15 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 - **26+ languages**, parsed with tree-sitter: Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, C#, Ruby, PHP,
   Swift, Kotlin, Scala, Bash, Lua, Elixir, Haskell, OCaml, Zig, Solidity, R, Julia, HTML, CSS, SQL, …
   Also reads .NET project files (`.sln`, `.csproj`, `.fsproj`, `.vbproj`) and Razor components
-  (`.razor`, `.cshtml`) for package, project-reference, target-framework, and `@code` extraction.
+  (`.razor`, `.cshtml`) for package, project-reference, target-framework, and `@code` extraction,
+  Verilog/SystemVerilog (`.v`, `.sv`, `.svh`), and MCP config files (`.mcp.json`,
+  `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
+  and env-var *names* (values are never read).
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
 - **Local-first** — `graph.json` lives next to your code; no daemon, no cloud, no account.
 - **Optional LLM-driven semantic extraction** through OpenAI, Anthropic, Gemini, DeepSeek, Moonshot, Ollama, or Bedrock.
-- **AI-assistant integration** — drop-in installers for Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, VS Code,
-  OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Pi, Devin CLI, Google Antigravity, and more.
+- **AI-assistant integration** — drop-in installers for Claude Code, Codex, Amp, Cursor, Gemini CLI, GitHub Copilot,
+  VS Code, OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Pi, Devin CLI, Google Antigravity, and more.
 - **MCP server** for any MCP-capable assistant (`graphify serve`).
 - **Git hooks + merge driver** so two branches editing the same `graph.json` produce a union-merged result.
 - **Cross-repo global graph** — aggregate every project you care about into one `~/.graphify/global-graph.json`.

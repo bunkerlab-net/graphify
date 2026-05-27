@@ -445,6 +445,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{line}")),
+                metadata: None,
             });
         }
     };
@@ -568,6 +569,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
                     file_type: "code".to_string(),
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{line}")),
+                    metadata: None,
                 });
             }
             edges.push(make_edge(
@@ -763,6 +765,7 @@ fn parse_form_text(text: &str, path: &Path) -> FileResult {
                 file_type: "code".to_string(),
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{line}")),
+                metadata: None,
             });
         }
     };
@@ -910,10 +913,17 @@ pub fn extract_delphi_form(path: &Path) -> FileResult {
 #[must_use]
 #[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 pub fn extract_lazarus_package(path: &Path) -> FileResult {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
+    let raw = match std::fs::read(path) {
+        Ok(b) => b,
         Err(e) => return FileResult::error(e.to_string()),
     };
+    if raw.len() as u64 > crate::extractors::PROJECT_XML_MAX_BYTES {
+        return FileResult::error("package file too large");
+    }
+    if !crate::extractors::project_xml_is_safe(&raw) {
+        return FileResult::error("refusing XML with DOCTYPE/ENTITY declaration");
+    }
+    let text = String::from_utf8_lossy(&raw).into_owned();
 
     let str_path = path.to_string_lossy().into_owned();
     let stem = file_stem(path);
@@ -928,6 +938,7 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             file_type: "code".to_string(),
             source_file: str_path.to_string(),
             source_location: Some("L1".to_string()),
+            metadata: None,
         }
     };
 

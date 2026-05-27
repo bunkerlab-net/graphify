@@ -43,6 +43,7 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         file_type: "document".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     });
 
     let mut state = MarkdownState {
@@ -129,6 +130,7 @@ fn handle_fence(
                 file_type: "document".to_string(),
                 source_file: ctx.str_path.to_string(),
                 source_location: Some(format!("L{}", state.code_block_start)),
+                metadata: None,
             });
         }
         let parent = state
@@ -194,6 +196,7 @@ fn handle_heading(
             file_type: "document".to_string(),
             source_file: ctx.str_path.to_string(),
             source_location: Some(format!("L{line_num}")),
+            metadata: None,
         });
     }
     while heading_stack.last().is_some_and(|(lvl, _)| *lvl >= level) {

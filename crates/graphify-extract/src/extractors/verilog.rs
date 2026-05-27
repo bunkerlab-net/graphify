@@ -64,6 +64,7 @@ pub fn extract_verilog(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     });
 
     let root = tree.root_node();
@@ -122,6 +123,7 @@ fn walk_verilog(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -159,6 +161,7 @@ fn walk_verilog(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -187,6 +190,7 @@ fn walk_verilog(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -219,6 +223,7 @@ fn walk_verilog(
                                     file_type: "code".to_string(),
                                     source_file: ctx.str_path.to_string(),
                                     source_location: Some(format!("L{line}")),
+                                    metadata: None,
                                 });
                             }
                             let src = module_nid.unwrap_or(ctx.file_nid);
@@ -256,6 +261,7 @@ fn walk_verilog(
                             file_type: "code".to_string(),
                             source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
+                            metadata: None,
                         });
                     }
                     ctx.edges.push(Edge {

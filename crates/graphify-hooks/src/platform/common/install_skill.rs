@@ -29,7 +29,7 @@ use super::skills::{
 /// Returns `HooksError::UnknownPlatform` for unrecognised names,
 /// `HooksError::Io` on filesystem failures.
 pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
-    let (skill_content, home_rel) = skill_for(platform)?;
+    let (skill_content, home_rel) = skill_for(platform, false)?;
 
     let skill_dst = if matches!(platform, "claude" | "windows") {
         if let Ok(cfg_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
@@ -88,9 +88,13 @@ pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
     Ok(msgs.join("\n"))
 }
 
-/// Map a platform name to its skill content + relative install path
-/// (under either the home directory or the project root).
-fn skill_for(platform: &str) -> Result<(&'static str, &'static str), HooksError> {
+/// Map a platform name to its skill content + relative install path.
+///
+/// `project` selects the project-scope path where it differs from the
+/// user-scope path. `opencode` is the only platform with distinct paths:
+/// `~/.config/opencode/...` at user scope but `./.opencode/...` at project
+/// scope (mirrors graphify-py `_platform_skill_destination`).
+fn skill_for(platform: &str, project: bool) -> Result<(&'static str, &'static str), HooksError> {
     Ok(match platform {
         "claude" | "windows" => {
             let skill = if platform == "windows" {
@@ -101,6 +105,8 @@ fn skill_for(platform: &str) -> Result<(&'static str, &'static str), HooksError>
             (skill, ".claude/skills/graphify/SKILL.md")
         }
         "codex" => (SKILL_CODEX_MD, ".agents/skills/graphify/SKILL.md"),
+        "amp" => (SKILL_MD, ".amp/skills/graphify/SKILL.md"),
+        "opencode" if project => (SKILL_OPENCODE_MD, ".opencode/skills/graphify/SKILL.md"),
         "opencode" => (
             SKILL_OPENCODE_MD,
             ".config/opencode/skills/graphify/SKILL.md",
@@ -142,7 +148,7 @@ pub fn install_platform_skill_project(
     platform: &str,
     project_dir: &std::path::Path,
 ) -> Result<String, HooksError> {
-    let (skill_content, rel) = skill_for(platform)?;
+    let (skill_content, rel) = skill_for(platform, true)?;
     let skill_dst = project_dir.join(rel);
     install_skill(skill_content, &skill_dst)?;
     let mut msgs = vec![format!("  skill installed  ->  {}", skill_dst.display())];
@@ -201,7 +207,7 @@ pub fn uninstall_platform_skill_project(
     platform: &str,
     project_dir: &std::path::Path,
 ) -> Result<String, HooksError> {
-    let (_skill_content, rel) = skill_for(platform)?;
+    let (_skill_content, rel) = skill_for(platform, true)?;
     let skill_dst = project_dir.join(rel);
     let mut msgs: Vec<String> = Vec::new();
     if skill_dst.exists() {

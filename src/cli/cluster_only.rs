@@ -64,6 +64,26 @@ pub(crate) fn cmd_cluster_only(
         cluster_start.elapsed().as_secs_f64()
     );
 
+    // Mirror the watch/update path (#822, #1028): map new community IDs back to
+    // the prior ones by node overlap so an existing .graphify_labels.json keeps
+    // attaching to the same conceptual community after re-clustering. Without
+    // this, labels follow the raw cid index and misalign whenever the graph
+    // changed between labeling and cluster-only.
+    let previous_node_community: indexmap::IndexMap<String, i64> = g
+        .nodes()
+        .filter_map(|(id, attrs)| {
+            attrs
+                .get("community")
+                .and_then(serde_json::Value::as_i64)
+                .map(|c| (id.clone(), c))
+        })
+        .collect();
+    let communities = if previous_node_community.is_empty() {
+        communities
+    } else {
+        graphify_cluster::remap_communities_to_previous(&communities, &previous_node_community)
+    };
+
     // Apply min_community_size filter: drop communities below the threshold from
     // the analysis (the full map is still passed to the HTML renderer so the viz
     // is unchanged, mirroring Python's report-only filtering at __main__.py:1820).

@@ -134,6 +134,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: None,
+        metadata: None,
     });
 
     let root = tree.root_node();
@@ -270,6 +271,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                 file_type: "code".to_string(),
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{ln}")),
+                metadata: None,
             });
             edges.push(Edge {
                 source: file_nid.to_string(),

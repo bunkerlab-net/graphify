@@ -32,6 +32,22 @@ pub fn strip_diacritics(text: &str) -> String {
         .collect()
 }
 
+/// Split `text` into `\w+` runs (Unicode alphanumeric characters plus `_`),
+/// matching Python's `re.findall(r"\w+", text)`.
+fn word_tokens(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|s| !s.is_empty())
+}
+
+/// Split text into word tokens, stripping punctuation and diacritics.
+///
+/// Mirrors Python `_search_tokens` (#1037).
+#[must_use]
+fn search_tokens(text: &str) -> Vec<String> {
+    let normalized = strip_diacritics(text).to_lowercase();
+    word_tokens(&normalized).map(str::to_string).collect()
+}
+
 // ── Graph loading ─────────────────────────────────────────────────────────────
 
 /// Load a graph from a JSON file.
@@ -170,10 +186,7 @@ pub fn score_nodes<S: BuildHasher>(
     terms: &[&str],
     idf_cache: &mut HashMap<String, f64, S>,
 ) -> Vec<(f64, String)> {
-    let norm_terms: Vec<String> = terms
-        .iter()
-        .map(|t| strip_diacritics(t).to_lowercase())
-        .collect();
+    let norm_terms: Vec<String> = terms.iter().flat_map(|t| search_tokens(t)).collect();
     let norm_term_refs: Vec<&str> = norm_terms.iter().map(String::as_str).collect();
     let idf = compute_idf(graph, &norm_term_refs, idf_cache);
 
@@ -653,7 +666,10 @@ pub fn subgraph_to_text<S: BuildHasher>(
 /// Mirrors Python `_find_node`.
 #[must_use]
 pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
-    let term = strip_diacritics(label).to_lowercase();
+    let term = search_tokens(label).join(" ");
+    if term.is_empty() {
+        return Vec::new();
+    }
     let mut exact: Vec<String> = Vec::new();
     let mut prefix: Vec<String> = Vec::new();
     let mut substring: Vec<String> = Vec::new();
@@ -818,19 +834,22 @@ fn is_searchable(term: &str) -> bool {
 pub fn query_terms(question: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in question.split_whitespace() {
-        let lower = raw.to_lowercase();
-        if lower.is_empty() {
-            continue;
-        }
-        let candidates: Vec<String> = if has_chinese(&lower) {
-            segment_chinese_bigram(&lower)
+        if has_chinese(raw) {
+            let lower = raw.to_lowercase();
+            for seg in segment_chinese_bigram(lower.trim()) {
+                let trimmed = seg.trim();
+                if !trimmed.is_empty() && is_searchable(trimmed) {
+                    out.push(trimmed.to_string());
+                }
+            }
         } else {
-            vec![lower]
-        };
-        for seg in candidates {
-            let trimmed = seg.trim();
-            if !trimmed.is_empty() && is_searchable(trimmed) {
-                out.push(trimmed.to_string());
+            // Strip punctuation without touching Unicode characters (avoid NFKD
+            // mangling non-Latin scripts). Mirrors graphify-py `_query_terms`.
+            let lower = raw.to_lowercase();
+            for tok in word_tokens(&lower) {
+                if is_searchable(tok) {
+                    out.push(tok.to_string());
+                }
             }
         }
     }

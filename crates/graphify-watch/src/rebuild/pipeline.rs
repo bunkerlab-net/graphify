@@ -56,21 +56,25 @@ pub(crate) fn rebuild_code_inner(
     };
     let extract_targets = targets.wanted;
     let deleted_paths = targets.deleted_paths;
-    let had_explicit_deletions = targets.had_tracked_deletion;
 
     let commit = git_head(&watch_root);
     let mut result = extract_phase(&extract_targets, &watch_root);
     let t_post = std::time::Instant::now();
 
     let existing_graph_path = out.join("graph.json");
-    let existing_graph_data = merge_with_existing_graph(
+    let merge = merge_with_existing_graph(
         &mut result,
         &existing_graph_path,
         changed_paths.is_some(),
         &deleted_paths,
         &extract_targets,
+        &code_files,
         &project_root,
     );
+    let existing_graph_data = merge.existing_graph_data;
+    // A full re-extraction that evicts deleted-file nodes is a legitimate
+    // shrink, so bypass the guard the same way an explicit deletion does (#1007).
+    let had_explicit_deletions = targets.had_tracked_deletion || merge.evicted_deleted_sources;
 
     relativize_source_files(&mut result, &project_root);
     std::fs::create_dir_all(&out).map_err(WatchError::Io)?;

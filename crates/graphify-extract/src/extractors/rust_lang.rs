@@ -84,6 +84,7 @@ pub fn extract_rust(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::from([file_nid.clone()]);
@@ -211,6 +212,7 @@ fn walk_rust(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -242,6 +244,7 @@ fn walk_rust(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -270,6 +273,7 @@ fn walk_rust(
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
+                        metadata: None,
                     });
                 }
                 impl_nid = Some(nid);
@@ -386,7 +390,9 @@ fn walk_calls_rust(
             }
             _ => {}
         }
-        if let Some(cn) = callee_name {
+        if let Some(cn) = callee_name
+            && !crate::builtins::is_language_builtin_global(&cn)
+        {
             let tgt_nid = ctx.label_to_nid.get(&cn.to_lowercase()).cloned();
             if let Some(tgt) = tgt_nid {
                 if tgt != caller_nid {

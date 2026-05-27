@@ -8,10 +8,21 @@
 #![allow(clippy::expect_used)]
 
 use graphify_build::{
-    Graph, GraphKind, build, build_from_json, deduplicate_by_label, norm_label,
-    prefix_graph_for_global, prune_repo_from_graph,
+    Graph, GraphKind, build, build_from_json, build_merge, build_merge_with_graph_cap,
+    deduplicate_by_label, norm_label, prefix_graph_for_global, prune_repo_from_graph,
 };
 use serde_json::{Value, json};
+
+fn node_labels(g: &Graph) -> std::collections::HashSet<String> {
+    g.nodes()
+        .filter_map(|(_, attrs)| {
+            attrs
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
+}
 
 fn small_extraction() -> Value {
     json!({
@@ -345,6 +356,154 @@ fn build_from_json_relative_source_file_unchanged() {
             .and_then(Value::as_str),
         Some("src/foo.py")
     );
+}
+
+#[test]
+fn build_merge_preserves_call_edge_direction() {
+    // #760: build_merge must read source/target verbatim, not re-derive edge
+    // endpoints from node insertion order (which flips directional `calls`).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graph.json");
+    // Callee `b` is inserted before caller `a`; the edge is a -> b.
+    let graph_json = json!({
+        "nodes": [
+            {"id": "b", "label": "b()", "file_type": "code", "source_file": "x.js"},
+            {"id": "a", "label": "a()", "file_type": "code", "source_file": "x.js"},
+        ],
+        "links": [
+            {"source": "a", "target": "b", "relation": "calls", "confidence": "EXTRACTED",
+             "source_file": "x.js", "weight": 1.0},
+        ],
+    });
+    std::fs::write(
+        &graph_path,
+        serde_json::to_string(&graph_json).expect("ser"),
+    )
+    .expect("write");
+
+    let g = build_merge(&[], &graph_path, None, false, false, None).expect("build_merge");
+    let calls: Vec<_> = g
+        .edges()
+        .filter(|e| e.attrs.get("relation").and_then(Value::as_str) == Some("calls"))
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].attrs.get("_src").and_then(Value::as_str),
+        Some("a")
+    );
+    assert_eq!(
+        calls[0].attrs.get("_tgt").and_then(Value::as_str),
+        Some("b")
+    );
+}
+
+#[test]
+fn build_merge_prune_absolute_paths_match_relative_nodes() {
+    // #1007: manifest stores absolute paths, graph nodes store relative paths.
+    // prune_sources with absolute paths must still remove the right nodes/edges.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon").join("corpus");
+    std::fs::create_dir(&root).expect("mkdir");
+    let graph_path = tmp.path().join("graph.json");
+    let graph_json = json!({
+        "nodes": [
+            {"id": "n1", "label": "login", "file_type": "code", "source_file": "module_a/auth.py"},
+            {"id": "n2", "label": "format_date", "file_type": "code", "source_file": "module_b/utils.py"},
+        ],
+        "edges": [
+            {"source": "n1", "target": "n2", "relation": "calls", "confidence": "EXTRACTED",
+             "source_file": "module_b/utils.py", "weight": 1.0},
+        ],
+    });
+    std::fs::write(
+        &graph_path,
+        serde_json::to_string(&graph_json).expect("ser"),
+    )
+    .expect("write");
+
+    let deleted_abs = root
+        .join("module_b")
+        .join("utils.py")
+        .to_string_lossy()
+        .into_owned();
+    let g = build_merge(
+        &[],
+        &graph_path,
+        Some(&[deleted_abs]),
+        false,
+        false,
+        Some(&root),
+    )
+    .expect("build_merge");
+
+    let labels = node_labels(&g);
+    assert!(
+        !labels.contains("format_date"),
+        "stale node should be pruned"
+    );
+    assert!(labels.contains("login"), "unrelated node must survive");
+    assert_eq!(
+        g.edge_count(),
+        0,
+        "edge from deleted source_file should be pruned"
+    );
+}
+
+#[test]
+fn build_merge_prune_windows_backslash_paths() {
+    // #1007: prune_sources with Windows-style backslash absolute paths must match.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon").join("corpus");
+    std::fs::create_dir(&root).expect("mkdir");
+    let graph_path = tmp.path().join("graph.json");
+    let graph_json = json!({
+        "nodes": [
+            {"id": "n1", "label": "parse_date", "file_type": "code", "source_file": "module_b/utils.py"},
+        ],
+        "edges": [],
+    });
+    std::fs::write(
+        &graph_path,
+        serde_json::to_string(&graph_json).expect("ser"),
+    )
+    .expect("write");
+
+    let win_path = root
+        .join("module_b")
+        .join("utils.py")
+        .to_string_lossy()
+        .replace('/', "\\");
+    let g = build_merge(
+        &[],
+        &graph_path,
+        Some(&[win_path]),
+        false,
+        false,
+        Some(&root),
+    )
+    .expect("build_merge");
+
+    let labels = node_labels(&g);
+    assert!(
+        !labels.contains("parse_date"),
+        "node should be pruned even with a backslash path"
+    );
+}
+
+#[test]
+fn build_merge_rejects_oversized_existing_graph() {
+    // #F4: build_merge must refuse to read an existing graph.json over the size
+    // cap rather than parsing it into memory.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graph.json");
+    std::fs::write(
+        &graph_path,
+        serde_json::to_string(&json!({"nodes": [], "links": []})).expect("ser"),
+    )
+    .expect("write");
+    let err = build_merge_with_graph_cap(&[], &graph_path, None, false, false, None, 8)
+        .expect_err("should reject oversized graph");
+    assert!(err.to_string().contains("exceeds"), "got: {err}");
 }
 
 #[test]

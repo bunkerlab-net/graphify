@@ -105,6 +105,7 @@ pub fn extract_json(path: &Path) -> FileResult {
         file_type: "code".to_string(),
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
+        metadata: None,
     });
 
     // Find root object
@@ -220,6 +221,7 @@ fn walk_json_object(
                 file_type: "code".to_string(),
                 source_file: ctx.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
+                metadata: None,
             });
         }
         ctx.edges.push(Edge {
