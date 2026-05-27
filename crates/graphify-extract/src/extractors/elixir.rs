@@ -47,7 +47,8 @@ fn read_text(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
 /// Extract modules, functions, imports, and calls from a `.ex`/`.exs` file.
 #[must_use]
 // Single-pass tree-sitter extractor: node/edge emission shares accumulator
-// state across module/function/call branches, so splitting fragments locality.
+// state across module/function/call branches, so splitting into helpers
+// would separate related logic.
 #[allow(clippy::too_many_lines)]
 pub fn extract_elixir(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {

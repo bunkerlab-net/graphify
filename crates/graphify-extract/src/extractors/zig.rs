@@ -14,7 +14,8 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 /// Extract functions, structs, enums, unions, and imports from a `.zig` file.
 #[must_use]
 // Single-pass tree-sitter extractor: node/edge emission shares accumulator
-// state across function/struct/enum/import branches, so splitting fragments locality.
+// state across function/struct/enum/import branches, so splitting into helpers
+// would separate related logic.
 #[allow(clippy::too_many_lines)]
 pub fn extract_zig(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {

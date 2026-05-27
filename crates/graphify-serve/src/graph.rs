@@ -33,7 +33,9 @@ pub fn strip_diacritics(text: &str) -> String {
 }
 
 /// Split `text` into `\w+` runs (Unicode alphanumeric characters plus `_`),
-/// matching Python's `re.findall(r"\w+", text)`.
+/// matching Python's `re.findall(r"\w+", text)` under its default Unicode mode.
+/// `char::is_alphanumeric()` accepts accented letters, CJK, etc. — broader than
+/// an ASCII-only `\w`, which is the desired behaviour for international labels.
 fn word_tokens(text: &str) -> impl Iterator<Item = &str> {
     text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .filter(|s| !s.is_empty())

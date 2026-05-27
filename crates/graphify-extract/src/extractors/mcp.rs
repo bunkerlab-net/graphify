@@ -283,8 +283,10 @@ fn detect_package_from_args(args: &[Value]) -> Option<String> {
 /// separator. Unscoped (`name@1.2.3`) splits on the first `@`.
 fn strip_version(pkg: &str) -> String {
     if let Some(rest) = pkg.strip_prefix('@') {
-        // `rest` drops the leading scope `@`; an `@` inside `rest` is the
-        // version separator. Its index in `rest` is one less than in `pkg`.
+        // `rest` drops the leading scope `@`, so an `@` found at index `rel`
+        // in `rest` sits at index `rel + 1` in `pkg`. Slicing `pkg[..=rel]`
+        // (inclusive of `rel`) therefore keeps `@scope/name` and drops the
+        // `@version` suffix.
         match rest.find('@') {
             Some(rel) => pkg[..=rel].to_string(),
             None => pkg.to_string(),
