@@ -179,7 +179,18 @@ fn rebuild_code_evicts_nodes_from_deleted_files() {
     assert!(rebuild_code(corpus, None, opts).expect("first rebuild"));
 
     let graph_path = corpus.join("graphify-out").join("graph.json");
-    let before = fs::read_to_string(&graph_path).expect("read graph");
+    let node_labels = |path: &Path| -> std::collections::HashSet<String> {
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("read graph")).expect("parse graph.json");
+        value["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .iter()
+            .filter_map(|n| n.get("label").and_then(|v| v.as_str()).map(str::to_string))
+            .collect()
+    };
+
+    let before = node_labels(&graph_path);
     assert!(
         before.contains("format_date()"),
         "format_date should be present before deletion"
@@ -188,7 +199,7 @@ fn rebuild_code_evicts_nodes_from_deleted_files() {
     fs::remove_file(corpus.join("utils.py")).expect("remove utils.py");
     assert!(rebuild_code(corpus, None, opts).expect("second rebuild"));
 
-    let after = fs::read_to_string(&graph_path).expect("read graph");
+    let after = node_labels(&graph_path);
     assert!(
         !after.contains("format_date()"),
         "stale function node from deleted file must be evicted"

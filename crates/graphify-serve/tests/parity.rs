@@ -215,6 +215,7 @@ fn test_score_nodes_ignores_trailing_punctuation() {
     let g = make_graph();
     let mut cache = HashMap::new();
     let scored = score_nodes(&g, &["extract?"], &mut cache);
+    assert!(!scored.is_empty(), "expected at least one match");
     assert_eq!(scored[0].1, "n1");
 }
 

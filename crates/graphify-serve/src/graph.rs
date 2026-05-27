@@ -684,7 +684,8 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
         // Token-join both sides; `search_tokens` already strips trailing `()`
         // and other punctuation, so no separate `bare_label` is needed.
         let node_term = search_tokens(&get_norm_label(attrs)).join(" ");
-        let nid_term = search_tokens(&nid.to_lowercase()).join(" ");
+        // `search_tokens` already lowercases, so pass `nid` directly.
+        let nid_term = search_tokens(nid).join(" ");
         if term == node_term || term == nid_term {
             exact.push(nid.clone());
         } else if node_term.starts_with(&term) || nid_term.starts_with(&term) {

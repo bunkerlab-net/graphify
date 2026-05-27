@@ -16,6 +16,7 @@ static PERF_LOG: LazyLock<bool> = LazyLock::new(|| std::env::var("GRAPHIFY_PERF_
 /// Canonicalise a root path to a string for `source_file` relativisation,
 /// falling back to the path as-is when it cannot be resolved (e.g. a
 /// non-existent root in tests).
+#[must_use]
 fn canonicalize_root_to_string(root: &Path) -> String {
     root.canonicalize()
         .unwrap_or_else(|_| root.to_path_buf())
