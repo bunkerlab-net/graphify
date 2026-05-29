@@ -77,6 +77,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
                 metadata: None,
             });
             edges.push(Edge {
+                external: false,
                 source: file_nid.clone(),
                 target: nid,
                 relation: "defines".to_string(),
@@ -107,6 +108,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
                 metadata: None,
             });
             edges.push(Edge {
+                external: false,
                 source: file_nid.clone(),
                 target: nid,
                 relation: "defines".to_string(),
@@ -135,6 +137,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
             });
         }
         edges.push(Edge {
+            external: false,
             source: file_nid.clone(),
             target: tgt_nid,
             relation: "imports".to_string(),

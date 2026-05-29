@@ -188,9 +188,24 @@ pub fn call_bedrock(
     messages: &[serde_json::Value],
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
+    call_bedrock_with_system(model, region, messages, max_tokens, EXTRACTION_SYSTEM)
+}
+
+/// Call AWS Bedrock Converse API with an explicit system prompt.
+///
+/// # Errors
+/// Returns [`LlmError::NoApiKey`] if no AWS credentials can be resolved,
+/// or [`LlmError::Http`] / [`LlmError::Parse`] on transport / response errors.
+pub fn call_bedrock_with_system(
+    model: &str,
+    region: &str,
+    messages: &[serde_json::Value],
+    max_tokens: u32,
+    system_prompt: &str,
+) -> Result<LlmResponse, LlmError> {
     let client = client_for(region);
     let sdk_messages = build_messages(messages)?;
-    let system = SystemContentBlock::Text(EXTRACTION_SYSTEM.to_string());
+    let system = SystemContentBlock::Text(system_prompt.to_string());
 
     let inference = InferenceConfiguration::builder()
         .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))

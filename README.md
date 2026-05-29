@@ -49,7 +49,9 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   Swift, Kotlin, Scala, Bash, Lua, Elixir, Haskell, OCaml, Zig, Solidity, R, Julia, HTML, CSS, SQL, …
   Also reads .NET project files (`.sln`, `.csproj`, `.fsproj`, `.vbproj`) and Razor components
   (`.razor`, `.cshtml`) for package, project-reference, target-framework, and `@code` extraction,
-  Verilog/SystemVerilog (`.v`, `.sv`, `.svh`), and MCP config files (`.mcp.json`,
+  Verilog/SystemVerilog (`.v`, `.sv`, `.svh`), BYOND DreamMaker
+  (`.dm`, `.dme` source plus `.dmi` icon sheets, `.dmm` maps, and `.dmf` interface forms),
+  and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var *names* (values are never read).
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.

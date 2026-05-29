@@ -329,3 +329,31 @@ fn test_multiple_repos_error() {
     let msg = err.to_string();
     assert!(msg.contains("multiple repos"), "error message was: {msg}");
 }
+
+#[test]
+fn test_identical_labels_in_different_files_not_merged() {
+    // Regression guard for graphify-py #1046: two high-entropy nodes that share
+    // an identical label but live in different source files are distinct symbols
+    // (e.g. a trait impl and its wrapper) and must NOT be merged. Pass 1
+    // partitions by `source_file`, and Pass 2's unique-by-norm candidate set
+    // prevents cross-file collapse of identical labels.
+    let nodes = vec![
+        json!({
+            "id": "a_authenticateusersession",
+            "label": "AuthenticateUserSession",
+            "source_file": "auth/a.rs"
+        }),
+        json!({
+            "id": "b_authenticateusersession",
+            "label": "AuthenticateUserSession",
+            "source_file": "auth/b.rs"
+        }),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(
+        result_nodes.len(),
+        2,
+        "identical labels in different files must not be merged"
+    );
+}

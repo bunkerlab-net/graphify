@@ -456,3 +456,50 @@ fn test_attach_hyperedges_deduplicates() {
     let stored = g.graph_attrs["hyperedges"].as_array().expect("array field");
     assert_eq!(stored.len(), 2, "he1 should not be duplicated");
 }
+
+#[test]
+fn test_to_html_aggregated_remaps_hyperedges_to_communities() {
+    // graphify-py #1006: when the graph exceeds the viz limit and is aggregated
+    // into a community meta-graph, hyperedges must be remapped from semantic
+    // node IDs to community IDs. Cross-community hyperedges survive (label
+    // derived from the relation); hyperedges within a single community collapse
+    // and are dropped.
+    let extraction = json!({
+        "nodes": [
+            {"id": "n1", "label": "N1"},
+            {"id": "n2", "label": "N2"},
+            {"id": "n3", "label": "N3"},
+            {"id": "n4", "label": "N4"},
+        ],
+        "edges": [],
+    });
+    let mut g = build_from_json(extraction, false, None).expect("build_from_json");
+    attach_hyperedges(
+        &mut g,
+        &[
+            // Spans community 0 and community 1 → kept.
+            json!({"id": "h1", "relation": "shares_data_flow", "nodes": ["n1", "n3"]}),
+            // Entirely within community 0 → fewer than 2 communities → dropped.
+            json!({"id": "h2", "relation": "intra_only", "nodes": ["n1", "n2"]}),
+        ],
+    );
+
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(0, vec!["n1".to_string(), "n2".to_string()]);
+    communities.insert(1, vec!["n3".to_string(), "n4".to_string()]);
+
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.html");
+    // node_limit = Some(2): 4 nodes > 2 → aggregated community view.
+    to_html(&g, &communities, &out, None, None, Some(2)).expect("to_html");
+
+    let html = std::fs::read_to_string(&out).expect("read html");
+    assert!(
+        html.contains("shares data flow"),
+        "cross-community hyperedge label should be remapped and rendered"
+    );
+    assert!(
+        !html.contains("intra only"),
+        "single-community hyperedge should be dropped from the aggregated view"
+    );
+}

@@ -94,6 +94,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -243,10 +252,11 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-bedrockruntime"
-version = "1.131.0"
+version = "1.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e494025b4c578bfefd025aada69c51ab1db6b7589f61cb78ae681f3115269209"
+checksum = "41a2940faeb61f4f579a434bc3a546e9ab49a89596e94527d329281ef55fd44d"
 dependencies = [
+ "arc-swap",
  "aws-credential-types",
  "aws-runtime",
  "aws-sigv4",
@@ -270,9 +280,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.99.0"
+version = "1.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f4055e6099b2ec264abdc0d9bbfffce306c1601809275c861594779a0b04b45"
+checksum = "bee2719d4a5e5e147bb9e9b77490df6ece750df1094968aa857b09b618a1881a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -294,10 +304,11 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.101.0"
+version = "1.102.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02f009ba0284c5d696425fd7b4dcc5b189f5726f4041b7a5794daecb3a68d598"
+checksum = "b30d254992d56ef19f430396e5765b11e0f5bd21a7a557cb12fca1c8c18b9636"
 dependencies = [
+ "arc-swap",
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
@@ -318,9 +329,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.104.0"
+version = "1.105.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aa6622798e19e6a76b690562085dd4771c736cd48343464a53ab4ae2f2c9f84"
+checksum = "59f4f8065fe615dbed9096458ba98dda6d641553ffd5aedd27e37e65211aca9f"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -869,9 +880,9 @@ dependencies = [
 
 [[package]]
 name = "cmov"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "codepage"
@@ -1462,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "graphify"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1500,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-affected"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1512,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-analyze"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "graphify-cluster",
@@ -1524,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-benchmark"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1537,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-build"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "caseless",
  "graphify-security",
@@ -1554,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cache"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "hex",
  "indexmap",
@@ -1569,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cluster"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1582,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-dedup"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "caseless",
  "indexmap",
@@ -1597,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-detect"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "calamine",
  "graphify-google",
@@ -1620,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-diagnostics"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1634,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-export"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1655,8 +1666,10 @@ dependencies = [
 
 [[package]]
 name = "graphify-extract"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
+ "flate2",
+ "graphify-build",
  "graphify-cache",
  "graphify-security",
  "indexmap",
@@ -1672,6 +1685,7 @@ dependencies = [
  "tree-sitter-c",
  "tree-sitter-c-sharp",
  "tree-sitter-cpp",
+ "tree-sitter-dm",
  "tree-sitter-elixir",
  "tree-sitter-fortran",
  "tree-sitter-go",
@@ -1700,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-global"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1716,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-google"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "hex",
  "regex",
@@ -1729,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-hooks"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "regex",
  "serde_json",
@@ -1741,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-html"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1758,7 +1772,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-ingest"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1775,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-llm"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -1796,14 +1810,14 @@ dependencies = [
 
 [[package]]
 name = "graphify-manifest"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-detect",
 ]
 
 [[package]]
 name = "graphify-multigraph-compat"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1814,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-prs"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1827,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-report"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1840,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-scip"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1855,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-security"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "ipnet",
  "mockito",
@@ -1869,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-semantic"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "indexmap",
  "regex",
@@ -1881,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-serve"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1897,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-transcribe"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1910,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-validate"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",
@@ -1918,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-watch"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1940,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-wiki"
-version = "0.8.21"
+version = "0.8.22"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -2401,9 +2415,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.27"
+version = "0.2.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "392c70591e8749fe235ddaf513e6f58b26bce3dcc16524cecc8936f75afa161e"
+checksum = "4603d3033e49e2b0e31229fcab20a5d40089c607d975cd9c80551dc69eed9102"
 dependencies = [
  "jiff-static",
  "jiff-tzdb-platform",
@@ -2416,9 +2430,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.27"
+version = "0.2.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47b605b0c050d845fc355bb11eb3f9a8deddc218ea60c76e61aa1f2adfb2c96a"
+checksum = "782d32378dddf207193ac91cefb848ad41abb58195c95168e1291227a0832b47"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2703,9 +2717,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50b7e5b27aa02a74bac8c3f23f448f8d87ff11f92d3aac1a6ed369ee08cc56c1"
+checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
 dependencies = [
  "libc",
  "log",
@@ -3728,9 +3742,9 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "socket2"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
+checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -4162,6 +4176,16 @@ name = "tree-sitter-cpp"
 version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-dm"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e7cb9dcfcd10c84ec03e3a0717a1d6fc7d6454ae5e54d03e3b17cc25564e4f6"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5087,18 +5111,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.48"
+version = "0.8.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eed437bf9d6692032087e337407a86f04cd8d6a16a37199ed57949d415bd68e9"
+checksum = "bce33a6288fa3f072a8c2c7d0f2fdbb90e28298f0135c1f99b96c3db2efcc60b"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.48"
+version = "0.8.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70e3cd084b1788766f53af483dd21f93881ff30d7320490ec3ef7526d203bad4"
+checksum = "8fd425244944f4ab65ccff928e7323354c5a018c75838362fdce749dfad2ee1e"
 dependencies = [
  "proc-macro2",
  "quote",

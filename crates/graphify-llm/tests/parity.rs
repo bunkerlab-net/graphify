@@ -538,7 +538,7 @@ struct MockRunner {
 }
 
 impl ClaudeRunner for MockRunner {
-    fn run(&self, _user_message: &str, _append_system_prompt: bool) -> (String, String, i32) {
+    fn run(&self, _user_message: &str, _system_prompt: Option<&str>) -> (String, String, i32) {
         (self.stdout.clone(), String::new(), self.code)
     }
 }
@@ -558,8 +558,13 @@ fn test_claude_cli_returns_parsed_nodes_and_edges() {
     };
 
     // Bypass path check — inject runner directly.
-    let result = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, true)
-        .expect("should succeed");
+    let result = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect("should succeed");
 
     assert_eq!(result.nodes.len(), 2, "expected 2 nodes");
     assert_eq!(result.edges.len(), 1, "expected 1 edge");
@@ -574,8 +579,13 @@ fn test_claude_cli_token_accounting_includes_cache() {
         code: 0,
     };
 
-    let result = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, true)
-        .expect("should succeed");
+    let result = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect("should succeed");
 
     // input_tokens = 6 + 17837 + 30800
     assert_eq!(
@@ -612,8 +622,13 @@ fn test_claude_cli_finish_reason_length_on_max_tokens() {
         stdout: envelope,
         code: 0,
     };
-    let result = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, true)
-        .expect("should succeed");
+    let result = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect("should succeed");
 
     assert_eq!(result.finish_reason, "length");
 }
@@ -624,8 +639,13 @@ fn test_claude_cli_raises_on_nonzero_exit() {
         stdout: String::new(),
         code: 2,
     };
-    let err = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, true)
-        .expect_err("should fail on non-zero exit");
+    let err = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect_err("should fail on non-zero exit");
 
     let msg = err.to_string();
     assert!(
@@ -640,8 +660,13 @@ fn test_claude_cli_raises_on_garbage_envelope() {
         stdout: "not json".to_string(),
         code: 0,
     };
-    let err = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, true)
-        .expect_err("should fail on bad JSON");
+    let err = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect_err("should fail on bad JSON");
 
     let msg = err.to_string();
     assert!(
@@ -664,8 +689,13 @@ fn test_claude_cli_hollow_response_relabelled_as_length() {
         code: 0,
     };
 
-    let result = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, true)
-        .expect("should succeed");
+    let result = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect("should succeed");
 
     assert_eq!(
         result.finish_reason, "length",
@@ -742,4 +772,26 @@ fn test_pack_chunks_by_tokens_rejects_zero_budget() {
     let paths: Vec<std::path::PathBuf> = vec![];
     let err = graphify_llm::pack_chunks_by_tokens(&paths, 0).expect_err("zero budget should fail");
     assert!(matches!(err, LlmError::InvalidInput(..)));
+}
+
+// ---------------------------------------------------------------------------
+// --mode deep — extraction system prompt selection (graphify-py v0.8.22)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_extraction_system_non_deep_is_base_prompt() {
+    let sys = graphify_llm::extraction_system(false);
+    assert_eq!(sys.as_ref(), graphify_llm::EXTRACTION_SYSTEM);
+    assert!(!sys.contains("DEEP_MODE"));
+}
+
+#[test]
+fn test_extraction_system_deep_appends_suffix() {
+    let sys = graphify_llm::extraction_system(true);
+    assert!(sys.starts_with(graphify_llm::EXTRACTION_SYSTEM));
+    assert!(sys.ends_with(graphify_llm::DEEP_EXTRACTION_SUFFIX));
+    assert!(sys.contains("DEEP_MODE: include additional INFERRED edges"));
+    // Base prompt ends with a newline; the suffix opens with one, so the join
+    // yields a blank-line separator (matches graphify-py concatenation).
+    assert!(sys.contains("}\n\nDEEP_MODE"));
 }

@@ -5,6 +5,7 @@
 pub mod bash;
 pub mod blade;
 pub mod dart;
+pub mod dm;
 pub mod dotnet;
 pub mod elixir;
 pub mod fortran;
@@ -211,6 +212,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                 });
             }
             edges.push(Edge {
+                external: false,
                 source: file_nid.clone(),
                 target: class_nid.clone(),
                 relation: "contains".to_string(),
@@ -245,6 +247,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                 });
             }
             edges.push(Edge {
+                external: false,
                 source: class_nid.clone(),
                 target: method_nid,
                 relation: "method".to_string(),
@@ -275,6 +278,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: class_nid.clone(),
                     target: method_nid,
                     relation: "method".to_string(),
@@ -419,6 +423,9 @@ pub use svelte::{extract_astro, extract_svelte};
 // ── Dart ──────────────────────────────────────────────────────────────────────
 pub use dart::extract_dart;
 
+// ── BYOND DreamMaker (.dm / .dme / .dmi / .dmm / .dmf) ──────────────────────────
+pub use dm::{extract_dm, extract_dmf, extract_dmi, extract_dmm};
+
 // ── MCP config (.mcp.json / claude_desktop_config.json / ...) ─────────────────
 pub use mcp::{extract_mcp_config, is_mcp_config_path};
 
@@ -494,6 +501,7 @@ fn extract_python_rationale(path: &Path, result: &mut FileResult) {
             });
         }
         edges.push(Edge {
+            external: false,
             source: rid,
             target: parent_nid.to_string(),
             relation: "rationale_for".to_string(),

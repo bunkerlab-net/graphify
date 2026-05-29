@@ -226,6 +226,7 @@ fn walk_fortran(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: nid.clone(),
                     relation: "defines".to_string(),
@@ -281,6 +282,7 @@ fn walk_fortran(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: nid.clone(),
                     relation: "defines".to_string(),
@@ -335,6 +337,7 @@ fn walk_fortran(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: scope_nid.to_string(),
                     target: nid.clone(),
                     relation: "defines".to_string(),
@@ -390,6 +393,7 @@ fn walk_fortran(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: scope_nid.to_string(),
                     target: nid.clone(),
                     relation: "defines".to_string(),
@@ -445,6 +449,7 @@ fn walk_fortran(
                     metadata: None,
                 });
                 edges.push(Edge {
+                    external: false,
                     source: scope_nid.to_string(),
                     target: imp_nid,
                     relation: "imports".to_string(),
@@ -529,6 +534,7 @@ fn walk_calls_fortran(
             let target_nid = make_id(&[stem, &callee]);
             let line = node.start_position().row + 1;
             edges.push(Edge {
+                external: false,
                 source: scope_nid.to_string(),
                 target: target_nid,
                 relation: "calls".to_string(),

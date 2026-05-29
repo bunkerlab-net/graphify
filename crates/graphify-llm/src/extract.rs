@@ -24,6 +24,22 @@ pub fn extract_files_direct(
     model: Option<&str>,
     root: &Path,
 ) -> Result<LlmResponse, LlmError> {
+    extract_files_direct_mode(files, backend, api_key, model, root, false)
+}
+
+/// Same as [`extract_files_direct`], selecting the deep-mode extraction system
+/// prompt when `deep_mode` is set (the CLI's `--mode deep`).
+///
+/// # Errors
+/// Same as [`extract_files_direct`].
+pub fn extract_files_direct_mode(
+    files: &[PathBuf],
+    backend: &str,
+    api_key: Option<&str>,
+    model: Option<&str>,
+    root: &Path,
+    deep_mode: bool,
+) -> Result<LlmResponse, LlmError> {
     let cfg = backend_config(backend).ok_or_else(|| {
         let available = BACKENDS
             .iter()
@@ -69,41 +85,48 @@ pub fn extract_files_direct(
     // OpenAI-compatible path because the cfg dict's hardcoded value shadowed
     // the resolved value).
     let max_out = openai_compat::resolve_max_tokens(cfg.default_max_tokens);
+    // Deep mode appends an INFERRED-edge suffix to the extraction system prompt.
+    let system = crate::constants::extraction_system(deep_mode);
 
     match backend {
         "claude" => {
             let msgs = vec![serde_json::json!({"role": "user", "content": user_msg})];
-            claude::call_claude(&key, mdl, &msgs, max_out)
+            claude::call_claude_with_system(&key, mdl, &msgs, max_out, system.as_ref())
         }
         "claude-cli" => {
             let runner = claude_cli::RealClaudeRunner;
-            claude_cli::call_claude_cli_with_runner(&runner, &user_msg, max_out)
+            claude_cli::call_claude_cli_with_runner_system(
+                &runner,
+                &user_msg,
+                max_out,
+                system.as_ref(),
+            )
         }
         "bedrock" => {
             let region = bedrock::resolve_region();
             let msgs = vec![serde_json::json!({"role": "user", "content": [{"text": user_msg}]})];
-            bedrock::call_bedrock(mdl, &region, &msgs, max_out)
+            bedrock::call_bedrock_with_system(mdl, &region, &msgs, max_out, system.as_ref())
         }
         "kimi" => {
-            let msgs = openai_compat::extraction_messages(&user_msg);
+            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
             kimi::call_kimi(&key, mdl, &msgs, max_out)
         }
         "gemini" => {
-            let msgs = openai_compat::extraction_messages(&user_msg);
+            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
             gemini::call_gemini(&key, mdl, &msgs, max_out)
         }
         "openai" => {
-            let msgs = openai_compat::extraction_messages(&user_msg);
+            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
             openai::call_openai(&key, mdl, &msgs, max_out)
         }
         "deepseek" => {
-            let msgs = openai_compat::extraction_messages(&user_msg);
+            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
             deepseek::call_deepseek(&key, mdl, &msgs, max_out)
         }
         "ollama" => {
             let base_url = std::env::var("OLLAMA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-            let msgs = openai_compat::extraction_messages(&user_msg);
+            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
             ollama::call_ollama(&key, &base_url, mdl, &msgs, max_out, &user_msg)
         }
         _ => unreachable!("backend_config already validated backend name"),

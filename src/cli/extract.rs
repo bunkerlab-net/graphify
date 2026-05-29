@@ -9,6 +9,8 @@ use crate::cli::{build_analysis, graphify_out_dir};
 pub(crate) struct LlmOptions<'a> {
     pub backend: Option<&'a str>,
     pub model: Option<&'a str>,
+    /// `--mode deep`: bias the LLM toward richer INFERRED architectural edges.
+    pub deep_mode: bool,
     pub max_workers: Option<usize>,
     pub token_budget: usize,
     pub max_concurrency: usize,
@@ -63,6 +65,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let LlmOptions {
         backend,
         model,
+        deep_mode,
         max_workers,
         token_budget,
         max_concurrency,
@@ -89,6 +92,22 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         .map(str::to_string)
         .or_else(graphify_llm::detect_backend);
 
+    // Deep-mode banner. graphify-py prints "deep mode enabled" unconditionally and
+    // then hard-exits when no backend is configured (`__main__.py:3026`, `:3058`).
+    // The Rust pipeline instead degrades to an AST-only run when no LLM key is
+    // present, so report which path will actually execute rather than implying
+    // semantic enrichment that won't happen.
+    if deep_mode {
+        if effective_backend.is_some() {
+            eprintln!("[graphify extract] deep mode enabled: richer semantic extraction");
+        } else {
+            eprintln!(
+                "[graphify extract] deep mode requested but no LLM backend configured; \
+                 running AST-only extraction"
+            );
+        }
+    }
+
     let start = std::time::Instant::now();
     let out_dir = out.map_or_else(
         || path.join(graphify_out_dir()),
@@ -101,6 +120,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let cfg = SemanticConfig {
         backend: effective_backend.as_deref(),
         model,
+        deep_mode,
         max_workers,
         token_budget,
         max_concurrency,
@@ -265,6 +285,7 @@ fn run_ast_extract_phase(
 struct SemanticConfig<'a> {
     backend: Option<&'a str>,
     model: Option<&'a str>,
+    deep_mode: bool,
     max_workers: Option<usize>,
     token_budget: usize,
     max_concurrency: usize,
@@ -305,7 +326,20 @@ fn run_semantic_phase(
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    let cache_split = graphify_cache::check_semantic_cache(&sem_paths, path);
+    // Deep mode forces a full re-extraction. The semantic cache is keyed by file
+    // content only (size+mtime fastpath, then sha256 — mode-agnostic, matching
+    // graphify-py), so honouring a prior *shallow* cache hit would silently skip
+    // the richer deep-mode prompt. graphify-py reads the cache regardless, making
+    // `--mode deep` a no-op on already-cached files; we bypass the read so deep
+    // mode actually runs. Fresh results still populate the cache for next time.
+    let cache_split = if cfg.deep_mode {
+        graphify_cache::SemanticCacheSplit {
+            uncached_files: sem_paths.clone(),
+            ..Default::default()
+        }
+    } else {
+        graphify_cache::check_semantic_cache(&sem_paths, path)
+    };
     let cache_hits = sem_paths
         .len()
         .saturating_sub(cache_split.uncached_files.len());
@@ -331,6 +365,7 @@ fn run_semantic_phase(
         token_budget: Some(cfg.token_budget),
         max_concurrency: cfg.max_concurrency,
         max_retry_depth: 3,
+        deep_mode: cfg.deep_mode,
     };
     eprintln!(
         "      running LLM semantic extraction via backend={b} \

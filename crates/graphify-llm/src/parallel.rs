@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::LlmResponse;
-use crate::retry::extract_with_adaptive_retry;
+use crate::retry::{AdaptiveRetryCtx, extract_with_adaptive_retry_ctx};
 use crate::tokens::pack_chunks_by_tokens;
 
 /// Merge a chunk result into the running accumulator in-place.
@@ -44,6 +44,8 @@ pub struct CorpusConfig<'a> {
     pub max_concurrency: usize,
     /// Maximum bisect depth for [`crate::retry::extract_with_adaptive_retry`].
     pub max_retry_depth: usize,
+    /// When `true`, use the deep-mode extraction system prompt (`--mode deep`).
+    pub deep_mode: bool,
 }
 
 /// Callback invoked after each chunk completes successfully.
@@ -144,15 +146,15 @@ fn resolve_worker_count(cfg: &CorpusConfig<'_>, total: usize) -> usize {
 /// Run a single chunk through the adaptive-retry extractor.
 fn extract_one_chunk(idx: usize, chunk: &[PathBuf], cfg: &CorpusConfig<'_>) -> ChunkOutcome {
     let t0 = Instant::now();
-    match extract_with_adaptive_retry(
-        chunk,
-        cfg.backend,
-        cfg.api_key,
-        cfg.model,
-        cfg.root,
-        cfg.max_retry_depth,
-        0,
-    ) {
+    let ctx = AdaptiveRetryCtx {
+        backend: cfg.backend,
+        api_key: cfg.api_key,
+        model: cfg.model,
+        root: cfg.root,
+        max_depth: cfg.max_retry_depth,
+        deep_mode: cfg.deep_mode,
+    };
+    match extract_with_adaptive_retry_ctx(chunk, &ctx, 0) {
         Ok(mut result) => {
             result.elapsed_seconds = t0.elapsed().as_secs_f64();
             ChunkOutcome::Ok { idx, result }

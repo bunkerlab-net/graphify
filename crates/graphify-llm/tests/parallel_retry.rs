@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use graphify_llm::{
-    CorpusConfig, extract_corpus_parallel, extract_files_direct, extract_with_adaptive_retry,
+    CorpusConfig, extract_corpus_parallel, extract_files_direct, extract_files_direct_mode,
+    extract_with_adaptive_retry,
 };
 use serde_json::json;
 
@@ -82,6 +83,31 @@ fn extract_files_direct_via_openai_mock() {
     let resp = extract_files_direct(&files, "openai", Some("k"), Some("m"), tmp.path())
         .expect("test invariant");
     assert_eq!(resp.nodes.len(), 1);
+}
+
+#[test]
+fn extract_files_direct_deep_mode_sends_deep_prompt() {
+    // The mock only matches when the request body carries the deep-mode system
+    // prompt, so a passing request proves `--mode deep` reached the wire.
+    let mut server = mockito::Server::new();
+    let m = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex("DEEP_MODE".to_string()))
+        .with_status(200)
+        .with_body(good_response_body())
+        .expect_at_least(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let files = write_files(&tmp, 1);
+    let resp = extract_files_direct_mode(&files, "openai", Some("k"), Some("m"), tmp.path(), true)
+        .expect("test invariant");
+    assert_eq!(resp.nodes.len(), 1);
+    m.assert();
 }
 
 // ── extract_with_adaptive_retry single chunk ───────────────────────────────
@@ -262,6 +288,7 @@ fn extract_corpus_parallel_happy_path() {
         token_budget: None,
         max_concurrency: 1,
         max_retry_depth: 1,
+        deep_mode: false,
     };
     let (resp, failed) = extract_corpus_parallel(&files, &cfg, None);
     assert!(!resp.nodes.is_empty());
@@ -293,6 +320,7 @@ fn extract_corpus_parallel_with_token_budget() {
         token_budget: Some(60_000),
         max_concurrency: 2,
         max_retry_depth: 1,
+        deep_mode: false,
     };
     let (resp, _failed) = extract_corpus_parallel(&files, &cfg, None);
     assert!(!resp.nodes.is_empty());
@@ -323,6 +351,7 @@ fn extract_corpus_parallel_with_callback() {
         token_budget: None,
         max_concurrency: 1,
         max_retry_depth: 1,
+        deep_mode: false,
     };
     let count: Arc<std::sync::Mutex<usize>> = Arc::new(std::sync::Mutex::new(0));
     let count_for_cb = Arc::clone(&count);
@@ -348,6 +377,7 @@ fn extract_corpus_parallel_empty_files() {
         token_budget: None,
         max_concurrency: 1,
         max_retry_depth: 1,
+        deep_mode: false,
     };
     let (resp, failed) = extract_corpus_parallel(&[], &cfg, None);
     assert!(resp.nodes.is_empty());

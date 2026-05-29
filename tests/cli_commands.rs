@@ -16,6 +16,40 @@ fn cli() -> Command {
     Command::cargo_bin("graphify").expect("cargo-bin graphify")
 }
 
+/// A [`cli`] command with every backend-selection env var scrubbed, so
+/// `graphify_llm::detect_backend()` cannot pick up a real LLM key from the
+/// developer's (or CI's) environment and turn an AST-only smoke test into a
+/// live API call. Covers the full set of vars `detect_backend` inspects:
+/// the per-provider API keys, the Bedrock credential-provider vars, and the
+/// Ollama base URL — plus the graphify-specific overrides, defensively.
+fn cli_no_backend() -> Command {
+    let mut cmd = cli();
+    for key in [
+        // API keys (gemini -> kimi -> claude -> openai -> deepseek).
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "MOONSHOT_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        // Bedrock credential-provider vars.
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_PROFILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        // Ollama (checked last).
+        "OLLAMA_BASE_URL",
+        // Defensive: graphify-specific overrides.
+        "GRAPHIFY_BACKEND",
+        "GRAPHIFY_OPENAI_MODEL",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
 /// Write a small Python project plus a runnable graph.json fixture into `dir`.
 fn write_python_project(dir: &Path) {
     fs::create_dir_all(dir.join("src")).unwrap();
@@ -85,6 +119,40 @@ fn extract_runs_without_backend_writes_graph() {
         dir.path().join("graphify-out").join("graph.json").exists(),
         "graph.json not written"
     );
+}
+
+#[test]
+fn extract_mode_deep_prints_banner_and_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    // No backend is configured (scrubbed), so deep mode degrades to an AST-only
+    // run and the banner reports that rather than implying semantic enrichment.
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--mode")
+        .arg("deep")
+        .arg("--no-cluster")
+        .assert()
+        .success()
+        .stderr(contains("deep mode"));
+
+    assert!(dir.path().join("graphify-out").join("graph.json").exists());
+}
+
+#[test]
+fn extract_mode_invalid_value_exits_2() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--mode")
+        .arg("bogus")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("invalid value").or(contains("'bogus'")));
 }
 
 #[test]

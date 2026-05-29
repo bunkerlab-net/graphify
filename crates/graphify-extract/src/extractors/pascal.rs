@@ -458,6 +458,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
                      str_path: &str|
      -> Edge {
         Edge {
+            external: false,
             source: src.to_string(),
             target: tgt.to_string(),
             relation: relation.to_string(),
@@ -781,6 +782,7 @@ fn parse_form_text(text: &str, path: &Path) -> FileResult {
         let key = (src.clone(), tgt.clone(), relation.clone());
         if seen_edge_pairs.insert(key) {
             edges.push(Edge {
+                external: false,
                 source: src,
                 target: tgt,
                 relation,
@@ -987,6 +989,7 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
         nodes.push(make_node(&pkg_nid, &pkg_name, &str_path));
     }
     edges.push(Edge {
+        external: false,
         source: file_nid.clone(),
         target: pkg_nid.clone(),
         relation: "contains".to_string(),
@@ -1009,6 +1012,7 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             nodes.push(make_node(&dep_nid, dep_name, &str_path));
         }
         edges.push(Edge {
+            external: false,
             source: pkg_nid.clone(),
             target: dep_nid,
             relation: "imports".to_string(),
@@ -1032,6 +1036,7 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             nodes.push(make_node(&unit_nid, unit_name, &str_path));
         }
         edges.push(Edge {
+            external: false,
             source: pkg_nid.clone(),
             target: unit_nid,
             relation: "contains".to_string(),

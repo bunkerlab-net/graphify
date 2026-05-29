@@ -360,6 +360,27 @@ fn pass2_fuzzy(
         }
 
         if score >= MERGE_THRESHOLD {
+            // Identical labels across different source files almost always mean
+            // same-named-but-different symbols (trait impls, wrapper methods,
+            // common type names). Mirror Pass 1's source_file partition for this
+            // sub-case (graphify-py #1046). NB: the unique-by-norm `candidates`
+            // construction above means two compared candidates never share a
+            // norm, so this guard is currently unreachable — it is retained for
+            // parity with graphify-py and as insurance should that invariant
+            // ever change.
+            if norm_a == norm_b {
+                let sf_a = node_a
+                    .get("source_file")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let sf_b = node_b
+                    .get("source_file")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if sf_a != sf_b {
+                    continue;
+                }
+            }
             // Gather all nodes matching either norm key for winner selection.
             let empty: Vec<usize> = Vec::new();
             let idxs_a = norm_to_idx.get(&norm_a).unwrap_or(&empty);

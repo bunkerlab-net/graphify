@@ -92,6 +92,9 @@ impl LlmBackend for ClaudeBackend {
 
 /// Call Anthropic Messages API and return an [`LlmResponse`].
 ///
+/// Uses the standard [`EXTRACTION_SYSTEM`] prompt; see [`call_claude_with_system`]
+/// to override it (e.g. for `--mode deep`).
+///
 /// # Errors
 /// Returns [`LlmError::Security`] if the API URL fails SSRF validation, or
 /// [`LlmError::Http`] / [`LlmError::Parse`] on transport errors.
@@ -100,6 +103,21 @@ pub fn call_claude(
     model: &str,
     messages: &[serde_json::Value],
     max_tokens: u32,
+) -> Result<LlmResponse, LlmError> {
+    call_claude_with_system(api_key, model, messages, max_tokens, EXTRACTION_SYSTEM)
+}
+
+/// Call Anthropic Messages API with an explicit system prompt.
+///
+/// # Errors
+/// Returns [`LlmError::Security`] if the API URL fails SSRF validation, or
+/// [`LlmError::Http`] / [`LlmError::Parse`] on transport errors.
+pub fn call_claude_with_system(
+    api_key: &str,
+    model: &str,
+    messages: &[serde_json::Value],
+    max_tokens: u32,
+    system: &str,
 ) -> Result<LlmResponse, LlmError> {
     let base = base_url();
     graphify_security::validate_url(&base)?;
@@ -114,7 +132,7 @@ pub fn call_claude(
     let body = json!({
         "model": model,
         "max_tokens": max_tokens,
-        "system": EXTRACTION_SYSTEM,
+        "system": system,
         "messages": messages,
     });
 

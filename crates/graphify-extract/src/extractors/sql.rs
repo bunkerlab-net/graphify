@@ -211,6 +211,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
             if !emitted.contains(&key) {
                 emitted.insert(key);
                 edges.push(Edge {
+                    external: false,
                     source: tbl_nid.clone(),
                     target: ref_nid,
                     relation: "references".to_string(),
@@ -274,6 +275,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                 metadata: None,
             });
             edges.push(Edge {
+                external: false,
                 source: file_nid.to_string(),
                 target: nid.to_string(),
                 relation: "contains".to_string(),
@@ -349,6 +351,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                                                 .cloned()
                                                 .unwrap_or_else(|| make_id(&[ctx.stem, rn]));
                                             ctx.edges.push(Edge {
+                                                external: false,
                                                 source: nid.clone(),
                                                 target: ref_nid,
                                                 relation: "references".to_string(),
@@ -399,6 +402,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                                                                 make_id(&[ctx.stem, rn])
                                                             });
                                                         ctx.edges.push(Edge {
+                                                            external: false,
                                                             source: nid.clone(),
                                                             target: ref_nid,
                                                             relation: "references".to_string(),
@@ -437,6 +441,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                                             .cloned()
                                             .unwrap_or_else(|| make_id(&[ctx.stem, rn]));
                                         ctx.edges.push(Edge {
+                                            external: false,
                                             source: nid.clone(),
                                             target: ref_nid,
                                             relation: "references".to_string(),
@@ -528,6 +533,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                                                 .cloned()
                                                 .unwrap_or_else(|| make_id(&[ctx.stem, &rn]));
                                             ctx.edges.push(Edge {
+                                                external: false,
                                                 source: src_nid.clone(),
                                                 target: ref_nid,
                                                 relation: "references".to_string(),
@@ -587,6 +593,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                         .cloned()
                         .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
                     ctx.edges.push(Edge {
+                        external: false,
                         source: trig_nid,
                         target: tbl_nid,
                         relation: "triggers".to_string(),
@@ -622,6 +629,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                         .cloned()
                         .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
                     ctx.edges.push(Edge {
+                        external: false,
                         source: obj_nid.clone(),
                         target: tbl_nid,
                         relation: "triggers".to_string(),
@@ -646,6 +654,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                             .cloned()
                             .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
                         ctx.edges.push(Edge {
+                            external: false,
                             source: obj_nid.clone(),
                             target: tbl_nid,
                             relation: "reads_from".to_string(),
@@ -670,6 +679,7 @@ fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]
                             .cloned()
                             .unwrap_or_else(|| make_id(&[ctx.stem, &tbl]));
                         ctx.edges.push(Edge {
+                            external: false,
                             source: obj_nid.clone(),
                             target: tbl_nid,
                             relation: "reads_from".to_string(),
@@ -723,6 +733,7 @@ fn walk_from_refs(
                                 let tbl_nid = make_id(&[stem, tbl]);
                                 let line = rc.node().start_position().row + 1;
                                 edges.push(Edge {
+                                    external: false,
                                     source: caller_nid.to_string(),
                                     target: tbl_nid,
                                     relation: "reads_from".to_string(),

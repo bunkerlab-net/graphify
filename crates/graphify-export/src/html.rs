@@ -6,7 +6,7 @@ use std::path::Path;
 
 use graphify_build::Graph;
 use graphify_security::sanitize_label;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -427,11 +427,12 @@ fn handle_oversized_graph(
         "Graph has {} nodes (above {limit} limit). Building aggregated community view...",
         graph.node_count()
     );
-    let meta = build_meta_graph(graph, communities, community_labels);
+    let mut meta = build_meta_graph(graph, communities, community_labels);
     if meta.node_count() <= 1 {
         println!("Single community - aggregated view not useful. Skipping graph.html.");
         return Ok(());
     }
+    remap_hyperedges_to_communities(&mut meta, graph, communities);
     let meta_communities: IndexMap<i64, Vec<String>> = communities
         .keys()
         .map(|&cid| (cid, vec![cid.to_string()]))
@@ -455,6 +456,73 @@ fn handle_oversized_graph(
     );
     println!("Tip: run with --obsidian for full node-level detail.");
     Ok(())
+}
+
+/// Remap the source graph's hyperedges from semantic node IDs to community IDs
+/// and attach them to the aggregated `meta` graph so the community view still
+/// renders them. Mirrors graphify-py `to_html` (#1006).
+///
+/// Each hyperedge's member node IDs are mapped to their community ID (members
+/// in no community are dropped); the community IDs are de-duplicated while
+/// preserving order. Hyperedges spanning fewer than two distinct communities
+/// collapse to nothing visible and are skipped.
+fn remap_hyperedges_to_communities(
+    meta: &mut Graph,
+    graph: &Graph,
+    communities: &IndexMap<i64, Vec<String>>,
+) {
+    let Some(raw) = graph
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+    else {
+        return;
+    };
+    let node_to_community = node_community_map(communities);
+    let mut remapped: Vec<Value> = Vec::new();
+    for he in raw {
+        // Prefer `nodes`, fall back to `members` (both list member node IDs).
+        let members = he
+            .get("nodes")
+            .and_then(Value::as_array)
+            .filter(|a| !a.is_empty())
+            .or_else(|| {
+                he.get("members")
+                    .and_then(Value::as_array)
+                    .filter(|a| !a.is_empty())
+            });
+        // O(1), insertion-ordered de-duplication of community IDs.
+        let mut comm_ids: IndexSet<String> = IndexSet::new();
+        if let Some(members) = members {
+            for nid in members.iter().filter_map(Value::as_str) {
+                if let Some(&c) = node_to_community.get(nid) {
+                    comm_ids.insert(c.to_string());
+                }
+            }
+        }
+        if comm_ids.len() < 2 {
+            continue;
+        }
+        let id = he.get("id").and_then(Value::as_str).unwrap_or("");
+        let label = he
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map_or_else(
+                || {
+                    he.get("relation")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .replace('_', " ")
+                },
+                str::to_string,
+            );
+        let nodes: Vec<String> = comm_ids.into_iter().collect();
+        remapped.push(json!({ "id": id, "label": label, "nodes": nodes }));
+    }
+    meta.graph_attrs
+        .insert("hyperedges".to_string(), Value::Array(remapped));
 }
 
 /// Build the meta-graph (one node per community, edges weighted by cross-community count).

@@ -148,6 +148,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
                 metadata: None,
             });
             edges.push(Edge {
+                external: false,
                 source: file_nid.clone(),
                 target: proj_nid.clone(),
                 relation: "contains".to_string(),
@@ -197,6 +198,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
                 && from != to
             {
                 edges.push(Edge {
+                    external: false,
                     source: from.clone(),
                     target: to.clone(),
                     relation: "imports".to_string(),
@@ -351,6 +353,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                             });
                         }
                         edges.push(Edge {
+                            external: false,
                             source: file_nid.clone(),
                             target: pkg_nid,
                             relation: "imports".to_string(),
@@ -390,6 +393,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                             });
                         }
                         edges.push(Edge {
+                            external: false,
                             source: file_nid.clone(),
                             target: proj_nid,
                             relation: "imports".to_string(),
@@ -464,6 +468,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                 metadata: None,
             });
             edges.push(Edge {
+                external: false,
                 source: file_nid.clone(),
                 target: sdk_nid,
                 relation: "references".to_string(),
@@ -506,6 +511,7 @@ fn add_framework_node(
         metadata: None,
     });
     edges.push(Edge {
+        external: false,
         source: file_nid.to_string(),
         target: fw_nid,
         relation: "references".to_string(),
@@ -567,6 +573,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
             });
         }
         edges.push(Edge {
+            external: false,
             source: file_nid.clone(),
             target: tgt_nid,
             relation: relation.to_string(),
@@ -648,6 +655,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     metadata: None,
                 });
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.clone(),
                     target: route_nid,
                     relation: "references".to_string(),
@@ -720,6 +728,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                 });
             }
             edges.push(Edge {
+                external: false,
                 source: file_nid.clone(),
                 target: method_nid,
                 relation: "contains".to_string(),

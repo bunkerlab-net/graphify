@@ -198,6 +198,7 @@ fn add_import_edge(
     }
     if existing_ids.contains(&node_id) {
         result.edges.push(Edge {
+            external: false,
             source: file_node_id.to_string(),
             target: node_id,
             relation: relation.to_string(),
@@ -218,6 +219,7 @@ fn add_import_edge(
             metadata: None,
         });
         result.edges.push(Edge {
+            external: false,
             source: file_node_id.to_string(),
             target: node_id.clone(),
             relation: relation.to_string(),

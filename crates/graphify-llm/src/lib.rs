@@ -58,10 +58,11 @@ pub use backends::{
 };
 pub use call::call_llm;
 pub use constants::{
-    EXTRACTION_SYSTEM, FILE_CHAR_CAP, LLM_JSON_MAX_BYTES, PER_FILE_OVERHEAD_CHARS,
+    DEEP_EXTRACTION_SUFFIX, EXTRACTION_SYSTEM, FILE_CHAR_CAP, LLM_JSON_MAX_BYTES,
+    PER_FILE_OVERHEAD_CHARS, extraction_system,
 };
 pub use error::LlmError;
-pub use extract::extract_files_direct;
+pub use extract::{extract_files_direct, extract_files_direct_mode};
 pub use parallel::{
     ChunkDoneCb, CorpusConfig, extract_corpus_parallel, extract_corpus_parallel_with_total,
     merge_into,

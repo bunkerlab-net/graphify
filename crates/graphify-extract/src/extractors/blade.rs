@@ -67,6 +67,7 @@ pub fn extract_blade(path: &Path) -> FileResult {
             });
         }
         edges.push(Edge {
+            external: false,
             source: file_nid.clone(),
             target: nid,
             relation: relation.to_string(),

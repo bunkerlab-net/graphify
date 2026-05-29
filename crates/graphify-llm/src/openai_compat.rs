@@ -11,10 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::tokenizer::CHARS_PER_TOKEN;
-use crate::{
-    EXTRACTION_SYSTEM, LLM_JSON_MAX_BYTES, LlmError, LlmResponse, parse_llm_json,
-    response_is_hollow,
-};
+use crate::{LLM_JSON_MAX_BYTES, LlmError, LlmResponse, parse_llm_json, response_is_hollow};
 
 /// Config passed in from a backend for one API call.
 pub struct OpenAiRequest<'a> {
@@ -247,8 +244,16 @@ pub fn derive_ollama_num_ctx(user_message: &str, max_completion_tokens: u32) -> 
 /// Build the standard extraction messages array (system + user).
 #[must_use]
 pub fn extraction_messages(user_message: &str) -> Vec<Value> {
+    extraction_messages_for(user_message, false)
+}
+
+/// Build the extraction messages array, selecting the deep-mode system prompt
+/// when `deep` is set.
+#[must_use]
+pub fn extraction_messages_for(user_message: &str, deep: bool) -> Vec<Value> {
+    let system = crate::constants::extraction_system(deep);
     vec![
-        json!({"role": "system", "content": EXTRACTION_SYSTEM}),
+        json!({"role": "system", "content": system.as_ref()}),
         json!({"role": "user", "content": user_message}),
     ]
 }

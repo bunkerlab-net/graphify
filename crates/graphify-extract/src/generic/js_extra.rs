@@ -207,6 +207,7 @@ fn require_imports_js(
             let (tgt_nid, resolved_path) = resolve_js_import_target(&raw, str_path);
             let line = node.start_position().row as u32 + 1;
             edges.push(Edge {
+                external: false,
                 source: file_nid.to_string(),
                 target: tgt_nid.clone(),
                 relation: "imports_from".to_string(),
@@ -253,6 +254,7 @@ fn require_imports_js(
                 }
                 for sym in &sym_names {
                     edges.push(Edge {
+                        external: false,
                         source: file_nid.to_string(),
                         target: make_id(&[&target_stem, sym]),
                         relation: "imports".to_string(),
@@ -424,6 +426,7 @@ pub(super) fn dynamic_import_js(
         if seen_dyn_pairs.insert(pair) {
             let line = node.start_position().row as u32 + 1;
             edges.push(Edge {
+                external: false,
                 source: caller_nid.to_string(),
                 target: tgt_nid,
                 relation: "imports_from".to_string(),

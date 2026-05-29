@@ -239,6 +239,7 @@ fn walk_ps(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: func_nid.clone(),
                     relation: "contains".to_string(),
@@ -288,6 +289,7 @@ fn walk_ps(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: class_nid.clone(),
                     relation: "contains".to_string(),
@@ -357,6 +359,7 @@ fn walk_ps(
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: parent,
                     target: method_nid.clone(),
                     relation: relation.to_string(),
@@ -432,6 +435,7 @@ fn walk_ps(
                             let tgt_nid = make_id1(&module_name);
                             let line = node.start_position().row + 1;
                             edges.push(Edge {
+                                external: false,
                                 source: file_nid.to_string(),
                                 target: tgt_nid,
                                 relation: "imports_from".to_string(),
@@ -523,6 +527,7 @@ fn walk_calls_ps(
                         if seen_call_pairs.insert(pair) {
                             let line = node.start_position().row + 1;
                             edges.push(Edge {
+                                external: false,
                                 source: caller_nid.to_string(),
                                 target: tgt,
                                 relation: "calls".to_string(),
