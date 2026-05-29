@@ -4,7 +4,17 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Semantic-extraction modes for `graphify extract --mode`.
+///
+/// Mirrors graphify-py's `_VALID_MODES`. `deep` biases the LLM toward richer
+/// `INFERRED` architectural edges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExtractMode {
+    /// Aggressive INFERRED-edge semantic extraction.
+    Deep,
+}
 
 /// Root CLI struct parsed from `argv` by clap.
 #[derive(Debug, Parser)]
@@ -170,6 +180,9 @@ pub(crate) enum Command {
         backend: Option<String>,
         #[arg(long)]
         model: Option<String>,
+        /// Semantic-extraction mode. `deep` enables aggressive INFERRED-edge extraction.
+        #[arg(long, value_enum)]
+        mode: Option<ExtractMode>,
         #[arg(long = "max-workers")]
         max_workers: Option<usize>,
         #[arg(long = "token-budget", default_value_t = 60_000)]

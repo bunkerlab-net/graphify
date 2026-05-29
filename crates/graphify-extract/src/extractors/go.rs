@@ -214,6 +214,7 @@ fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) 
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: func_nid.clone(),
                     relation: "contains".to_string(),
@@ -280,6 +281,7 @@ fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) 
                         });
                     }
                     edges.push(Edge {
+                        external: false,
                         source: parent_nid,
                         target: mnid.clone(),
                         relation: "method".to_string(),
@@ -304,6 +306,7 @@ fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) 
                         });
                     }
                     edges.push(Edge {
+                        external: false,
                         source: file_nid.to_string(),
                         target: mnid.clone(),
                         relation: "contains".to_string(),
@@ -343,6 +346,7 @@ fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u8]) 
                             });
                         }
                         edges.push(Edge {
+                            external: false,
                             source: file_nid.to_string(),
                             target: type_nid,
                             relation: "contains".to_string(),
@@ -461,6 +465,7 @@ fn emit_go_import_spec(
         let tgt_nid = make_id(&["go", "pkg", raw]);
         let line = spec.start_position().row + 1;
         edges.push(Edge {
+            external: false,
             source: file_nid.to_string(),
             target: tgt_nid,
             relation: "imports_from".to_string(),
@@ -558,6 +563,7 @@ fn walk_calls_go(
                             if seen_call_pairs.insert(pair) {
                                 let line = node.start_position().row + 1;
                                 edges.push(Edge {
+                                    external: false,
                                     source: caller_nid.to_string(),
                                     target: tgt,
                                     relation: "calls".to_string(),

@@ -92,6 +92,7 @@ pub(super) fn walk_calls(
                     if ctx.seen_call_pairs.insert(pair) {
                         let line = node.start_position().row as u32 + 1;
                         ctx.edges.push(Edge {
+                            external: false,
                             source: caller_nid.to_string(),
                             target: tgt,
                             relation: "calls".to_string(),

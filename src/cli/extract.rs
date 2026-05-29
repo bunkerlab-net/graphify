@@ -9,6 +9,8 @@ use crate::cli::{build_analysis, graphify_out_dir};
 pub(crate) struct LlmOptions<'a> {
     pub backend: Option<&'a str>,
     pub model: Option<&'a str>,
+    /// `--mode deep`: bias the LLM toward richer INFERRED architectural edges.
+    pub deep_mode: bool,
     pub max_workers: Option<usize>,
     pub token_budget: usize,
     pub max_concurrency: usize,
@@ -63,12 +65,16 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let LlmOptions {
         backend,
         model,
+        deep_mode,
         max_workers,
         token_budget,
         max_concurrency,
         api_timeout,
         dedup_llm,
     } = llm;
+    if deep_mode {
+        eprintln!("[graphify extract] deep mode enabled: richer semantic extraction");
+    }
     let ClusterOptions {
         no_cluster,
         resolution,
@@ -101,6 +107,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let cfg = SemanticConfig {
         backend: effective_backend.as_deref(),
         model,
+        deep_mode,
         max_workers,
         token_budget,
         max_concurrency,
@@ -265,6 +272,7 @@ fn run_ast_extract_phase(
 struct SemanticConfig<'a> {
     backend: Option<&'a str>,
     model: Option<&'a str>,
+    deep_mode: bool,
     max_workers: Option<usize>,
     token_budget: usize,
     max_concurrency: usize,
@@ -331,6 +339,7 @@ fn run_semantic_phase(
         token_budget: Some(cfg.token_budget),
         max_concurrency: cfg.max_concurrency,
         max_retry_depth: 3,
+        deep_mode: cfg.deep_mode,
     };
     eprintln!(
         "      running LLM semantic extraction via backend={b} \

@@ -6,8 +6,21 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::extract::extract_files_direct;
+use crate::extract::extract_files_direct_mode;
 use crate::{LlmError, LlmResponse};
+
+/// Run-constant context for [`extract_with_adaptive_retry_ctx`].
+///
+/// Bundles the fields that stay fixed across the bisect recursion so the
+/// recursive entry point stays a 3-argument call (`chunk`, `ctx`, `depth`).
+pub(crate) struct AdaptiveRetryCtx<'a> {
+    pub backend: &'a str,
+    pub api_key: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub root: &'a std::path::Path,
+    pub max_depth: usize,
+    pub deep_mode: bool,
+}
 
 const CONTEXT_EXCEEDED_MARKERS: &[&str] = &[
     "context size",
@@ -89,6 +102,9 @@ pub(crate) fn merge_responses(
 
 /// Extract a chunk; split in half and retry on context overflow or truncation.
 ///
+/// Standard (non-deep) entry point. See [`extract_with_adaptive_retry_ctx`] to
+/// thread deep mode and other run-constant settings.
+///
 /// # Errors
 /// Propagates errors that don't look like context-window overflow.
 pub fn extract_with_adaptive_retry(
@@ -100,7 +116,35 @@ pub fn extract_with_adaptive_retry(
     max_depth: usize,
     depth: usize,
 ) -> Result<LlmResponse, LlmError> {
-    let result = extract_files_direct(chunk, backend, api_key, model, root);
+    let ctx = AdaptiveRetryCtx {
+        backend,
+        api_key,
+        model,
+        root,
+        max_depth,
+        deep_mode: false,
+    };
+    extract_with_adaptive_retry_ctx(chunk, &ctx, depth)
+}
+
+/// Extract a chunk; split in half and retry on context overflow or truncation,
+/// honouring the run-constant settings in `ctx` (including `deep_mode`).
+///
+/// # Errors
+/// Propagates errors that don't look like context-window overflow.
+pub(crate) fn extract_with_adaptive_retry_ctx(
+    chunk: &[PathBuf],
+    ctx: &AdaptiveRetryCtx<'_>,
+    depth: usize,
+) -> Result<LlmResponse, LlmError> {
+    let result = extract_files_direct_mode(
+        chunk,
+        ctx.backend,
+        ctx.api_key,
+        ctx.model,
+        ctx.root,
+        ctx.deep_mode,
+    );
 
     match result {
         Err(ref e) if looks_like_context_exceeded(e) => {
@@ -113,15 +157,16 @@ pub fn extract_with_adaptive_retry(
                         .map(|p| p.display().to_string())
                         .unwrap_or_default()
                 );
-                return Ok(empty_llm_response(model));
+                return Ok(empty_llm_response(ctx.model));
             }
-            if depth >= max_depth {
+            if depth >= ctx.max_depth {
                 eprintln!(
                     "[graphify] chunk of {} still overflows context at recursion \
-                     depth {depth} (max {max_depth}) — dropping",
-                    chunk.len()
+                     depth {depth} (max {}) — dropping",
+                    chunk.len(),
+                    ctx.max_depth
                 );
-                return Ok(empty_llm_response(model));
+                return Ok(empty_llm_response(ctx.model));
             }
             eprintln!(
                 "[graphify] chunk of {} exceeded context at depth {depth} \
@@ -129,25 +174,9 @@ pub fn extract_with_adaptive_retry(
                 chunk.len()
             );
             let mid = chunk.len() / 2;
-            let left = extract_with_adaptive_retry(
-                &chunk[..mid],
-                backend,
-                api_key,
-                model,
-                root,
-                max_depth,
-                depth + 1,
-            )?;
-            let right = extract_with_adaptive_retry(
-                &chunk[mid..],
-                backend,
-                api_key,
-                model,
-                root,
-                max_depth,
-                depth + 1,
-            )?;
-            Ok(merge_responses(&left, &right, model))
+            let left = extract_with_adaptive_retry_ctx(&chunk[..mid], ctx, depth + 1)?;
+            let right = extract_with_adaptive_retry_ctx(&chunk[mid..], ctx, depth + 1)?;
+            Ok(merge_responses(&left, &right, ctx.model))
         }
         Err(e) => Err(e),
         Ok(resp) if resp.finish_reason == "length" => {
@@ -162,11 +191,12 @@ pub fn extract_with_adaptive_retry(
                 );
                 return Ok(resp);
             }
-            if depth >= max_depth {
+            if depth >= ctx.max_depth {
                 eprintln!(
                     "[graphify] chunk of {} still truncated at recursion depth {depth} \
-                     (max {max_depth}) — partial result kept",
-                    chunk.len()
+                     (max {}) — partial result kept",
+                    chunk.len(),
+                    ctx.max_depth
                 );
                 return Ok(resp);
             }
@@ -178,25 +208,9 @@ pub fn extract_with_adaptive_retry(
                 chunk.len() - chunk.len() / 2,
             );
             let mid = chunk.len() / 2;
-            let left = extract_with_adaptive_retry(
-                &chunk[..mid],
-                backend,
-                api_key,
-                model,
-                root,
-                max_depth,
-                depth + 1,
-            )?;
-            let right = extract_with_adaptive_retry(
-                &chunk[mid..],
-                backend,
-                api_key,
-                model,
-                root,
-                max_depth,
-                depth + 1,
-            )?;
-            Ok(merge_responses(&left, &right, model))
+            let left = extract_with_adaptive_retry_ctx(&chunk[..mid], ctx, depth + 1)?;
+            let right = extract_with_adaptive_retry_ctx(&chunk[mid..], ctx, depth + 1)?;
+            Ok(merge_responses(&left, &right, ctx.model))
         }
         Ok(resp) => Ok(resp),
     }

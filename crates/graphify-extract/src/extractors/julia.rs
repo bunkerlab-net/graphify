@@ -223,6 +223,7 @@ fn walk_julia(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: ctx.file_nid.to_string(),
                     target: mod_nid.clone(),
                     relation: "defines".to_string(),
@@ -308,6 +309,7 @@ fn walk_julia(
                             });
                         }
                         ctx.edges.push(Edge {
+                            external: false,
                             source: scope_nid.to_string(),
                             target: struct_nid.clone(),
                             relation: "defines".to_string(),
@@ -322,6 +324,7 @@ fn walk_julia(
                             let super_name = read_text(identifiers[identifiers.len() - 1], source);
                             let super_nid = make_id(&[ctx.stem, super_name]);
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: struct_nid,
                                 target: super_nid,
                                 relation: "inherits".to_string(),
@@ -367,6 +370,7 @@ fn walk_julia(
                             });
                         }
                         ctx.edges.push(Edge {
+                            external: false,
                             source: scope_nid.to_string(),
                             target: struct_nid,
                             relation: "defines".to_string(),
@@ -434,6 +438,7 @@ fn walk_julia(
                         });
                     }
                     ctx.edges.push(Edge {
+                        external: false,
                         source: scope_nid.to_string(),
                         target: abs_nid,
                         relation: "defines".to_string(),
@@ -482,6 +487,7 @@ fn walk_julia(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: scope_nid.to_string(),
                     target: func_nid.clone(),
                     relation: "defines".to_string(),
@@ -535,6 +541,7 @@ fn walk_julia(
                         });
                     }
                     ctx.edges.push(Edge {
+                        external: false,
                         source: scope_nid.to_string(),
                         target: func_nid.clone(),
                         relation: "defines".to_string(),
@@ -580,6 +587,7 @@ fn walk_julia(
                             metadata: None,
                         });
                         ctx.edges.push(Edge {
+                            external: false,
                             source: scope_nid.to_string(),
                             target: imp_nid,
                             relation: "imports".to_string(),
@@ -619,6 +627,7 @@ fn walk_julia(
                                 metadata: None,
                             });
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: scope_nid.to_string(),
                                 target: pkg_nid,
                                 relation: "imports".to_string(),
@@ -695,6 +704,7 @@ fn walk_calls_julia(
                 let target_nid = make_id(&[ctx.stem, callee_name]);
                 if ctx.seen_ids.contains(&target_nid) && target_nid != func_nid {
                     ctx.edges.push(Edge {
+                        external: false,
                         source: func_nid.to_string(),
                         target: target_nid,
                         relation: "calls".to_string(),
@@ -714,6 +724,7 @@ fn walk_calls_julia(
                     let target_nid = make_id(&[ctx.stem, method_name]);
                     if ctx.seen_ids.contains(&target_nid) && target_nid != func_nid {
                         ctx.edges.push(Edge {
+                            external: false,
                             source: func_nid.to_string(),
                             target: target_nid,
                             relation: "calls".to_string(),

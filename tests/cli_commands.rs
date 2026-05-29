@@ -88,6 +88,46 @@ fn extract_runs_without_backend_writes_graph() {
 }
 
 #[test]
+fn extract_mode_deep_prints_banner_and_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli()
+        .env_remove("GEMINI_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("MOONSHOT_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("AWS_ACCESS_KEY_ID")
+        .env_remove("OLLAMA_BASE_URL")
+        .env_remove("GRAPHIFY_BACKEND")
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--mode")
+        .arg("deep")
+        .arg("--no-cluster")
+        .assert()
+        .success()
+        .stderr(contains("deep mode enabled"));
+
+    assert!(dir.path().join("graphify-out").join("graph.json").exists());
+}
+
+#[test]
+fn extract_mode_invalid_value_exits_2() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--mode")
+        .arg("bogus")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("invalid value").or(contains("'bogus'")));
+}
+
+#[test]
 fn extract_with_custom_out_dir() {
     let dir = tempfile::tempdir().unwrap();
     write_python_project(dir.path());

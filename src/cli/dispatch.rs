@@ -188,6 +188,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         path,
         backend,
         model,
+        mode,
         max_workers,
         token_budget,
         max_concurrency,
@@ -205,6 +206,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
     else {
         unreachable!("dispatch_extract invoked with wrong variant")
     };
+    let deep_mode = matches!(mode, Some(cli::args::ExtractMode::Deep));
     cli::extract::cmd_extract(cli::extract::ExtractOptions {
         path: &path,
         out: out.as_deref(),
@@ -213,6 +215,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         llm: cli::extract::LlmOptions {
             backend: backend.as_deref(),
             model: model.as_deref(),
+            deep_mode,
             max_workers,
             token_budget,
             max_concurrency,

@@ -1,5 +1,7 @@
 //! Public constants and prompt strings shared across LLM backends.
 
+use std::borrow::Cow;
+
 /// Max chars read from a single file before joining.
 pub const FILE_CHAR_CAP: usize = 20_000;
 /// Per-file overhead for the `=== rel ===\n` separator.
@@ -28,3 +30,26 @@ Format: {stem}_{entity} where stem = filename without extension, entity = symbol
 Output exactly this schema:\n\
 {\"nodes\":[{\"id\":\"stem_entity\",\"label\":\"Human Readable Name\",\"file_type\":\"code|document|paper|image|rationale|concept\",\"source_file\":\"relative/path\",\"source_location\":null,\"source_url\":null,\"captured_at\":null,\"author\":null,\"contributor\":null}],\"edges\":[{\"source\":\"node_id\",\"target\":\"node_id\",\"relation\":\"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to\",\"confidence\":\"EXTRACTED|INFERRED|AMBIGUOUS\",\"confidence_score\":1.0,\"source_file\":\"relative/path\",\"source_location\":null,\"weight\":1.0}],\"hyperedges\":[],\"input_tokens\":0,\"output_tokens\":0}\n\
 ";
+
+/// Appended to [`EXTRACTION_SYSTEM`] in `--mode deep` to bias the model toward
+/// richer architectural `INFERRED` edges. Byte-identical to the Python reference
+/// `_DEEP_EXTRACTION_SUFFIX`.
+pub const DEEP_EXTRACTION_SUFFIX: &str = "\n\
+DEEP_MODE: include additional INFERRED edges only for concrete architectural\n\
+signals (shared data contracts, explicit lifecycle coupling, or multi-step flow\n\
+dependencies visible in the sources). Avoid broad conceptual similarity edges.\n\
+Mark uncertain ones AMBIGUOUS instead of omitting.\n\
+";
+
+/// Return the extraction system prompt, optionally in deep mode.
+///
+/// Non-deep borrows [`EXTRACTION_SYSTEM`]; deep mode allocates the concatenation
+/// with [`DEEP_EXTRACTION_SUFFIX`]. Mirrors Python `_extraction_system`.
+#[must_use]
+pub fn extraction_system(deep: bool) -> Cow<'static, str> {
+    if deep {
+        Cow::Owned(format!("{EXTRACTION_SYSTEM}{DEEP_EXTRACTION_SUFFIX}"))
+    } else {
+        Cow::Borrowed(EXTRACTION_SYSTEM)
+    }
+}

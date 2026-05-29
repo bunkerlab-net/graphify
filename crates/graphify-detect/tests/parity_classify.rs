@@ -18,6 +18,24 @@ fn classify_typescript() {
 }
 
 #[test]
+fn classify_byond_dreammaker() {
+    // BYOND DreamMaker source + asset extensions added in graphify-py v0.8.22.
+    for name in [
+        "code.dm",
+        "env.dme",
+        "icons.dmi",
+        "map.dmm",
+        "interface.dmf",
+    ] {
+        assert_eq!(
+            classify_file(Path::new(name)),
+            Some(FileType::Code),
+            "{name} should classify as code",
+        );
+    }
+}
+
+#[test]
 fn classify_markdown() {
     assert_eq!(
         classify_file(Path::new("README.md")),

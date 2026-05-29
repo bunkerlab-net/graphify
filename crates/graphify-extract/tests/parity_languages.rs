@@ -8,12 +8,13 @@
 use std::path::{Path, PathBuf};
 
 use graphify_extract::{
-    extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp, extract_csproj,
-    extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go, extract_groovy,
-    extract_java, extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package,
-    extract_lua, extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell,
-    extract_razor, extract_ruby, extract_rust, extract_scala, extract_sln, extract_sql,
-    extract_svelte, extract_swift, extract_verilog, extract_zig, file_stem, make_id,
+    FileResult, extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp,
+    extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf, extract_dmi,
+    extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
+    extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package, extract_lua,
+    extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell, extract_razor,
+    extract_ruby, extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte,
+    extract_swift, extract_verilog, extract_zig, file_stem, make_id,
 };
 
 fn fixtures() -> PathBuf {
@@ -841,4 +842,396 @@ fn razor_missing_file() {
 fn razor_no_dangling_edges() {
     let r = extract_razor(&fixtures().join("sample.razor"));
     assert_no_dangling_edges(&r);
+}
+
+// ── BYOND DreamMaker (.dm / .dme) ───────────────────────────────────────────
+//
+// Ports the DM/DMI/DMM/DMF cases from graphify-py `tests/test_languages.py`.
+// (Reuses the existing `labels` helper above for node labels.)
+
+/// `(source_label, target_label)` pairs for `calls` edges (Python `_calls`).
+fn calls(r: &FileResult) -> Vec<(String, String)> {
+    let by_id: std::collections::HashMap<&str, &str> = r
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    r.edges
+        .iter()
+        .filter(|e| e.relation == "calls")
+        .map(|e| {
+            (
+                by_id
+                    .get(e.source.as_str())
+                    .map_or(e.source.clone(), |s| (*s).to_string()),
+                by_id
+                    .get(e.target.as_str())
+                    .map_or(e.target.clone(), |s| (*s).to_string()),
+            )
+        })
+        .collect()
+}
+
+/// Edges whose relation is in `relations` (Python `_edges_with_relation`).
+fn edges_with_relation<'a>(
+    r: &'a FileResult,
+    relations: &[&str],
+) -> Vec<&'a graphify_extract::Edge> {
+    r.edges
+        .iter()
+        .filter(|e| relations.contains(&e.relation.as_str()))
+        .collect()
+}
+
+#[test]
+fn dm_no_error() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    assert!(r.error.is_none());
+}
+
+#[test]
+fn dm_finds_global_proc() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"log_event()"));
+    assert!(ls.contains(&"RunTest()"));
+}
+
+#[test]
+fn dm_finds_type_definition() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"/datum/weapon"));
+    assert!(ls.contains(&"/datum/weapon/sword"));
+}
+
+#[test]
+fn dm_qualifies_proc_with_type_path() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"/datum/weapon/attack()"));
+    assert!(ls.contains(&"/datum/weapon/sword/attack()"));
+}
+
+#[test]
+fn dm_finds_path_form_proc_definition() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    assert!(labels(&r).contains(&"/datum/weapon/sword/sharpen()"));
+}
+
+#[test]
+fn dm_emits_include_edge() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let import_edges = edges_with_relation(&r, &["imports", "imports_from"]);
+    assert!(!import_edges.is_empty());
+    assert!(
+        import_edges
+            .iter()
+            .all(|e| e.context.as_deref() == Some("import"))
+    );
+}
+
+#[test]
+fn dm_unresolved_include_flagged_external() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let import_edges = edges_with_relation(&r, &["imports", "imports_from"]);
+    let helpers: Vec<_> = import_edges
+        .iter()
+        .filter(|e| e.target.contains("helpers"))
+        .collect();
+    assert!(!helpers.is_empty());
+    assert!(helpers.iter().all(|e| e.external));
+}
+
+#[test]
+fn dm_resolves_in_file_calls() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let cs = calls(&r);
+    assert!(cs.iter().any(|(_, callee)| callee == "log_event()"));
+    assert!(cs.contains(&(
+        "/datum/weapon/sword/attack()".to_string(),
+        "/datum/weapon/sword/sharpen()".to_string(),
+    )));
+}
+
+#[test]
+fn dm_ambiguous_member_call_left_unresolved() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let cs = calls(&r);
+    assert!(
+        !cs.iter()
+            .any(|(s, c)| s == "RunTest()" && c.contains("attack"))
+    );
+    assert!(r.raw_calls.iter().any(|rc| rc.callee == "attack"));
+}
+
+#[test]
+fn dm_emits_new_as_instantiates() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let by_id: std::collections::HashMap<&str, &str> = r
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let inst: Vec<(Option<&&str>, Option<&&str>)> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "instantiates")
+        .map(|e| (by_id.get(e.source.as_str()), by_id.get(e.target.as_str())))
+        .collect();
+    assert!(inst.contains(&(Some(&"RunTest()"), Some(&"/datum/weapon/sword"))));
+}
+
+#[test]
+fn dm_call_edges_have_call_context() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let call_edges = edges_with_relation(&r, &["calls", "instantiates"]);
+    assert!(!call_edges.is_empty());
+    assert!(
+        call_edges
+            .iter()
+            .all(|e| e.context.as_deref() == Some("call"))
+    );
+}
+
+#[test]
+fn dm_no_dangling_edges() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let ids: std::collections::HashSet<&str> = r.nodes.iter().map(|n| n.id.as_str()).collect();
+    for e in &r.edges {
+        assert!(
+            ids.contains(e.source.as_str()),
+            "dangling source {}",
+            e.source
+        );
+    }
+}
+
+#[test]
+fn dm_super_call_not_emitted() {
+    let r = extract_dm(&fixtures().join("sample.dm"));
+    let cs = calls(&r);
+    assert!(
+        !cs.iter()
+            .any(|(_, c)| c.trim_matches(|ch| ch == '(' || ch == ')') == "..")
+    );
+    assert!(!r.raw_calls.iter().any(|rc| rc.callee == ".."));
+}
+
+// ── DMI (BYOND icon sheets) ─────────────────────────────────────────────────
+
+#[test]
+fn dmi_no_error() {
+    let r = extract_dmi(&fixtures().join("sample.dmi"));
+    assert!(r.error.is_none());
+}
+
+#[test]
+fn dmi_emits_state_nodes() {
+    let r = extract_dmi(&fixtures().join("sample.dmi"));
+    assert!(labels(&r).contains(&"\"mob\""));
+}
+
+#[test]
+fn dmi_state_contained_by_file() {
+    let r = extract_dmi(&fixtures().join("sample.dmi"));
+    let by_id: std::collections::HashMap<&str, &str> = r
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let contains: Vec<(Option<&&str>, Option<&&str>)> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .map(|e| (by_id.get(e.source.as_str()), by_id.get(e.target.as_str())))
+        .collect();
+    assert!(contains.contains(&(Some(&"sample.dmi"), Some(&"\"mob\""))));
+}
+
+// ── DMM (BYOND map files) ───────────────────────────────────────────────────
+
+#[test]
+fn dmm_no_error() {
+    let r = extract_dmm(&fixtures().join("sample.dmm"));
+    assert!(r.error.is_none());
+}
+
+#[test]
+fn dmm_extracts_type_paths_as_uses_edges() {
+    let r = extract_dmm(&fixtures().join("sample.dmm"));
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "uses")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(targets.contains("turf_closed_wall"));
+    assert!(targets.contains("obj_structure_table"));
+    assert!(targets.contains("obj_item_weapon_sword"));
+}
+
+#[test]
+fn dmm_strips_var_overrides() {
+    let r = extract_dmm(&fixtures().join("sample.dmm"));
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "uses")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(!targets.iter().any(|t| t.contains('{')));
+    assert!(targets.contains("obj_item_weapon_sword"));
+}
+
+#[test]
+fn dmm_handles_multiline_tile_definition() {
+    let r = extract_dmm(&fixtures().join("sample.dmm"));
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "uses")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(targets.contains("area_station_maintenance"));
+}
+
+#[test]
+fn dmm_skips_grid_section() {
+    let r = extract_dmm(&fixtures().join("sample.dmm"));
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "uses")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert_eq!(targets.len(), 5);
+}
+
+// ── DMF (BYOND interface forms) ─────────────────────────────────────────────
+
+#[test]
+fn dmf_no_error() {
+    let r = extract_dmf(&fixtures().join("sample.dmf"));
+    assert!(r.error.is_none());
+}
+
+#[test]
+fn dmf_extracts_windows() {
+    let r = extract_dmf(&fixtures().join("sample.dmf"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"window \"mapwindow\""));
+    assert!(ls.contains(&"window \"infowindow\""));
+}
+
+#[test]
+fn dmf_elem_labels_carry_control_type() {
+    let r = extract_dmf(&fixtures().join("sample.dmf"));
+    assert!(labels(&r).contains(&"elem \"map\" [MAP]"));
+}
+
+#[test]
+fn dmf_elem_under_window() {
+    let r = extract_dmf(&fixtures().join("sample.dmf"));
+    let by_id: std::collections::HashMap<&str, &str> = r
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let contains: Vec<(Option<&&str>, Option<&&str>)> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .map(|e| (by_id.get(e.source.as_str()), by_id.get(e.target.as_str())))
+        .collect();
+    assert!(contains.contains(&(Some(&"window \"mapwindow\""), Some(&"elem \"map\" [MAP]"))));
+}
+
+#[test]
+fn dmf_no_dangling_edges() {
+    let r = extract_dmf(&fixtures().join("sample.dmf"));
+    let ids: std::collections::HashSet<&str> = r.nodes.iter().map(|n| n.id.as_str()).collect();
+    for e in &r.edges {
+        assert!(
+            ids.contains(e.source.as_str()),
+            "dangling source {}",
+            e.source
+        );
+        assert!(
+            ids.contains(e.target.as_str()),
+            "dangling target {}",
+            e.target
+        );
+    }
+}
+
+// ── BYOND coverage tests (beyond the graphify-py parity suite) ──────────────
+//
+// These exercise paths the shipped fixtures don't reach: the zTXt (compressed)
+// `.dmi` branch — the v0.8.22 capped-decompression security fix — plus resolved
+// includes and error returns.
+
+/// Build a minimal `.dmi` PNG carrying a zlib-compressed `Description` chunk.
+/// CRCs are left zeroed; `read_dmi_description` does not validate them.
+fn png_with_ztxt_description(text: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(text.as_bytes()).expect("zlib write");
+    let compressed = enc.finish().expect("zlib finish");
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b"Description\x00"); // keyword + null separator
+    payload.push(0); // zTXt compression method = 0 (zlib)
+    payload.extend_from_slice(&compressed);
+
+    let mut png = Vec::from(*b"\x89PNG\r\n\x1a\n");
+    let mut chunk = |typ: &[u8], data: &[u8]| {
+        let len = u32::try_from(data.len()).expect("chunk len fits u32");
+        png.extend_from_slice(&len.to_be_bytes());
+        png.extend_from_slice(typ);
+        png.extend_from_slice(data);
+        png.extend_from_slice(&[0, 0, 0, 0]); // placeholder CRC (unvalidated)
+    };
+    chunk(b"IHDR", &[0u8; 13]);
+    chunk(b"zTXt", &payload);
+    chunk(b"IEND", &[]);
+    png
+}
+
+#[test]
+fn dmi_reads_compressed_ztxt_description() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("icons.dmi");
+    let desc = "# BEGIN DMI\nversion = 4.0\nstate = \"ztxt_mob\"\n# END DMI\n";
+    std::fs::write(&path, png_with_ztxt_description(desc)).expect("write dmi");
+
+    let r = extract_dmi(&path);
+    assert!(r.error.is_none());
+    assert!(labels(&r).contains(&"\"ztxt_mob\""));
+}
+
+#[test]
+fn dm_resolvable_include_emits_imports_from() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("helpers.dm"), "/proc/helper()\n").expect("write helper");
+    let main = tmp.path().join("main.dm");
+    std::fs::write(&main, "#include \"helpers.dm\"\n/proc/run()\n").expect("write main");
+
+    let r = extract_dm(&main);
+    let import_edges = edges_with_relation(&r, &["imports", "imports_from"]);
+    assert!(
+        import_edges
+            .iter()
+            .any(|e| e.relation == "imports_from" && !e.external),
+        "a resolvable include should produce a non-external imports_from edge"
+    );
+}
+
+#[test]
+fn byond_extractors_error_on_missing_file() {
+    let missing = Path::new("/nonexistent/graphify/byond/sample");
+    assert!(extract_dm(&missing.with_extension("dm")).error.is_some());
+    assert!(extract_dmi(&missing.with_extension("dmi")).error.is_some());
+    assert!(extract_dmm(&missing.with_extension("dmm")).error.is_some());
+    assert!(extract_dmf(&missing.with_extension("dmf")).error.is_some());
 }

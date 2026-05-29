@@ -9,6 +9,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+flate2 = "1.1"
 graphify-cache = { workspace = true }
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
@@ -27,6 +28,7 @@ tree-sitter-bash = "0.25"
 tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
+tree-sitter-dm = "0.25"
 tree-sitter-go = "0.25"
 tree-sitter-java = "0.23"
 tree-sitter-javascript = "0.25"
@@ -55,6 +57,7 @@ tree-sitter-verilog = "1.0"
 tree-sitter-zig = "1.1"
 
 [dev-dependencies]
+graphify-build = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

@@ -59,6 +59,7 @@ fn build_label_index_groups_by_normalised_label() {
 fn existing_edge_pairs_includes_relation() {
     let edges = vec![
         Edge {
+            external: false,
             source: "a".to_string(),
             target: "b".to_string(),
             relation: "contains".to_string(),
@@ -70,6 +71,7 @@ fn existing_edge_pairs_includes_relation() {
             confidence_score: None,
         },
         Edge {
+            external: false,
             source: "a".to_string(),
             target: "b".to_string(),
             relation: "calls".to_string(),
@@ -103,6 +105,7 @@ fn existing_edge_pairs_distinguishes_context() {
     // in graphify-py `_apply_symbol_resolution_facts` (ab4e542).
     let edges = vec![
         Edge {
+            external: false,
             source: "a".to_string(),
             target: "b".to_string(),
             relation: "references".to_string(),
@@ -114,6 +117,7 @@ fn existing_edge_pairs_distinguishes_context() {
             confidence_score: None,
         },
         Edge {
+            external: false,
             source: "a".to_string(),
             target: "b".to_string(),
             relation: "references".to_string(),

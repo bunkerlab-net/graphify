@@ -94,10 +94,15 @@ graphify extract . --out /tmp/g          # write to /tmp/g/graphify-out
 graphify extract . --google-workspace    # also export .gdoc/.gsheet/.gslides sidecars via gws (requires the optional `gws` Google Workspace export CLI)
 graphify extract . --global              # merge result into ~/.graphify/global-graph.json
 graphify extract . --global --as my-repo # custom tag for --global
+graphify extract . --mode deep           # aggressive INFERRED-edge semantic extraction
 ```
 
-Optional LLM-driven semantic extraction is wired through `--backend`/`--model`/`--token-budget`/`--max-concurrency`/
-`--api-timeout`/`--max-workers` (see `graphify extract --help` and the [LLM backends](#llm-backends) section).
+Optional LLM-driven semantic extraction is wired through `--backend`/`--model`/`--mode`/`--token-budget`/
+`--max-concurrency`/`--api-timeout`/`--max-workers` (see `graphify extract --help` and the
+[LLM backends](#llm-backends) section). `--mode deep` is the only mode beyond the default; it appends a
+deep-extraction instruction to the LLM system prompt so the model emits richer `INFERRED` architectural
+edges (shared data contracts, lifecycle coupling, multi-step flows). An unknown `--mode` value exits with
+status 2.
 
 ### `update <path>`
 
@@ -160,11 +165,16 @@ The query / affected / explain / serve commands filter on these.
 | `inherits`     | Class → base class. Java's source-level `extends` is normalised here.    |
 | `implements`   | Class → interface (Java / C# / TypeScript).                              |
 | `references`   | Function / method / class → type referenced in its signature or body.    |
+| `instantiates` | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).    |
+| `uses`         | BYOND `.dmm` map → each type path referenced in its tile dictionary.     |
 | `requires_env` | MCP server → env-var *name* it depends on (values are never read).       |
 
 `references` edges typically carry a `context` describing *how* the type is
 used; older extractors (SQL, for one) still emit `references` without a
 `context`, so consumers should treat the field as optional.
+
+Unresolved imports carry an `external: true` flag (e.g. a BYOND `#include` of a
+file outside the corpus). Resolved imports use `imports_from` and omit the flag.
 
 **Contexts** (`--context` on `query`, on `references` edges):
 
@@ -178,6 +188,7 @@ used; older extractors (SQL, for one) still emit `references` without a
 | `attribute`      | Java `@Annotation` / C# `[Attribute]` decoration.                |
 | `import`         | Module / file referenced by an `import` statement.               |
 | `export`         | Module re-exported by an `export … from` statement.              |
+| `map`            | BYOND `.dmm` map tile → a type path it places.                   |
 | `command`        | MCP server → its executable (`npx`, `uvx`, …).                   |
 | `package`        | MCP server → npm / pypi package parsed from its args.            |
 
@@ -232,7 +243,8 @@ graphify explain "AuthMiddleware"
 ### `save-result`
 
 Save a Q&A result back into `graphify-out/memory/` so it gets re-extracted into the graph on the next `update`
-(the feedback loop).
+(the feedback loop). Files under `graphify-out/memory/` are always detected: they bypass `.gitignore` /
+`.graphifyignore` filtering, so a broad ignore pattern (e.g. `*.md`) can't silently erase generated memory notes.
 
 ```bash
 graphify save-result \

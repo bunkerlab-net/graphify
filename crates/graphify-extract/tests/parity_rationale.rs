@@ -1,0 +1,163 @@
+//! Parity tests for rationale/docstring extraction.
+//!
+//! Mirrors `graphify-py/tests/test_rationale.py`. Currently scoped to the
+//! v0.8.22 decorated-method regression (#1050); the older rationale cases in
+//! the Python file remain a pre-existing port gap.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use graphify_extract::{Node, extract_python};
+
+/// Write `code` to `<dir>/sample.py` and return the path.
+///
+/// Mirrors `_write_py` (which `textwrap.dedent`s); we just supply an
+/// already-dedented literal.
+fn write_py(dir: &Path, code: &str) -> PathBuf {
+    let p = dir.join("sample.py");
+    std::fs::write(&p, code).expect("write sample.py");
+    p
+}
+
+/// Regression for #1050: `@property` / `@staticmethod` / `@classmethod` methods
+/// were emitted with a class-unqualified node id (e.g. `file_baz`) while the
+/// rationale walker emitted the class-qualified id (`file_bar_baz`) as the
+/// docstring edge's target. The mismatch caused `build_from_json` to drop the
+/// `rationale_for` edge as dangling, orphaning the docstring node.
+#[test]
+#[allow(clippy::too_many_lines)] // single cohesive regression scenario; splitting would obscure it
+fn decorated_method_node_id_is_class_qualified() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = write_py(
+        tmp.path(),
+        r#"
+class Bar:
+    @property
+    def baz(self) -> int:
+        """Return the baz value because callers expect a cached integer."""
+        return 1
+
+    @staticmethod
+    def helper() -> int:
+        """A static helper documented for downstream callers."""
+        return 2
+
+    @classmethod
+    def factory(cls) -> "Bar":
+        """Construct a Bar via the canonical classmethod entry point."""
+        return cls()
+
+    def normal(self) -> int:
+        """A normal instance method documented for comparison."""
+        return 3
+"#,
+    );
+
+    let result = extract_python(&path);
+    let nodes_by_id: HashMap<&str, &Node> =
+        result.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    // The plain method's id is the baseline: stem + class + name.
+    let normal_ids: Vec<&str> = nodes_by_id
+        .iter()
+        .filter(|(_, n)| n.label == ".normal()")
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(
+        normal_ids.len(),
+        1,
+        "expected exactly one `.normal()` method node, got {normal_ids:?}"
+    );
+    let normal_id = normal_ids[0];
+    assert!(
+        normal_id.ends_with("_bar_normal"),
+        "normal method id {normal_id} should be class-qualified"
+    );
+
+    // Each decorated method must share the same class-qualified id shape so the
+    // `rationale_for` edge target matches the method node id.
+    for decorated_name in ["baz", "helper", "factory"] {
+        let want_label = format!(".{decorated_name}()");
+        let matches: Vec<&str> = nodes_by_id
+            .iter()
+            .filter(|(_, n)| n.label == want_label)
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one `{want_label}` method node, got {matches:?}"
+        );
+        let method_id = matches[0];
+        let want_suffix = format!("_bar_{decorated_name}");
+        assert!(
+            method_id.ends_with(&want_suffix),
+            "decorated method id {method_id} should end with {want_suffix}"
+        );
+        // The buggy unqualified id must NOT also be present.
+        let buggy = method_id.replace(&want_suffix, &format!("_{decorated_name}"));
+        assert!(
+            !nodes_by_id.contains_key(buggy.as_str()),
+            "buggy unqualified id {buggy} should not exist alongside the class-qualified id"
+        );
+    }
+
+    // Every `rationale_for` edge's target must resolve to an actual node (no
+    // dangling edges into phantom unqualified ids).
+    let rationale_edges: Vec<&_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "rationale_for")
+        .collect();
+    for edge in &rationale_edges {
+        assert!(
+            nodes_by_id.contains_key(edge.target.as_str()),
+            "rationale_for edge targets missing node id {}",
+            edge.target
+        );
+    }
+
+    // After build_from_json, each decorated-method docstring node must be
+    // connected (degree > 0), not an orphan dropped from the graph.
+    let extraction = serde_json::json!({
+        "nodes": result.nodes,
+        "edges": result.edges,
+    });
+    let graph = graphify_build::build_from_json(extraction, false, None).expect("build_from_json");
+    let degree = |id: &str| -> usize {
+        graph
+            .edge_list
+            .iter()
+            .filter(|e| e.source == id || e.target == id)
+            .count()
+    };
+
+    for decorated_name in ["baz", "helper", "factory", "normal"] {
+        let want_label = format!(".{decorated_name}()");
+        let method_id = nodes_by_id
+            .iter()
+            .find(|(_, n)| n.label == want_label)
+            .map(|(id, _)| *id)
+            .expect("method node present");
+        let attached: Vec<&str> = rationale_edges
+            .iter()
+            .filter(|e| e.target == method_id)
+            .map(|e| e.source.as_str())
+            .collect();
+        assert!(
+            !attached.is_empty(),
+            "no rationale_for edge found for `{want_label}` method"
+        );
+        for r_id in attached {
+            assert!(
+                graph.contains_node(r_id),
+                "rationale node {r_id} missing from graph"
+            );
+            assert!(
+                degree(r_id) > 0,
+                "rationale node {r_id} for `{want_label}` is orphaned (degree 0) after build_from_json"
+            );
+        }
+    }
+}

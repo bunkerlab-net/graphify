@@ -200,6 +200,7 @@ impl McpBuilder {
             return;
         }
         self.edges.push(Edge {
+            external: false,
             source: source.to_string(),
             target: target.to_string(),
             relation: relation.to_string(),

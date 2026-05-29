@@ -16,7 +16,10 @@ use crate::{
 /// The real implementation calls the binary; tests inject a [`MockRunner`].
 pub trait ClaudeRunner: Send + Sync {
     /// Run the claude CLI, return `(stdout, stderr, exit_code)`.
-    fn run(&self, user_message: &str, append_system_prompt: bool) -> (String, String, i32);
+    ///
+    /// `system_prompt` carries the extraction system prompt to append via
+    /// `--append-system-prompt` (or the deep-mode variant); `None` appends none.
+    fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32);
 }
 
 /// Production runner that invokes the real `claude` binary.
@@ -24,14 +27,14 @@ pub struct RealClaudeRunner;
 
 impl ClaudeRunner for RealClaudeRunner {
     /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, and returns stdout/stderr/exit-code.
-    fn run(&self, user_message: &str, append_system_prompt: bool) -> (String, String, i32) {
+    fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32) {
         let mut cmd = std::process::Command::new("claude");
         cmd.arg("-p")
             .arg("--output-format")
             .arg("json")
             .arg("--no-session-persistence");
-        if append_system_prompt {
-            cmd.arg("--append-system-prompt").arg(EXTRACTION_SYSTEM);
+        if let Some(system) = system_prompt {
+            cmd.arg("--append-system-prompt").arg(system);
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -169,13 +172,28 @@ pub fn call_claude_cli_with_runner(
     user_message: &str,
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
+    call_claude_cli_with_runner_system(runner, user_message, max_tokens, EXTRACTION_SYSTEM)
+}
+
+/// Call the Claude CLI with the given runner and an explicit system prompt
+/// (e.g. the deep-mode variant).
+///
+/// # Errors
+/// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
+/// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
+pub fn call_claude_cli_with_runner_system(
+    runner: &dyn ClaudeRunner,
+    user_message: &str,
+    max_tokens: u32,
+    system: &str,
+) -> Result<LlmResponse, LlmError> {
     if which_claude().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
-    call_claude_cli_inner(runner, user_message, max_tokens, true)
+    call_claude_cli_inner(runner, user_message, max_tokens, Some(system))
 }
 
-/// Inner CLI call (extraction path — injects system prompt).
+/// Inner CLI call (extraction path — injects `system_prompt` when `Some`).
 ///
 /// # Errors
 /// Returns [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
@@ -183,9 +201,9 @@ pub fn call_claude_cli_inner(
     runner: &dyn ClaudeRunner,
     user_message: &str,
     _max_tokens: u32,
-    append_system: bool,
+    system_prompt: Option<&str>,
 ) -> Result<LlmResponse, LlmError> {
-    let (stdout, stderr, code) = runner.run(user_message, append_system);
+    let (stdout, stderr, code) = runner.run(user_message, system_prompt);
 
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
@@ -283,7 +301,7 @@ pub fn call_claude_cli_plain(user_message: &str, _max_tokens: u32) -> Result<Str
         return Err(LlmError::ClaudeCliMissing);
     }
     let runner = RealClaudeRunner;
-    let (stdout, stderr, code) = runner.run(user_message, false);
+    let (stdout, stderr, code) = runner.run(user_message, None);
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
         return Err(LlmError::ClaudeCliError(format!(

@@ -23,6 +23,7 @@ fn n(id: &str, label: &str, file_type: &str, source_file: &str) -> Node {
 
 fn e(src: &str, tgt: &str, relation: &str) -> Edge {
     Edge {
+        external: false,
         source: src.to_string(),
         target: tgt.to_string(),
         relation: relation.to_string(),

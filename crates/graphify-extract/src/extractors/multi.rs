@@ -22,12 +22,13 @@ use serde_json::Value;
 
 use crate::extractors::{
     extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
-    extract_csproj, extract_dart, extract_delphi_form, extract_elixir, extract_fortran, extract_go,
-    extract_groovy, extract_java, extract_js, extract_json, extract_julia, extract_kotlin,
-    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown,
-    extract_mcp_config, extract_objc, extract_pascal, extract_php, extract_powershell,
-    extract_python, extract_razor, extract_ruby, extract_rust, extract_scala, extract_sln,
-    extract_sql, extract_svelte, extract_swift, extract_verilog, extract_zig, is_mcp_config_path,
+    extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf, extract_dmi,
+    extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
+    extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
+    extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
+    extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
+    extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte, extract_swift,
+    extract_verilog, extract_zig, is_mcp_config_path,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
@@ -92,6 +93,10 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "lpk" => Some(extract_lazarus_package),
         "sh" | "bash" => Some(extract_bash),
         "json" => Some(extract_json),
+        "dm" | "dme" => Some(extract_dm),
+        "dmi" => Some(extract_dmi),
+        "dmm" => Some(extract_dmm),
+        "dmf" => Some(extract_dmf),
         "sln" => Some(extract_sln),
         "csproj" | "fsproj" | "vbproj" => Some(extract_csproj),
         "razor" | "cshtml" => Some(extract_razor),
@@ -321,6 +326,7 @@ fn walk_imports(ctx: &mut ImportWalkCtx<'_>, node: tree_sitter::Node<'_>, source
             if let Some(tgt_nid) = entities.get(name) {
                 for src_class_nid in ctx.local_classes {
                     ctx.new_edges.push(Edge {
+                        external: false,
                         source: src_class_nid.clone(),
                         target: tgt_nid.clone(),
                         relation: "uses".to_string(),
@@ -398,6 +404,7 @@ fn walk_java(
             let key = (file_nid.to_string(), tgt_nid.clone());
             if seen_pairs.insert(key) {
                 new_edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: tgt_nid.clone(),
                     relation: "imports".to_string(),
@@ -947,6 +954,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
 
         existing_pairs.insert(pair);
         all_edges.push(Edge {
+            external: false,
             source: caller.clone(),
             target: tgt.clone(),
             relation: "calls".to_string(),

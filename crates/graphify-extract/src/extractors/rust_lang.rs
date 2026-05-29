@@ -216,6 +216,7 @@ fn walk_rust(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: parent,
                     target: func_nid.clone(),
                     relation: relation.to_string(),
@@ -248,6 +249,7 @@ fn walk_rust(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: ctx.file_nid.to_string(),
                     target: item_nid,
                     relation: "contains".to_string(),
@@ -306,6 +308,7 @@ fn walk_rust(
                     let tgt_nid = make_id1(&module_name);
                     let line = node.start_position().row + 1;
                     ctx.edges.push(Edge {
+                        external: false,
                         source: ctx.file_nid.to_string(),
                         target: tgt_nid,
                         relation: "imports_from".to_string(),
@@ -400,6 +403,7 @@ fn walk_calls_rust(
                     if ctx.seen_call_pairs.insert(pair) {
                         let line = node.start_position().row + 1;
                         ctx.edges.push(Edge {
+                            external: false,
                             source: caller_nid.to_string(),
                             target: tgt,
                             relation: "calls".to_string(),

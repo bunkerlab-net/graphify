@@ -274,6 +274,7 @@ fn walk_elixir(
                 });
             }
             edges.push(Edge {
+                external: false,
                 source: file_nid.to_string(),
                 target: module_nid.clone(),
                 relation: "contains".to_string(),
@@ -348,6 +349,7 @@ fn walk_elixir(
                 "contains"
             };
             edges.push(Edge {
+                external: false,
                 source: container.to_string(),
                 target: func_nid.clone(),
                 relation: relation.to_string(),
@@ -368,6 +370,7 @@ fn walk_elixir(
                 if let Some(mn) = module_name {
                     let tgt_nid = make_id1(&mn);
                     edges.push(Edge {
+                        external: false,
                         source: file_nid.to_string(),
                         target: tgt_nid,
                         relation: "imports".to_string(),
@@ -505,6 +508,7 @@ fn walk_calls_elixir(
                 if seen_call_pairs.insert(pair) {
                     let line = node.start_position().row + 1;
                     edges.push(Edge {
+                        external: false,
                         source: caller_nid.to_string(),
                         target: tgt,
                         relation: "calls".to_string(),

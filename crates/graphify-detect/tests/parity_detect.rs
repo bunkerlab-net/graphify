@@ -15,6 +15,33 @@ fn detect_finds_python_file() {
 }
 
 #[test]
+fn detect_memory_dir_bypasses_gitignore() {
+    // Regression for graphify-py #1047: a user ignore pattern (`*.md`) must not
+    // erase the notes we generate under `graphify-out/memory`. Files inside the
+    // memory sidecar bypass ignore filtering even when they match a pattern.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".graphifyignore"), "*.md\n").expect("test invariant");
+    std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
+    // A top-level markdown file is ignored…
+    std::fs::write(tmp.path().join("README.md"), "# ignored").expect("test invariant");
+    // …but a memory-dir markdown note survives.
+    let mem = tmp.path().join("graphify-out").join("memory");
+    std::fs::create_dir_all(&mem).expect("create_dir_all");
+    std::fs::write(mem.join("note.md"), "remembered fact").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let docs = &result.files["document"];
+    assert!(
+        docs.iter().any(|f| f.contains("note.md")),
+        "memory-dir note.md must be detected despite the *.md ignore rule: {docs:?}"
+    );
+    assert!(
+        !docs.iter().any(|f| f.contains("README.md")),
+        "top-level README.md must still be ignored by *.md: {docs:?}"
+    );
+}
+
+#[test]
 fn detect_includes_code_key() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");

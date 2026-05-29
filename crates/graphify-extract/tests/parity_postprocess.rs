@@ -31,6 +31,7 @@ fn e(src: &str, tgt: &str, source_file: &str, relation: &str) -> Edge {
         weight: 1.0,
         context: None,
         confidence_score: None,
+        external: false,
     }
 }
 

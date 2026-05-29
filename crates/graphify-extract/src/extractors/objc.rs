@@ -153,6 +153,7 @@ fn walk_objc(
                         if !module.is_empty() {
                             let tgt_nid = make_id1(&module);
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: ctx.file_nid.to_string(),
                                 target: tgt_nid,
                                 relation: "imports".to_string(),
@@ -175,6 +176,7 @@ fn walk_objc(
                                     if !module.is_empty() {
                                         let tgt_nid = make_id1(&module);
                                         ctx.edges.push(Edge {
+                                            external: false,
                                             source: ctx.file_nid.to_string(),
                                             target: tgt_nid,
                                             relation: "imports".to_string(),
@@ -240,6 +242,7 @@ fn walk_objc(
                 });
             }
             ctx.edges.push(Edge {
+                external: false,
                 source: ctx.file_nid.to_string(),
                 target: cls_nid.clone(),
                 relation: "contains".to_string(),
@@ -261,6 +264,7 @@ fn walk_objc(
                     } else if colon_seen && child.kind() == "identifier" {
                         let super_nid = make_id1(read_text(child, source));
                         ctx.edges.push(Edge {
+                            external: false,
                             source: cls_nid.clone(),
                             target: super_nid,
                             relation: "inherits".to_string(),
@@ -284,6 +288,7 @@ fn walk_objc(
                                                 let proto_nid =
                                                     make_id1(read_text(tc.node(), source));
                                                 ctx.edges.push(Edge {
+                                                    external: false,
                                                     source: cls_nid.clone(),
                                                     target: proto_nid,
                                                     relation: "imports".to_string(),
@@ -346,6 +351,7 @@ fn walk_objc(
                         metadata: None,
                     });
                     ctx.edges.push(Edge {
+                        external: false,
                         source: ctx.file_nid.to_string(),
                         target: impl_nid.clone(),
                         relation: "contains".to_string(),
@@ -410,6 +416,7 @@ fn walk_objc(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: ctx.file_nid.to_string(),
                     target: proto_nid.clone(),
                     relation: "contains".to_string(),
@@ -458,6 +465,7 @@ fn walk_objc(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: container.to_string(),
                     target: method_nid.clone(),
                     relation: "method".to_string(),
@@ -562,6 +570,7 @@ fn walk_calls_objc(
                         seen_calls.insert(pair);
                         let line = node.start_position().row + 1;
                         edges.push(Edge {
+                            external: false,
                             source: caller_nid.to_string(),
                             target: candidate.clone(),
                             relation: "calls".to_string(),

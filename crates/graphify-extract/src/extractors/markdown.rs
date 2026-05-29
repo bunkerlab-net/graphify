@@ -138,6 +138,7 @@ fn handle_fence(
             .last()
             .map_or(ctx.file_nid, |(_, nid)| nid.as_str());
         ctx.edges.push(Edge {
+            external: false,
             source: parent.to_string(),
             target: cb_nid,
             relation: "contains".to_string(),
@@ -206,6 +207,7 @@ fn handle_heading(
         .last()
         .map_or(ctx.file_nid, |(_, nid)| nid.as_str());
     ctx.edges.push(Edge {
+        external: false,
         source: parent.to_string(),
         target: h_nid.clone(),
         relation: "contains".to_string(),

@@ -49,7 +49,10 @@ fn classify_one(
     if !in_memory && p.starts_with(converted_dir) {
         return FileDecision::Skip;
     }
-    if is_ignored(p, root, ignore_patterns) {
+    // Memory-dir sidecars bypass ignore filtering: a user's `.gitignore`
+    // pattern (e.g. `*.md`) must not erase the `graphify-out/memory` notes we
+    // generate ourselves. Mirrors graphify-py `detect()` (#1047).
+    if !in_memory && is_ignored(p, root, ignore_patterns) {
         return FileDecision::Skip;
     }
     if is_sensitive(p) {

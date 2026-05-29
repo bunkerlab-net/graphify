@@ -85,6 +85,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         metadata: None,
     });
     edges.push(Edge {
+        external: false,
         source: file_nid.clone(),
         target: entry_nid.clone(),
         relation: "contains".to_string(),
@@ -226,6 +227,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                     });
                 }
                 edges.push(Edge {
+                    external: false,
                     source: file_nid.to_string(),
                     target: fn_nid.clone(),
                     relation: "defines".to_string(),
@@ -323,6 +325,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                 if let Some(res) = resolved {
                                     let tgt_nid = make_id1(&res.to_string_lossy());
                                     edges.push(Edge {
+                                        external: false,
                                         source: file_nid.to_string(),
                                         target: tgt_nid,
                                         relation: "imports_from".to_string(),
@@ -338,6 +341,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                 let tgt_nid = make_id1(&raw);
                                 if !tgt_nid.is_empty() {
                                     edges.push(Edge {
+                                        external: false,
                                         source: file_nid.to_string(),
                                         target: tgt_nid,
                                         relation: "imports".to_string(),
@@ -380,6 +384,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                     });
                                 }
                                 edges.push(Edge {
+                                    external: false,
                                     source: file_nid.to_string(),
                                     target: var_nid,
                                     relation: "defines".to_string(),
@@ -534,6 +539,7 @@ fn emit_call_edge_if_valid(
     }
     let line = cmd_node.start_position().row + 1;
     ctx.edges.push(Edge {
+        external: false,
         source: caller_nid.to_string(),
         target: tgt,
         relation: "calls".to_string(),

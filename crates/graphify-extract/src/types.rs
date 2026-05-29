@@ -48,6 +48,17 @@ pub struct Edge {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional numeric confidence in `[0.0, 1.0]` complementing the string tier.
     pub confidence_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    /// `true` when the edge points at an unresolved / external target (e.g. a
+    /// BYOND `#include` of a file outside the corpus). Serialised only when set,
+    /// mirroring graphify-py, which adds the key solely for unresolved includes.
+    pub external: bool,
+}
+
+/// serde `skip_serializing_if` predicate: omit a `bool` field when it is `false`.
+#[allow(clippy::trivially_copy_pass_by_ref)] // signature dictated by serde's skip_serializing_if
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// An unresolved call saved for cross-file resolution.

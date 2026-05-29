@@ -127,6 +127,7 @@ fn walk_verilog(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: ctx.file_nid.to_string(),
                     target: nid.clone(),
                     relation: "defines".to_string(),
@@ -165,6 +166,7 @@ fn walk_verilog(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: parent.to_string(),
                     target: nid,
                     relation: "contains".to_string(),
@@ -194,6 +196,7 @@ fn walk_verilog(
                     });
                 }
                 ctx.edges.push(Edge {
+                    external: false,
                     source: parent.to_string(),
                     target: nid,
                     relation: "contains".to_string(),
@@ -228,6 +231,7 @@ fn walk_verilog(
                             }
                             let src = module_nid.unwrap_or(ctx.file_nid);
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: src.to_string(),
                                 target: tgt_nid,
                                 relation: "imports_from".to_string(),
@@ -265,6 +269,7 @@ fn walk_verilog(
                         });
                     }
                     ctx.edges.push(Edge {
+                        external: false,
                         source: mnid.to_string(),
                         target: tgt_nid,
                         relation: "instantiates".to_string(),

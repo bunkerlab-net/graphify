@@ -66,6 +66,7 @@ pub(super) fn add_edge(
     edges: &mut Vec<Edge>,
 ) {
     edges.push(Edge {
+        external: false,
         source: src.to_string(),
         target: tgt.to_string(),
         relation: relation.to_string(),
@@ -506,6 +507,7 @@ pub(super) fn walk<'tree>(
             let line = node.start_position().row as u32 + 1;
             let tgt = ensure_named_node(&type_name, line, stem, str_path, ctx.nodes, ctx.seen_ids);
             let e = Edge {
+                external: false,
                 source: parent.to_string(),
                 target: tgt,
                 relation: "references".to_string(),
@@ -545,6 +547,7 @@ pub(super) fn walk<'tree>(
                     let field_nid = make_id(&[parent, &name]);
                     add_node(&field_nid, &name, line, str_path, ctx.nodes, ctx.seen_ids);
                     let e = Edge {
+                        external: false,
                         source: parent.to_string(),
                         target: field_nid,
                         relation: "defines".to_string(),
@@ -697,6 +700,29 @@ pub(super) fn walk<'tree>(
                         parent, &case_nid, "case_of", line, str_path, None, ctx.edges,
                     );
                 }
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
+    // ── Python decorated_definition: transparent wrapper ──────────────────────
+    // Python's `@property` / `@staticmethod` / `@classmethod` wrap the inner
+    // `function_definition` in a `decorated_definition` node. The default recurse
+    // below clears `parent_class_nid`, which would emit the inner method with a
+    // class-unqualified id (e.g. `file_baz` instead of `file_bar_baz`). That
+    // diverges from the class-qualified id the rationale walker uses for the same
+    // method's docstring, leaving the rationale edge dangling and the docstring
+    // node orphaned (#1050). Treat `decorated_definition` as transparent so
+    // `parent_class_nid` propagates to the real function node.
+    if t == "decorated_definition" {
+        let mut cur = node.walk();
+        if cur.goto_first_child() {
+            loop {
+                let child = cur.node();
+                walk(ctx, child, parent_class_nid, source);
                 if !cur.goto_next_sibling() {
                     break;
                 }

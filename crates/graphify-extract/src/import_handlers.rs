@@ -29,6 +29,7 @@ fn make_edge(
     line: u32,
 ) -> Edge {
     Edge {
+        external: false,
         source: source.to_string(),
         target: target.to_string(),
         relation: relation.to_string(),
@@ -663,6 +664,7 @@ pub fn import_lua(
         let module_name = cap.split('.').next_back().unwrap_or("").to_string();
         if !module_name.is_empty() {
             edges.push(Edge {
+                external: false,
                 source: file_nid.to_string(),
                 target: module_name.clone(),
                 relation: "imports".to_string(),

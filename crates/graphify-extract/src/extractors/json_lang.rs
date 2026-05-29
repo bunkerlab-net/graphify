@@ -225,6 +225,7 @@ fn walk_json_object(
             });
         }
         ctx.edges.push(Edge {
+            external: false,
             source: parent_nid.to_string(),
             target: key_nid.clone(),
             relation: "contains".to_string(),
@@ -259,6 +260,7 @@ fn walk_json_object(
                                     let ref_nid = make_id(&["ref", r]);
                                     if !ref_nid.is_empty() {
                                         ctx.edges.push(Edge {
+                                            external: false,
                                             source: key_nid.clone(),
                                             target: ref_nid,
                                             relation: "extends".to_string(),
@@ -289,6 +291,7 @@ fn walk_json_object(
                         let ref_nid = make_id(&["ref", val_text]);
                         if !ref_nid.is_empty() {
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: ctx.file_nid.to_string(),
                                 target: ref_nid,
                                 relation: "extends".to_string(),
@@ -304,6 +307,7 @@ fn walk_json_object(
                         let ref_nid = make_id(&["ref", val_text]);
                         if !ref_nid.is_empty() {
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: parent_nid.to_string(),
                                 target: ref_nid,
                                 relation: "references".to_string(),
@@ -321,6 +325,7 @@ fn walk_json_object(
                         let dep_nid = make_id1(key);
                         if !dep_nid.is_empty() {
                             ctx.edges.push(Edge {
+                                external: false,
                                 source: key_nid.clone(),
                                 target: dep_nid,
                                 relation: "imports".to_string(),
