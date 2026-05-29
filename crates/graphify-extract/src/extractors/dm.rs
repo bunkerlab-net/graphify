@@ -583,9 +583,10 @@ pub fn extract_dmi(path: &Path) -> FileResult {
 // ── .dmm (BYOND map files) ─────────────────────────────────────────────────────
 
 /// Matches the start of a `.dmm` grid section: `(x,y,z) = ...`.
-#[allow(clippy::unwrap_used)] // literal pattern; compiles on first use
-static DMM_GRID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)\s*=").unwrap());
+#[allow(clippy::expect_used)] // literal pattern; compiles on first use
+static DMM_GRID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)\s*=").expect("static dmm_grid regex")
+});
 
 /// Split a tile-dictionary body on top-level commas, respecting `(){}[]`
 /// nesting and string literals. Mirrors graphify-py `_split_dmm_tile`.
@@ -757,15 +758,15 @@ pub fn extract_dmm(path: &Path) -> FileResult {
 
 // ── .dmf (BYOND interface forms) ────────────────────────────────────────────────
 
-#[allow(clippy::unwrap_used)] // literal pattern; compiles on first use
+#[allow(clippy::expect_used)] // literal pattern; compiles on first use
 static DMF_WINDOW_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^\s*window\s+"([^"]+)"\s*$"#).unwrap());
-#[allow(clippy::unwrap_used)] // literal pattern; compiles on first use
+    LazyLock::new(|| Regex::new(r#"^\s*window\s+"([^"]+)"\s*$"#).expect("static dmf_window regex"));
+#[allow(clippy::expect_used)] // literal pattern; compiles on first use
 static DMF_ELEM_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^\s*elem\s+"([^"]+)"\s*$"#).unwrap());
-#[allow(clippy::unwrap_used)] // literal pattern; compiles on first use
+    LazyLock::new(|| Regex::new(r#"^\s*elem\s+"([^"]+)"\s*$"#).expect("static dmf_elem regex"));
+#[allow(clippy::expect_used)] // literal pattern; compiles on first use
 static DMF_TYPE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*type\s*=\s*(\S+)\s*$").unwrap());
+    LazyLock::new(|| Regex::new(r"^\s*type\s*=\s*(\S+)\s*$").expect("static dmf_type regex"));
 
 /// Extract windows and controls from a `.dmf` interface file.
 #[must_use]

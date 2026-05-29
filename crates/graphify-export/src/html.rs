@@ -6,7 +6,7 @@ use std::path::Path;
 
 use graphify_build::Graph;
 use graphify_security::sanitize_label;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -492,14 +492,12 @@ fn remap_hyperedges_to_communities(
                     .and_then(Value::as_array)
                     .filter(|a| !a.is_empty())
             });
-        let mut comm_ids: Vec<String> = Vec::new();
+        // O(1), insertion-ordered de-duplication of community IDs.
+        let mut comm_ids: IndexSet<String> = IndexSet::new();
         if let Some(members) = members {
             for nid in members.iter().filter_map(Value::as_str) {
                 if let Some(&c) = node_to_community.get(nid) {
-                    let s = c.to_string();
-                    if !comm_ids.contains(&s) {
-                        comm_ids.push(s);
-                    }
+                    comm_ids.insert(c.to_string());
                 }
             }
         }
@@ -520,7 +518,8 @@ fn remap_hyperedges_to_communities(
                 },
                 str::to_string,
             );
-        remapped.push(json!({ "id": id, "label": label, "nodes": comm_ids }));
+        let nodes: Vec<String> = comm_ids.into_iter().collect();
+        remapped.push(json!({ "id": id, "label": label, "nodes": nodes }));
     }
     meta.graph_attrs
         .insert("hyperedges".to_string(), Value::Array(remapped));
