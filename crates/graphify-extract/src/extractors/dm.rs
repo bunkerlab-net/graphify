@@ -403,23 +403,25 @@ pub fn extract_dm(path: &Path) -> FileResult {
         ..
     } = ctx;
 
-    // Index node ids by last path segment (for `proc()` calls) and by full type
-    // path (for `new /type` instantiation). Type nodes are intentionally indexed
-    // alongside procs (matching graphify-py): a name that uniquely identifies a
-    // single node — proc or type — resolves; any collision (e.g. a proc and a
-    // type sharing a last segment) yields >1 candidate and falls through to
-    // `raw_calls`. Only unambiguous (single-candidate) names resolve; the rest
-    // become `raw_calls` for cross-file resolution.
+    // Index *callable* nodes by last path segment (for `proc()` calls) and full
+    // type paths by their complete path (for `new /type` instantiation). Only
+    // proc nodes are callable — their labels end in "()" — so a bare call never
+    // resolves to a non-callable type node (e.g. `widget()` matching the type
+    // `/datum/widget`). graphify-py indexes *every* label here, a latent bug we
+    // fix rather than replicate. Only unambiguous (single-candidate) names
+    // resolve; the rest become `raw_calls` for cross-file resolution.
     let mut label_to_nids: HashMap<String, Vec<String>> = HashMap::new();
     let mut path_to_nids: HashMap<String, Vec<String>> = HashMap::new();
     for n in &nodes {
         let label = n.label.trim_matches(|c| c == '(' || c == ')');
-        let last = label.rsplit_once('/').map_or(label, |(_, tail)| tail);
-        if !last.is_empty() {
-            label_to_nids
-                .entry(last.to_lowercase())
-                .or_default()
-                .push(n.id.clone());
+        if n.label.ends_with("()") {
+            let last = label.rsplit_once('/').map_or(label, |(_, tail)| tail);
+            if !last.is_empty() {
+                label_to_nids
+                    .entry(last.to_lowercase())
+                    .or_default()
+                    .push(n.id.clone());
+            }
         }
         if label.starts_with('/') {
             path_to_nids

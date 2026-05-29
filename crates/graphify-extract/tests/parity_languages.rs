@@ -966,6 +966,34 @@ fn dm_ambiguous_member_call_left_unresolved() {
 }
 
 #[test]
+fn dm_call_does_not_resolve_to_type_node() {
+    // A bare call whose name matches a *type's* last segment must not resolve to
+    // that (non-callable) type node — there is no proc by that name, so it
+    // belongs in raw_calls. graphify-py indexes every label and would resolve
+    // `widget()` to the `/datum/widget` type (a latent bug we fix in Rust).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = "/datum/widget\n\tvar/size = 1\n\n/proc/run()\n\twidget()\n";
+    let path = tmp.path().join("types.dm");
+    std::fs::write(&path, src).expect("write dm");
+
+    let r = extract_dm(&path);
+    let Some(widget_type) = r.nodes.iter().find(|n| n.label == "/datum/widget") else {
+        panic!("expected a `/datum/widget` type node, got {:?}", labels(&r));
+    };
+    assert!(
+        !r.edges
+            .iter()
+            .any(|e| e.relation == "calls" && e.target == widget_type.id),
+        "a bare call must not resolve to a non-callable type node"
+    );
+    assert!(
+        r.raw_calls.iter().any(|rc| rc.callee == "widget"),
+        "the unresolved call should be recorded in raw_calls: {:?}",
+        r.raw_calls
+    );
+}
+
+#[test]
 fn dm_emits_new_as_instantiates() {
     let r = extract_dm(&fixtures().join("sample.dm"));
     let by_id: std::collections::HashMap<&str, &str> = r
