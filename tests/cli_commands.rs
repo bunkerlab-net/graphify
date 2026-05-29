@@ -144,7 +144,7 @@ fn extract_mode_deep_prints_banner_and_succeeds() {
 fn extract_mode_invalid_value_exits_2() {
     let dir = tempfile::tempdir().unwrap();
     write_python_project(dir.path());
-    cli()
+    cli_no_backend()
         .arg("extract")
         .arg(dir.path())
         .arg("--mode")
