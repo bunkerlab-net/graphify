@@ -15,19 +15,19 @@ fn detect_finds_python_file() {
 }
 
 #[test]
-fn detect_memory_dir_bypasses_gitignore() {
+fn detect_memory_dir_bypasses_gitignore() -> Result<(), Box<dyn std::error::Error>> {
     // Regression for graphify-py #1047: a user ignore pattern (`*.md`) must not
     // erase the notes we generate under `graphify-out/memory`. Files inside the
     // memory sidecar bypass ignore filtering even when they match a pattern.
-    let tmp = tempdir().expect("tempdir");
-    std::fs::write(tmp.path().join(".graphifyignore"), "*.md\n").expect("test invariant");
-    std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
+    let tmp = tempdir()?;
+    std::fs::write(tmp.path().join(".graphifyignore"), "*.md\n")?;
+    std::fs::write(tmp.path().join("main.py"), "x = 1")?;
     // A top-level markdown file is ignored…
-    std::fs::write(tmp.path().join("README.md"), "# ignored").expect("test invariant");
+    std::fs::write(tmp.path().join("README.md"), "# ignored")?;
     // …but a memory-dir markdown note survives.
     let mem = tmp.path().join("graphify-out").join("memory");
-    std::fs::create_dir_all(&mem).expect("create_dir_all");
-    std::fs::write(mem.join("note.md"), "remembered fact").expect("test invariant");
+    std::fs::create_dir_all(&mem)?;
+    std::fs::write(mem.join("note.md"), "remembered fact")?;
 
     let result = detect(tmp.path(), None, None);
     let docs = &result.files["document"];
@@ -39,6 +39,7 @@ fn detect_memory_dir_bypasses_gitignore() {
         !docs.iter().any(|f| f.contains("README.md")),
         "top-level README.md must still be ignored by *.md: {docs:?}"
     );
+    Ok(())
 }
 
 #[test]

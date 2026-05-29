@@ -131,10 +131,19 @@ impl<'tree> DmCtx<'_, 'tree> {
                 if raw.is_empty() {
                     return;
                 }
-                let norm = raw
-                    .replace('\\', "/")
-                    .trim_start_matches(['.', '/'])
-                    .to_string();
+                // graphify-py normalises with `raw.lstrip("./")`, but Python's
+                // str.lstrip treats "./" as a *character set*, so it silently
+                // eats the leading `..` of a parent-relative include
+                // (`../shared.dm` -> `shared.dm`) and mis-resolves it. Strip only
+                // a single leading `/` plus any leading `./` segments, preserving
+                // `../` so parent-relative includes resolve correctly. Divergence
+                // from graphify-py, which carries this lstrip bug.
+                let replaced = raw.replace('\\', "/");
+                let mut norm_slice: &str = replaced.strip_prefix('/').unwrap_or(&replaced);
+                while let Some(rest) = norm_slice.strip_prefix("./") {
+                    norm_slice = rest;
+                }
+                let norm = norm_slice.to_string();
                 let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
                 let joined = parent.join(&norm);
                 let (target, relation, external) = if joined.exists() {
@@ -395,8 +404,12 @@ pub fn extract_dm(path: &Path) -> FileResult {
     } = ctx;
 
     // Index node ids by last path segment (for `proc()` calls) and by full type
-    // path (for `new /type` instantiation). Only unambiguous (single-candidate)
-    // names resolve; the rest become `raw_calls` for cross-file resolution.
+    // path (for `new /type` instantiation). Type nodes are intentionally indexed
+    // alongside procs (matching graphify-py): a name that uniquely identifies a
+    // single node — proc or type — resolves; any collision (e.g. a proc and a
+    // type sharing a last segment) yields >1 candidate and falls through to
+    // `raw_calls`. Only unambiguous (single-candidate) names resolve; the rest
+    // become `raw_calls` for cross-file resolution.
     let mut label_to_nids: HashMap<String, Vec<String>> = HashMap::new();
     let mut path_to_nids: HashMap<String, Vec<String>> = HashMap::new();
     for n in &nodes {

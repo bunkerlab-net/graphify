@@ -1229,9 +1229,35 @@ fn dm_resolvable_include_emits_imports_from() {
 
 #[test]
 fn byond_extractors_error_on_missing_file() {
-    let missing = Path::new("/nonexistent/graphify/byond/sample");
+    // A path under a fresh tempdir that is never created: isolated and
+    // platform-independent (no reliance on a hard-coded absolute path).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing = tmp.path().join("graphify").join("byond").join("sample");
     assert!(extract_dm(&missing.with_extension("dm")).error.is_some());
     assert!(extract_dmi(&missing.with_extension("dmi")).error.is_some());
     assert!(extract_dmm(&missing.with_extension("dmm")).error.is_some());
     assert!(extract_dmf(&missing.with_extension("dmf")).error.is_some());
+}
+
+#[test]
+fn dm_parent_relative_include_resolves_to_parent_dir() {
+    // graphify-py's `lstrip("./")` collapses `../helpers.dm` to `helpers.dm`,
+    // mis-resolving parent-relative includes. The Rust normaliser preserves
+    // `../`, so this include resolves to the real file one directory up and
+    // emits a non-external `imports_from` edge.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("helpers.dm"), "/proc/helper()\n").expect("write helper");
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir_all(&sub).expect("create sub");
+    let main = sub.join("main.dm");
+    std::fs::write(&main, "#include \"../helpers.dm\"\n/proc/run()\n").expect("write main");
+
+    let r = extract_dm(&main);
+    let import_edges = edges_with_relation(&r, &["imports", "imports_from"]);
+    assert!(
+        import_edges
+            .iter()
+            .any(|e| e.relation == "imports_from" && !e.external),
+        "a `../` include of an existing file must resolve (non-external imports_from): {import_edges:?}"
+    );
 }

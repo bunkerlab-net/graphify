@@ -72,9 +72,6 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         api_timeout,
         dedup_llm,
     } = llm;
-    if deep_mode {
-        eprintln!("[graphify extract] deep mode enabled: richer semantic extraction");
-    }
     let ClusterOptions {
         no_cluster,
         resolution,
@@ -94,6 +91,22 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let effective_backend: Option<String> = backend
         .map(str::to_string)
         .or_else(graphify_llm::detect_backend);
+
+    // Deep-mode banner. graphify-py prints "deep mode enabled" unconditionally and
+    // then hard-exits when no backend is configured (`__main__.py:3026`, `:3058`).
+    // The Rust pipeline instead degrades to an AST-only run when no LLM key is
+    // present, so report which path will actually execute rather than implying
+    // semantic enrichment that won't happen.
+    if deep_mode {
+        if effective_backend.is_some() {
+            eprintln!("[graphify extract] deep mode enabled: richer semantic extraction");
+        } else {
+            eprintln!(
+                "[graphify extract] deep mode requested but no LLM backend configured; \
+                 running AST-only extraction"
+            );
+        }
+    }
 
     let start = std::time::Instant::now();
     let out_dir = out.map_or_else(
@@ -313,7 +326,20 @@ fn run_semantic_phase(
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    let cache_split = graphify_cache::check_semantic_cache(&sem_paths, path);
+    // Deep mode forces a full re-extraction. The semantic cache is keyed by file
+    // content only (size+mtime fastpath, then sha256 — mode-agnostic, matching
+    // graphify-py), so honouring a prior *shallow* cache hit would silently skip
+    // the richer deep-mode prompt. graphify-py reads the cache regardless, making
+    // `--mode deep` a no-op on already-cached files; we bypass the read so deep
+    // mode actually runs. Fresh results still populate the cache for next time.
+    let cache_split = if cfg.deep_mode {
+        graphify_cache::SemanticCacheSplit {
+            uncached_files: sem_paths.clone(),
+            ..Default::default()
+        }
+    } else {
+        graphify_cache::check_semantic_cache(&sem_paths, path)
+    };
     let cache_hits = sem_paths
         .len()
         .saturating_sub(cache_split.uncached_files.len());
