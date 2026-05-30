@@ -9,6 +9,12 @@
 //! is shared across all Antigravity workspaces (#1079); a `--project` install
 //! writes a workspace-local skill at `.agents/skills/graphify/SKILL.md`
 //! instead.
+//!
+//! A `--project` install writes *only* the skill — the rules and workflow files
+//! are global-only, matching graphify-py's `_project_install("antigravity")`.
+//! That is deliberate: the workflow text points at the shared
+//! `~/.gemini/config/skills/...` skill, so emitting it alongside a
+//! workspace-local skill would reference the wrong location.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +70,14 @@ pub fn antigravity_install(project_dir: &Path, project: bool) -> Result<String, 
             let frontmatter = "---\nname: graphify-manager\ndescription: Rebuild the code graph or perform manual CLI queries when MCP server is offline.\n---\n\n";
             fs::write(&skill_dst, format!("{frontmatter}{content}").as_bytes())?;
         }
+    }
+
+    // A `--project` install stops here: only the workspace-local skill is
+    // written, mirroring graphify-py's `_project_install("antigravity")`. The
+    // rules, workflow, and MCP setup hint are global-only because the workflow
+    // text references the shared `~/.gemini/config/skills/...` skill.
+    if project {
+        return Ok(msgs.join("\n"));
     }
 
     let rules_path = project_dir.join(ANTIGRAVITY_RULES_PATH);

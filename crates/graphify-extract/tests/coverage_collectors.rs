@@ -161,13 +161,26 @@ fn rust_trait_with_multiple_supertraits_and_generic_impl() {
 trait B {}\n\
 trait C: A + B {}\n\
 struct Widget {}\n\
+struct Canvas {}\n\
 trait Render<T> {}\n\
-impl Render<Widget> for Widget {}\n";
+impl Render<Widget> for Widget {}\n\
+impl Render<Widget> for Canvas {}\n";
     let (_t, r) = extract_snippet("rt.rs", src, extract_rust);
     // First supertrait → inherits.
     assert!(has(&r, "inherits", None, "C", "A"));
-    // impl Render<Widget> for Widget → implements Render + generic_arg Widget.
+    // impl Render<Widget> for Widget → implements Render; the Widget generic arg
+    // equals the impl type, so the self-edge is intentionally skipped.
     assert!(has(&r, "implements", None, "Widget", "Render"));
+    // impl Render<Widget> for Canvas → implements Render + generic_arg Widget,
+    // exercising the generic-argument branch (impl type ≠ generic arg).
+    assert!(has(&r, "implements", None, "Canvas", "Render"));
+    assert!(has(
+        &r,
+        "references",
+        Some("generic_arg"),
+        "Canvas",
+        "Widget"
+    ));
 }
 
 // ── Swift: optionals, arrays, dictionaries, generic base, struct conformance ───

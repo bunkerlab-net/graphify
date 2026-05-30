@@ -666,8 +666,9 @@ fn js_module_level_arrow_produces_node_and_call_edges() -> Result<(), Box<dyn st
         "module-level arrow missing"
     );
     assert!(
-        relations(&r).contains("calls"),
-        "expected calls edge handler->helper"
+        has_edge(&r, "calls", None, "handler", "helper"),
+        "expected calls edge handler->helper, edges: {:?}",
+        r.edges
     );
     Ok(())
 }

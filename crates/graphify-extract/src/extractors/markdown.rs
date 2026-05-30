@@ -53,10 +53,13 @@ pub fn extract_markdown(path: &Path) -> FileResult {
     });
 
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
-    // The currently-open fence marker (`` ` `` or `~`), or `None` outside a
-    // fenced block. Tracking the marker (rather than a bool) lets a `~~~`
-    // inside a ``` block — or vice versa — not prematurely close the block.
-    let mut fence: Option<char> = None;
+    // The currently-open fence as `(marker_char, run_length)`, or `None`
+    // outside a fenced block. Tracking the marker char (rather than a bool)
+    // lets a `~~~` inside a ``` block — or vice versa — not prematurely close
+    // the block; tracking the run length enforces the CommonMark rule that a
+    // closing fence must repeat the opening marker at least as many times, so a
+    // nested ``` inside a ```` block does not close the outer block early.
+    let mut fence: Option<(char, usize)> = None;
 
     let mut ctx = LineCtx {
         stem: &stem,
@@ -86,10 +89,16 @@ pub fn extract_markdown(path: &Path) -> FileResult {
             None
         };
         if let Some(marker) = marker {
+            let marker_len = trimmed.chars().take_while(|&c| c == marker).count();
             match fence {
-                None => fence = Some(marker),
-                Some(open) if open == marker => fence = None,
-                Some(_) => {} // mismatched fence inside a block — ignore
+                None => fence = Some((marker, marker_len)),
+                // Close only on the same marker repeated at least as many times
+                // as the opening fence (CommonMark). A shorter or mismatched run
+                // inside the block does not close it.
+                Some((open_ch, open_len)) if open_ch == marker && marker_len >= open_len => {
+                    fence = None;
+                }
+                Some(_) => {}
             }
             continue;
         }

@@ -1538,6 +1538,47 @@ fn test_antigravity_uninstall_project_removes_project_skill_only() {
     assert!(!project_skill.exists(), "project skill must be removed");
 }
 
+/// #1079: a `--project` install writes only the workspace-local skill — never
+/// the rules or workflow files. Those are global-only because the workflow text
+/// hardcodes the shared `~/.gemini/config/skills/...` skill path; emitting it
+/// for a project-local skill would dangle. Mirrors graphify-py's
+/// `_project_install("antigravity")`, which copies the skill alone.
+#[test]
+#[serial(home_env)]
+fn test_antigravity_install_project_writes_skill_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    antigravity_install(dir.path(), true).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        dir.path().join(".agents/skills/graphify/SKILL.md").exists(),
+        "project skill must be written"
+    );
+    assert!(
+        !dir.path().join(".agents/rules/graphify.md").exists(),
+        "project install must not write rules"
+    );
+    assert!(
+        !dir.path().join(".agents/workflows/graphify.md").exists(),
+        "project install must not write workflow"
+    );
+    // The global skill location must stay untouched by a project install.
+    assert!(
+        !home
+            .path()
+            .join(".gemini/config/skills/graphify/SKILL.md")
+            .exists(),
+        "project install must not write the global skill"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // vscode_install / vscode_uninstall
 // ---------------------------------------------------------------------------
