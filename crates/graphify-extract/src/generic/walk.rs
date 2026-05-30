@@ -861,14 +861,13 @@ pub(super) fn walk<'tree>(
         // is a member-function declaration, not a data member) when emitting
         // type references.
         let mut dcur = node.walk();
-        let decls: Vec<Node<'_>> = node
+        let is_method = node
             .children_by_field_name("declarator", &mut dcur)
-            .collect();
-        let is_method = decls.iter().any(|d| {
-            d.kind() == "function_declarator"
-                || (matches!(d.kind(), "pointer_declarator" | "reference_declarator")
-                    && any_child_kind(*d, "function_declarator"))
-        });
+            .any(|d| {
+                d.kind() == "function_declarator"
+                    || (matches!(d.kind(), "pointer_declarator" | "reference_declarator")
+                        && any_child_kind(d, "function_declarator"))
+            });
         if !is_method && let Some(type_node) = node.child_by_field_name("type") {
             let line = node.start_position().row as u32 + 1;
             emit_member_type_refs(
