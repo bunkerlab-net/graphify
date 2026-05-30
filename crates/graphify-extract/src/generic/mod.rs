@@ -166,12 +166,15 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     // ── Clean edges ───────────────────────────────────────────────────────────
     // Cross-module edge relations (`imports`, `imports_from`, `re_exports`)
     // legitimately point at nodes that don't live in this file. Everything
-    // else must have both endpoints among `seen_ids`.
+    // else must have both endpoints among the reconciled node ids. Rebuild the
+    // valid-id set from the surviving nodes rather than the now-stale
+    // `seen_ids`, which still lists any placeholder ids reconcile folded away.
+    let valid_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {
-            seen_ids.contains(&e.source)
-                && (seen_ids.contains(&e.target)
+            valid_ids.contains(&e.source)
+                && (valid_ids.contains(&e.target)
                     || matches!(
                         e.relation.as_str(),
                         "imports" | "imports_from" | "re_exports"

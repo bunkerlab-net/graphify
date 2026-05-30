@@ -463,7 +463,11 @@ pub fn extract_go(path: &Path) -> FileResult {
         edges: &mut edges,
     });
     crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
-    let clean_edges = filter_dangling_edges(edges, &seen_ids);
+    // Validate dangling edges against the reconciled graph: reconcile may have
+    // folded placeholder nodes away, so rebuild the valid-id set from the
+    // surviving nodes rather than trusting the now-stale `seen_ids`.
+    let valid_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+    let clean_edges = filter_dangling_edges(edges, &valid_ids);
 
     FileResult {
         nodes,

@@ -132,11 +132,15 @@ pub fn extract_rust(path: &Path) -> FileResult {
     }
 
     crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
+    // Validate dangling edges against the reconciled graph rather than the
+    // now-stale `seen_ids`, which still lists any placeholder ids reconcile
+    // folded away.
+    let valid_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {
-            seen_ids.contains(&e.source)
-                && (seen_ids.contains(&e.target)
+            valid_ids.contains(&e.source)
+                && (valid_ids.contains(&e.target)
                     || matches!(e.relation.as_str(), "imports" | "imports_from"))
         })
         .collect();
@@ -561,8 +565,13 @@ fn emit_rust_param_return_refs(
     }
 }
 
-/// Emit `inherits` (first supertrait) / `references[generic_arg]` edges from a
-/// `trait_item`'s `trait_bounds`.
+/// Emit supertrait edges from a `trait_item`'s `trait_bounds`.
+///
+/// Each bound is processed independently: within one bound the leading type is
+/// the supertrait (`inherits`) and any following types are its generic
+/// arguments (`references[generic_arg]`). So `trait C: A + B` emits `inherits`
+/// for both `A` and `B`, while `trait C: Foo<Bar>` emits `inherits C→Foo` and
+/// `references[generic_arg] C→Bar`. Mirrors graphify-py's per-bound `enumerate`.
 fn emit_rust_trait_bounds(
     ctx: &mut RustWalkCtx<'_>,
     node: tree_sitter::Node<'_>,

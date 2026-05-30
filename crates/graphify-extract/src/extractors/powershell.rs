@@ -126,11 +126,15 @@ pub fn extract_powershell(path: &Path) -> FileResult {
     }
 
     crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
+    // Validate dangling edges against the reconciled graph rather than the
+    // now-stale `seen_ids`, which still lists any placeholder ids reconcile
+    // folded away.
+    let valid_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {
-            seen_ids.contains(&e.source)
-                && (seen_ids.contains(&e.target) || e.relation == "imports_from")
+            valid_ids.contains(&e.source)
+                && (valid_ids.contains(&e.target) || e.relation == "imports_from")
         })
         .collect();
 

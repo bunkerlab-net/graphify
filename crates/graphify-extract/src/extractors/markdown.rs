@@ -80,10 +80,15 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         // fences, so a `~~~` code block leaks its contents as phantom heading
         // nodes. Both ``` and ~~~ are valid CommonMark fences, so the Rust port
         // honours both.
-        let trimmed = line_text.trim();
-        let marker = if trimmed.starts_with("```") {
+        // CommonMark allows a fence to be indented by at most three spaces; four
+        // or more leading spaces make the line an indented code block, not a
+        // fence. Count leading spaces explicitly rather than trimming so an
+        // over-indented ``` is not mistaken for a fence.
+        let leading_spaces = line_text.chars().take_while(|&c| c == ' ').count();
+        let trimmed = &line_text[leading_spaces..];
+        let marker = if leading_spaces <= 3 && trimmed.starts_with("```") {
             Some('`')
-        } else if trimmed.starts_with("~~~") {
+        } else if leading_spaces <= 3 && trimmed.starts_with("~~~") {
             Some('~')
         } else {
             None

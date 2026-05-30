@@ -138,8 +138,10 @@ trait Render<T> {}\n\
 impl Render<Widget> for Widget {}\n\
 impl Render<Widget> for Canvas {}\n";
     let (_t, r) = extract_snippet("rt.rs", src, extract_rust);
-    // First supertrait → inherits.
+    // Each supertrait in `C: A + B` is a separate bound, so both are `inherits`
+    // (a supertrait is inheritance, not a generic argument).
     assert!(has_edge(&r, "inherits", None, "C", "A"));
+    assert!(has_edge(&r, "inherits", None, "C", "B"));
     // impl Render<Widget> for Widget → implements Render; the Widget generic arg
     // equals the impl type, so the self-edge is intentionally skipped.
     assert!(has_edge(&r, "implements", None, "Widget", "Render"));
