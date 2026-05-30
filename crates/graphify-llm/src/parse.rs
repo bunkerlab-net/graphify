@@ -17,8 +17,10 @@ pub fn empty_fragment() -> Value {
 ///
 /// Robust against the common failure modes Claude exhibits: a markdown fence
 /// preceded by a prose preamble, prose-wrapped JSON with no fence at all, and
-/// truncated responses missing their closing fence. Returns an empty fragment
-/// on failure. Capped at [`LLM_JSON_MAX_BYTES`].
+/// truncated responses missing their closing fence. Already-valid JSON is
+/// parsed verbatim before any fence stripping, so a payload that legitimately
+/// contains a triple-backtick substring inside a string is not corrupted.
+/// Returns an empty fragment on failure. Capped at [`LLM_JSON_MAX_BYTES`].
 #[must_use]
 pub fn parse_llm_json(raw: &str) -> Value {
     if raw.len() > LLM_JSON_MAX_BYTES {
@@ -30,12 +32,21 @@ pub fn parse_llm_json(raw: &str) -> Value {
         return empty_fragment();
     }
 
-    // Strategy 1: trim whitespace, then handle a markdown fence found anywhere
-    // in the text (not only at offset 0). Claude often prepends a preamble such
-    // as "Here are the extracted entities:\n\n```json\n{...}\n```".
-    let mut s = raw.trim();
-    if let Some(fence_start) = s.find("```") {
-        let mut after_fence = &s[fence_start + 3..];
+    let trimmed = raw.trim();
+
+    // Strategy 0: already-valid JSON. Try this *before* any fence stripping so a
+    // response that genuinely is valid JSON — but happens to contain a ```
+    // substring inside a string value — is parsed verbatim rather than mangled
+    // by the fence logic below.
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return v;
+    }
+
+    // Strategy 1: handle a markdown fence found anywhere in the text (not only
+    // at offset 0). Claude often prepends a preamble such as "Here are the
+    // extracted entities:\n\n```json\n{...}\n```".
+    if let Some(fence_start) = trimmed.find("```") {
+        let mut after_fence = &trimmed[fence_start + 3..];
         // Optional language tag (json, JSON, javascript, js, …) up to newline.
         if let Some(nl) = after_fence.find('\n') {
             let tag = after_fence[..nl].trim().to_ascii_lowercase();
@@ -43,19 +54,20 @@ pub fn parse_llm_json(raw: &str) -> Value {
                 after_fence = &after_fence[nl + 1..];
             }
         }
-        s = match after_fence.rfind("```") {
+        let stripped = match after_fence.rfind("```") {
             Some(fence_end) => after_fence[..fence_end].trim(),
             None => after_fence.trim(),
         };
-    }
-    if let Ok(v) = serde_json::from_str::<Value>(s) {
-        return v;
+        if let Ok(v) = serde_json::from_str::<Value>(stripped) {
+            return v;
+        }
     }
 
     // Strategy 2: extract the first balanced JSON object found anywhere in the
-    // (fence-stripped) text. Handles JSON wrapped in prose with no fence, e.g.
-    // "The extracted graph is { ... }. Hope this helps!".
-    if let Some(obj) = first_balanced_object(s)
+    // original trimmed text. Handles JSON wrapped in prose with no fence, e.g.
+    // "The extracted graph is { ... }. Hope this helps!". Using the original
+    // (not the fence-stripped) text keeps a ```-in-string payload intact.
+    if let Some(obj) = first_balanced_object(trimmed)
         && let Ok(v) = serde_json::from_str::<Value>(obj)
     {
         return v;

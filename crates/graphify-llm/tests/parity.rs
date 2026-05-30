@@ -318,6 +318,17 @@ fn test_parse_llm_json_empty_response_returns_empty_fragment() {
     );
 }
 
+#[test]
+fn test_parse_llm_json_valid_json_with_fence_substring_is_not_mangled() {
+    // A valid JSON payload whose string value contains a ``` substring must be
+    // parsed verbatim. Stripping fences before the first parse would corrupt it
+    // and lose the whole fragment.
+    let raw = r#"{"nodes": [{"id": "x", "snippet": "```py\ncode\n```"}], "edges": []}"#;
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"][0]["snippet"], "```py\ncode\n```");
+    assert_eq!(result["edges"], json!([]));
+}
+
 // ---------------------------------------------------------------------------
 // test_llm_parser.py / test_claude_cli_backend.py — claude -p argv shape
 // ---------------------------------------------------------------------------
