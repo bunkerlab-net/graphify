@@ -16,7 +16,7 @@ use tree_sitter::Node;
 use crate::types::{Edge, Node as GNode};
 
 use super::names::read_text_owned;
-use super::walk::add_edge;
+use super::walk::{add_edge, first_child_kind, named_children};
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 
@@ -121,22 +121,6 @@ pub(super) fn swift_pre_scan(root: Node<'_>, source: &[u8]) -> (HashSet<String>,
         }
     }
     (protocols, classes)
-}
-
-/// Return the first child of `node` whose kind is `kind`.
-fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().kind() == kind {
-                return Some(cur.node());
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    None
 }
 
 /// Classify a Swift inheritance entry as `inherits` or `implements`.
@@ -1067,21 +1051,4 @@ pub(super) fn emit_scala_inheritance(
             }
         }
     }
-}
-
-/// Collect the named children of `node` into a `Vec`.
-fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
-    let mut out = Vec::new();
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().is_named() {
-                out.push(cur.node());
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    out
 }

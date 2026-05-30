@@ -26,6 +26,7 @@ const ANTIGRAVITY_WORKFLOW_PATH: &str = ".agents/workflows/graphify.md";
 /// Global installs share `~/.gemini/config/skills/graphify/SKILL.md` across
 /// every workspace (#1079); `--project` installs write to the workspace-local
 /// `.agents/skills/graphify/SKILL.md`.
+#[must_use]
 fn antigravity_skill_dst(project_dir: &Path, project: bool) -> PathBuf {
     if project {
         project_dir

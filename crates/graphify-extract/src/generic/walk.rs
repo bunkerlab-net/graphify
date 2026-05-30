@@ -114,6 +114,22 @@ pub(super) fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<N
     None
 }
 
+/// `true` if any child of `node` has the given `kind` (allocation-free).
+pub(super) fn any_child_kind(node: Node<'_>, kind: &str) -> bool {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == kind {
+                return true;
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    false
+}
+
 // ── Body finder ───────────────────────────────────────────────────────────────
 
 /// Locate the body child of a class or function node.
@@ -848,9 +864,7 @@ pub(super) fn walk<'tree>(
         let is_method = decls.iter().any(|d| {
             d.kind() == "function_declarator"
                 || (matches!(d.kind(), "pointer_declarator" | "reference_declarator")
-                    && named_children(*d)
-                        .iter()
-                        .any(|c| c.kind() == "function_declarator"))
+                    && any_child_kind(*d, "function_declarator"))
         });
         if !is_method && let Some(type_node) = node.child_by_field_name("type") {
             let line = node.start_position().row as u32 + 1;

@@ -679,6 +679,10 @@ pub fn import_lua(
     }
 }
 
+/// How many parent directories to probe when resolving a Lua `require()` to a
+/// file on disk, so requires from nested files still find a package root above.
+const LUA_MAX_PROBE_LEVELS: usize = 6;
+
 /// Resolve a Lua `require()` module name to a node id (#1075).
 ///
 /// Lua module names use dots as path separators: `require("pkg.b")` looks for
@@ -699,7 +703,7 @@ fn resolve_lua_import_target(raw_module: &str, str_path: &str) -> String {
         let mut probe = start_dir.to_path_buf();
         // Walk up a few levels so requires from nested files still resolve when
         // the package root is above the importing file.
-        for _ in 0..6 {
+        for _ in 0..LUA_MAX_PROBE_LEVELS {
             for suffix in [".lua", ".luau"] {
                 let cand = probe.join(format!("{rel}{suffix}"));
                 if cand.is_file() {

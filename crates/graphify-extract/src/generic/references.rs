@@ -10,6 +10,7 @@
 use tree_sitter::Node;
 
 use super::names::read_text_owned;
+use super::walk::first_child_kind;
 
 /// Role of a collected type reference. `Direct` = used as the type itself
 /// (e.g. `def f(x: Foo)`), `Generic` = used as a type argument to a generic
@@ -841,28 +842,12 @@ fn recurse_named_refs(
     }
 }
 
-/// Return the first child of `node` whose kind is `kind`, if any.
-fn first_child_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().kind() == kind {
-                return Some(cur.node());
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    None
-}
-
 // ── Swift ───────────────────────────────────────────────────────────────────
 
 /// Return the head `type_identifier` text from a Swift `user_type` node.
 #[must_use]
 pub(super) fn swift_user_type_name(user_type_node: Node<'_>, source: &[u8]) -> Option<String> {
-    first_child_of_kind(user_type_node, "type_identifier")
+    first_child_kind(user_type_node, "type_identifier")
         .map(|n| read_text_owned(n, source))
         .filter(|t| !t.is_empty())
 }
@@ -870,7 +855,7 @@ pub(super) fn swift_user_type_name(user_type_node: Node<'_>, source: &[u8]) -> O
 /// Return the `type_annotation` child of a Swift `property_declaration`, if any.
 #[must_use]
 pub(super) fn swift_property_type_node(property_node: Node<'_>) -> Option<Node<'_>> {
-    first_child_of_kind(property_node, "type_annotation")
+    first_child_kind(property_node, "type_annotation")
 }
 
 /// Walk a Swift type expression; append `(name, role)` tuples. Mirrors
@@ -883,7 +868,7 @@ pub(super) fn swift_collect_type_refs(
 ) {
     match node.kind() {
         "user_type" => {
-            if let Some(head) = first_child_of_kind(node, "type_identifier") {
+            if let Some(head) = first_child_kind(node, "type_identifier") {
                 let text = read_text_owned(head, source);
                 if !text.is_empty() {
                     out.push((text, role_of(generic)));
@@ -1220,7 +1205,7 @@ pub(super) fn scala_collect_type_refs(
         "generic_type" => {
             let base = node
                 .child_by_field_name("type")
-                .or_else(|| first_child_of_kind(node, "type_identifier"));
+                .or_else(|| first_child_kind(node, "type_identifier"));
             if let Some(base) = base
                 && base.kind() == "type_identifier"
             {

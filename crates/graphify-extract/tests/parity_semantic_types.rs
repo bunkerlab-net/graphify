@@ -628,11 +628,11 @@ fn powershell_method_parameter_and_return_type_contexts() {
 // ── JS/TS arrow scope guard #1077 (test_languages.py) ──────────────────────────
 
 #[test]
-fn js_local_const_does_not_emit_phantom_node() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn js_local_const_does_not_emit_phantom_node() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let src = "describe('suite', () => {\n  const inner = new Set([1, 2, 3]);\n  let other = [1, 2];\n});\n\nconst moduleConst = new Set([4, 5]);\nexport const exportedConst = { a: 1 };\n";
     let f = tmp.path().join("scope_guard.js");
-    std::fs::write(&f, src).expect("write");
+    std::fs::write(&f, src)?;
     let r = extract_js(&f);
     let labs = labels(&r);
     assert!(
@@ -651,14 +651,15 @@ fn js_local_const_does_not_emit_phantom_node() {
         labs.iter().any(|l| l == "exportedConst"),
         "exported const missing: {labs:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn js_module_level_arrow_produces_node_and_call_edges() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn js_module_level_arrow_produces_node_and_call_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let src = "function helper() { return 1; }\nconst handler = () => {\n  helper();\n};\n";
     let f = tmp.path().join("arrows.js");
-    std::fs::write(&f, src).expect("write");
+    std::fs::write(&f, src)?;
     let r = extract_js(&f);
     assert!(
         labels(&r).iter().any(|l| l.contains("handler")),
@@ -668,14 +669,15 @@ fn js_module_level_arrow_produces_node_and_call_edges() {
         relations(&r).contains("calls"),
         "expected calls edge handler->helper"
     );
+    Ok(())
 }
 
 #[test]
-fn ts_local_const_does_not_emit_phantom_node() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn ts_local_const_does_not_emit_phantom_node() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let src = "describe('suite', () => {\n  const inner: Set<number> = new Set([1, 2]);\n});\n\nexport const topLevel = { a: 1 };\n";
     let f = tmp.path().join("scope_guard.ts");
-    std::fs::write(&f, src).expect("write");
+    std::fs::write(&f, src)?;
     let r = extract_js(&f);
     let labs = labels(&r);
     assert!(
@@ -686,6 +688,7 @@ fn ts_local_const_does_not_emit_phantom_node() {
         labs.iter().any(|l| l == "topLevel"),
         "module-level TS const missing: {labs:?}"
     );
+    Ok(())
 }
 
 // ── Markdown fenced code blocks #1077 (test_languages.py) ──────────────────────
@@ -715,12 +718,12 @@ fn markdown_contains_edges() {
 }
 
 #[test]
-fn markdown_fenced_heading_not_parsed() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn markdown_fenced_heading_not_parsed() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let src =
         "# Real Heading\n\n```bash\n## Not A Heading\necho hello\n```\n\n## Another Real Heading\n";
     let f = tmp.path().join("fenced.md");
-    std::fs::write(&f, src).expect("write");
+    std::fs::write(&f, src)?;
     let r = extract_markdown(&f);
     let labs = labels(&r);
     assert!(
@@ -735,4 +738,5 @@ fn markdown_fenced_heading_not_parsed() {
         !labs.iter().any(|l| l.contains("Not A Heading")),
         "fenced heading wrongly parsed: {labs:?}"
     );
+    Ok(())
 }
