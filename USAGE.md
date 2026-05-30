@@ -168,7 +168,7 @@ The query / affected / explain / serve commands filter on these.
 | `imports`      | File node → imported module.                                                                                                              |
 | `imports_from` | File node → imported symbol from another file (`from x import y`).                                                                        |
 | `re_exports`   | Module → re-exported module (`export … from 'x'`).                                                                                        |
-| `inherits`     | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia/Go) is normalized here. |
+| `inherits`     | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia) is normalized here.    |
 | `implements`   | Class → interface / protocol (Java, C#, TypeScript, Kotlin, PHP, Swift, Objective-C, Rust trait `impl`).                                  |
 | `embeds`       | Go struct/interface embedding (anonymous field or embedded interface).                                                                    |
 | `mixes_in`     | Trait mixin: PHP `use`, Scala `with`.                                                                                                     |
