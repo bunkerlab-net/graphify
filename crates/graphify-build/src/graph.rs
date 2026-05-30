@@ -88,6 +88,15 @@ impl Graph {
             let directed = self.kind.is_directed();
             for edge in &mut self.edge_list {
                 if Self::edge_matches(directed, edge, src, tgt) {
+                    // #1061: keep the first-seen direction when an undirected
+                    // graph collapses a same-relation bidirectional pair, so
+                    // single-call ingestion (e.g. the global-graph merge) does
+                    // not flip caller/callee. Mirrors `bulk_add_edges`.
+                    if !directed
+                        && Self::is_reverse_direction_duplicate(&edge.attrs, src, tgt, &attrs)
+                    {
+                        return;
+                    }
                     edge.attrs = attrs;
                     return;
                 }

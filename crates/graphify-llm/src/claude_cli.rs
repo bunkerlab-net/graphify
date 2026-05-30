@@ -155,6 +155,7 @@ pub fn claude_is_on_path() -> bool {
 }
 
 /// Searches `$PATH` for an executable named `name` and returns its path.
+#[must_use]
 fn which_named(name: &str) -> Option<std::path::PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
