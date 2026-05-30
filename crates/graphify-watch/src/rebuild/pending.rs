@@ -22,9 +22,13 @@ pub const PENDING_DRAIN_MAX_PASSES: usize = 20;
 
 /// Append `changed_paths` to `<out>/.pending_changes`, one per line.
 ///
-/// Opened in append mode so concurrent writers do not clobber each other on
-/// POSIX; each small `write` is effectively atomic. A no-op when `changed_paths`
-/// is empty, so an empty change set never creates an empty queue file.
+/// Opened in append mode so concurrent writers do not clobber each other's
+/// existing content on POSIX. `write_all` may still issue more than one `write`
+/// syscall, so two concurrent writers can interleave mid-line for large
+/// payloads; line-atomicity here relies on the typically small payload landing
+/// in a single sub-`PIPE_BUF` write, and the drain pass tolerates a torn line by
+/// skipping it. A no-op when `changed_paths` is empty, so an empty change set
+/// never creates an empty queue file.
 ///
 /// # Errors
 /// Propagates filesystem errors via [`WatchError`].

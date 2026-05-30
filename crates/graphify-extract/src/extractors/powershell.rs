@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
+use crate::generic::walk::first_child_kind;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node, RawCall};
 
@@ -193,32 +194,13 @@ struct PsWalkCtx<'a> {
     function_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
-/// Return the first child of `node` whose kind is `kind`.
-fn first_child_kind_ps<'tree>(
-    node: tree_sitter::Node<'tree>,
-    kind: &str,
-) -> Option<tree_sitter::Node<'tree>> {
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().kind() == kind {
-                return Some(cur.node());
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    None
-}
-
 /// Drill into a `type_literal` node and return its inner `type_identifier` text.
 /// Mirrors Python `_ps_type_name`.
 fn ps_type_name(type_literal: Option<tree_sitter::Node<'_>>, source: &[u8]) -> Option<String> {
     let tl = type_literal?;
-    let spec = first_child_kind_ps(tl, "type_spec")?;
-    let tname = first_child_kind_ps(spec, "type_name")?;
-    let tid = first_child_kind_ps(tname, "type_identifier")?;
+    let spec = first_child_kind(tl, "type_spec")?;
+    let tname = first_child_kind(spec, "type_name")?;
+    let tid = first_child_kind(tname, "type_identifier")?;
     Some(read_text(tid, source).to_string())
 }
 
@@ -394,7 +376,7 @@ fn walk_ps(
         "class_property_definition" => {
             if let Some(parent) = parent_class_nid
                 && let Some(type_name) =
-                    ps_type_name(first_child_kind_ps(node, "type_literal"), source)
+                    ps_type_name(first_child_kind(node, "type_literal"), source)
             {
                 let line = node.start_position().row + 1;
                 let mut rc = PsRefCtx {
@@ -471,9 +453,8 @@ fn walk_ps(
                 });
                 // Return type (type_literal sibling of simple_name) and parameter
                 // types (class_method_parameter_list) → `references` edges.
-                let return_type_name =
-                    ps_type_name(first_child_kind_ps(node, "type_literal"), source);
-                let param_list = first_child_kind_ps(node, "class_method_parameter_list");
+                let return_type_name = ps_type_name(first_child_kind(node, "type_literal"), source);
+                let param_list = first_child_kind(node, "class_method_parameter_list");
                 {
                     let mut rc = PsRefCtx {
                         stem,
@@ -494,7 +475,7 @@ fn walk_ps(
                             loop {
                                 if pc.node().kind() == "class_method_parameter"
                                     && let Some(pn) = ps_type_name(
-                                        first_child_kind_ps(pc.node(), "type_literal"),
+                                        first_child_kind(pc.node(), "type_literal"),
                                         source,
                                     )
                                 {
