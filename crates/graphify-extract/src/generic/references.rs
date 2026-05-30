@@ -1230,6 +1230,10 @@ pub(super) fn scala_collect_type_refs(
         | "projected_type" => {
             recurse_named_refs(node, source, generic, out, scala_collect_type_refs);
         }
+        // No catch-all recurse: graphify-py's `_scala_collect_type_refs`
+        // (extract.py) handles only `type_identifier`, `generic_type`, and the
+        // wrapper kinds above, so other named nodes are intentionally ignored to
+        // preserve parity.
         _ => {}
     }
 }

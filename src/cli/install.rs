@@ -59,8 +59,10 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("devin", PlatformCmd::Uninstall { project: true }) => devin_project_uninstall(&cwd)?,
         ("devin", PlatformCmd::Install { .. }) => devin_install()?,
         ("devin", PlatformCmd::Uninstall { .. }) => devin_uninstall()?,
-        // Antigravity has bespoke project-scope handling (workspace-local skill
-        // + rules + workflow), matched before the generic `--project` branch.
+        // Antigravity has bespoke project-scope handling: a `--project` install
+        // writes only the workspace-local skill (rules + workflow are global-only;
+        // `antigravity_install` early-returns for projects). Matched before the
+        // generic `--project` branch.
         ("antigravity", PlatformCmd::Install { project: true }) => antigravity_install(&cwd, true)?,
         ("antigravity", PlatformCmd::Uninstall { project: true }) => {
             antigravity_uninstall(&cwd, true)?

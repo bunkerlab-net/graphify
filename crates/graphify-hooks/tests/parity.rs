@@ -1579,6 +1579,55 @@ fn test_antigravity_install_project_writes_skill_only() {
     );
 }
 
+/// #1079: a `--project` uninstall after a prior global install removes the
+/// workspace rules + workflow but leaves the shared global skill intact. This
+/// mirrors graphify-py's `_project_uninstall("antigravity")`, which calls
+/// `_antigravity_uninstall(project_dir, project=True)` — it cleans the
+/// workspace artefacts defensively even though a project install never writes
+/// them, and never touches the global skill.
+#[test]
+#[serial(home_env)]
+fn test_antigravity_uninstall_project_after_global_keeps_global_skill() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    // Prior global install: writes the global skill + workspace rules/workflow.
+    antigravity_install(dir.path(), false).expect("test invariant");
+    let global_skill = home.path().join(".gemini/config/skills/graphify/SKILL.md");
+    assert!(
+        global_skill.exists(),
+        "precondition: global skill must exist"
+    );
+    assert!(dir.path().join(".agents/rules/graphify.md").exists());
+    assert!(dir.path().join(".agents/workflows/graphify.md").exists());
+
+    // Project uninstall: clears workspace artefacts, spares the global skill.
+    antigravity_uninstall(dir.path(), true).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        !dir.path().join(".agents/rules/graphify.md").exists(),
+        "project uninstall must remove workspace rules"
+    );
+    assert!(
+        !dir.path().join(".agents/workflows/graphify.md").exists(),
+        "project uninstall must remove workspace workflow"
+    );
+    assert!(
+        !dir.path().join(".agents/skills/graphify/SKILL.md").exists(),
+        "no project-local skill should remain"
+    );
+    assert!(
+        global_skill.exists(),
+        "project uninstall must not touch the global skill"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // vscode_install / vscode_uninstall
 // ---------------------------------------------------------------------------
