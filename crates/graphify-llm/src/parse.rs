@@ -63,13 +63,29 @@ pub fn parse_llm_json(raw: &str) -> Value {
         }
     }
 
-    // Strategy 2: extract the first balanced JSON object found anywhere in the
-    // original trimmed text. Handles JSON wrapped in prose with no fence, e.g.
-    // "The extracted graph is { ... }. Hope this helps!". Using the original
-    // (not the fence-stripped) text keeps a ```-in-string payload intact.
-    if let Some(obj) = first_balanced_object(trimmed)
-        && let Ok(v) = serde_json::from_str::<Value>(obj)
-    {
+    // Strategy 2: scan every balanced `{ … }` object in the original trimmed
+    // text and pick the best parseable one. Handles JSON wrapped in prose with
+    // no fence, e.g. "The extracted graph is { ... }. Hope this helps!", and —
+    // unlike a first-object-only scan — skips an incidental brace group that
+    // appears before the real payload (e.g. "Note {see below}. Graph: {...}"),
+    // which would otherwise fail to parse and abort the whole strategy. Using
+    // the original (not the fence-stripped) text keeps a ```-in-string payload
+    // intact. An extraction-shaped object (one carrying `nodes`/`edges`/
+    // `hyperedges`) is preferred over any other valid object so an incidental
+    // `{"status": "ok"}` does not shadow the real fragment.
+    let mut first_parsed: Option<Value> = None;
+    for obj in balanced_objects(trimmed) {
+        let Ok(v) = serde_json::from_str::<Value>(obj) else {
+            continue;
+        };
+        if v.get("nodes").is_some() || v.get("edges").is_some() || v.get("hyperedges").is_some() {
+            return v;
+        }
+        if first_parsed.is_none() {
+            first_parsed = Some(v);
+        }
+    }
+    if let Some(v) = first_parsed {
         return v;
     }
 
@@ -80,35 +96,51 @@ pub fn parse_llm_json(raw: &str) -> Value {
     empty_fragment()
 }
 
-/// Return the first balanced `{ … }` substring of `s`, or `None` when no
-/// brace-balanced object can be found. Quotes and backslash escapes inside
-/// strings are respected so braces within string literals do not affect depth.
-fn first_balanced_object(s: &str) -> Option<&str> {
-    let start = s.find('{')?;
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape = false;
-    for (i, ch) in s[start..].char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        match ch {
-            '\\' => escape = true,
-            '"' => in_string = !in_string,
-            _ if in_string => {}
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    let end = start + i + ch.len_utf8();
-                    return Some(&s[start..end]);
-                }
+/// Return every top-level balanced `{ … }` substring of `s`, in source order.
+///
+/// Quotes and backslash escapes inside strings are respected so braces within
+/// string literals do not affect depth. Objects nested inside another are part
+/// of their enclosing candidate, not separate entries. An unbalanced trailing
+/// `{` (e.g. a truncated response) yields no further candidates.
+fn balanced_objects(s: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = s[search_from..].find('{') {
+        let start = search_from + rel;
+        let mut depth: i32 = 0;
+        let mut in_string = false;
+        let mut escape = false;
+        let mut end = None;
+        for (i, ch) in s[start..].char_indices() {
+            if escape {
+                escape = false;
+                continue;
             }
-            _ => {}
+            match ch {
+                '\\' => escape = true,
+                '"' => in_string = !in_string,
+                _ if in_string => {}
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + i + ch.len_utf8());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(e) => {
+                out.push(&s[start..e]);
+                search_from = e;
+            }
+            // Unbalanced from here on; no later candidate can close either.
+            None => break,
         }
     }
-    None
+    out
 }
 
 /// Return `true` if the response produced no usable nodes, edges, or hyperedges.

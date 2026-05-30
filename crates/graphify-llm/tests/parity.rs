@@ -329,6 +329,27 @@ fn test_parse_llm_json_valid_json_with_fence_substring_is_not_mangled() {
     assert_eq!(result["edges"], json!([]));
 }
 
+#[test]
+fn test_parse_llm_json_skips_incidental_brace_before_real_json() {
+    // An incidental, non-JSON brace group before the real payload must not abort
+    // the scan: the parser keeps scanning balanced objects until one parses.
+    let raw = "Note {see below}. Here is the graph: {\"nodes\": [{\"id\": \"z\"}], \"edges\": []}";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"], json!([{"id": "z"}]));
+    assert_eq!(result["edges"], json!([]));
+}
+
+#[test]
+fn test_parse_llm_json_prefers_extraction_shaped_object() {
+    // When an earlier brace group is itself valid JSON but not an extraction
+    // fragment, the parser must skip it in favour of the object that carries
+    // `nodes`/`edges`/`hyperedges`.
+    let raw = "{\"status\": \"ok\"} then {\"nodes\": [], \"edges\": [{\"source\": \"a\"}]}";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["edges"], json!([{"source": "a"}]));
+    assert_eq!(result["nodes"], json!([]));
+}
+
 // ---------------------------------------------------------------------------
 // test_llm_parser.py / test_claude_cli_backend.py — claude -p argv shape
 // ---------------------------------------------------------------------------
