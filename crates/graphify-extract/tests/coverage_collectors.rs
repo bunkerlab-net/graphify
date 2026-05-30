@@ -381,3 +381,64 @@ private:\n\
         "Widget"
     ));
 }
+
+// ── Forward references: placeholder reconciliation ─────────────────────────────
+
+/// All `(id)`s of nodes carrying `label`.
+fn node_ids_for_label<'a>(r: &'a FileResult, label: &str) -> Vec<&'a str> {
+    r.nodes
+        .iter()
+        .filter(|n| n.label == label)
+        .map(|n| n.id.as_str())
+        .collect()
+}
+
+#[test]
+fn rust_forward_reference_binds_to_declaration_not_placeholder() {
+    // `Engine` references `Item` before `Item` is declared. The forward
+    // reference must resolve to the single file-qualified `Item` declaration,
+    // not a duplicate bare-name placeholder.
+    let src = "struct Engine {\n    item: Item,\n}\nstruct Item {}\n";
+    let (_t, r) = extract_snippet("fwd.rs", src, extract_rust);
+    let item_ids = node_ids_for_label(&r, "Item");
+    assert_eq!(
+        item_ids.len(),
+        1,
+        "expected one Item node, got {item_ids:?}"
+    );
+    assert_ne!(
+        item_ids[0],
+        graphify_extract::make_id1("Item"),
+        "Item node must be the file-qualified declaration, not a bare placeholder"
+    );
+    // The field reference edge must target that single declaration.
+    let field_target = r
+        .edges
+        .iter()
+        .find(|e| e.relation == "references" && e.context.as_deref() == Some("field"))
+        .map(|e| e.target.as_str());
+    assert_eq!(
+        field_target,
+        Some(item_ids[0]),
+        "field edge must point at the Item declaration"
+    );
+}
+
+#[test]
+fn go_forward_reference_binds_to_declaration_not_placeholder() {
+    // `Store` references `Item` before `Item` is declared (Go allows any order).
+    let src = "package p\ntype Store struct {\n    item *Item\n}\ntype Item struct{}\n";
+    let (_t, r) = extract_snippet("fwd.go", src, extract_go);
+    let item_ids = node_ids_for_label(&r, "Item");
+    assert_eq!(
+        item_ids.len(),
+        1,
+        "expected one Item node, got {item_ids:?}"
+    );
+    assert_ne!(
+        item_ids[0],
+        graphify_extract::make_id1("Item"),
+        "Item node must be the package-qualified declaration, not a bare placeholder"
+    );
+    assert!(has(&r, "references", Some("field"), "Store", "Item"));
+}

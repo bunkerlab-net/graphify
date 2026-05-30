@@ -119,8 +119,17 @@ impl Graph {
         tgt: &str,
         incoming: &IndexMap<String, Value>,
     ) -> bool {
-        existing.get("relation").and_then(Value::as_str)
-            == incoming.get("relation").and_then(Value::as_str)
+        // Both edges must carry an explicit, equal `relation`. Two edges that
+        // each lack the attribute are not "the same relation" — treating absent
+        // == absent as a match would let the guard silently drop a reverse-
+        // direction edge that has no relation at all.
+        let (Some(existing_rel), Some(incoming_rel)) = (
+            existing.get("relation").and_then(Value::as_str),
+            incoming.get("relation").and_then(Value::as_str),
+        ) else {
+            return false;
+        };
+        existing_rel == incoming_rel
             && existing.get("_src").and_then(Value::as_str) == Some(tgt)
             && existing.get("_tgt").and_then(Value::as_str) == Some(src)
     }

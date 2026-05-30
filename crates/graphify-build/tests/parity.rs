@@ -450,6 +450,52 @@ fn build_from_json_preserves_first_direction_on_bidirectional_pair() {
 }
 
 #[test]
+fn add_edge_preserves_first_direction_on_bidirectional_pair() {
+    // #1061 on the single-call path. `add_edge` (used e.g. by the global-graph
+    // merge) must apply the same first-seen-direction guard as `bulk_add_edges`:
+    // adding `a_handler -> z_emitter` then the reverse must collapse to one
+    // undirected edge that keeps the first-seen _src/_tgt.
+    let mut g = Graph::new(GraphKind::Graph);
+    g.add_node("a_handler", indexmap::IndexMap::new());
+    g.add_node("z_emitter", indexmap::IndexMap::new());
+
+    let mut forward = indexmap::IndexMap::new();
+    forward.insert("relation".to_string(), json!("calls"));
+    forward.insert("_src".to_string(), json!("a_handler"));
+    forward.insert("_tgt".to_string(), json!("z_emitter"));
+    g.add_edge("a_handler", "z_emitter", forward);
+
+    let mut reverse = indexmap::IndexMap::new();
+    reverse.insert("relation".to_string(), json!("calls"));
+    reverse.insert("_src".to_string(), json!("z_emitter"));
+    reverse.insert("_tgt".to_string(), json!("a_handler"));
+    g.add_edge("z_emitter", "a_handler", reverse);
+
+    let calls: Vec<_> = g
+        .edges()
+        .filter(|e| e.attrs.get("relation").and_then(Value::as_str) == Some("calls"))
+        .collect();
+    assert_eq!(
+        calls.len(),
+        1,
+        "bidirectional pair must collapse to one edge"
+    );
+    let data = g
+        .edge_data("a_handler", "z_emitter")
+        .expect("edge between the pair");
+    assert_eq!(
+        data.get("_src").and_then(Value::as_str),
+        Some("a_handler"),
+        "add_edge flipped the calls edge source on bidirectional collision"
+    );
+    assert_eq!(
+        data.get("_tgt").and_then(Value::as_str),
+        Some("z_emitter"),
+        "add_edge flipped the calls edge target on bidirectional collision"
+    );
+}
+
+#[test]
 fn build_merge_prune_absolute_paths_match_relative_nodes() {
     // #1007: manifest stores absolute paths, graph nodes store relative paths.
     // prune_sources with absolute paths must still remove the right nodes/edges.

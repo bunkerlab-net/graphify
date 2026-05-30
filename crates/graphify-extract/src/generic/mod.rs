@@ -158,6 +158,11 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
         }
     }
 
+    // Fold any forward-reference placeholder into its same-file declaration
+    // before cleaning, so a type used before it is declared resolves to the
+    // real node instead of an orphaned bare-name duplicate.
+    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
+
     // ── Clean edges ───────────────────────────────────────────────────────────
     // Cross-module edge relations (`imports`, `imports_from`, `re_exports`)
     // legitimately point at nodes that don't live in this file. Everything

@@ -136,6 +136,7 @@ pub fn extract_fortran(path: &Path) -> FileResult {
         }
     }
 
+    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
     FileResult {
         nodes,
         edges,

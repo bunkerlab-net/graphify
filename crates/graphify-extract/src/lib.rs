@@ -17,6 +17,7 @@
 
 mod builtins;
 pub mod error;
+mod forward_refs;
 pub mod generic;
 pub mod ids;
 pub mod import_handlers;

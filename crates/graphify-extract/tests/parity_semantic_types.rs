@@ -344,15 +344,26 @@ fn scala_constructor_parameter_field_context() {
 }
 
 #[test]
-fn scala_val_definition_field_context() {
-    let r = extract_scala(&fixtures().join("sample.scala"));
+fn scala_val_definition_field_context() -> Result<(), Box<dyn std::error::Error>> {
+    // In `sample.scala` the constructor parameter and the `val` share the type
+    // `Config`, so a fixture assertion cannot tell the val-definition branch
+    // apart from the constructor-parameter branch. Use an inline snippet whose
+    // val type is distinct from any constructor parameter to isolate it.
+    let tmp = tempfile::tempdir()?;
+    let f = tmp.path().join("valdef.scala");
+    std::fs::write(
+        &f,
+        "class Widget\nclass Holder {\n  val item: Widget = null\n}\n",
+    )?;
+    let r = extract_scala(&f);
     assert!(has_edge(
         &r,
         "references",
         Some("field"),
-        "HttpClient",
-        "Config"
+        "Holder",
+        "Widget"
     ));
+    Ok(())
 }
 
 #[test]

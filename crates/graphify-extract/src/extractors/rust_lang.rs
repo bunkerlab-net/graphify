@@ -131,6 +131,7 @@ pub fn extract_rust(path: &Path) -> FileResult {
         }
     }
 
+    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {

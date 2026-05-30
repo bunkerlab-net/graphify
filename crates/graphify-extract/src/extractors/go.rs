@@ -462,6 +462,7 @@ pub fn extract_go(path: &Path) -> FileResult {
         go_imported_pkgs: &go_imported_pkgs,
         edges: &mut edges,
     });
+    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
     let clean_edges = filter_dangling_edges(edges, &seen_ids);
 
     FileResult {
