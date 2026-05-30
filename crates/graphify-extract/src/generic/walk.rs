@@ -82,6 +82,7 @@ pub(super) fn add_edge(
 // ── Small AST helpers ──────────────────────────────────────────────────────────
 
 /// Collect the named children of `node` into a `Vec`.
+#[must_use]
 pub(super) fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
     let mut out = Vec::new();
     let mut cur = node.walk();
@@ -99,6 +100,7 @@ pub(super) fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
 }
 
 /// Return the first child of `node` whose kind is `kind`.
+#[must_use]
 pub(super) fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
     let mut cur = node.walk();
     if cur.goto_first_child() {
@@ -115,6 +117,7 @@ pub(super) fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<N
 }
 
 /// `true` if any child of `node` has the given `kind` (allocation-free).
+#[must_use]
 pub(super) fn any_child_kind(node: Node<'_>, kind: &str) -> bool {
     let mut cur = node.walk();
     if cur.goto_first_child() {

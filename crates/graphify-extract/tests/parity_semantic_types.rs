@@ -740,3 +740,29 @@ fn markdown_fenced_heading_not_parsed() -> Result<(), Box<dyn std::error::Error>
     );
     Ok(())
 }
+
+/// Rust divergence from graphify-py: `~~~` fences are honoured too, so a
+/// heading-shaped line inside a tilde-fenced block is not parsed as a heading.
+#[test]
+fn markdown_tilde_fenced_heading_not_parsed() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let src =
+        "# Real Heading\n\n~~~bash\n## Not A Heading\necho hi\n~~~\n\n## Another Real Heading\n";
+    let f = tmp.path().join("tilde.md");
+    std::fs::write(&f, src)?;
+    let r = extract_markdown(&f);
+    let labs = labels(&r);
+    assert!(
+        labs.iter().any(|l| l.contains("Real Heading")),
+        "'Real Heading' missing: {labs:?}"
+    );
+    assert!(
+        labs.iter().any(|l| l.contains("Another Real Heading")),
+        "'Another Real Heading' missing: {labs:?}"
+    );
+    assert!(
+        !labs.iter().any(|l| l.contains("Not A Heading")),
+        "tilde-fenced heading wrongly parsed: {labs:?}"
+    );
+    Ok(())
+}

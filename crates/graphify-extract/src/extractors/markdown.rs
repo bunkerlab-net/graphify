@@ -15,10 +15,10 @@ static HEADING_RE: LazyLock<Regex> =
 /// Extract structural nodes and edges from a Markdown file.
 ///
 /// Emits a node per file and per heading, with `contains` edges nesting
-/// headings by level. Fenced code blocks are skipped during parsing so their
-/// contents are not misread as headings, but no node is emitted for them —
-/// they were always orphans and inflated the disconnected-component count
-/// (#1077).
+/// headings by level. Fenced code blocks (both backtick and tilde fences) are
+/// skipped during parsing so their contents are not misread as headings, but no
+/// node is emitted for them — they were always orphans and inflated the
+/// disconnected-component count (#1077).
 #[must_use]
 pub fn extract_markdown(path: &Path) -> FileResult {
     let source = match std::fs::read_to_string(path) {
@@ -53,7 +53,10 @@ pub fn extract_markdown(path: &Path) -> FileResult {
     });
 
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
-    let mut in_code_block = false;
+    // The currently-open fence marker (`` ` `` or `~`), or `None` outside a
+    // fenced block. Tracking the marker (rather than a bool) lets a `~~~`
+    // inside a ``` block — or vice versa — not prematurely close the block.
+    let mut fence: Option<char> = None;
 
     let mut ctx = LineCtx {
         stem: &stem,
@@ -69,11 +72,28 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         // headings, but emit no nodes/edges for them (#1077): they were always
         // orphans (a single contains edge to the parent doc) and inflated the
         // disconnected-component count.
-        if line_text.trim().starts_with("```") {
-            in_code_block = !in_code_block;
+        //
+        // Divergence from graphify-py: the Python parser only recognises ```
+        // fences, so a `~~~` code block leaks its contents as phantom heading
+        // nodes. Both ``` and ~~~ are valid CommonMark fences, so the Rust port
+        // honours both.
+        let trimmed = line_text.trim();
+        let marker = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+        if let Some(marker) = marker {
+            match fence {
+                None => fence = Some(marker),
+                Some(open) if open == marker => fence = None,
+                Some(_) => {} // mismatched fence inside a block — ignore
+            }
             continue;
         }
-        if in_code_block {
+        if fence.is_some() {
             continue;
         }
         if let Some(cap) = HEADING_RE.captures(line_text) {
