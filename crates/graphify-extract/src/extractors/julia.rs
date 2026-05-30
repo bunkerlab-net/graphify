@@ -233,8 +233,12 @@ fn emit_julia_struct_fields(
                     }
                 }
             }
-            if type_ids.len() >= 2
-                && let Some(last) = type_ids.last()
+            // A `typed_expression` with at least two identifiers is `name::Type`
+            // (or `name::Mod.Type`); the trailing identifier is the field type.
+            // `split_last` binds it without a redundant length-then-`last` guard
+            // and without an indexing panic path.
+            if let Some((last, rest)) = type_ids.split_last()
+                && !rest.is_empty()
             {
                 let field_line = child.start_position().row + 1;
                 let type_name = read_text(*last, source).to_string();
