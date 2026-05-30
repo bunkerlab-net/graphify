@@ -86,9 +86,11 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         // over-indented ``` is not mistaken for a fence.
         let leading_spaces = line_text.chars().take_while(|&c| c == ' ').count();
         let trimmed = &line_text[leading_spaces..];
-        let marker = if leading_spaces <= 3 && trimmed.starts_with("```") {
+        let marker = if leading_spaces > 3 {
+            None
+        } else if trimmed.starts_with("```") {
             Some('`')
-        } else if leading_spaces <= 3 && trimmed.starts_with("~~~") {
+        } else if trimmed.starts_with("~~~") {
             Some('~')
         } else {
             None
