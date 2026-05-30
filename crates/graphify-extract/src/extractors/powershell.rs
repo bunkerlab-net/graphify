@@ -196,6 +196,7 @@ struct PsWalkCtx<'a> {
 
 /// Drill into a `type_literal` node and return its inner `type_identifier` text.
 /// Mirrors Python `_ps_type_name`.
+#[must_use]
 fn ps_type_name(type_literal: Option<tree_sitter::Node<'_>>, source: &[u8]) -> Option<String> {
     let tl = type_literal?;
     let spec = first_child_kind(tl, "type_spec")?;
