@@ -98,9 +98,15 @@ pub fn extract_markdown(path: &Path) -> FileResult {
             match fence {
                 None => fence = Some((marker, marker_len)),
                 // Close only on the same marker repeated at least as many times
-                // as the opening fence (CommonMark). A shorter or mismatched run
-                // inside the block does not close it.
-                Some((open_ch, open_len)) if open_ch == marker && marker_len >= open_len => {
+                // as the opening fence, with nothing but optional whitespace
+                // after the run (CommonMark). A shorter or mismatched run, or a
+                // closing line carrying an info string (e.g. ```text), does not
+                // close the block.
+                Some((open_ch, open_len))
+                    if open_ch == marker
+                        && marker_len >= open_len
+                        && trimmed[marker_len..].trim().is_empty() =>
+                {
                     fence = None;
                 }
                 Some(_) => {}
