@@ -932,7 +932,9 @@ pub(super) fn emit_kotlin_inheritance(
                 }
             }
             let Some(ut) = user_type_node else { continue };
-            let Some(base) = kotlin_user_type_name(ut, source) else {
+            // Skip empty base names (consistent with the PHP emitter) so a
+            // malformed `user_type` never spawns an empty-label node.
+            let Some(base) = kotlin_user_type_name(ut, source).filter(|b| !b.is_empty()) else {
                 continue;
             };
             let base_nid = emit_base_node(&base, line, stem, str_path, nodes, seen_ids);
@@ -996,14 +998,22 @@ pub(super) fn emit_scala_inheritance(
         let mut bases: Vec<(String, u32)> = Vec::new();
         for c in named_children(extend) {
             let c_line = c.start_position().row as u32 + 1;
+            // Skip empty base names (consistent with the PHP emitter) so a
+            // malformed node never spawns an empty-label node.
             if c.kind() == "type_identifier" {
-                bases.push((read_text_owned(c, source), c_line));
+                let name = read_text_owned(c, source);
+                if !name.is_empty() {
+                    bases.push((name, c_line));
+                }
             } else if c.kind() == "generic_type" {
                 let base = c
                     .child_by_field_name("type")
                     .or_else(|| first_child_kind(c, "type_identifier"));
                 if let Some(base) = base {
-                    bases.push((read_text_owned(base, source), c_line));
+                    let name = read_text_owned(base, source);
+                    if !name.is_empty() {
+                        bases.push((name, c_line));
+                    }
                 }
             }
         }

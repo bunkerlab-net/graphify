@@ -155,14 +155,31 @@ pub fn claude_is_on_path() -> bool {
 }
 
 /// Searches `$PATH` for an executable named `name` and returns its path.
+///
+/// Mirrors `shutil.which`: a candidate must be a regular file and, on Unix, have
+/// an executable bit set — a non-executable file of the same name is skipped.
 #[must_use]
 fn which_named(name: &str) -> Option<std::path::PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
             let candidate = dir.join(name);
-            candidate.is_file().then_some(candidate)
+            is_executable_file(&candidate).then_some(candidate)
         })
     })
+}
+
+/// `true` if `path` is a regular file with an executable bit set (Unix).
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// `true` if `path` is a regular file. On non-Unix platforms executability is
+/// determined by extension (handled by [`select_claude_command`]), not a mode bit.
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 /// Pure resolution of the `claude` command to invoke, given the host platform

@@ -678,12 +678,14 @@ fn markdown_fenced_heading_not_parsed() -> Result<(), Box<dyn std::error::Error>
     std::fs::write(&f, src)?;
     let r = extract_markdown(&f);
     let labs = labels(&r);
+    // Exact match: "Real Heading" is a substring of "Another Real Heading", so a
+    // substring check would pass even if only the latter were present.
     assert!(
-        labs.iter().any(|l| l.contains("Real Heading")),
+        labs.iter().any(|l| l == "Real Heading"),
         "'Real Heading' missing: {labs:?}"
     );
     assert!(
-        labs.iter().any(|l| l.contains("Another Real Heading")),
+        labs.iter().any(|l| l == "Another Real Heading"),
         "'Another Real Heading' missing: {labs:?}"
     );
     assert!(

@@ -395,6 +395,7 @@ private:\n\
 // ── Forward references: placeholder reconciliation ─────────────────────────────
 
 /// All `(id)`s of nodes carrying `label`.
+#[must_use]
 fn node_ids_for_label<'a>(r: &'a FileResult, label: &str) -> Vec<&'a str> {
     r.nodes
         .iter()
