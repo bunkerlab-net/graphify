@@ -100,6 +100,22 @@ impl Graph {
         });
     }
 
+    /// `true` if `existing` carries the same `relation` as the incoming edge
+    /// (`src` → `tgt`) but stores the opposite direction in its `_src`/`_tgt`
+    /// attributes. Used by [`Self::bulk_add_edges`] to keep the first-seen
+    /// direction on undirected bidirectional collisions (#1061).
+    fn is_reverse_direction_duplicate(
+        existing: &IndexMap<String, Value>,
+        src: &str,
+        tgt: &str,
+        incoming: &IndexMap<String, Value>,
+    ) -> bool {
+        existing.get("relation").and_then(Value::as_str)
+            == incoming.get("relation").and_then(Value::as_str)
+            && existing.get("_src").and_then(Value::as_str) == Some(tgt)
+            && existing.get("_tgt").and_then(Value::as_str) == Some(src)
+    }
+
     /// `true` if `edge` connects `u` and `v` under the given directedness.
     fn edge_matches(directed: bool, edge: &Edge, u: &str, v: &str) -> bool {
         if directed {
@@ -152,6 +168,23 @@ impl Graph {
         for (src, tgt, attrs) in edges {
             let key = canonical(&src, &tgt);
             if let Some(&existing) = index.get(&key) {
+                // #1061: in an undirected graph the same node pair can arrive
+                // twice with the same relation but opposite directions (mutual
+                // recursion, callbacks, event handlers). The deterministic edge
+                // sort upstream means the lexicographically-later direction
+                // would otherwise overwrite the earlier edge's `_src`/`_tgt`,
+                // silently flipping the surviving edge's caller and callee.
+                // First-seen direction wins: drop the redundant reverse copy.
+                if !directed
+                    && Self::is_reverse_direction_duplicate(
+                        &self.edge_list[existing].attrs,
+                        &src,
+                        &tgt,
+                        &attrs,
+                    )
+                {
+                    continue;
+                }
                 self.edge_list[existing].attrs = attrs;
             } else {
                 let idx = self.edge_list.len();

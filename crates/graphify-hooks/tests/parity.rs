@@ -1426,7 +1426,7 @@ fn test_antigravity_install_writes_rules_and_workflow() {
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    antigravity_install(dir.path()).expect("test invariant");
+    antigravity_install(dir.path(), false).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
@@ -1444,14 +1444,98 @@ fn test_antigravity_uninstall_removes_files() {
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    antigravity_install(dir.path()).expect("test invariant");
-    antigravity_uninstall(dir.path()).expect("test invariant");
+    antigravity_install(dir.path(), false).expect("test invariant");
+    antigravity_uninstall(dir.path(), false).expect("test invariant");
     // SAFETY: test-only cleanup.
     unsafe {
         std::env::remove_var("HOME");
     }
     assert!(!dir.path().join(".agents/rules/graphify.md").exists());
     assert!(!dir.path().join(".agents/workflows/graphify.md").exists());
+}
+
+/// #1079: a global install writes the skill to ~/.gemini/config/skills/, not
+/// the old ~/.agents/skills/ location; rules + workflow stay workspace-local.
+#[test]
+#[serial(home_env)]
+fn test_antigravity_global_install_writes_gemini_config_skills() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    antigravity_install(dir.path(), false).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    let global_skill = home.path().join(".gemini/config/skills/graphify/SKILL.md");
+    let wrong_skill = home.path().join(".agents/skills/graphify/SKILL.md");
+    assert!(global_skill.exists(), "skill missing from {global_skill:?}");
+    assert!(
+        !wrong_skill.exists(),
+        "skill wrongly written to {wrong_skill:?}"
+    );
+    assert!(dir.path().join(".agents/rules/graphify.md").exists());
+    assert!(dir.path().join(".agents/workflows/graphify.md").exists());
+}
+
+/// #1079: a global uninstall removes the skill from ~/.gemini/config/skills/
+/// and cleans up the workspace rules + workflow.
+#[test]
+#[serial(home_env)]
+fn test_antigravity_global_uninstall_removes_gemini_config_skill() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    antigravity_install(dir.path(), false).expect("test invariant");
+    let global_skill = home.path().join(".gemini/config/skills/graphify/SKILL.md");
+    assert!(global_skill.exists(), "precondition: skill must exist");
+    antigravity_uninstall(dir.path(), false).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        !global_skill.exists(),
+        "skill not removed from {global_skill:?}"
+    );
+    assert!(!dir.path().join(".agents/rules/graphify.md").exists());
+    assert!(!dir.path().join(".agents/workflows/graphify.md").exists());
+}
+
+/// #1079: a `--project` uninstall removes only the workspace-local skill and
+/// must not touch the shared global skill.
+#[test]
+#[serial(home_env)]
+fn test_antigravity_uninstall_project_removes_project_skill_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // Pre-create a global skill that must survive the project uninstall.
+    let global_skill = home.path().join(".gemini/config/skills/graphify/SKILL.md");
+    fs::create_dir_all(global_skill.parent().expect("parent")).expect("mkdir");
+    fs::write(&global_skill, "global skill").expect("write");
+    // SAFETY: test-only HOME override.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    antigravity_install(dir.path(), true).expect("test invariant");
+    let project_skill = dir.path().join(".agents/skills/graphify/SKILL.md");
+    assert!(project_skill.exists(), "project skill must be written");
+    antigravity_uninstall(dir.path(), true).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        global_skill.exists(),
+        "project uninstall must not touch global skill"
+    );
+    assert!(!project_skill.exists(), "project skill must be removed");
 }
 
 // ---------------------------------------------------------------------------

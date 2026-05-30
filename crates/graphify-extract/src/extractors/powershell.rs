@@ -188,6 +188,81 @@ struct PsWalkCtx<'a> {
     function_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
+/// Return the first child of `node` whose kind is `kind`.
+fn first_child_kind_ps<'tree>(
+    node: tree_sitter::Node<'tree>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'tree>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == kind {
+                return Some(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Drill into a `type_literal` node and return its inner `type_identifier` text.
+/// Mirrors Python `_ps_type_name`.
+fn ps_type_name(type_literal: Option<tree_sitter::Node<'_>>, source: &[u8]) -> Option<String> {
+    let tl = type_literal?;
+    let spec = first_child_kind_ps(tl, "type_spec")?;
+    let tname = first_child_kind_ps(spec, "type_name")?;
+    let tid = first_child_kind_ps(tname, "type_identifier")?;
+    Some(read_text(tid, source).to_string())
+}
+
+/// Mutable graph state for the PowerShell type-reference passes, reborrowed
+/// from the structural-walk locals at each call site.
+struct PsRefCtx<'a> {
+    stem: &'a str,
+    str_path: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+}
+
+impl PsRefCtx<'_> {
+    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+        let nid1 = make_id(&[self.stem, name]);
+        if self.seen_ids.contains(&nid1) {
+            return nid1;
+        }
+        let nid2 = make_id1(name);
+        if self.seen_ids.insert(nid2.clone()) {
+            self.nodes.push(Node {
+                id: nid2.clone(),
+                label: name.to_string(),
+                file_type: "code".to_string(),
+                source_file: self.str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                metadata: None,
+            });
+        }
+        nid2
+    }
+
+    fn push_ref(&mut self, src: &str, tgt: &str, context: &str, line: usize) {
+        self.edges.push(Edge {
+            external: false,
+            source: src.to_string(),
+            target: tgt.to_string(),
+            relation: "references".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            source_file: self.str_path.to_string(),
+            source_location: Some(format!("L{line}")),
+            weight: 1.0,
+            context: Some(context.to_string()),
+            confidence_score: None,
+        });
+    }
+}
+
 #[allow(clippy::too_many_lines)] // linear dispatch over PowerShell's AST node kinds
 fn walk_ps(
     ctx: &mut PsWalkCtx<'_>,
@@ -311,6 +386,25 @@ fn walk_ps(
                 }
             }
         }
+        "class_property_definition" => {
+            if let Some(parent) = parent_class_nid
+                && let Some(type_name) =
+                    ps_type_name(first_child_kind_ps(node, "type_literal"), source)
+            {
+                let line = node.start_position().row + 1;
+                let mut rc = PsRefCtx {
+                    stem,
+                    str_path,
+                    nodes: &mut *nodes,
+                    edges: &mut *edges,
+                    seen_ids: &mut *seen_ids,
+                };
+                let target = rc.ensure_named_node(&type_name, line);
+                if target != parent {
+                    rc.push_ref(parent, &target, "field", line);
+                }
+            }
+        }
         "class_method_definition" => {
             let name_node = {
                 let mut cur = node.walk();
@@ -370,6 +464,48 @@ fn walk_ps(
                     context: None,
                     confidence_score: None,
                 });
+                // Return type (type_literal sibling of simple_name) and parameter
+                // types (class_method_parameter_list) → `references` edges.
+                let return_type_name =
+                    ps_type_name(first_child_kind_ps(node, "type_literal"), source);
+                let param_list = first_child_kind_ps(node, "class_method_parameter_list");
+                {
+                    let mut rc = PsRefCtx {
+                        stem,
+                        str_path,
+                        nodes: &mut *nodes,
+                        edges: &mut *edges,
+                        seen_ids: &mut *seen_ids,
+                    };
+                    if let Some(rt) = return_type_name {
+                        let target = rc.ensure_named_node(&rt, line);
+                        if target != method_nid {
+                            rc.push_ref(&method_nid, &target, "return_type", line);
+                        }
+                    }
+                    if let Some(pl) = param_list {
+                        let mut pc = pl.walk();
+                        if pc.goto_first_child() {
+                            loop {
+                                if pc.node().kind() == "class_method_parameter"
+                                    && let Some(pn) = ps_type_name(
+                                        first_child_kind_ps(pc.node(), "type_literal"),
+                                        source,
+                                    )
+                                {
+                                    let p_line = pc.node().start_position().row + 1;
+                                    let target = rc.ensure_named_node(&pn, p_line);
+                                    if target != method_nid {
+                                        rc.push_ref(&method_nid, &target, "parameter_type", p_line);
+                                    }
+                                }
+                                if !pc.goto_next_sibling() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(body) = find_script_block_body(node) {
                     function_bodies.push((method_nid, body.start_byte(), body.end_byte()));
                 }

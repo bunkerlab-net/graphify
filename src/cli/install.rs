@@ -59,6 +59,12 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("devin", PlatformCmd::Uninstall { project: true }) => devin_project_uninstall(&cwd)?,
         ("devin", PlatformCmd::Install { .. }) => devin_install()?,
         ("devin", PlatformCmd::Uninstall { .. }) => devin_uninstall()?,
+        // Antigravity has bespoke project-scope handling (workspace-local skill
+        // + rules + workflow), matched before the generic `--project` branch.
+        ("antigravity", PlatformCmd::Install { project: true }) => antigravity_install(&cwd, true)?,
+        ("antigravity", PlatformCmd::Uninstall { project: true }) => {
+            antigravity_uninstall(&cwd, true)?
+        }
         (p, PlatformCmd::Install { project: true }) => install_platform_skill_project(p, &cwd)?,
         (p, PlatformCmd::Uninstall { project: true }) => uninstall_platform_skill_project(p, &cwd)?,
         ("claude", PlatformCmd::Install { .. }) => claude_install(&cwd)?,
@@ -73,8 +79,8 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("kiro", PlatformCmd::Uninstall { .. }) => kiro_uninstall(&cwd)?,
         ("pi", PlatformCmd::Install { .. }) => pi_install()?,
         ("pi", PlatformCmd::Uninstall { .. }) => pi_uninstall()?,
-        ("antigravity", PlatformCmd::Install { .. }) => antigravity_install(&cwd)?,
-        ("antigravity", PlatformCmd::Uninstall { .. }) => antigravity_uninstall(&cwd)?,
+        ("antigravity", PlatformCmd::Install { .. }) => antigravity_install(&cwd, false)?,
+        ("antigravity", PlatformCmd::Uninstall { .. }) => antigravity_uninstall(&cwd, false)?,
         ("cursor", PlatformCmd::Install { .. }) => cursor_install(&cwd)?,
         ("cursor", PlatformCmd::Uninstall { .. }) => cursor_uninstall(&cwd)?,
         (p, PlatformCmd::Install { .. }) => agents_install(&cwd, p)?,

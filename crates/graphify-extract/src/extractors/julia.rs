@@ -179,6 +179,85 @@ struct JuliaWalkCtx<'a> {
     function_bodies: &'a mut Vec<(String, usize, usize, bool)>,
 }
 
+impl JuliaWalkCtx<'_> {
+    /// Return the NID for a named type, creating a bare placeholder node when no
+    /// file-qualified node already exists. Mirrors Julia's `ensure_named_node`.
+    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+        let nid1 = make_id(&[self.stem, name]);
+        if self.seen_ids.contains(&nid1) {
+            return nid1;
+        }
+        let nid2 = make_id1(name);
+        if self.seen_ids.insert(nid2.clone()) {
+            self.nodes.push(Node {
+                id: nid2.clone(),
+                label: name.to_string(),
+                file_type: "code".to_string(),
+                source_file: self.str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                metadata: None,
+            });
+        }
+        nid2
+    }
+}
+
+/// Emit `references[field]` edges for a Julia `struct_definition`'s fields.
+///
+/// Each `name::Type` field lowers to a `typed_expression` child whose last
+/// identifier is the field type. Mirrors the field handling added to Python
+/// `extract_julia`.
+fn emit_julia_struct_fields(
+    ctx: &mut JuliaWalkCtx<'_>,
+    node: tree_sitter::Node<'_>,
+    struct_nid: &str,
+    source: &[u8],
+) {
+    let mut cur = node.walk();
+    if !cur.goto_first_child() {
+        return;
+    }
+    loop {
+        let child = cur.node();
+        if child.kind() == "typed_expression" {
+            let mut type_ids: Vec<tree_sitter::Node<'_>> = Vec::new();
+            let mut tc = child.walk();
+            if tc.goto_first_child() {
+                loop {
+                    if tc.node().kind() == "identifier" {
+                        type_ids.push(tc.node());
+                    }
+                    if !tc.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            if type_ids.len() >= 2
+                && let Some(last) = type_ids.last()
+            {
+                let field_line = child.start_position().row + 1;
+                let type_name = read_text(*last, source).to_string();
+                let type_nid = ctx.ensure_named_node(&type_name, field_line);
+                ctx.edges.push(Edge {
+                    external: false,
+                    source: struct_nid.to_string(),
+                    target: type_nid,
+                    relation: "references".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: ctx.str_path.to_string(),
+                    source_location: Some(format!("L{field_line}")),
+                    weight: 1.0,
+                    context: Some("field".to_string()),
+                    confidence_score: None,
+                });
+            }
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)] // linear dispatch over Julia's AST node kinds
 fn walk_julia(
     ctx: &mut JuliaWalkCtx<'_>,
@@ -322,10 +401,10 @@ fn walk_julia(
                         });
                         if identifiers.len() >= 2 {
                             let super_name = read_text(identifiers[identifiers.len() - 1], source);
-                            let super_nid = make_id(&[ctx.stem, super_name]);
+                            let super_nid = ctx.ensure_named_node(super_name, line);
                             ctx.edges.push(Edge {
                                 external: false,
-                                source: struct_nid,
+                                source: struct_nid.clone(),
                                 target: super_nid,
                                 relation: "inherits".to_string(),
                                 confidence: "EXTRACTED".to_string(),
@@ -336,6 +415,7 @@ fn walk_julia(
                                 confidence_score: None,
                             });
                         }
+                        emit_julia_struct_fields(ctx, node, &struct_nid, source);
                     }
                 } else {
                     let name_node = {
@@ -372,7 +452,7 @@ fn walk_julia(
                         ctx.edges.push(Edge {
                             external: false,
                             source: scope_nid.to_string(),
-                            target: struct_nid,
+                            target: struct_nid.clone(),
                             relation: "defines".to_string(),
                             confidence: "EXTRACTED".to_string(),
                             source_file: ctx.str_path.to_string(),
@@ -381,6 +461,7 @@ fn walk_julia(
                             context: None,
                             confidence_score: None,
                         });
+                        emit_julia_struct_fields(ctx, node, &struct_nid, source);
                     }
                 }
             }

@@ -398,6 +398,58 @@ fn build_merge_preserves_call_edge_direction() {
 }
 
 #[test]
+fn build_from_json_preserves_first_direction_on_bidirectional_pair() {
+    // Regression for #1061. When an extraction emits two `calls` edges between
+    // the same pair in opposite directions, the undirected graph collapses them
+    // into one edge. The deterministic (source, target, relation) sort means the
+    // lexicographically-later direction wrote second and clobbered the first
+    // edge's _src/_tgt — the surviving edge then exported with caller and callee
+    // systematically swapped. First-seen direction (a_handler -> z_emitter) must
+    // win instead.
+    let extraction = json!({
+        "nodes": [
+            {"id": "a_handler", "label": "a", "file_type": "code", "source_file": "a.ts"},
+            {"id": "z_emitter", "label": "z", "file_type": "code", "source_file": "z.ts"},
+        ],
+        "edges": [
+            {"source": "a_handler", "target": "z_emitter", "relation": "calls",
+             "confidence": "EXTRACTED", "source_file": "a.ts"},
+            {"source": "z_emitter", "target": "a_handler", "relation": "calls",
+             "confidence": "EXTRACTED", "source_file": "z.ts"},
+        ],
+        "input_tokens": 0,
+        "output_tokens": 0,
+    });
+    let g = build_from_json(extraction, false, None)
+        .expect("build_from_json should succeed for a valid bidirectional extraction");
+
+    // Only one undirected edge survives, but its stored direction must be the
+    // first-seen one (a_handler -> z_emitter).
+    let calls: Vec<_> = g
+        .edges()
+        .filter(|e| e.attrs.get("relation").and_then(Value::as_str) == Some("calls"))
+        .collect();
+    assert_eq!(
+        calls.len(),
+        1,
+        "bidirectional pair must collapse to one edge"
+    );
+    let data = g
+        .edge_data("a_handler", "z_emitter")
+        .expect("edge between the pair");
+    assert_eq!(
+        data.get("_src").and_then(Value::as_str),
+        Some("a_handler"),
+        "calls edge source flipped on bidirectional collision"
+    );
+    assert_eq!(
+        data.get("_tgt").and_then(Value::as_str),
+        Some("z_emitter"),
+        "calls edge target flipped on bidirectional collision"
+    );
+}
+
+#[test]
 fn build_merge_prune_absolute_paths_match_relative_nodes() {
     // #1007: manifest stores absolute paths, graph nodes store relative paths.
     // prune_sources with absolute paths must still remove the right nodes/edges.

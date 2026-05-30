@@ -752,14 +752,14 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.62"
+version = "1.2.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1dce859f0832a7d088c4f1119888ab94ef4b5d6795d1ce05afb7fe159d79f98"
+checksum = "556e016178bb5662a08681bbe0f00f8e17631781a4dfc8c45e466e4b185ec27f"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 1.3.0",
+ "shlex",
 ]
 
 [[package]]
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "graphify"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-affected"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-analyze"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "graphify-cluster",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-benchmark"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1548,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-build"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "caseless",
  "graphify-security",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cache"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "hex",
  "indexmap",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cluster"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-dedup"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "caseless",
  "indexmap",
@@ -1608,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-detect"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "calamine",
  "graphify-google",
@@ -1623,7 +1623,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "shlex 2.0.1",
+ "shlex",
  "tempfile",
  "thiserror 2.0.18",
  "zip 8.6.0",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-diagnostics"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "graphify-security",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-export"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1666,7 +1666,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-extract"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "flate2",
  "graphify-build",
@@ -1714,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-global"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-google"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "hex",
  "regex",
@@ -1743,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-hooks"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "regex",
  "serde_json",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-html"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1772,7 +1772,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-ingest"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-llm"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -1810,14 +1810,14 @@ dependencies = [
 
 [[package]]
 name = "graphify-manifest"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-detect",
 ]
 
 [[package]]
 name = "graphify-multigraph-compat"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-prs"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "chrono",
  "graphify-security",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-report"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "chrono",
  "graphify-build",
@@ -1854,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-scip"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-security"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "ipnet",
  "mockito",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-semantic"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "indexmap",
  "regex",
@@ -1895,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-serve"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-transcribe"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-security",
  "hex",
@@ -1924,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-validate"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",
@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-watch"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-wiki"
-version = "0.8.22"
+version = "0.8.25"
 dependencies = [
  "graphify-build",
  "indexmap",
@@ -2136,9 +2136,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.10.0"
+version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb92f162bf56536459fc83c79b974bb12837acfed43d6bc370a7916d0ae15ecc"
+checksum = "55281c53a1894c864990125767da440a4e630446785086f52523b20033b74498"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3690,12 +3690,6 @@ dependencies = [
 
 [[package]]
 name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
-
-[[package]]
-name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
@@ -4446,9 +4440,9 @@ checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typenum"
-version = "1.20.0"
+version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
+checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "unicode-bidi"
@@ -4564,9 +4558,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.23.1"
+version = "1.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
+checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -5111,18 +5105,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.49"
+version = "0.8.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bce33a6288fa3f072a8c2c7d0f2fdbb90e28298f0135c1f99b96c3db2efcc60b"
+checksum = "3b065d4f0e55f82fae73202e189638116a87c55ab6b8e6c2721e13dd9d854ad1"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.49"
+version = "0.8.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd425244944f4ab65ccff928e7323354c5a018c75838362fdce749dfad2ee1e"
+checksum = "0b631b19d36a892ab55420c92dbc83ccd79274f25be714855d3074aa71cab639"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -1,13 +1,17 @@
 //! Install/uninstall graphify for Google Antigravity.
 //!
-//! Antigravity requires three artefacts: a home-dir skill at
-//! `~/.agents/skills/graphify/SKILL.md`, a project-local rules file at
+//! Antigravity requires three artefacts: a skill, a project-local rules file at
 //! `.agents/rules/graphify.md`, and a workflow file at
 //! `.agents/workflows/graphify.md`. The skill also needs a YAML frontmatter
 //! block injected post-install, which is unique to this platform.
+//!
+//! The global skill lives at `~/.gemini/config/skills/graphify/SKILL.md` so it
+//! is shared across all Antigravity workspaces (#1079); a `--project` install
+//! writes a workspace-local skill at `.agents/skills/graphify/SKILL.md`
+//! instead.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::common::{
     ANTIGRAVITY_RULES, ANTIGRAVITY_WORKFLOW, SKILL_MD, dirs_home, install_skill, remove_skill,
@@ -17,19 +21,39 @@ use crate::HooksError;
 const ANTIGRAVITY_RULES_PATH: &str = ".agents/rules/graphify.md";
 const ANTIGRAVITY_WORKFLOW_PATH: &str = ".agents/workflows/graphify.md";
 
+/// Resolve the Antigravity skill destination.
+///
+/// Global installs share `~/.gemini/config/skills/graphify/SKILL.md` across
+/// every workspace (#1079); `--project` installs write to the workspace-local
+/// `.agents/skills/graphify/SKILL.md`.
+fn antigravity_skill_dst(project_dir: &Path, project: bool) -> PathBuf {
+    if project {
+        project_dir
+            .join(".agents")
+            .join("skills")
+            .join("graphify")
+            .join("SKILL.md")
+    } else {
+        dirs_home()
+            .join(".gemini")
+            .join("config")
+            .join("skills")
+            .join("graphify")
+            .join("SKILL.md")
+    }
+}
+
 /// Install graphify for Google Antigravity: skill + rules + workflows.
+///
+/// `project` selects the workspace-local skill destination over the global one.
 ///
 /// # Errors
 ///
 /// Returns `HooksError::Io` on filesystem failures.
-pub fn antigravity_install(project_dir: &Path) -> Result<String, HooksError> {
+pub fn antigravity_install(project_dir: &Path, project: bool) -> Result<String, HooksError> {
     let mut msgs: Vec<String> = Vec::new();
 
-    let skill_dst = dirs_home()
-        .join(".agents")
-        .join("skills")
-        .join("graphify")
-        .join("SKILL.md");
+    let skill_dst = antigravity_skill_dst(project_dir, project);
     install_skill(SKILL_MD, &skill_dst)?;
     msgs.push(format!("  skill installed  ->  {}", skill_dst.display()));
 
@@ -104,10 +128,13 @@ pub fn antigravity_install(project_dir: &Path) -> Result<String, HooksError> {
 
 /// Remove graphify Antigravity rules, workflow, and skill files.
 ///
+/// `project` selects the workspace-local skill destination over the global one,
+/// so a project uninstall never touches the shared global skill (#1079).
+///
 /// # Errors
 ///
 /// Returns `HooksError::Io` on filesystem failures.
-pub fn antigravity_uninstall(project_dir: &Path) -> Result<String, HooksError> {
+pub fn antigravity_uninstall(project_dir: &Path, project: bool) -> Result<String, HooksError> {
     let mut msgs: Vec<String> = Vec::new();
 
     let rules_path = project_dir.join(ANTIGRAVITY_RULES_PATH);
@@ -130,11 +157,7 @@ pub fn antigravity_uninstall(project_dir: &Path) -> Result<String, HooksError> {
         ));
     }
 
-    let skill_dst = dirs_home()
-        .join(".agents")
-        .join("skills")
-        .join("graphify")
-        .join("SKILL.md");
+    let skill_dst = antigravity_skill_dst(project_dir, project);
     if skill_dst.exists() {
         msgs.push(format!(
             "graphify skill removed from {}",

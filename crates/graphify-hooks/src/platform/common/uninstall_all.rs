@@ -33,7 +33,7 @@ pub fn uninstall_all(project_dir: &Path, purge: bool) -> Result<String, HooksErr
         vscode_uninstall(project_dir),
         cursor_uninstall(project_dir),
         kiro_uninstall(project_dir),
-        antigravity_uninstall(project_dir),
+        antigravity_uninstall(project_dir, false),
         // AGENTS.md covers codex, aider, opencode, claw, droid, trae, trae-cn, hermes
         agents_uninstall(project_dir, ""),
         uninstall_opencode_plugin(project_dir),

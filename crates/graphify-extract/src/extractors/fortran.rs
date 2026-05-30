@@ -176,6 +176,160 @@ struct FortranWalkCtx<'a> {
     scope_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
+/// Return the first child of `node` whose kind is `kind`.
+fn first_child_kind_f<'tree>(
+    node: tree_sitter::Node<'tree>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'tree>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == kind {
+                return Some(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Collect the named children of `node`.
+fn named_children_f(node: tree_sitter::Node<'_>) -> Vec<tree_sitter::Node<'_>> {
+    let mut out = Vec::new();
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().is_named() {
+                out.push(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Mutable graph state for the Fortran signature-reference pass, reborrowed
+/// from the structural-walk locals at each call site.
+struct FortranRefCtx<'a> {
+    source: &'a [u8],
+    stem: &'a str,
+    str_path: &'a str,
+    nodes: &'a mut Vec<Node>,
+    edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
+}
+
+impl FortranRefCtx<'_> {
+    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+        let nid1 = make_id(&[self.stem, name]);
+        if self.seen_ids.contains(&nid1) {
+            return nid1;
+        }
+        let nid2 = make_id1(name);
+        if self.seen_ids.insert(nid2.clone()) {
+            self.nodes.push(Node {
+                id: nid2.clone(),
+                label: name.to_string(),
+                file_type: "code".to_string(),
+                source_file: self.str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                metadata: None,
+            });
+        }
+        nid2
+    }
+
+    fn push_ref(&mut self, src: &str, tgt: &str, context: &str, line: usize) {
+        self.edges.push(Edge {
+            external: false,
+            source: src.to_string(),
+            target: tgt.to_string(),
+            relation: "references".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            source_file: self.str_path.to_string(),
+            source_location: Some(format!("L{line}")),
+            weight: 1.0,
+            context: Some(context.to_string()),
+            confidence_score: None,
+        });
+    }
+}
+
+/// Emit `references[parameter_type]` / `references[return_type]` edges for a
+/// subroutine/function based on its `derived_type` variable declarations.
+/// Mirrors Python `emit_signature_refs`.
+fn emit_fortran_signature_refs(
+    rc: &mut FortranRefCtx<'_>,
+    scope_node: tree_sitter::Node<'_>,
+    fn_nid: &str,
+    is_function: bool,
+) {
+    let stmt_type = if is_function {
+        "function_statement"
+    } else {
+        "subroutine_statement"
+    };
+    let Some(stmt) = first_child_kind_f(scope_node, stmt_type) else {
+        return;
+    };
+
+    let mut param_names: HashSet<String> = HashSet::new();
+    if let Some(params_node) = first_child_kind_f(stmt, "parameters") {
+        for c in named_children_f(params_node) {
+            if c.kind() == "identifier" {
+                param_names.insert(read_text(c, rc.source).to_lowercase());
+            }
+        }
+    }
+
+    let mut result_name: Option<String> = None;
+    if is_function {
+        if let Some(result_node) = first_child_kind_f(stmt, "function_result") {
+            if let Some(res_id) = first_child_kind_f(result_node, "identifier") {
+                result_name = Some(read_text(res_id, rc.source).to_lowercase());
+            }
+        } else {
+            // Implicit result variable: same name as the function.
+            result_name = fortran_name(stmt, rc.source);
+        }
+    }
+
+    for child in named_children_f(scope_node) {
+        if child.kind() != "variable_declaration" {
+            continue;
+        }
+        let Some(derived) = first_child_kind_f(child, "derived_type") else {
+            continue;
+        };
+        let Some(type_name_node) = first_child_kind_f(derived, "type_name") else {
+            continue;
+        };
+        let type_name = read_text(type_name_node, rc.source).to_lowercase();
+        for var in named_children_f(child) {
+            if var.kind() != "identifier" {
+                continue;
+            }
+            let var_name = read_text(var, rc.source).to_lowercase();
+            let var_line = var.start_position().row + 1;
+            if param_names.contains(&var_name) {
+                let tgt = rc.ensure_named_node(&type_name, var_line);
+                if tgt != fn_nid {
+                    rc.push_ref(fn_nid, &tgt, "parameter_type", var_line);
+                }
+            } else if is_function && result_name.as_deref() == Some(var_name.as_str()) {
+                let tgt = rc.ensure_named_node(&type_name, var_line);
+                if tgt != fn_nid {
+                    rc.push_ref(fn_nid, &tgt, "return_type", var_line);
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)] // linear dispatch over Fortran's AST node kinds
 fn walk_fortran(
     ctx: &mut FortranWalkCtx<'_>,
@@ -349,6 +503,15 @@ fn walk_fortran(
                     confidence_score: None,
                 });
                 scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
+                let mut rc = FortranRefCtx {
+                    source,
+                    stem,
+                    str_path,
+                    nodes: &mut *nodes,
+                    edges: &mut *edges,
+                    seen_ids: &mut *seen_ids,
+                };
+                emit_fortran_signature_refs(&mut rc, node, &nid, false);
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
@@ -405,6 +568,15 @@ fn walk_fortran(
                     confidence_score: None,
                 });
                 scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
+                let mut rc = FortranRefCtx {
+                    source,
+                    stem,
+                    str_path,
+                    nodes: &mut *nodes,
+                    edges: &mut *edges,
+                    seen_ids: &mut *seen_ids,
+                };
+                emit_fortran_signature_refs(&mut rc, node, &nid, true);
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
@@ -414,6 +586,37 @@ fn walk_fortran(
                         }
                     }
                 }
+            }
+        }
+        "derived_type_definition" => {
+            if let Some(stmt) = first_child_kind_f(node, "derived_type_statement")
+                && let Some(name_node) = first_child_kind_f(stmt, "type_name")
+            {
+                let type_name = read_text(name_node, source).to_lowercase();
+                let type_nid = make_id(&[stem, &type_name]);
+                let line = node.start_position().row + 1;
+                if seen_ids.insert(type_nid.clone()) {
+                    nodes.push(Node {
+                        id: type_nid.clone(),
+                        label: type_name,
+                        file_type: "code".to_string(),
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        metadata: None,
+                    });
+                }
+                edges.push(Edge {
+                    external: false,
+                    source: scope_nid.to_string(),
+                    target: type_nid,
+                    relation: "defines".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: None,
+                });
             }
         }
         "use_statement" => {

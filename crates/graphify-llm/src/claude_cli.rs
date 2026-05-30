@@ -17,8 +17,9 @@ use crate::{
 pub trait ClaudeRunner: Send + Sync {
     /// Run the claude CLI, return `(stdout, stderr, exit_code)`.
     ///
-    /// `system_prompt` carries the extraction system prompt to append via
-    /// `--append-system-prompt` (or the deep-mode variant); `None` appends none.
+    /// `system_prompt` carries the extraction system prompt passed via
+    /// `--system-prompt` (replacing Claude Code's default coding-agent prompt,
+    /// per #1062); `None` passes no system prompt.
     fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32);
 }
 
@@ -28,14 +29,19 @@ pub struct RealClaudeRunner;
 impl ClaudeRunner for RealClaudeRunner {
     /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, and returns stdout/stderr/exit-code.
     fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32) {
-        let mut cmd = std::process::Command::new("claude");
-        cmd.arg("-p")
-            .arg("--output-format")
-            .arg("json")
-            .arg("--no-session-persistence");
-        if let Some(system) = system_prompt {
-            cmd.arg("--append-system-prompt").arg(system);
-        }
+        let Some(program) = resolve_claude_command() else {
+            return (
+                String::new(),
+                "Claude Code CLI not found on $PATH. Install from \
+                 https://claude.ai/code and run `claude` once to authenticate."
+                    .to_string(),
+                1,
+            );
+        };
+        let model = claude_cli_model_override();
+        let args = build_claude_cli_args(system_prompt, model.as_deref());
+        let mut cmd = std::process::Command::new(&program);
+        cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -142,24 +148,93 @@ impl<R: ClaudeRunner + 'static> LlmBackend for ClaudeCliBackend<R> {
     }
 }
 
-/// Check whether the `claude` binary is on `$PATH`.
+/// Check whether a usable `claude` binary is on `$PATH`.
 #[must_use]
 pub fn claude_is_on_path() -> bool {
-    which_claude().is_some()
+    resolve_claude_command().is_some()
 }
 
-/// Searches `$PATH` for a `claude` executable and returns its path if found.
-fn which_claude() -> Option<std::path::PathBuf> {
+/// Searches `$PATH` for an executable named `name` and returns its path.
+fn which_named(name: &str) -> Option<std::path::PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
-            let candidate = dir.join("claude");
-            if candidate.is_file() {
-                Some(candidate)
-            } else {
-                None
-            }
+            let candidate = dir.join(name);
+            candidate.is_file().then_some(candidate)
         })
     })
+}
+
+/// Pure resolution of the `claude` command to invoke, given the host platform
+/// and a name→path lookup. Factored out so the Windows `claude.cmd` preference
+/// (#1072) is testable without a real Windows host.
+///
+/// On Windows, npm installs `claude` as both `claude.ps1` and `claude.cmd`.
+/// When `PATHEXT` lists `.PS1` before `.CMD`, a bare `claude` lookup resolves
+/// to `claude.ps1`, which `CreateProcess` cannot execute directly (`WinError
+/// 2`). `claude.cmd` IS executable, so its full path is preferred. Falls back
+/// to the bare `claude` name when only that resolves (e.g. a WSL-style
+/// install). Returns `None` when neither is present.
+#[must_use]
+pub fn select_claude_command(
+    is_windows: bool,
+    mut which: impl FnMut(&str) -> Option<String>,
+) -> Option<String> {
+    if is_windows {
+        if let Some(cmd_path) = which("claude.cmd") {
+            return Some(cmd_path);
+        }
+        if which("claude").is_some() {
+            return Some("claude".to_string());
+        }
+        return None;
+    }
+    which("claude").map(|_| "claude".to_string())
+}
+
+/// Resolve the real `claude` command for this host.
+fn resolve_claude_command() -> Option<String> {
+    select_claude_command(cfg!(windows), |name| {
+        which_named(name).map(|p| p.to_string_lossy().into_owned())
+    })
+}
+
+/// The `GRAPHIFY_CLAUDE_CLI_MODEL` override, trimmed; `None` when unset/blank.
+///
+/// `claude -p` defaults to Opus, which is overkill for structured-JSON
+/// extraction. Setting `GRAPHIFY_CLAUDE_CLI_MODEL=haiku` (or `sonnet`, or a
+/// full model id) opts into a cheaper/faster model.
+fn claude_cli_model_override() -> Option<String> {
+    let raw = std::env::var("GRAPHIFY_CLAUDE_CLI_MODEL").ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Build the `claude -p` argument vector (excluding the executable itself).
+///
+/// Mirrors graphify-py `_call_claude_cli`'s `cli_args`: uses `--system-prompt`
+/// (replace) rather than `--append-system-prompt` (add) so graphify's
+/// "raw JSON only" instruction does not conflict with Claude Code's default
+/// markdown/prose coding-agent prompt (the root cause of the hollow-response
+/// loop, #1062). Appends `--model` only when `model` is `Some` and non-empty.
+#[must_use]
+pub fn build_claude_cli_args(system_prompt: Option<&str>, model: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "-p".to_string(),
+        "--output-format".to_string(),
+        "json".to_string(),
+        "--no-session-persistence".to_string(),
+    ];
+    if let Some(system) = system_prompt {
+        args.push("--system-prompt".to_string());
+        args.push(system.to_string());
+    }
+    if let Some(m) = model
+        && !m.trim().is_empty()
+    {
+        args.push("--model".to_string());
+        args.push(m.trim().to_string());
+    }
+    args
 }
 
 /// Call the Claude CLI with the given runner.
@@ -187,7 +262,7 @@ pub fn call_claude_cli_with_runner_system(
     max_tokens: u32,
     system: &str,
 ) -> Result<LlmResponse, LlmError> {
-    if which_claude().is_none() {
+    if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
     call_claude_cli_inner(runner, user_message, max_tokens, Some(system))
@@ -297,7 +372,7 @@ pub fn call_claude_cli_inner(
 /// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
 /// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
 pub fn call_claude_cli_plain(user_message: &str, _max_tokens: u32) -> Result<String, LlmError> {
-    if which_claude().is_none() {
+    if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
     let runner = RealClaudeRunner;

@@ -131,6 +131,30 @@ struct ObjcWalkCtx<'a> {
     method_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
+impl ObjcWalkCtx<'_> {
+    /// Return the NID for a named type, creating a bare placeholder node when no
+    /// file-qualified node already exists. Mirrors Objective-C's
+    /// `ensure_named_node`.
+    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+        let nid1 = make_id(&[self.stem, name]);
+        if self.seen_ids.contains(&nid1) {
+            return nid1;
+        }
+        let nid2 = make_id1(name);
+        if self.seen_ids.insert(nid2.clone()) {
+            self.nodes.push(Node {
+                id: nid2.clone(),
+                label: name.to_string(),
+                file_type: "code".to_string(),
+                source_file: self.str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                metadata: None,
+            });
+        }
+        nid2
+    }
+}
+
 #[allow(clippy::too_many_lines)] // linear dispatch over Objective-C's AST node kinds
 fn walk_objc(
     ctx: &mut ObjcWalkCtx<'_>,
@@ -262,7 +286,7 @@ fn walk_objc(
                     if child.kind() == ":" {
                         colon_seen = true;
                     } else if colon_seen && child.kind() == "identifier" {
-                        let super_nid = make_id1(read_text(child, source));
+                        let super_nid = ctx.ensure_named_node(read_text(child, source), line);
                         ctx.edges.push(Edge {
                             external: false,
                             source: cls_nid.clone(),
@@ -277,6 +301,7 @@ fn walk_objc(
                         });
                         colon_seen = false;
                     } else if child.kind() == "parameterized_arguments" {
+                        // Protocols adopted: @interface Foo : Bar <Proto1, Proto2>
                         let mut pc = child.walk();
                         if pc.goto_first_child() {
                             loop {
@@ -285,18 +310,20 @@ fn walk_objc(
                                     if tc.goto_first_child() {
                                         loop {
                                             if tc.node().kind() == "type_identifier" {
-                                                let proto_nid =
-                                                    make_id1(read_text(tc.node(), source));
+                                                let proto_nid = ctx.ensure_named_node(
+                                                    read_text(tc.node(), source),
+                                                    line,
+                                                );
                                                 ctx.edges.push(Edge {
                                                     external: false,
                                                     source: cls_nid.clone(),
                                                     target: proto_nid,
-                                                    relation: "imports".to_string(),
+                                                    relation: "implements".to_string(),
                                                     confidence: "EXTRACTED".to_string(),
                                                     source_file: ctx.str_path.to_string(),
                                                     source_location: Some(format!("L{line}")),
                                                     weight: 1.0,
-                                                    context: Some("import".to_string()),
+                                                    context: None,
                                                     confidence_score: None,
                                                 });
                                             }
@@ -307,6 +334,46 @@ fn walk_objc(
                                     }
                                 }
                                 if !pc.goto_next_sibling() {
+                                    break;
+                                }
+                            }
+                        }
+                    } else if child.kind() == "property_declaration" {
+                        // @property type → references[field] from the class.
+                        let prop_line = child.start_position().row + 1;
+                        let mut sc = child.walk();
+                        if sc.goto_first_child() {
+                            'props: loop {
+                                if sc.node().kind() == "struct_declaration" {
+                                    let mut dc = sc.node().walk();
+                                    if dc.goto_first_child() {
+                                        loop {
+                                            if dc.node().kind() == "type_identifier" {
+                                                let type_nid = ctx.ensure_named_node(
+                                                    read_text(dc.node(), source),
+                                                    prop_line,
+                                                );
+                                                ctx.edges.push(Edge {
+                                                    external: false,
+                                                    source: cls_nid.clone(),
+                                                    target: type_nid,
+                                                    relation: "references".to_string(),
+                                                    confidence: "EXTRACTED".to_string(),
+                                                    source_file: ctx.str_path.to_string(),
+                                                    source_location: Some(format!("L{prop_line}")),
+                                                    weight: 1.0,
+                                                    context: Some("field".to_string()),
+                                                    confidence_score: None,
+                                                });
+                                                break 'props;
+                                            }
+                                            if !dc.goto_next_sibling() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if !sc.goto_next_sibling() {
                                     break;
                                 }
                             }

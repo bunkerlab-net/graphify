@@ -13,9 +13,12 @@ pub fn empty_fragment() -> Value {
     json!({"nodes": [], "edges": [], "hyperedges": []})
 }
 
-/// Strip optional markdown fences and parse JSON.
+/// Parse a JSON extraction fragment out of a raw LLM response.
 ///
-/// Returns an empty fragment on failure. Capped at [`LLM_JSON_MAX_BYTES`].
+/// Robust against the common failure modes Claude exhibits: a markdown fence
+/// preceded by a prose preamble, prose-wrapped JSON with no fence at all, and
+/// truncated responses missing their closing fence. Returns an empty fragment
+/// on failure. Capped at [`LLM_JSON_MAX_BYTES`].
 #[must_use]
 pub fn parse_llm_json(raw: &str) -> Value {
     if raw.len() > LLM_JSON_MAX_BYTES {
@@ -26,30 +29,74 @@ pub fn parse_llm_json(raw: &str) -> Value {
         );
         return empty_fragment();
     }
+
+    // Strategy 1: trim whitespace, then handle a markdown fence found anywhere
+    // in the text (not only at offset 0). Claude often prepends a preamble such
+    // as "Here are the extracted entities:\n\n```json\n{...}\n```".
     let mut s = raw.trim();
-    if s.starts_with("```") {
-        let parts: Vec<&str> = s.splitn(3, "```").collect();
-        if parts.len() >= 2 {
-            let mut inner = parts[1];
-            if inner.starts_with("json") {
-                inner = &inner[4..];
-            }
-            // Strip trailing fence
-            let trimmed = inner.trim();
-            if let Some(idx) = trimmed.rfind("```") {
-                s = trimmed[..idx].trim();
-            } else {
-                s = trimmed;
+    if let Some(fence_start) = s.find("```") {
+        let mut after_fence = &s[fence_start + 3..];
+        // Optional language tag (json, JSON, javascript, js, …) up to newline.
+        if let Some(nl) = after_fence.find('\n') {
+            let tag = after_fence[..nl].trim().to_ascii_lowercase();
+            if matches!(tag.as_str(), "json" | "javascript" | "js" | "") {
+                after_fence = &after_fence[nl + 1..];
             }
         }
+        s = match after_fence.rfind("```") {
+            Some(fence_end) => after_fence[..fence_end].trim(),
+            None => after_fence.trim(),
+        };
     }
-    match serde_json::from_str::<Value>(s) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("[graphify] LLM returned invalid JSON, skipping chunk: {e}");
-            empty_fragment()
+    if let Ok(v) = serde_json::from_str::<Value>(s) {
+        return v;
+    }
+
+    // Strategy 2: extract the first balanced JSON object found anywhere in the
+    // (fence-stripped) text. Handles JSON wrapped in prose with no fence, e.g.
+    // "The extracted graph is { ... }. Hope this helps!".
+    if let Some(obj) = first_balanced_object(s)
+        && let Ok(v) = serde_json::from_str::<Value>(obj)
+    {
+        return v;
+    }
+
+    let preview: String = raw.chars().take(200).collect();
+    eprintln!(
+        "[graphify] LLM returned invalid JSON, skipping chunk (first 200 chars: {preview:?})"
+    );
+    empty_fragment()
+}
+
+/// Return the first balanced `{ … }` substring of `s`, or `None` when no
+/// brace-balanced object can be found. Quotes and backslash escapes inside
+/// strings are respected so braces within string literals do not affect depth.
+fn first_balanced_object(s: &str) -> Option<&str> {
+    let start = s.find('{')?;
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for (i, ch) in s[start..].char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '"' => in_string = !in_string,
+            _ if in_string => {}
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = start + i + ch.len_utf8();
+                    return Some(&s[start..end]);
+                }
+            }
+            _ => {}
         }
     }
+    None
 }
 
 /// Return `true` if the response produced no usable nodes, edges, or hyperedges.

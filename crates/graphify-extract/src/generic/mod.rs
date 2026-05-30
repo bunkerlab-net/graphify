@@ -93,6 +93,15 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
         HashSet::new()
     };
 
+    // Pre-scan Swift files so the inheritance emitter can split `inherits`
+    // (base class) from `implements` (protocol conformance). Empty otherwise.
+    let (swift_protocol_names, swift_class_names): (HashSet<String>, HashSet<String>) =
+        if config.lang_id == config::LangId::Swift {
+            inherit::swift_pre_scan(root, &source)
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+
     let mut cur = root.walk();
     if cur.goto_first_child() {
         let mut walk_ctx = walk::WalkCtx {
@@ -105,6 +114,8 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             seen_ids: &mut seen_ids,
             function_bodies: &mut function_bodies,
             csharp_interface_names: &csharp_interface_names,
+            swift_protocol_names: &swift_protocol_names,
+            swift_class_names: &swift_class_names,
         };
         loop {
             let child = cur.node();

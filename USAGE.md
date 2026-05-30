@@ -130,6 +130,12 @@ hook does this from `git diff --name-only HEAD~1 HEAD`), the shrink is treated
 as intentional and the guard is skipped — no `--force` needed for delete-heavy
 commits.
 
+When several commits land in quick succession, a post-commit hook that cannot
+acquire the rebuild lock appends its changed paths to
+`graphify-out/.pending_changes` instead of dropping them. The process holding
+the lock drains that queue and folds the paths into its own rebuild, so no
+commit's changes are lost under contention.
+
 ### `cluster-only <path>`
 
 Rerun clustering on an existing `graph.json` and regenerate the report and HTML viz. Useful after tweaking cluster
@@ -154,22 +160,24 @@ The query / affected / explain / serve commands filter on these.
 
 **Relations** (`--relation` on `affected`):
 
-| Relation       | Emitted by                                                               |
-| -------------- | ------------------------------------------------------------------------ |
-| `contains`     | File / config node → contained entity (function, class, `mcp_server`).   |
-| `method`       | Class node → method.                                                     |
-| `calls`        | Function / method node → callee, resolved within the file or cross-file. |
-| `imports`      | File node → imported module.                                             |
-| `imports_from` | File node → imported symbol from another file (`from x import y`).       |
-| `re_exports`   | Module → re-exported module (`export … from 'x'`).                       |
-| `inherits`     | Class → base class. Java's source-level `extends` is normalised here.    |
-| `implements`   | Class → interface (Java / C# / TypeScript).                              |
-| `references`   | Function / method / class → type referenced in its signature or body.    |
-| `instantiates` | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).    |
-| `uses`         | BYOND `.dmm` map → each type path referenced in its tile dictionary.     |
-| `requires_env` | MCP server → env-var *name* it depends on (values are never read).       |
+| Relation       | Emitted by                                                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `contains`     | File / config node → contained entity (function, class, `mcp_server`).                                                                    |
+| `method`       | Class node → method.                                                                                                                      |
+| `calls`        | Function / method node → callee, resolved within the file or cross-file.                                                                  |
+| `imports`      | File node → imported module.                                                                                                              |
+| `imports_from` | File node → imported symbol from another file (`from x import y`).                                                                        |
+| `re_exports`   | Module → re-exported module (`export … from 'x'`).                                                                                        |
+| `inherits`     | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia/Go) is normalised here. |
+| `implements`   | Class → interface / protocol (Java, C#, TypeScript, Kotlin, PHP, Swift, Objective-C, Rust trait `impl`).                                  |
+| `embeds`       | Go struct/interface embedding (anonymous field or embedded interface).                                                                    |
+| `mixes_in`     | Trait mixin: PHP `use`, Scala `with`.                                                                                                     |
+| `references`   | Function / method / class → type referenced in its signature or body.                                                                     |
+| `instantiates` | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).                                                                     |
+| `uses`         | BYOND `.dmm` map → each type path referenced in its tile dictionary.                                                                      |
+| `requires_env` | MCP server → env-var _name_ it depends on (values are never read).                                                                        |
 
-`references` edges typically carry a `context` describing *how* the type is
+`references` edges typically carry a `context` describing _how_ the type is
 used; older extractors (SQL, for one) still emit `references` without a
 `context`, so consumers should treat the field as optional.
 
@@ -192,9 +200,12 @@ file outside the corpus). Resolved imports use `imports_from` and omit the flag.
 | `command`        | MCP server → its executable (`npx`, `uvx`, …).                   |
 | `package`        | MCP server → npm / pypi package parsed from its args.            |
 
-`parameter_type`, `return_type`, `generic_arg`, and `attribute` are emitted by
-the Python, C#, Java, and TypeScript extractors. Other languages emit the
-structural relations but skip the per-signature reference pass.
+`parameter_type`, `return_type`, `generic_arg`, and `field` are emitted by the
+Python, C#, Java, TypeScript, Go, Rust, Swift, Kotlin, Scala, PHP, C, C++,
+Objective-C, Julia, Fortran, and PowerShell extractors. `attribute` is emitted
+by the Java `@Annotation` / C# `[Attribute]` passes. A few extractors (SQL, for
+one) still emit `references` without a `context`, so consumers should treat the
+field as optional.
 
 ### `query "<question>"`
 
@@ -435,7 +446,8 @@ graphify trae install          # AGENTS.md section
 graphify trae-cn install       # AGENTS.md section (Trae CN)
 graphify hermes install        # AGENTS.md section (Hermes)
 graphify kiro install          # .kiro/steering/graphify.md
-graphify antigravity install   # .antigravity/ rules
+graphify antigravity install   # ~/.gemini/config/skills/graphify/SKILL.md + .agents/rules + .agents/workflows
+                               #   --project:  ./.agents/skills/graphify/SKILL.md (workspace-local skill)
 graphify pi install            # global Pi config
 graphify devin install         # ~/.config/devin/skills/graphify/SKILL.md (Devin CLI)
 graphify devin install --project  # .devin/skills/... + .windsurf/rules/graphify.md
@@ -510,16 +522,17 @@ the LLM spend.
 
 ### Environment variables
 
-| Variable                    | Effect                                                           |
-| --------------------------- | ---------------------------------------------------------------- |
-| `GRAPHIFY_OUT`              | Override the output directory name (default `graphify-out`).     |
-| `GRAPHIFY_FORCE`            | Same effect as `--force` on `update`.                            |
-| `GRAPHIFY_VIZ_NODE_LIMIT`   | Cap nodes before HTML export is skipped (default 5000).          |
-| `GRAPHIFY_GOOGLE_WORKSPACE` | Truthy value enables `.gdoc/.gsheet/.gslides` export by default. |
-| `GRAPHIFY_BEDROCK_MODEL`    | Override the default model for the Bedrock backend.              |
-| `GRAPHIFY_BEDROCK_BASE_URL` | Override the Bedrock Runtime endpoint URL (mainly for tests).    |
-| `GRAPHIFY_CLUSTER_PROGRESS` | Truthy value prints per-level cluster progress to stderr.        |
-| `GRAPHIFY_CLUSTER_BACKEND`  | `leiden` (default) or `louvain` to force the fallback.           |
+| Variable                    | Effect                                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GRAPHIFY_OUT`              | Override the output directory name (default `graphify-out`).                                                                                        |
+| `GRAPHIFY_FORCE`            | Same effect as `--force` on `update`.                                                                                                               |
+| `GRAPHIFY_VIZ_NODE_LIMIT`   | Cap nodes before HTML export is skipped (default 5000).                                                                                             |
+| `GRAPHIFY_GOOGLE_WORKSPACE` | Truthy value enables `.gdoc/.gsheet/.gslides` export by default.                                                                                    |
+| `GRAPHIFY_BEDROCK_MODEL`    | Override the default model for the Bedrock backend.                                                                                                 |
+| `GRAPHIFY_BEDROCK_BASE_URL` | Override the Bedrock Runtime endpoint URL (mainly for tests).                                                                                       |
+| `GRAPHIFY_CLAUDE_CLI_MODEL` | Model passed to `claude -p --model` for the `claude-cli` backend (e.g. `haiku`, `sonnet`, or a full model id). Unset uses claude-cli's own default. |
+| `GRAPHIFY_CLUSTER_PROGRESS` | Truthy value prints per-level cluster progress to stderr.                                                                                           |
+| `GRAPHIFY_CLUSTER_BACKEND`  | `leiden` (default) or `louvain` to force the fallback.                                                                                              |
 
 ### LLM backends
 

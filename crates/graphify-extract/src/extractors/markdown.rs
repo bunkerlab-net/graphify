@@ -13,6 +13,12 @@ static HEADING_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(#{1,6})\s+(.+)").expect("static heading regex"));
 
 /// Extract structural nodes and edges from a Markdown file.
+///
+/// Emits a node per file and per heading, with `contains` edges nesting
+/// headings by level. Fenced code blocks are skipped during parsing so their
+/// contents are not misread as headings, but no node is emitted for them —
+/// they were always orphans and inflated the disconnected-component count
+/// (#1077).
 #[must_use]
 pub fn extract_markdown(path: &Path) -> FileResult {
     let source = match std::fs::read_to_string(path) {
@@ -46,14 +52,8 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         metadata: None,
     });
 
-    let mut state = MarkdownState {
-        heading_stack: Vec::new(),
-        in_code_block: false,
-        code_block_lang: None,
-        code_block_start: 0,
-        code_block_lines: Vec::new(),
-        code_block_count: 0,
-    };
+    let mut heading_stack: Vec<(usize, String)> = Vec::new();
+    let mut in_code_block = false;
 
     let mut ctx = LineCtx {
         stem: &stem,
@@ -65,17 +65,19 @@ pub fn extract_markdown(path: &Path) -> FileResult {
     };
     for (line_num_0, line_text) in source.lines().enumerate() {
         let line_num = line_num_0 + 1;
-        let stripped = line_text.trim();
-        if let Some(after_ticks) = stripped.strip_prefix("```") {
-            handle_fence(&mut state, &mut ctx, after_ticks, line_num);
+        // Skip over fenced code blocks so their contents are not parsed as
+        // headings, but emit no nodes/edges for them (#1077): they were always
+        // orphans (a single contains edge to the parent doc) and inflated the
+        // disconnected-component count.
+        if line_text.trim().starts_with("```") {
+            in_code_block = !in_code_block;
             continue;
         }
-        if state.in_code_block {
-            state.code_block_lines.push(line_text.to_string());
+        if in_code_block {
             continue;
         }
         if let Some(cap) = HEADING_RE.captures(line_text) {
-            handle_heading(&mut ctx, &mut state.heading_stack, &cap, line_num);
+            handle_heading(&mut ctx, &mut heading_stack, &cap, line_num);
         }
     }
 
@@ -87,16 +89,6 @@ pub fn extract_markdown(path: &Path) -> FileResult {
     }
 }
 
-/// Mutable parser state threaded through the markdown line walker.
-struct MarkdownState {
-    heading_stack: Vec<(usize, String)>,
-    in_code_block: bool,
-    code_block_lang: Option<String>,
-    code_block_start: usize,
-    code_block_lines: Vec<String>,
-    code_block_count: usize,
-}
-
 /// Per-file context passed to the line handlers.
 struct LineCtx<'a> {
     stem: &'a str,
@@ -105,76 +97,6 @@ struct LineCtx<'a> {
     nodes: &'a mut Vec<Node>,
     edges: &'a mut Vec<Edge>,
     seen_ids: &'a mut HashSet<String>,
-}
-
-/// Toggle the code-block state on a `` ``` `` fence. On close, emit the node + edge.
-fn handle_fence(
-    state: &mut MarkdownState,
-    ctx: &mut LineCtx<'_>,
-    after_ticks: &str,
-    line_num: usize,
-) {
-    if state.in_code_block {
-        state.in_code_block = false;
-        state.code_block_count += 1;
-        let label = code_block_label(
-            state.code_block_lang.as_deref(),
-            state.code_block_count,
-            &state.code_block_lines,
-        );
-        let cb_nid = make_id(&[ctx.stem, &format!("codeblock_{}", state.code_block_count)]);
-        if ctx.seen_ids.insert(cb_nid.clone()) {
-            ctx.nodes.push(Node {
-                id: cb_nid.clone(),
-                label,
-                file_type: "document".to_string(),
-                source_file: ctx.str_path.to_string(),
-                source_location: Some(format!("L{}", state.code_block_start)),
-                metadata: None,
-            });
-        }
-        let parent = state
-            .heading_stack
-            .last()
-            .map_or(ctx.file_nid, |(_, nid)| nid.as_str());
-        ctx.edges.push(Edge {
-            external: false,
-            source: parent.to_string(),
-            target: cb_nid,
-            relation: "contains".to_string(),
-            confidence: "EXTRACTED".to_string(),
-            source_file: ctx.str_path.to_string(),
-            source_location: Some(format!("L{}", state.code_block_start)),
-            weight: 1.0,
-            context: None,
-            confidence_score: None,
-        });
-    } else {
-        state.in_code_block = true;
-        state.code_block_lang = {
-            let lang = after_ticks.split_whitespace().next().unwrap_or("");
-            if lang.is_empty() {
-                None
-            } else {
-                Some(lang.to_string())
-            }
-        };
-        state.code_block_start = line_num;
-        state.code_block_lines = Vec::new();
-    }
-}
-
-/// Build the `"code:<lang> (<first line>)"` label for a closed code block.
-fn code_block_label(lang: Option<&str>, count: usize, lines: &[String]) -> String {
-    let mut lbl = lang.map_or_else(|| format!("code:block{count}"), |l| format!("code:{l}"));
-    if let Some(first_line) = lines.first() {
-        let fl = first_line.trim();
-        if !fl.is_empty() {
-            let fl_clipped: String = fl.chars().take(60).collect();
-            lbl = format!("{lbl} ({fl_clipped})");
-        }
-    }
-    lbl
 }
 
 /// Emit a heading node, attach it to its parent, and update the heading stack.
