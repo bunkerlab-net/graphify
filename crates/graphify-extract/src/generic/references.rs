@@ -10,6 +10,7 @@
 use tree_sitter::Node;
 
 use super::names::read_text_owned;
+use super::walk::first_child_kind;
 
 /// Role of a collected type reference. `Direct` = used as the type itself
 /// (e.g. `def f(x: Foo)`), `Generic` = used as a type argument to a generic
@@ -803,4 +804,525 @@ pub(super) fn java_method_annotation_names(method_node: Node<'_>, source: &[u8])
         }
     }
     names
+}
+
+// ── Shared helpers for the v0.8.25 cross-language type-ref collectors ──────────
+
+/// Map a `generic` flag to the corresponding [`RefRole`].
+fn role_of(generic: bool) -> RefRole {
+    if generic {
+        RefRole::Generic
+    } else {
+        RefRole::Direct
+    }
+}
+
+/// A language type-reference collector: walks a type node, appending
+/// `(name, role)` tuples for each referenced user type.
+pub(super) type RefCollector = fn(Node<'_>, &[u8], bool, &mut Vec<(String, RefRole)>);
+
+/// Recurse `collect` over every named child of `node`, preserving `generic`.
+fn recurse_named_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+    collect: RefCollector,
+) {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().is_named() {
+                collect(cur.node(), source, generic, out);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+// ── Swift ───────────────────────────────────────────────────────────────────
+
+/// Return the head `type_identifier` text from a Swift `user_type` node.
+#[must_use]
+pub(super) fn swift_user_type_name(user_type_node: Node<'_>, source: &[u8]) -> Option<String> {
+    first_child_kind(user_type_node, "type_identifier")
+        .map(|n| read_text_owned(n, source))
+        .filter(|t| !t.is_empty())
+}
+
+/// Return the `type_annotation` child of a Swift `property_declaration`, if any.
+#[must_use]
+pub(super) fn swift_property_type_node(property_node: Node<'_>) -> Option<Node<'_>> {
+    first_child_kind(property_node, "type_annotation")
+}
+
+/// Walk a Swift type expression; append `(name, role)` tuples. Mirrors
+/// Python `_swift_collect_type_refs`.
+pub(super) fn swift_collect_type_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+) {
+    match node.kind() {
+        "user_type" => {
+            if let Some(head) = first_child_kind(node, "type_identifier") {
+                let text = read_text_owned(head, source);
+                if !text.is_empty() {
+                    out.push((text, role_of(generic)));
+                }
+            }
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    if cur.node().kind() == "type_arguments" {
+                        recurse_named_refs(cur.node(), source, true, out, swift_collect_type_refs);
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        "type_identifier" => {
+            let text = read_text_owned(node, source);
+            if !text.is_empty() {
+                out.push((text, role_of(generic)));
+            }
+        }
+        // `optional_type`, `array_type`, `dictionary_type`, `tuple_type`, etc.
+        // are all named wrappers handled identically by the fallback below.
+        _ if node.is_named() => {
+            recurse_named_refs(node, source, generic, out, swift_collect_type_refs);
+        }
+        _ => {}
+    }
+}
+
+// ── PHP ───────────────────────────────────────────────────────────────────────
+
+/// Return the unqualified tail of a PHP `name` / `qualified_name` node.
+#[must_use]
+pub(super) fn php_name_text(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let full = read_text_owned(node, source);
+    let tail = full.rsplit('\\').next().unwrap_or(&full);
+    if tail.is_empty() {
+        None
+    } else {
+        Some(tail.to_string())
+    }
+}
+
+/// PHP type-node kinds that count as a type annotation on params/properties.
+pub(super) const PHP_TYPE_NODE_KINDS: &[&str] = &[
+    "named_type",
+    "primitive_type",
+    "nullable_type",
+    "union_type",
+    "intersection_type",
+    "optional_type",
+];
+
+/// Return the return-type node following `formal_parameters` on a PHP method.
+#[must_use]
+pub(super) fn php_method_return_type_node(method_node: Node<'_>) -> Option<Node<'_>> {
+    let mut saw_params = false;
+    let mut cur = method_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if c.kind() == "formal_parameters" {
+                saw_params = true;
+            } else if saw_params
+                && c.is_named()
+                && c.kind() != "compound_statement"
+                && PHP_TYPE_NODE_KINDS.contains(&c.kind())
+            {
+                return Some(c);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Walk a PHP type expression; append `(name, role)` tuples. Mirrors
+/// Python `_php_collect_type_refs`.
+pub(super) fn php_collect_type_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+) {
+    match node.kind() {
+        "primitive_type" => {}
+        "named_type" => {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    if matches!(cur.node().kind(), "name" | "qualified_name") {
+                        if let Some(text) = php_name_text(cur.node(), source) {
+                            out.push((text, role_of(generic)));
+                        }
+                        return;
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        "name" | "qualified_name" => {
+            if let Some(text) = php_name_text(node, source) {
+                out.push((text, role_of(generic)));
+            }
+        }
+        // `nullable_type` / `union_type` / `intersection_type` / `optional_type`
+        // are named wrappers handled identically by the fallback below.
+        _ if node.is_named() => {
+            recurse_named_refs(node, source, generic, out, php_collect_type_refs);
+        }
+        _ => {}
+    }
+}
+
+// ── Kotlin ────────────────────────────────────────────────────────────────────
+
+/// Return the head identifier text from a Kotlin `user_type` node.
+#[must_use]
+pub(super) fn kotlin_user_type_name(user_type_node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut cur = user_type_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            match c.kind() {
+                "type_identifier" | "identifier" => {
+                    let text = read_text_owned(c, source);
+                    return if text.is_empty() { None } else { Some(text) };
+                }
+                "simple_user_type" => {
+                    if let Some(sub) = first_named_identifier(c) {
+                        let text = read_text_owned(sub, source);
+                        return if text.is_empty() { None } else { Some(text) };
+                    }
+                }
+                _ => {}
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Return the first `identifier` / `type_identifier` child of `node`.
+fn first_named_identifier(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if matches!(cur.node().kind(), "identifier" | "type_identifier") {
+                return Some(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Find the type node within a Kotlin `property_declaration`.
+#[must_use]
+pub(super) fn kotlin_property_type_node(property_node: Node<'_>) -> Option<Node<'_>> {
+    let mut cur = property_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if c.kind() == "variable_declaration"
+                && let Some(sub) = kotlin_type_child(c)
+            {
+                return Some(sub);
+            }
+            if matches!(c.kind(), "user_type" | "nullable_type" | "type_reference") {
+                return Some(c);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+fn kotlin_type_child(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if matches!(
+                cur.node().kind(),
+                "user_type" | "nullable_type" | "type_reference"
+            ) {
+                return Some(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Find the return-type node of a Kotlin `function_declaration`.
+#[must_use]
+pub(super) fn kotlin_function_return_type_node(func_node: Node<'_>) -> Option<Node<'_>> {
+    let mut saw_params = false;
+    let mut saw_colon = false;
+    let mut cur = func_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if c.kind() == "function_value_parameters" {
+                saw_params = true;
+            } else if saw_params && c.kind() == ":" {
+                saw_colon = true;
+            } else if saw_colon && c.is_named() {
+                return Some(c);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Walk a Kotlin type expression; append `(name, role)` tuples. Mirrors
+/// Python `_kotlin_collect_type_refs`.
+pub(super) fn kotlin_collect_type_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+) {
+    match node.kind() {
+        "integral_literal" | "boolean_literal" => {}
+        "user_type" => {
+            if let Some(head) = kotlin_user_type_head(node) {
+                let text = read_text_owned(head, source);
+                if !text.is_empty() {
+                    out.push((text, role_of(generic)));
+                }
+            }
+            kotlin_collect_type_arguments(node, source, out);
+        }
+        "identifier" | "type_identifier" => {
+            let text = read_text_owned(node, source);
+            if !text.is_empty() {
+                out.push((text, role_of(generic)));
+            }
+        }
+        // `nullable_type` / `parenthesized_type` / `type_reference` are named
+        // wrappers handled identically by the fallback below.
+        _ if node.is_named() => {
+            recurse_named_refs(node, source, generic, out, kotlin_collect_type_refs);
+        }
+        _ => {}
+    }
+}
+
+/// Return the head `identifier`/`type_identifier` node of a Kotlin `user_type`,
+/// drilling through a `simple_user_type` wrapper.
+fn kotlin_user_type_head(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if matches!(c.kind(), "identifier" | "type_identifier") {
+                return Some(c);
+            }
+            if c.kind() == "simple_user_type" {
+                return first_named_identifier(c);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Recurse into a Kotlin `user_type`'s `type_arguments`, marking refs generic.
+fn kotlin_collect_type_arguments(node: Node<'_>, source: &[u8], out: &mut Vec<(String, RefRole)>) {
+    let mut cur = node.walk();
+    if !cur.goto_first_child() {
+        return;
+    }
+    loop {
+        if cur.node().kind() == "type_arguments" {
+            let mut acur = cur.node().walk();
+            if acur.goto_first_child() {
+                loop {
+                    let arg = acur.node();
+                    if arg.kind() == "type_projection" {
+                        recurse_named_refs(arg, source, true, out, kotlin_collect_type_refs);
+                    } else if arg.is_named() {
+                        kotlin_collect_type_refs(arg, source, true, out);
+                    }
+                    if !acur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+}
+
+// ── Scala ─────────────────────────────────────────────────────────────────────
+
+/// Walk a Scala type expression; append `(name, role)` tuples. Mirrors
+/// Python `_scala_collect_type_refs`.
+pub(super) fn scala_collect_type_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+) {
+    match node.kind() {
+        "type_identifier" => {
+            let text = read_text_owned(node, source);
+            if !text.is_empty() {
+                out.push((text, role_of(generic)));
+            }
+        }
+        "generic_type" => {
+            let base = node
+                .child_by_field_name("type")
+                .or_else(|| first_child_kind(node, "type_identifier"));
+            if let Some(base) = base
+                && base.kind() == "type_identifier"
+            {
+                let text = read_text_owned(base, source);
+                if !text.is_empty() {
+                    out.push((text, role_of(generic)));
+                }
+            }
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    if cur.node().kind() == "type_arguments" {
+                        recurse_named_refs(cur.node(), source, true, out, scala_collect_type_refs);
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        "compound_type" | "infix_type" | "function_type" | "tuple_type" | "annotated_type"
+        | "projected_type" => {
+            recurse_named_refs(node, source, generic, out, scala_collect_type_refs);
+        }
+        // No catch-all recurse: graphify-py's `_scala_collect_type_refs`
+        // (extract.py) handles only `type_identifier`, `generic_type`, and the
+        // wrapper kinds above, so other named nodes are intentionally ignored to
+        // preserve parity.
+        _ => {}
+    }
+}
+
+// ── C / C++ ─────────────────────────────────────────────────────────────────
+
+/// Node kinds that are C/C++ primitive types and never yield a type reference.
+const C_PRIMITIVE_TYPE_NODES: &[&str] = &[
+    "primitive_type",
+    "sized_type_specifier",
+    "auto",
+    "placeholder_type_specifier",
+];
+
+/// Walk a C type expression; append `(name, role)` tuples for user-defined types.
+pub(super) fn c_collect_type_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+) {
+    if C_PRIMITIVE_TYPE_NODES.contains(&node.kind()) {
+        return;
+    }
+    match node.kind() {
+        "type_identifier" => {
+            let text = read_text_owned(node, source);
+            if !text.is_empty() {
+                out.push((text, role_of(generic)));
+            }
+        }
+        "pointer_declarator"
+        | "reference_declarator"
+        | "array_declarator"
+        | "type_qualifier"
+        | "type_descriptor"
+        | "abstract_pointer_declarator"
+        | "abstract_reference_declarator"
+        | "abstract_array_declarator" => {
+            recurse_named_refs(node, source, generic, out, c_collect_type_refs);
+        }
+        _ => {}
+    }
+}
+
+/// Walk a C++ type expression; append `(name, role)` tuples. Resolves
+/// `qualified_identifier` tails and `template_type` base + arguments.
+pub(super) fn cpp_collect_type_refs(
+    node: Node<'_>,
+    source: &[u8],
+    generic: bool,
+    out: &mut Vec<(String, RefRole)>,
+) {
+    if C_PRIMITIVE_TYPE_NODES.contains(&node.kind()) {
+        return;
+    }
+    match node.kind() {
+        "type_identifier" => {
+            let text = read_text_owned(node, source);
+            if !text.is_empty() {
+                out.push((text, role_of(generic)));
+            }
+        }
+        "qualified_identifier" => {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                cpp_collect_type_refs(name_node, source, generic, out);
+            }
+        }
+        "template_type" => {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let text = read_text_owned(name_node, source);
+                if !text.is_empty() {
+                    out.push((text, role_of(generic)));
+                }
+            }
+            if let Some(args_node) = node.child_by_field_name("arguments") {
+                recurse_named_refs(args_node, source, true, out, cpp_collect_type_refs);
+            }
+        }
+        "type_descriptor"
+        | "pointer_declarator"
+        | "reference_declarator"
+        | "array_declarator"
+        | "type_qualifier"
+        | "abstract_pointer_declarator"
+        | "abstract_reference_declarator"
+        | "abstract_array_declarator" => {
+            recurse_named_refs(node, source, generic, out, cpp_collect_type_refs);
+        }
+        _ => {}
+    }
 }

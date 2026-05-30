@@ -53,7 +53,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   (`.dm`, `.dme` source plus `.dmi` icon sheets, `.dmm` maps, and `.dmf` interface forms),
   and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
-  and env-var *names* (values are never read).
+  and env-var _names_ (values are never read).
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
 - **Local-first** — `graph.json` lives next to your code; no daemon, no cloud, no account.
 - **Optional LLM-driven semantic extraction** through OpenAI, Anthropic, Gemini, DeepSeek, Moonshot, Ollama, or Bedrock.

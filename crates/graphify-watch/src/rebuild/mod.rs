@@ -8,6 +8,7 @@
 pub mod community;
 pub mod git;
 pub mod helpers;
+pub mod pending;
 pub mod pipeline;
 mod pipeline_helpers;
 pub mod relativize;
@@ -15,6 +16,10 @@ pub mod shrink;
 
 pub use community::node_community_map;
 pub use git::git_head;
+pub use pending::{
+    PENDING_DRAIN_MAX_PASSES, PENDING_FILENAME, drain_pending, merge_changed_paths, queue_pending,
+    rebuild_with_pending,
+};
 pub use relativize::relativize_source_files;
 pub use shrink::check_shrink;
 
@@ -75,10 +80,19 @@ pub fn rebuild_code(
         }
         LockPolicy::TryAcquire | LockPolicy::BlockOn => {
             let block = matches!(opts.lock, LockPolicy::BlockOn);
+            // #1059: an incremental hook must not drop its change set when
+            // another rebuild is already running. Queue before attempting a
+            // non-blocking lock so a failed acquisition still records the work;
+            // the lock-holder drains the queue and merges it in. Full-corpus
+            // rebuilds (changed_paths == None) skip the queue — they already
+            // cover every file, so there is nothing to merge.
+            if !block && let Some(paths) = changed_paths {
+                pending::queue_pending(&out, paths)?;
+            }
             let guard = RebuildLock::acquire(&out, block)?;
             if !guard.acquired() {
                 println!(
-                    "[graphify watch] Rebuild already in progress for {} - skipping.",
+                    "[graphify watch] Rebuild already in progress for {} - changes queued.",
                     watch_path
                         .canonicalize()
                         .unwrap_or_else(|_| watch_path.to_path_buf())
@@ -86,7 +100,12 @@ pub fn rebuild_code(
                 );
                 return Ok(false);
             }
-            let result = rebuild_code_inner(watch_path, changed_paths, opts.force, opts.no_cluster);
+            // Lock acquired. Drain anything queued by earlier contenders
+            // (including the paths we just queued ourselves) and merge with our
+            // own change set, then loop to absorb any late arrivals.
+            let result = pending::rebuild_with_pending(&out, changed_paths, |paths| {
+                rebuild_code_inner(watch_path, paths, opts.force, opts.no_cluster)
+            });
             drop(guard);
             result
         }

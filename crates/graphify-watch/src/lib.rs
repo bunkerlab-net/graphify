@@ -23,7 +23,9 @@ pub use error::WatchError;
 pub use lock::RebuildLock;
 pub use notify::{check_update, graphify_out, notify_only};
 pub use rebuild::{
-    LockPolicy, RebuildOptions, check_shrink, git_head, node_community_map, relativize_source_files,
+    LockPolicy, PENDING_DRAIN_MAX_PASSES, PENDING_FILENAME, RebuildOptions, check_shrink,
+    drain_pending, git_head, merge_changed_paths, node_community_map, queue_pending,
+    rebuild_with_pending, relativize_source_files,
 };
 pub use resource::apply_resource_limits;
 pub use watch_fn::{rebuild_code, watch};

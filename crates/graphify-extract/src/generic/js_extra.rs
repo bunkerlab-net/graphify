@@ -50,13 +50,25 @@ pub(super) fn js_extra_walk<'tree>(
         return false;
     }
 
-    // CJS require
+    // CJS require imports — emit edges regardless of scope.
     let require_found = require_imports_js(node, source, file_nid, str_path, stem, edges);
+
+    // Scope guard (#1077): only emit nodes for module-level declarations.
+    // Without this, a `const x = …` inside an arrow callback (e.g. inside
+    // `describe(() => { const set = new Set(…) })`) emits a bare-named node,
+    // and the same name collides across unrelated files producing phantom
+    // god-nodes. Arrow-function bodies are walked separately via
+    // `function_bodies`, so locals never need a node here.
+    let is_module_level = node.parent().is_some_and(|parent| {
+        parent.kind() == "program"
+            || (parent.kind() == "export_statement"
+                && parent.parent().is_some_and(|pp| pp.kind() == "program"))
+    });
 
     let mut arrow_found = false;
     let mut const_found = false;
 
-    if t == "lexical_declaration" {
+    if t == "lexical_declaration" && is_module_level {
         let mut cur = node.walk();
         if cur.goto_first_child() {
             loop {

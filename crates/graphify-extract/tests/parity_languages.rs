@@ -238,6 +238,65 @@ fn markdown_rich_doc_extracts_headings_and_code_blocks() {
 }
 
 #[test]
+fn markdown_nested_fence_does_not_leak_inner_heading() -> Result<(), Box<dyn std::error::Error>> {
+    // A four-backtick fence wraps a three-backtick block whose contents include
+    // a line that looks like a heading. Per CommonMark, the inner ``` is too
+    // short to close the outer ```` fence, so the `#` line stays inside the
+    // code block and must not become a phantom heading node.
+    let src = "# Real Heading\n\
+````markdown\n\
+```python\n\
+# not a heading, just a comment\n\
+```\n\
+````\n\
+## Another Real Heading\n";
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("nested.md");
+    std::fs::write(&path, src)?;
+    let result = extract_markdown(&path);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert!(labels.contains(&"Real Heading"), "labels: {labels:?}");
+    assert!(
+        labels.contains(&"Another Real Heading"),
+        "labels: {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|l| l.contains("not a heading")),
+        "inner code-block line leaked as a heading: {labels:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn markdown_closing_fence_with_info_string_does_not_close() -> Result<(), Box<dyn std::error::Error>>
+{
+    // A closing fence must carry only optional whitespace after its run; a line
+    // with an info string (```text) is not a valid close (CommonMark), so the
+    // block stays open and its `#` lines must not become heading nodes.
+    let src = "# Title\n\
+```\n\
+# inside code\n\
+```text\n\
+# still inside code\n\
+```\n\
+## End\n";
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("infoclose.md");
+    std::fs::write(&path, src)?;
+    let result = extract_markdown(&path);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert!(labels.contains(&"Title"), "labels: {labels:?}");
+    assert!(labels.contains(&"End"), "labels: {labels:?}");
+    assert!(
+        !labels.iter().any(|l| l.contains("inside code")),
+        "code-block line leaked as a heading: {labels:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn c_extractor_produces_nodes() {
     let result = extract_c(&fixtures().join("sample.c"));
     assert!(result.error.is_none(), "{:?}", result.error);

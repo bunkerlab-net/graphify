@@ -27,9 +27,13 @@
 #![allow(clippy::expect_used, clippy::doc_markdown)]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use graphify_watch::{RebuildLock, WATCHED_EXTENSIONS, check_update, notify_only};
+use graphify_watch::{
+    LockPolicy, PENDING_FILENAME, RebuildLock, RebuildOptions, WATCHED_EXTENSIONS, check_update,
+    drain_pending, merge_changed_paths, notify_only, queue_pending, rebuild_code,
+    rebuild_with_pending,
+};
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -337,6 +341,266 @@ fn test_rebuild_lock_non_blocking_does_not_clobber_holder() {
     // Reap child.
     let mut status = 0i32;
     // SAFETY: waitpid is safe with a valid pid and a valid status pointer.
+    #[allow(unsafe_code)] // reason: libc::waitpid has no safe Rust wrapper
+    unsafe {
+        libc::waitpid(pid as libc::pid_t, &raw mut status, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #1059 — pending-changes queue (Python: _queue_pending / _drain_pending /
+// _merge_changed_paths and the _rebuild_code lock-contention behaviour)
+// ---------------------------------------------------------------------------
+
+/// Python: `test_merge_changed_paths_dedupes_in_order`
+#[test]
+fn test_merge_changed_paths_dedupes_in_order() {
+    let a = PathBuf::from("a.py");
+    let b = PathBuf::from("b.py");
+    let c = PathBuf::from("c.py");
+    let first = [a.clone(), b.clone()];
+    let third = [b.clone(), c.clone()];
+    let fourth = [a.clone()];
+    let merged =
+        merge_changed_paths(&[Some(&first[..]), None, Some(&third[..]), Some(&fourth[..])]);
+    assert_eq!(merged, vec![a, b, c]);
+}
+
+/// Python: `test_queue_and_drain_pending_round_trip`
+#[test]
+fn test_queue_and_drain_pending_round_trip() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("graphify-out");
+    let paths = vec![
+        PathBuf::from("a.py"),
+        PathBuf::from("sub/b.py"),
+        PathBuf::from("c.md"),
+    ];
+    queue_pending(&out, &paths).expect("queue_pending");
+
+    let pending_file = out.join(PENDING_FILENAME);
+    assert!(pending_file.exists());
+    let content = fs::read_to_string(&pending_file).expect("read pending");
+    assert_eq!(
+        content.lines().collect::<Vec<_>>(),
+        vec!["a.py", "sub/b.py", "c.md"]
+    );
+
+    let drained = drain_pending(&out);
+    assert_eq!(drained, paths);
+    // Drain unlinks so subsequent callers see an empty queue.
+    assert!(!pending_file.exists());
+    assert!(drain_pending(&out).is_empty());
+}
+
+/// Python: `test_drain_pending_dedupes_and_skips_blank_lines`
+#[test]
+fn test_drain_pending_dedupes_and_skips_blank_lines() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("graphify-out");
+    queue_pending(&out, &[PathBuf::from("a.py"), PathBuf::from("b.py")]).expect("queue");
+    queue_pending(&out, &[PathBuf::from("b.py"), PathBuf::from("c.py")]).expect("queue");
+    // Simulate a torn write leaving an empty line.
+    {
+        use std::io::Write;
+        let mut fh = fs::OpenOptions::new()
+            .append(true)
+            .open(out.join(PENDING_FILENAME))
+            .expect("open pending");
+        fh.write_all(b"\n   \n").expect("write blank lines");
+    }
+    let drained = drain_pending(&out);
+    assert_eq!(
+        drained,
+        vec![
+            PathBuf::from("a.py"),
+            PathBuf::from("b.py"),
+            PathBuf::from("c.py"),
+        ]
+    );
+}
+
+/// Python: `test_queue_pending_noop_on_empty_list`
+#[test]
+fn test_queue_pending_noop_on_empty_list() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("graphify-out");
+    queue_pending(&out, &[]).expect("queue");
+    assert!(!out.join(PENDING_FILENAME).exists());
+}
+
+/// Python: `test_rebuild_code_merges_pending_on_acquire`
+///
+/// The Rust port injects the inner rebuild as a closure (the Python test
+/// monkeypatches the recursive `_rebuild_code`), so the merge orchestration is
+/// unit-testable without spawning the real pipeline.
+#[test]
+fn test_rebuild_with_pending_merges_queue_on_acquire() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("graphify-out");
+    fs::create_dir_all(&out).expect("mkdir");
+    // Pre-populate the queue as if an earlier contender had dropped its paths.
+    queue_pending(
+        &out,
+        &[PathBuf::from("queued1.py"), PathBuf::from("queued2.py")],
+    )
+    .expect("queue");
+
+    let mut inner_calls: Vec<Vec<String>> = Vec::new();
+    let own = [PathBuf::from("own.py"), PathBuf::from("queued1.py")];
+    let ok = rebuild_with_pending(&out, Some(&own), |paths| {
+        inner_calls.push(
+            paths
+                .unwrap_or(&[])
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        );
+        Ok(true)
+    })
+    .expect("rebuild_with_pending");
+
+    assert!(ok);
+    // First inner call gets the merged + deduped set: own.py first (caller order
+    // preserved), then drained queued1/queued2 with queued1 deduped.
+    assert_eq!(inner_calls[0], vec!["own.py", "queued1.py", "queued2.py"]);
+    assert!(!out.join(PENDING_FILENAME).exists());
+}
+
+/// Python: `test_rebuild_code_drains_late_arrivals`
+#[test]
+fn test_rebuild_with_pending_drains_late_arrivals() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("graphify-out");
+    fs::create_dir_all(&out).expect("mkdir");
+
+    let mut inner_calls: Vec<Vec<String>> = Vec::new();
+    let mut call_idx = 0u32;
+    let own = [PathBuf::from("own.py")];
+    let ok = rebuild_with_pending(&out, Some(&own), |paths| {
+        inner_calls.push(
+            paths
+                .unwrap_or(&[])
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        );
+        call_idx += 1;
+        if call_idx == 1 {
+            // Simulate a late-arriving hook that queues during the first rebuild.
+            queue_pending(&out, &[PathBuf::from("late.py")]).expect("queue late");
+        }
+        Ok(true)
+    })
+    .expect("rebuild_with_pending");
+
+    assert!(ok);
+    // First inner call covers our own change set; second is the late-drain pass.
+    assert!(inner_calls.len() >= 2);
+    assert_eq!(inner_calls[0], vec!["own.py"]);
+    assert_eq!(inner_calls[1], vec!["late.py"]);
+    assert!(!out.join(PENDING_FILENAME).exists());
+}
+
+/// Python: `test_rebuild_code_full_corpus_skips_pending_queue`
+#[test]
+fn test_rebuild_with_pending_full_corpus_skips_queue() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("graphify-out");
+    fs::create_dir_all(&out).expect("mkdir");
+    // Pre-existing queued paths from an earlier incremental hook.
+    queue_pending(&out, &[PathBuf::from("earlier.py")]).expect("queue");
+
+    let mut seen: Vec<Option<Vec<String>>> = Vec::new();
+    let ok = rebuild_with_pending(&out, None, |paths| {
+        seen.push(paths.map(|ps| {
+            ps.iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        }));
+        Ok(true)
+    })
+    .expect("rebuild_with_pending");
+
+    assert!(ok);
+    // Full-corpus rebuild passes None to the inner call (does not merge in the
+    // queued paths — a full rebuild already covers them) and runs no late loop.
+    assert_eq!(seen, vec![None]);
+    // The queue still gets drained on entry so stale entries do not leak.
+    assert!(!out.join(PENDING_FILENAME).exists());
+}
+
+/// Python: `test_rebuild_code_queues_on_lock_contention`
+///
+/// When the rebuild lock is held, an incremental hook must queue its
+/// `changed_paths` and report skipped instead of silently dropping the change
+/// set. `flock` reports same-process re-acquires as already-held (see
+/// `test_rebuild_lock_non_blocking_does_not_clobber_holder`), so a child
+/// process holds the lock to create genuine cross-process contention.
+#[test]
+#[cfg(unix)]
+fn test_rebuild_code_queues_on_lock_contention() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let watch_path = dir.path();
+    let out = watch_path.join("graphify-out");
+    fs::create_dir_all(&out).expect("create_dir_all");
+
+    let (mut parent_sock, child_sock) = UnixStream::pair().expect("socketpair");
+    parent_sock
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set timeout");
+
+    // SAFETY: child calls only async-signal-safe functions then _exit.
+    #[allow(unsafe_code)] // reason: libc::fork has no safe Rust wrapper
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "fork failed");
+
+    if pid == 0 {
+        // --- child: hold the lock until the parent finishes ---
+        drop(parent_sock);
+        let mut sock = child_sock;
+        let _guard = RebuildLock::acquire(&out, true).expect("child lock");
+        sock.write_all(b"1").expect("signal held");
+        let mut buf = [0u8; 1];
+        let _ = sock.read(&mut buf);
+        // SAFETY: _exit terminates the child without running destructors.
+        #[allow(unsafe_code)] // reason: libc::_exit has no safe Rust wrapper
+        unsafe {
+            libc::_exit(0)
+        };
+    }
+
+    // --- parent ---
+    drop(child_sock);
+    let mut buf = [0u8; 1];
+    parent_sock
+        .read_exact(&mut buf)
+        .expect("timed out waiting for child to acquire lock");
+
+    let opts = RebuildOptions {
+        lock: LockPolicy::TryAcquire,
+        ..RebuildOptions::default()
+    };
+    let changed = [PathBuf::from("a.py"), PathBuf::from("b.py")];
+    let ok = rebuild_code(watch_path, Some(&changed), opts).expect("rebuild_code");
+    assert!(!ok, "rebuild must report skipped when the lock is held");
+
+    let pending = out.join(PENDING_FILENAME);
+    assert!(
+        pending.exists(),
+        "changed paths must be queued under lock contention"
+    );
+    let content = fs::read_to_string(&pending).expect("read pending");
+    assert_eq!(content.lines().collect::<Vec<_>>(), vec!["a.py", "b.py"]);
+
+    // Release the child and reap it.
+    let _ = parent_sock.write_all(b"1");
+    let mut status = 0i32;
+    // SAFETY: waitpid with a valid pid and status pointer.
     #[allow(unsafe_code)] // reason: libc::waitpid has no safe Rust wrapper
     unsafe {
         libc::waitpid(pid as libc::pid_t, &raw mut status, 0);

@@ -18,8 +18,8 @@ use crate::types::{Edge, Node as GNode};
 
 use super::config::{LangConfig, LangId};
 use super::inherit::{
-    emit_cpp_inheritance, emit_csharp_inheritance, emit_java_inheritance, emit_swift_inheritance,
-    emit_ts_inheritance,
+    emit_cpp_inheritance, emit_csharp_inheritance, emit_java_inheritance, emit_kotlin_inheritance,
+    emit_php_inheritance, emit_scala_inheritance, emit_swift_inheritance, emit_ts_inheritance,
 };
 use super::js_extra::js_extra_walk;
 use super::names::{get_cpp_func_name, read_csharp_type_name, read_text_owned};
@@ -77,6 +77,60 @@ pub(super) fn add_edge(
         context: context.map(str::to_string),
         confidence_score: None,
     });
+}
+
+// ── Small AST helpers ──────────────────────────────────────────────────────────
+
+/// Collect the named children of `node` into a `Vec`.
+#[must_use]
+pub(crate) fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut out = Vec::new();
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().is_named() {
+                out.push(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Return the first child of `node` whose kind is `kind`.
+#[must_use]
+pub(crate) fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == kind {
+                return Some(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// `true` if any child of `node` has the given `kind` (allocation-free).
+#[must_use]
+pub(super) fn any_child_kind(node: Node<'_>, kind: &str) -> bool {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == kind {
+                return true;
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    false
 }
 
 // ── Body finder ───────────────────────────────────────────────────────────────
@@ -152,8 +206,11 @@ fn emit_function_reference_edges(
     line: u32,
 ) {
     use super::references::{
-        RefRole, csharp_attribute_names, csharp_collect_type_refs, java_collect_type_refs,
-        java_method_annotation_names, python_collect_param_refs, python_collect_type_refs,
+        PHP_TYPE_NODE_KINDS, RefRole, c_collect_type_refs, cpp_collect_type_refs,
+        csharp_attribute_names, csharp_collect_type_refs, java_collect_type_refs,
+        java_method_annotation_names, kotlin_collect_type_refs, kotlin_function_return_type_node,
+        php_collect_type_refs, php_method_return_type_node, python_collect_param_refs,
+        python_collect_type_refs, scala_collect_type_refs, swift_collect_type_refs,
         ts_collect_type_refs,
     };
 
@@ -166,6 +223,12 @@ fn emit_function_reference_edges(
             | LangId::TypeScript
             | LangId::TypeScriptX
             | LangId::JavaScript
+            | LangId::Swift
+            | LangId::Php
+            | LangId::Kotlin
+            | LangId::Scala
+            | LangId::C
+            | LangId::Cpp
     ) {
         return;
     }
@@ -305,7 +368,172 @@ fn emit_function_reference_edges(
                 }
             }
         }
+        LangId::Swift => {
+            // Swift parameters are direct `parameter` children of the function.
+            for p in named_children(node) {
+                if p.kind() == "parameter"
+                    && let Some(type_node) = p.child_by_field_name("type")
+                {
+                    let mut refs: Vec<(String, RefRole)> = Vec::new();
+                    swift_collect_type_refs(type_node, source, false, &mut refs);
+                    for (name, role) in refs {
+                        emit_ref(ctx, &name, role.into_context("parameter_type"));
+                    }
+                }
+            }
+            if let Some(return_node) = node.child_by_field_name("return_type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                swift_collect_type_refs(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+        }
+        LangId::Php => {
+            if let Some(params) = first_child_kind(node, "formal_parameters") {
+                for p in named_children(params) {
+                    if p.kind() != "simple_parameter" {
+                        continue;
+                    }
+                    if let Some(type_node) = named_children(p)
+                        .into_iter()
+                        .find(|c| PHP_TYPE_NODE_KINDS.contains(&c.kind()))
+                    {
+                        let mut refs: Vec<(String, RefRole)> = Vec::new();
+                        php_collect_type_refs(type_node, source, false, &mut refs);
+                        for (name, role) in refs {
+                            emit_ref(ctx, &name, role.into_context("parameter_type"));
+                        }
+                    }
+                }
+            }
+            if let Some(return_node) = php_method_return_type_node(node) {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                php_collect_type_refs(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+        }
+        LangId::Kotlin => {
+            if let Some(params) = first_child_kind(node, "function_value_parameters") {
+                for p in named_children(params) {
+                    if p.kind() != "parameter" {
+                        continue;
+                    }
+                    if let Some(type_node) = named_children(p).into_iter().find(|c| {
+                        matches!(c.kind(), "user_type" | "nullable_type" | "type_reference")
+                    }) {
+                        let mut refs: Vec<(String, RefRole)> = Vec::new();
+                        kotlin_collect_type_refs(type_node, source, false, &mut refs);
+                        for (name, role) in refs {
+                            emit_ref(ctx, &name, role.into_context("parameter_type"));
+                        }
+                    }
+                }
+            }
+            if let Some(return_node) = kotlin_function_return_type_node(node) {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                kotlin_collect_type_refs(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+        }
+        LangId::Scala => {
+            if let Some(params) = first_child_kind(node, "parameters") {
+                for p in named_children(params) {
+                    if p.kind() != "parameter" {
+                        continue;
+                    }
+                    if let Some(type_node) = p.child_by_field_name("type") {
+                        let mut refs: Vec<(String, RefRole)> = Vec::new();
+                        scala_collect_type_refs(type_node, source, false, &mut refs);
+                        for (name, role) in refs {
+                            emit_ref(ctx, &name, role.into_context("parameter_type"));
+                        }
+                    }
+                }
+            }
+            if let Some(return_node) = node.child_by_field_name("return_type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                scala_collect_type_refs(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+        }
+        LangId::C | LangId::Cpp => {
+            let collect: super::references::RefCollector = if lang == LangId::Cpp {
+                cpp_collect_type_refs
+            } else {
+                c_collect_type_refs
+            };
+            if let Some(return_node) = node.child_by_field_name("type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                collect(return_node, source, false, &mut refs);
+                for (name, role) in refs {
+                    emit_ref(ctx, &name, role.into_context("return_type"));
+                }
+            }
+            // The function_declarator may be wrapped in pointer/reference declarators.
+            let mut decl = node.child_by_field_name("declarator");
+            while let Some(d) = decl {
+                if matches!(d.kind(), "pointer_declarator" | "reference_declarator") {
+                    decl = d.child_by_field_name("declarator");
+                } else {
+                    break;
+                }
+            }
+            if let Some(d) = decl
+                && d.kind() == "function_declarator"
+                && let Some(params_node) = d.child_by_field_name("parameters")
+            {
+                for p in named_children(params_node) {
+                    if p.kind() != "parameter_declaration" {
+                        continue;
+                    }
+                    if let Some(ptype) = p.child_by_field_name("type") {
+                        let mut refs: Vec<(String, RefRole)> = Vec::new();
+                        collect(ptype, source, false, &mut refs);
+                        for (name, role) in refs {
+                            emit_ref(ctx, &name, role.into_context("parameter_type"));
+                        }
+                    }
+                }
+            }
+        }
         _ => {}
+    }
+}
+
+/// Emit `references` edges (context `field` or `generic_arg`) from a class
+/// member's type node, using the supplied language type-ref `collect`or.
+/// Self-references (member type == enclosing class) are skipped.
+fn emit_member_type_refs(
+    ctx: &mut WalkCtx<'_, '_>,
+    type_node: Node<'_>,
+    parent_nid: &str,
+    line: u32,
+    source: &[u8],
+    collect: super::references::RefCollector,
+) {
+    let mut refs: Vec<(String, super::references::RefRole)> = Vec::new();
+    collect(type_node, source, false, &mut refs);
+    for (name, role) in refs {
+        let target =
+            ensure_named_node(&name, line, ctx.stem, ctx.str_path, ctx.nodes, ctx.seen_ids);
+        if target != parent_nid {
+            add_edge(
+                parent_nid,
+                &target,
+                "references",
+                line,
+                ctx.str_path,
+                Some(role.into_context("field")),
+                ctx.edges,
+            );
+        }
     }
 }
 
@@ -326,6 +554,13 @@ pub(super) struct WalkCtx<'a, 'tree> {
     /// can split `inherits` (class extension) from `implements` (interface
     /// implementation) on `base_list` entries. Empty for non-C# files.
     pub csharp_interface_names: &'a HashSet<String>,
+    /// Names declared as `protocol` in the current Swift compilation unit, used
+    /// to classify conformances as `implements`. Empty for non-Swift files.
+    pub swift_protocol_names: &'a HashSet<String>,
+    /// Names declared as `class`/`struct`/`enum`/`actor` in the current Swift
+    /// compilation unit, used to classify a base as `inherits`. Empty for
+    /// non-Swift files.
+    pub swift_class_names: &'a HashSet<String>,
 }
 
 /// Recursive structural AST walk that emits nodes and edges for classes,
@@ -457,6 +692,21 @@ pub(super) fn walk<'tree>(
             emit_cpp_inheritance(ctx, node, source, &class_nid, line);
         }
 
+        // PHP extends/implements/use
+        if config.lang_id == LangId::Php {
+            emit_php_inheritance(ctx, node, source, &class_nid, line);
+        }
+
+        // Kotlin delegation_specifiers
+        if config.lang_id == LangId::Kotlin {
+            emit_kotlin_inheritance(ctx, node, source, &class_nid, line);
+        }
+
+        // Scala extends_clause + constructor parameters
+        if config.lang_id == LangId::Scala {
+            emit_scala_inheritance(ctx, node, source, &class_nid, line);
+        }
+
         // TS/JS class_heritage (extends_clause + implements_clause)
         if matches!(
             config.lang_id,
@@ -523,11 +773,112 @@ pub(super) fn walk<'tree>(
         return;
     }
 
+    // ── PHP property_declaration ──────────────────────────────────────────────
+    if config.lang_id == LangId::Php
+        && t == "property_declaration"
+        && let Some(parent) = parent_class_nid
+    {
+        let line = node.start_position().row as u32 + 1;
+        if let Some(type_node) = named_children(node)
+            .into_iter()
+            .find(|c| super::references::PHP_TYPE_NODE_KINDS.contains(&c.kind()))
+        {
+            emit_member_type_refs(
+                ctx,
+                type_node,
+                parent,
+                line,
+                source,
+                super::references::php_collect_type_refs,
+            );
+        }
+        return;
+    }
+
+    // ── Kotlin property_declaration ───────────────────────────────────────────
+    if config.lang_id == LangId::Kotlin
+        && t == "property_declaration"
+        && let Some(parent) = parent_class_nid
+    {
+        let line = node.start_position().row as u32 + 1;
+        if let Some(type_node) = super::references::kotlin_property_type_node(node) {
+            emit_member_type_refs(
+                ctx,
+                type_node,
+                parent,
+                line,
+                source,
+                super::references::kotlin_collect_type_refs,
+            );
+        }
+        return;
+    }
+
+    // ── Swift property_declaration ────────────────────────────────────────────
+    if config.lang_id == LangId::Swift
+        && t == "property_declaration"
+        && let Some(parent) = parent_class_nid
+    {
+        let line = node.start_position().row as u32 + 1;
+        if let Some(type_anno) = super::references::swift_property_type_node(node) {
+            emit_member_type_refs(
+                ctx,
+                type_anno,
+                parent,
+                line,
+                source,
+                super::references::swift_collect_type_refs,
+            );
+        }
+        return;
+    }
+
+    // ── Scala val_definition ──────────────────────────────────────────────────
+    // Falls through (no early return) so call expressions in the initializer
+    // are still walked.
+    if config.lang_id == LangId::Scala
+        && t == "val_definition"
+        && let Some(parent) = parent_class_nid
+        && let Some(type_node) = node.child_by_field_name("type")
+    {
+        let line = node.start_position().row as u32 + 1;
+        emit_member_type_refs(
+            ctx,
+            type_node,
+            parent,
+            line,
+            source,
+            super::references::scala_collect_type_refs,
+        );
+    }
+
     // ── C++ field_declaration ─────────────────────────────────────────────────
     if config.lang_id == LangId::Cpp
         && t == "field_declaration"
         && let Some(parent) = parent_class_nid
     {
+        // Skip method prototypes (a field_declaration with a function_declarator
+        // is a member-function declaration, not a data member) when emitting
+        // type references.
+        let mut dcur = node.walk();
+        let is_method = node
+            .children_by_field_name("declarator", &mut dcur)
+            .any(|d| {
+                d.kind() == "function_declarator"
+                    || (matches!(d.kind(), "pointer_declarator" | "reference_declarator")
+                        && any_child_kind(d, "function_declarator"))
+            });
+        if !is_method && let Some(type_node) = node.child_by_field_name("type") {
+            let line = node.start_position().row as u32 + 1;
+            emit_member_type_refs(
+                ctx,
+                type_node,
+                parent,
+                line,
+                source,
+                super::references::cpp_collect_type_refs,
+            );
+        }
         let mut cur = node.walk();
         if cur.goto_first_child() {
             loop {

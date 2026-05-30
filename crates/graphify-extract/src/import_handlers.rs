@@ -660,13 +660,13 @@ pub fn import_lua(
     let text = String::from_utf8_lossy(&source[node.start_byte()..node.end_byte()]).into_owned();
     let line = node.start_position().row as u32 + 1;
     // regex: require\s*[('"\s]*['"]?([^'")\s]+)
-    if let Some(cap) = find_require_module(&text) {
-        let module_name = cap.split('.').next_back().unwrap_or("").to_string();
-        if !module_name.is_empty() {
+    if let Some(raw_module) = find_require_module(&text) {
+        let tgt_nid = resolve_lua_import_target(&raw_module, str_path);
+        if !tgt_nid.is_empty() {
             edges.push(Edge {
                 external: false,
                 source: file_nid.to_string(),
-                target: module_name.clone(),
+                target: tgt_nid,
                 relation: "imports".to_string(),
                 confidence: "EXTRACTED".to_string(),
                 source_file: str_path.to_string(),
@@ -677,6 +677,52 @@ pub fn import_lua(
             });
         }
     }
+}
+
+/// How many parent directories to probe when resolving a Lua `require()` to a
+/// file on disk, so requires from nested files still find a package root above.
+const LUA_MAX_PROBE_LEVELS: usize = 6;
+
+/// Resolve a Lua `require()` module name to a node id (#1075).
+///
+/// Lua module names use dots as path separators: `require("pkg.b")` looks for
+/// `pkg/b.lua` (or `pkg/b/init.lua`) relative to a package root. The importing
+/// file's directory is probed and walked upward looking for a matching file on
+/// disk; when found, the returned id matches the file node id `extract_generic`
+/// assigns that file (`make_id1(path)`), so the edge lands on a real node. When
+/// nothing matches, the full dotted module name's id is returned so cross-file
+/// resolution can still complete via the symbol-resolution pass instead of the
+/// edge being dropped entirely.
+#[must_use]
+fn resolve_lua_import_target(raw_module: &str, str_path: &str) -> String {
+    if raw_module.is_empty() {
+        return String::new();
+    }
+    let rel = raw_module.replace('.', "/");
+    if let Some(start_dir) = std::path::Path::new(str_path).parent() {
+        let mut probe = start_dir.to_path_buf();
+        // Walk up a few levels so requires from nested files still resolve when
+        // the package root is above the importing file.
+        for _ in 0..LUA_MAX_PROBE_LEVELS {
+            for suffix in [".lua", ".luau"] {
+                let cand = probe.join(format!("{rel}{suffix}"));
+                if cand.is_file() {
+                    return make_id1(&cand.to_string_lossy());
+                }
+            }
+            for suffix in [".lua", ".luau"] {
+                let cand = probe.join(&rel).join(format!("init{suffix}"));
+                if cand.is_file() {
+                    return make_id1(&cand.to_string_lossy());
+                }
+            }
+            match probe.parent() {
+                Some(p) if p != probe => probe = p.to_path_buf(),
+                _ => break,
+            }
+        }
+    }
+    make_id1(raw_module)
 }
 
 /// Extract the module string from a `require(...)` call in `text`, returning `None` if not found.

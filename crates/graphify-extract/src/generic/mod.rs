@@ -19,7 +19,7 @@ mod inherit;
 mod js_extra;
 mod names;
 mod references;
-mod walk;
+pub(crate) mod walk;
 
 pub use config::{ImportHandlerFn, LangConfig, LangId, ResolveFnNameFn};
 pub use js_extra::resolve_js_import_target;
@@ -93,6 +93,15 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
         HashSet::new()
     };
 
+    // Pre-scan Swift files so the inheritance emitter can split `inherits`
+    // (base class) from `implements` (protocol conformance). Empty otherwise.
+    let (swift_protocol_names, swift_class_names): (HashSet<String>, HashSet<String>) =
+        if config.lang_id == config::LangId::Swift {
+            inherit::swift_pre_scan(root, &source)
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+
     let mut cur = root.walk();
     if cur.goto_first_child() {
         let mut walk_ctx = walk::WalkCtx {
@@ -105,6 +114,8 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             seen_ids: &mut seen_ids,
             function_bodies: &mut function_bodies,
             csharp_interface_names: &csharp_interface_names,
+            swift_protocol_names: &swift_protocol_names,
+            swift_class_names: &swift_class_names,
         };
         loop {
             let child = cur.node();
@@ -147,15 +158,23 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
         }
     }
 
+    // Fold any forward-reference placeholder into its same-file declaration
+    // before cleaning, so a type used before it is declared resolves to the
+    // real node instead of an orphaned bare-name duplicate.
+    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
+
     // ── Clean edges ───────────────────────────────────────────────────────────
     // Cross-module edge relations (`imports`, `imports_from`, `re_exports`)
     // legitimately point at nodes that don't live in this file. Everything
-    // else must have both endpoints among `seen_ids`.
+    // else must have both endpoints among the reconciled node ids. Rebuild the
+    // valid-id set from the surviving nodes rather than the now-stale
+    // `seen_ids`, which still lists any placeholder ids reconcile folded away.
+    let valid_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
     let clean_edges: Vec<Edge> = edges
         .into_iter()
         .filter(|e| {
-            seen_ids.contains(&e.source)
-                && (seen_ids.contains(&e.target)
+            valid_ids.contains(&e.source)
+                && (valid_ids.contains(&e.target)
                     || matches!(
                         e.relation.as_str(),
                         "imports" | "imports_from" | "re_exports"

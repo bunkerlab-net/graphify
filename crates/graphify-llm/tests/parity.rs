@@ -12,7 +12,7 @@
 
 #![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
-use graphify_llm::claude_cli::ClaudeRunner;
+use graphify_llm::claude_cli::{ClaudeRunner, build_claude_cli_args, select_claude_command};
 use graphify_llm::ollama::resolve_num_ctx;
 use graphify_llm::{
     BACKENDS, LlmError, backend_config, detect_backend, estimate_cost, looks_like_context_exceeded,
@@ -252,6 +252,182 @@ fn test_parse_llm_json_returns_empty_fragment_on_invalid() {
 fn test_parse_llm_json_returns_empty_fragment_on_truncated() {
     let parsed = parse_llm_json(r#"{"nodes": [{"id":"#);
     assert_eq!(parsed["nodes"], json!([]));
+}
+
+// ---------------------------------------------------------------------------
+// test_llm_parser.py — _parse_llm_json robustness (PR #1062)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_parse_llm_json_preamble_then_fence_is_parsed() {
+    // Claude often prefixes the JSON with a short preamble before the ```json
+    // fence; the parser must handle a fence found anywhere, not only at offset 0.
+    let raw = "Here are the extracted entities:\n\n```json\n{\"nodes\": [{\"id\": \"a\"}], \"edges\": []}\n```";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"], json!([{"id": "a"}]));
+    assert_eq!(result["edges"], json!([]));
+}
+
+#[test]
+fn test_parse_llm_json_prose_wrapped_without_fence_is_parsed() {
+    // Prose around bare JSON with no markdown fence: the balanced-brace
+    // fallback extracts the first complete object.
+    let raw =
+        "The extracted graph is {\"nodes\": [{\"id\": \"b\"}], \"edges\": []}. Hope this helps!";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"], json!([{"id": "b"}]));
+}
+
+#[test]
+fn test_parse_llm_json_raw_json_still_works() {
+    // Regression: clean JSON (the original happy path) must parse exactly.
+    let raw = r#"{"nodes": [], "edges": [], "hyperedges": []}"#;
+    let result = parse_llm_json(raw);
+    assert_eq!(result, json!({"nodes": [], "edges": [], "hyperedges": []}));
+}
+
+#[test]
+fn test_parse_llm_json_total_refusal_returns_empty_fragment() {
+    // Model refusal / unrelated prose must degrade gracefully to the empty
+    // fragment so the hollow detector takes over.
+    let raw = "I cannot extract structured data from this content.";
+    let result = parse_llm_json(raw);
+    assert_eq!(result, json!({"nodes": [], "edges": [], "hyperedges": []}));
+}
+
+#[test]
+fn test_parse_llm_json_fence_with_uppercase_language_tag() {
+    let raw = "```JSON\n{\"nodes\": [{\"id\": \"x\"}], \"edges\": []}\n```";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"], json!([{"id": "x"}]));
+}
+
+#[test]
+fn test_parse_llm_json_fence_without_closing_backticks() {
+    // Truncated response: model ran out of tokens before closing the fence.
+    let raw = "```json\n{\"nodes\": [{\"id\": \"y\"}], \"edges\": []}";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"], json!([{"id": "y"}]));
+}
+
+#[test]
+fn test_parse_llm_json_empty_response_returns_empty_fragment() {
+    assert_eq!(
+        parse_llm_json(""),
+        json!({"nodes": [], "edges": [], "hyperedges": []})
+    );
+}
+
+#[test]
+fn test_parse_llm_json_valid_json_with_fence_substring_is_not_mangled() {
+    // A valid JSON payload whose string value contains a ``` substring must be
+    // parsed verbatim. Stripping fences before the first parse would corrupt it
+    // and lose the whole fragment.
+    let raw = r#"{"nodes": [{"id": "x", "snippet": "```py\ncode\n```"}], "edges": []}"#;
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"][0]["snippet"], "```py\ncode\n```");
+    assert_eq!(result["edges"], json!([]));
+}
+
+#[test]
+fn test_parse_llm_json_skips_incidental_brace_before_real_json() {
+    // An incidental, non-JSON brace group before the real payload must not abort
+    // the scan: the parser keeps scanning balanced objects until one parses.
+    let raw = "Note {see below}. Here is the graph: {\"nodes\": [{\"id\": \"z\"}], \"edges\": []}";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["nodes"], json!([{"id": "z"}]));
+    assert_eq!(result["edges"], json!([]));
+}
+
+#[test]
+fn test_parse_llm_json_prefers_extraction_shaped_object() {
+    // When an earlier brace group is itself valid JSON but not an extraction
+    // fragment, the parser must skip it in favour of the object that carries
+    // `nodes`/`edges`/`hyperedges`.
+    let raw = "{\"status\": \"ok\"} then {\"nodes\": [], \"edges\": [{\"source\": \"a\"}]}";
+    let result = parse_llm_json(raw);
+    assert_eq!(result["edges"], json!([{"source": "a"}]));
+    assert_eq!(result["nodes"], json!([]));
+}
+
+// ---------------------------------------------------------------------------
+// test_llm_parser.py / test_claude_cli_backend.py — claude -p argv shape
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_claude_cli_uses_system_prompt_not_append() {
+    // The hollow-response root cause was --append-system-prompt layering
+    // graphify's prompt on Claude Code's default; the fix switches to
+    // --system-prompt (replace).
+    let args = build_claude_cli_args(Some("SYSTEM"), None);
+    assert!(
+        args.iter().any(|a| a == "--system-prompt"),
+        "--system-prompt missing from argv: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "--append-system-prompt"),
+        "--append-system-prompt should have been replaced"
+    );
+}
+
+#[test]
+fn test_claude_cli_model_arg_added_when_present() {
+    // GRAPHIFY_CLAUDE_CLI_MODEL must be forwarded to `claude -p --model`.
+    let args = build_claude_cli_args(Some("SYSTEM"), Some("haiku"));
+    let idx = args
+        .iter()
+        .position(|a| a == "--model")
+        .expect("--model flag present");
+    assert_eq!(args[idx + 1], "haiku");
+}
+
+#[test]
+fn test_claude_cli_no_model_arg_when_absent() {
+    // Default behaviour: no --model so claude-cli's own default kicks in.
+    let args = build_claude_cli_args(Some("SYSTEM"), None);
+    assert!(!args.iter().any(|a| a == "--model"));
+}
+
+#[test]
+fn test_claude_cli_blank_model_is_ignored() {
+    // A blank/whitespace override (env var set to "") must not add --model.
+    let args = build_claude_cli_args(Some("SYSTEM"), Some("   "));
+    assert!(!args.iter().any(|a| a == "--model"));
+}
+
+#[test]
+fn test_select_claude_windows_prefers_claude_cmd() {
+    // On Windows, prefer the full path to claude.cmd over the unexecutable
+    // claude.ps1 that a bare `claude` lookup resolves to (#1072).
+    let chosen = select_claude_command(true, |name| match name {
+        "claude" => Some(r"C:\npm\claude.ps1".to_string()),
+        "claude.cmd" => Some(r"C:\npm\claude.cmd".to_string()),
+        _ => None,
+    });
+    assert_eq!(chosen.as_deref(), Some(r"C:\npm\claude.cmd"));
+}
+
+#[test]
+fn test_select_claude_windows_falls_back_to_bare_claude() {
+    // claude.cmd missing but claude present (WSL-style): use the bare name.
+    let chosen = select_claude_command(true, |name| {
+        (name == "claude").then(|| "/usr/local/bin/claude".to_string())
+    });
+    assert_eq!(chosen.as_deref(), Some("claude"));
+}
+
+#[test]
+fn test_select_claude_windows_none_when_neither_present() {
+    let chosen = select_claude_command(true, |_| None);
+    assert_eq!(chosen, None);
+}
+
+#[test]
+fn test_select_claude_non_windows_uses_bare_claude() {
+    let chosen = select_claude_command(false, |name| {
+        (name == "claude").then(|| "/usr/local/bin/claude".to_string())
+    });
+    assert_eq!(chosen.as_deref(), Some("claude"));
 }
 
 // ---------------------------------------------------------------------------

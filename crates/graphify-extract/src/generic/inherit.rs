@@ -5,6 +5,10 @@
 //! They inspect language-specific child nodes (e.g. `base_list`, `superclass`,
 //! `base_class_clause`) and push `inherits` / `extends` / `implements` edges.
 
+// Tree-sitter row numbers are source line indices; files with 2^32+ lines do
+// not exist in practice, so usize→u32 truncation is safe.
+#![allow(clippy::cast_possible_truncation)]
+
 use std::collections::HashSet;
 
 use tree_sitter::Node;
@@ -12,7 +16,7 @@ use tree_sitter::Node;
 use crate::types::{Edge, Node as GNode};
 
 use super::names::read_text_owned;
-use super::walk::add_edge;
+use super::walk::{add_edge, first_child_kind, named_children};
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 
@@ -48,11 +52,107 @@ pub(super) fn emit_base_node(
 
 // ── Swift ─────────────────────────────────────────────────────────────────────
 
-/// Emit `inherits` edges for Swift class/protocol `inheritance_specifier` nodes.
+/// Return the leading kind keyword for a Swift `class_declaration`
+/// (`class` / `struct` / `enum` / `extension` / `actor`), if present.
+#[must_use]
+pub(super) fn swift_declaration_keyword(node: Node<'_>) -> Option<&'static str> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if !c.is_named() {
+                match c.kind() {
+                    "class" => return Some("class"),
+                    "struct" => return Some("struct"),
+                    "enum" => return Some("enum"),
+                    "extension" => return Some("extension"),
+                    "actor" => return Some("actor"),
+                    _ => {}
+                }
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Pre-scan a Swift compilation unit, returning `(protocol_names, class_like_names)`.
 ///
-/// Swift uses `inheritance_specifier` children inside the class/protocol body
-/// to list both superclasses and protocol conformances; this function treats
-/// all of them uniformly as `inherits` edges, matching Python `_extract_swift`.
+/// Used to classify each `inheritance_specifier` entry as `inherits` (a class)
+/// or `implements` (a protocol). Mirrors Python `_swift_pre_scan`.
+#[must_use]
+pub(super) fn swift_pre_scan(root: Node<'_>, source: &[u8]) -> (HashSet<String>, HashSet<String>) {
+    let mut protocols: HashSet<String> = HashSet::new();
+    let mut classes: HashSet<String> = HashSet::new();
+    let mut stack: Vec<Node<'_>> = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "protocol_declaration" {
+            let name_node = n
+                .child_by_field_name("name")
+                .or_else(|| first_child_kind(n, "type_identifier"));
+            if let Some(nn) = name_node {
+                let text = read_text_owned(nn, source);
+                if !text.is_empty() {
+                    protocols.insert(text);
+                }
+            }
+        } else if n.kind() == "class_declaration"
+            && matches!(
+                swift_declaration_keyword(n),
+                Some("class" | "struct" | "enum" | "actor")
+            )
+            && let Some(nn) = n.child_by_field_name("name")
+        {
+            let text = read_text_owned(nn, source);
+            if !text.is_empty() {
+                classes.insert(text);
+            }
+        }
+        let mut cur = n.walk();
+        if cur.goto_first_child() {
+            loop {
+                stack.push(cur.node());
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+    (protocols, classes)
+}
+
+/// Classify a Swift inheritance entry as `inherits` or `implements`.
+///
+/// Declared protocols → `implements`; declared classes → `inherits`. A
+/// `struct`/`enum`/`extension`/`actor` can only conform to protocols, so all
+/// of its entries are `implements`. For a `class`, the first entry is the base
+/// class (`inherits`) and the rest are protocol conformances (`implements`).
+/// Mirrors Python `_swift_classify_base`.
+fn swift_classify_base(
+    name: &str,
+    kind: Option<&str>,
+    is_first: bool,
+    protocols: &HashSet<String>,
+    classes: &HashSet<String>,
+) -> &'static str {
+    if protocols.contains(name) {
+        return "implements";
+    }
+    if classes.contains(name) {
+        return "inherits";
+    }
+    if matches!(kind, Some("struct" | "enum" | "extension" | "actor")) {
+        return "implements";
+    }
+    if is_first { "inherits" } else { "implements" }
+}
+
+/// Emit `inherits` / `implements` edges for a Swift class/protocol/extension's
+/// `inheritance_specifier` children, plus `references[generic_arg]` edges for
+/// any generic arguments on a base type. Mirrors Python `_extract_swift`.
+#[allow(clippy::too_many_lines)] // linear walk over inheritance specifiers + their generic args
 pub(super) fn emit_swift_inheritance(
     ctx: &mut super::walk::WalkCtx<'_, '_>,
     node: Node<'_>,
@@ -60,11 +160,23 @@ pub(super) fn emit_swift_inheritance(
     class_nid: &str,
     line: u32,
 ) {
+    use super::references::{RefRole, swift_collect_type_refs, swift_user_type_name};
+
     let stem = ctx.stem;
     let str_path = ctx.str_path;
+    let protocols = ctx.swift_protocol_names;
+    let classes = ctx.swift_class_names;
+    let is_protocol = node.kind() == "protocol_declaration";
+    let kind = if node.kind() == "class_declaration" {
+        swift_declaration_keyword(node)
+    } else {
+        Some("protocol")
+    };
     let nodes = &mut *ctx.nodes;
     let edges = &mut *ctx.edges;
     let seen_ids = &mut *ctx.seen_ids;
+
+    let mut seen_base = false;
     let mut cur = node.walk();
     if !cur.goto_first_child() {
         return;
@@ -72,19 +184,80 @@ pub(super) fn emit_swift_inheritance(
     loop {
         let child = cur.node();
         if child.kind() == "inheritance_specifier" {
+            // Resolve the base name (and the user_type carrying any generics).
+            let mut base_name: Option<String> = None;
+            let mut user_type_node: Option<Node<'_>> = None;
             let mut scur = child.walk();
             if scur.goto_first_child() {
                 loop {
                     let sub = scur.node();
-                    if matches!(sub.kind(), "user_type" | "type_identifier") {
-                        let base = read_text_owned(sub, source);
-                        let base_nid = emit_base_node(&base, line, stem, str_path, nodes, seen_ids);
-                        add_edge(
-                            class_nid, &base_nid, "inherits", line, str_path, None, edges,
-                        );
+                    if sub.kind() == "user_type" {
+                        user_type_node = Some(sub);
+                        base_name = swift_user_type_name(sub, source);
+                        break;
+                    }
+                    if sub.kind() == "type_identifier" {
+                        let t = read_text_owned(sub, source);
+                        base_name = (!t.is_empty()).then_some(t);
+                        break;
                     }
                     if !scur.goto_next_sibling() {
                         break;
+                    }
+                }
+            }
+            if let Some(base_name) = base_name {
+                let base_nid = emit_base_node(&base_name, line, stem, str_path, nodes, seen_ids);
+                let relation = if is_protocol {
+                    "inherits"
+                } else {
+                    swift_classify_base(&base_name, kind, !seen_base, protocols, classes)
+                };
+                seen_base = true;
+                add_edge(class_nid, &base_nid, relation, line, str_path, None, edges);
+                // Generic arguments on the base type → references[generic_arg].
+                if let Some(ut) = user_type_node {
+                    let mut tacur = ut.walk();
+                    if tacur.goto_first_child() {
+                        loop {
+                            if tacur.node().kind() == "type_arguments" {
+                                let mut acur = tacur.node().walk();
+                                if acur.goto_first_child() {
+                                    loop {
+                                        if acur.node().is_named() {
+                                            let mut refs: Vec<(String, RefRole)> = Vec::new();
+                                            swift_collect_type_refs(
+                                                acur.node(),
+                                                source,
+                                                true,
+                                                &mut refs,
+                                            );
+                                            for (ref_name, _role) in refs {
+                                                let target = super::walk::ensure_named_node(
+                                                    &ref_name, line, stem, str_path, nodes,
+                                                    seen_ids,
+                                                );
+                                                add_edge(
+                                                    class_nid,
+                                                    &target,
+                                                    "references",
+                                                    line,
+                                                    str_path,
+                                                    Some("generic_arg"),
+                                                    edges,
+                                                );
+                                            }
+                                        }
+                                        if !acur.goto_next_sibling() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if !tacur.goto_next_sibling() {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -615,6 +788,277 @@ pub(super) fn emit_cpp_inheritance(
         }
         if !cur.goto_next_sibling() {
             break;
+        }
+    }
+}
+
+// ── PHP ───────────────────────────────────────────────────────────────────────
+
+/// Emit `inherits` (`extends`) / `implements` (`implements`) / `mixes_in`
+/// (trait `use`) edges for a PHP class. Mirrors Python `_extract_php`.
+pub(super) fn emit_php_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
+    node: Node<'_>,
+    source: &[u8],
+    class_nid: &str,
+    _line: u32,
+) {
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+
+    let emit = |base_name: Option<String>,
+                rel: &str,
+                at_line: u32,
+                nodes: &mut Vec<GNode>,
+                edges: &mut Vec<Edge>,
+                seen_ids: &mut HashSet<String>| {
+        let Some(base_name) = base_name else { return };
+        if base_name.is_empty() {
+            return;
+        }
+        let base_nid = emit_base_node(&base_name, at_line, stem, str_path, nodes, seen_ids);
+        add_edge(class_nid, &base_nid, rel, at_line, str_path, None, edges);
+    };
+
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let child = cur.node();
+            let child_line = child.start_position().row as u32 + 1;
+            match child.kind() {
+                "base_clause" => {
+                    for sub in named_children(child) {
+                        if matches!(sub.kind(), "name" | "qualified_name") {
+                            emit(
+                                super::references::php_name_text(sub, source),
+                                "inherits",
+                                child_line,
+                                nodes,
+                                edges,
+                                seen_ids,
+                            );
+                        }
+                    }
+                }
+                "class_interface_clause" => {
+                    for sub in named_children(child) {
+                        if matches!(sub.kind(), "name" | "qualified_name") {
+                            emit(
+                                super::references::php_name_text(sub, source),
+                                "implements",
+                                child_line,
+                                nodes,
+                                edges,
+                                seen_ids,
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+    // Trait `use` declarations inside the class body → `mixes_in`.
+    let body = node
+        .child_by_field_name("body")
+        .or_else(|| first_child_kind(node, "declaration_list"));
+    if let Some(body) = body {
+        for member in named_children(body) {
+            if member.kind() != "use_declaration" {
+                continue;
+            }
+            let member_line = member.start_position().row as u32 + 1;
+            for sub in named_children(member) {
+                if matches!(sub.kind(), "name" | "qualified_name") {
+                    emit(
+                        super::references::php_name_text(sub, source),
+                        "mixes_in",
+                        member_line,
+                        nodes,
+                        edges,
+                        seen_ids,
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ── Kotlin ────────────────────────────────────────────────────────────────────
+
+/// Emit `inherits` (`: Base()`) / `implements` (`: Interface`) edges for a
+/// Kotlin class's `delegation_specifiers`, plus `references[generic_arg]` for
+/// type arguments on the base. Mirrors Python `_extract_kotlin`.
+pub(super) fn emit_kotlin_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
+    node: Node<'_>,
+    source: &[u8],
+    class_nid: &str,
+    line: u32,
+) {
+    use super::references::{RefRole, kotlin_collect_type_refs, kotlin_user_type_name};
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+
+    for child in named_children(node) {
+        if child.kind() != "delegation_specifiers" {
+            continue;
+        }
+        for spec in named_children(child) {
+            if spec.kind() != "delegation_specifier" {
+                continue;
+            }
+            let mut relation = "implements";
+            let mut user_type_node: Option<Node<'_>> = None;
+            for sub in named_children(spec) {
+                if sub.kind() == "constructor_invocation" {
+                    relation = "inherits";
+                    user_type_node = first_child_kind(sub, "user_type");
+                    break;
+                }
+                if sub.kind() == "user_type" {
+                    user_type_node = Some(sub);
+                    break;
+                }
+            }
+            let Some(ut) = user_type_node else { continue };
+            // Skip empty base names (consistent with the PHP emitter) so a
+            // malformed `user_type` never spawns an empty-label node.
+            let Some(base) = kotlin_user_type_name(ut, source).filter(|b| !b.is_empty()) else {
+                continue;
+            };
+            let base_nid = emit_base_node(&base, line, stem, str_path, nodes, seen_ids);
+            add_edge(class_nid, &base_nid, relation, line, str_path, None, edges);
+            for arg_child in named_children(ut) {
+                if arg_child.kind() != "type_arguments" {
+                    continue;
+                }
+                for arg in named_children(arg_child) {
+                    let mut refs: Vec<(String, RefRole)> = Vec::new();
+                    if arg.kind() == "type_projection" {
+                        for inner in named_children(arg) {
+                            kotlin_collect_type_refs(inner, source, true, &mut refs);
+                        }
+                    } else {
+                        kotlin_collect_type_refs(arg, source, true, &mut refs);
+                    }
+                    for (ref_name, _role) in refs {
+                        let target = super::walk::ensure_named_node(
+                            &ref_name, line, stem, str_path, nodes, seen_ids,
+                        );
+                        add_edge(
+                            class_nid,
+                            &target,
+                            "references",
+                            line,
+                            str_path,
+                            Some("generic_arg"),
+                            edges,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Scala ─────────────────────────────────────────────────────────────────────
+
+/// Emit `inherits` (first base after `extends`) / `mixes_in` (each `with`
+/// trait) edges plus `references[field]` edges for constructor parameters.
+/// Mirrors Python `_extract_scala`.
+pub(super) fn emit_scala_inheritance(
+    ctx: &mut super::walk::WalkCtx<'_, '_>,
+    node: Node<'_>,
+    source: &[u8],
+    class_nid: &str,
+    _line: u32,
+) {
+    use super::references::{RefRole, scala_collect_type_refs};
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+
+    let extend = node
+        .child_by_field_name("extend")
+        .or_else(|| first_child_kind(node, "extends_clause"));
+    if let Some(extend) = extend {
+        let mut bases: Vec<(String, u32)> = Vec::new();
+        for c in named_children(extend) {
+            let c_line = c.start_position().row as u32 + 1;
+            // Skip empty base names (consistent with the PHP emitter) so a
+            // malformed node never spawns an empty-label node.
+            if c.kind() == "type_identifier" {
+                let name = read_text_owned(c, source);
+                if !name.is_empty() {
+                    bases.push((name, c_line));
+                }
+            } else if c.kind() == "generic_type" {
+                let base = c
+                    .child_by_field_name("type")
+                    .or_else(|| first_child_kind(c, "type_identifier"));
+                if let Some(base) = base {
+                    let name = read_text_owned(base, source);
+                    if !name.is_empty() {
+                        bases.push((name, c_line));
+                    }
+                }
+            }
+        }
+        for (idx, (base_name, base_line)) in bases.into_iter().enumerate() {
+            let rel = if idx == 0 { "inherits" } else { "mixes_in" };
+            let base_nid = super::walk::ensure_named_node(
+                &base_name, base_line, stem, str_path, nodes, seen_ids,
+            );
+            if base_nid != class_nid {
+                add_edge(class_nid, &base_nid, rel, base_line, str_path, None, edges);
+            }
+        }
+    }
+
+    for c in named_children(node) {
+        if c.kind() != "class_parameters" {
+            continue;
+        }
+        for cp in named_children(c) {
+            if cp.kind() != "class_parameter" {
+                continue;
+            }
+            let Some(ptype) = cp.child_by_field_name("type") else {
+                continue;
+            };
+            let cp_line = cp.start_position().row as u32 + 1;
+            let mut refs: Vec<(String, RefRole)> = Vec::new();
+            scala_collect_type_refs(ptype, source, false, &mut refs);
+            for (ref_name, role) in refs {
+                let context = role.into_context("field");
+                let target = super::walk::ensure_named_node(
+                    &ref_name, cp_line, stem, str_path, nodes, seen_ids,
+                );
+                if target != class_nid {
+                    add_edge(
+                        class_nid,
+                        &target,
+                        "references",
+                        cp_line,
+                        str_path,
+                        Some(context),
+                        edges,
+                    );
+                }
+            }
         }
     }
 }

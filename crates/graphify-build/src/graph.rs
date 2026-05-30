@@ -88,6 +88,15 @@ impl Graph {
             let directed = self.kind.is_directed();
             for edge in &mut self.edge_list {
                 if Self::edge_matches(directed, edge, src, tgt) {
+                    // #1061: keep the first-seen direction when an undirected
+                    // graph collapses a same-relation bidirectional pair, so
+                    // single-call ingestion (e.g. the global-graph merge) does
+                    // not flip caller/callee. Mirrors `bulk_add_edges`.
+                    if !directed
+                        && Self::is_reverse_direction_duplicate(&edge.attrs, src, tgt, &attrs)
+                    {
+                        return;
+                    }
                     edge.attrs = attrs;
                     return;
                 }
@@ -98,6 +107,31 @@ impl Graph {
             target: tgt.to_string(),
             attrs,
         });
+    }
+
+    /// `true` if `existing` carries the same `relation` as the incoming edge
+    /// (`src` → `tgt`) but stores the opposite direction in its `_src`/`_tgt`
+    /// attributes. Used by [`Self::bulk_add_edges`] to keep the first-seen
+    /// direction on undirected bidirectional collisions (#1061).
+    fn is_reverse_direction_duplicate(
+        existing: &IndexMap<String, Value>,
+        src: &str,
+        tgt: &str,
+        incoming: &IndexMap<String, Value>,
+    ) -> bool {
+        // Both edges must carry an explicit, equal `relation`. Two edges that
+        // each lack the attribute are not "the same relation" — treating absent
+        // == absent as a match would let the guard silently drop a reverse-
+        // direction edge that has no relation at all.
+        let (Some(existing_rel), Some(incoming_rel)) = (
+            existing.get("relation").and_then(Value::as_str),
+            incoming.get("relation").and_then(Value::as_str),
+        ) else {
+            return false;
+        };
+        existing_rel == incoming_rel
+            && existing.get("_src").and_then(Value::as_str) == Some(tgt)
+            && existing.get("_tgt").and_then(Value::as_str) == Some(src)
     }
 
     /// `true` if `edge` connects `u` and `v` under the given directedness.
@@ -152,6 +186,23 @@ impl Graph {
         for (src, tgt, attrs) in edges {
             let key = canonical(&src, &tgt);
             if let Some(&existing) = index.get(&key) {
+                // #1061: in an undirected graph the same node pair can arrive
+                // twice with the same relation but opposite directions (mutual
+                // recursion, callbacks, event handlers). The deterministic edge
+                // sort upstream means the lexicographically-later direction
+                // would otherwise overwrite the earlier edge's `_src`/`_tgt`,
+                // silently flipping the surviving edge's caller and callee.
+                // First-seen direction wins: drop the redundant reverse copy.
+                if !directed
+                    && Self::is_reverse_direction_duplicate(
+                        &self.edge_list[existing].attrs,
+                        &src,
+                        &tgt,
+                        &attrs,
+                    )
+                {
+                    continue;
+                }
                 self.edge_list[existing].attrs = attrs;
             } else {
                 let idx = self.edge_list.len();
