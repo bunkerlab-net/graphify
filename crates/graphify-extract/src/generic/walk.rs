@@ -83,7 +83,7 @@ pub(super) fn add_edge(
 
 /// Collect the named children of `node` into a `Vec`.
 #[must_use]
-pub(super) fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+pub(crate) fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
     let mut out = Vec::new();
     let mut cur = node.walk();
     if cur.goto_first_child() {
@@ -101,7 +101,7 @@ pub(super) fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
 
 /// Return the first child of `node` whose kind is `kind`.
 #[must_use]
-pub(super) fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+pub(crate) fn first_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {

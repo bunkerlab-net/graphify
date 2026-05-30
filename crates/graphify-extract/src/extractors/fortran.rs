@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::generic::walk::{first_child_kind, named_children};
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 
@@ -177,42 +178,6 @@ struct FortranWalkCtx<'a> {
     scope_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
-/// Return the first child of `node` whose kind is `kind`.
-fn first_child_kind_f<'tree>(
-    node: tree_sitter::Node<'tree>,
-    kind: &str,
-) -> Option<tree_sitter::Node<'tree>> {
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().kind() == kind {
-                return Some(cur.node());
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    None
-}
-
-/// Collect the named children of `node`.
-fn named_children_f(node: tree_sitter::Node<'_>) -> Vec<tree_sitter::Node<'_>> {
-    let mut out = Vec::new();
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().is_named() {
-                out.push(cur.node());
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    out
-}
-
 /// Mutable graph state for the Fortran signature-reference pass, reborrowed
 /// from the structural-walk locals at each call site.
 struct FortranRefCtx<'a> {
@@ -274,13 +239,13 @@ fn emit_fortran_signature_refs(
     } else {
         "subroutine_statement"
     };
-    let Some(stmt) = first_child_kind_f(scope_node, stmt_type) else {
+    let Some(stmt) = first_child_kind(scope_node, stmt_type) else {
         return;
     };
 
     let mut param_names: HashSet<String> = HashSet::new();
-    if let Some(params_node) = first_child_kind_f(stmt, "parameters") {
-        for c in named_children_f(params_node) {
+    if let Some(params_node) = first_child_kind(stmt, "parameters") {
+        for c in named_children(params_node) {
             if c.kind() == "identifier" {
                 param_names.insert(read_text(c, rc.source).to_lowercase());
             }
@@ -289,8 +254,8 @@ fn emit_fortran_signature_refs(
 
     let mut result_name: Option<String> = None;
     if is_function {
-        if let Some(result_node) = first_child_kind_f(stmt, "function_result") {
-            if let Some(res_id) = first_child_kind_f(result_node, "identifier") {
+        if let Some(result_node) = first_child_kind(stmt, "function_result") {
+            if let Some(res_id) = first_child_kind(result_node, "identifier") {
                 result_name = Some(read_text(res_id, rc.source).to_lowercase());
             }
         } else {
@@ -299,18 +264,18 @@ fn emit_fortran_signature_refs(
         }
     }
 
-    for child in named_children_f(scope_node) {
+    for child in named_children(scope_node) {
         if child.kind() != "variable_declaration" {
             continue;
         }
-        let Some(derived) = first_child_kind_f(child, "derived_type") else {
+        let Some(derived) = first_child_kind(child, "derived_type") else {
             continue;
         };
-        let Some(type_name_node) = first_child_kind_f(derived, "type_name") else {
+        let Some(type_name_node) = first_child_kind(derived, "type_name") else {
             continue;
         };
         let type_name = read_text(type_name_node, rc.source).to_lowercase();
-        for var in named_children_f(child) {
+        for var in named_children(child) {
             if var.kind() != "identifier" {
                 continue;
             }
@@ -590,8 +555,8 @@ fn walk_fortran(
             }
         }
         "derived_type_definition" => {
-            if let Some(stmt) = first_child_kind_f(node, "derived_type_statement")
-                && let Some(name_node) = first_child_kind_f(stmt, "type_name")
+            if let Some(stmt) = first_child_kind(node, "derived_type_statement")
+                && let Some(name_node) = first_child_kind(stmt, "type_name")
             {
                 let type_name = read_text(name_node, source).to_lowercase();
                 let type_nid = make_id(&[stem, &type_name]);

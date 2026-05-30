@@ -19,7 +19,7 @@ mod inherit;
 mod js_extra;
 mod names;
 mod references;
-mod walk;
+pub(crate) mod walk;
 
 pub use config::{ImportHandlerFn, LangConfig, LangId, ResolveFnNameFn};
 pub use js_extra::resolve_js_import_target;

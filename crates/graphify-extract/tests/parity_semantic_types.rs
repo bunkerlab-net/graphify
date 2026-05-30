@@ -9,79 +9,19 @@
 
 #![allow(clippy::expect_used)]
 
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use graphify_extract::{
-    FileResult, extract_c, extract_cpp, extract_fortran, extract_go, extract_js, extract_julia,
-    extract_kotlin, extract_markdown, extract_objc, extract_php, extract_powershell, extract_rust,
-    extract_scala, extract_swift,
+    extract_c, extract_cpp, extract_fortran, extract_go, extract_js, extract_julia, extract_kotlin,
+    extract_markdown, extract_objc, extract_php, extract_powershell, extract_rust, extract_scala,
+    extract_swift,
 };
+
+mod common;
+use common::{has_edge, labels, relations};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
-/// Mirror Python `_normalize_symbol_label`: strip wrapping `()` and a leading `.`.
-fn normalize_symbol_label(label: &str) -> String {
-    label
-        .trim_matches(|c| c == '(' || c == ')')
-        .trim_start_matches('.')
-        .to_string()
-}
-
-/// Mirror Python `_edge_labels`: the set of `(source_label, target_label)` pairs
-/// for `relation` (optionally filtered by `context`), using normalized labels.
-fn edge_labels(
-    result: &FileResult,
-    relation: &str,
-    context: Option<&str>,
-) -> HashSet<(String, String)> {
-    let labels: HashMap<&str, String> = result
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), normalize_symbol_label(&n.label)))
-        .collect();
-    let mut pairs: HashSet<(String, String)> = HashSet::new();
-    for e in &result.edges {
-        if e.relation != relation {
-            continue;
-        }
-        if let Some(ctx) = context
-            && e.context.as_deref() != Some(ctx)
-        {
-            continue;
-        }
-        let s = labels
-            .get(e.source.as_str())
-            .cloned()
-            .unwrap_or_else(|| e.source.clone());
-        let t = labels
-            .get(e.target.as_str())
-            .cloned()
-            .unwrap_or_else(|| e.target.clone());
-        pairs.insert((s, t));
-    }
-    pairs
-}
-
-/// `true` if `(src, tgt)` appears among `relation`/`context` edges.
-fn has_edge(
-    result: &FileResult,
-    relation: &str,
-    context: Option<&str>,
-    src: &str,
-    tgt: &str,
-) -> bool {
-    edge_labels(result, relation, context).contains(&(src.to_string(), tgt.to_string()))
-}
-
-fn labels(result: &FileResult) -> Vec<String> {
-    result.nodes.iter().map(|n| n.label.clone()).collect()
-}
-
-fn relations(result: &FileResult) -> HashSet<String> {
-    result.edges.iter().map(|e| e.relation.clone()).collect()
 }
 
 // ── Go (test_multilang.py) ────────────────────────────────────────────────────
