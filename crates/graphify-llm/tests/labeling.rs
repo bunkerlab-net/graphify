@@ -11,6 +11,7 @@ use graphify_llm::{
     label_communities_with,
 };
 use indexmap::{IndexMap, IndexSet};
+use serial_test::serial;
 
 /// community 0 = ordering, community 1 = payments.
 fn graph() -> (IndexMap<String, String>, IndexMap<i64, Vec<String>>) {
@@ -117,6 +118,7 @@ fn generate_community_labels_degrades_on_error() {
 }
 
 #[test]
+#[serial]
 fn generate_community_labels_no_backend() {
     // With backend=None and no env keys / no providers.json, detect_backend()
     // returns None and the real wrapper degrades to placeholders without any LLM
@@ -169,6 +171,7 @@ fn generate_community_labels_degrades_loud() {
 }
 
 #[test]
+#[serial]
 fn label_communities_real_path_via_custom_provider() {
     // Exercise the public (non-`_with`) wrappers end-to-end: a custom provider
     // pointed at a mock server drives `call_llm`, and both `label_communities`

@@ -188,7 +188,10 @@ where
     );
 
     let labeled_len = u32::try_from(labeled_cids.len()).unwrap_or(u32::MAX);
-    let max_tokens = (40 + 16u32.saturating_mul(labeled_len)).min(4096);
+    let max_tokens = 16u32
+        .saturating_mul(labeled_len)
+        .saturating_add(40)
+        .min(4096);
     let text = call(&prompt, backend, max_tokens)?;
     labels.extend(parse_label_response(&text, &labeled_cids)?);
     Ok(labels)

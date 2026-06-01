@@ -8,6 +8,7 @@ use graphify_llm::{
     load_custom_providers_from,
 };
 use indexmap::IndexMap;
+use serial_test::serial;
 use tempfile::tempdir;
 
 /// RAII guard that sets/restores env vars (mirrors the HTTP tests' guard).
@@ -126,6 +127,7 @@ fn custom_provider_cannot_shadow_builtin() {
 }
 
 #[test]
+#[serial]
 fn detect_backend_custom_provider_after_builtins() {
     let mut g = EnvGuard::new();
     for key in [
@@ -168,6 +170,7 @@ fn detect_backend_custom_provider_after_builtins() {
 }
 
 #[test]
+#[serial]
 fn custom_provider_call_llm_routes_via_openai_compat() {
     // A custom provider registered in $HOME/.graphify/providers.json must drive a
     // plain call through the OpenAI-compatible client (#1084). nextest isolates
@@ -206,6 +209,7 @@ fn custom_provider_call_llm_routes_via_openai_compat() {
 }
 
 #[test]
+#[serial]
 fn custom_provider_extract_files_routes_via_openai_compat() {
     // `extract_files_direct` with a custom provider must extract through the
     // OpenAI-compatible client (#1084).

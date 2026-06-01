@@ -480,7 +480,7 @@ fn run_walk_phase(ctx: &WalkCtx<'_>, root: &Path, memory_dir: &Path) -> Vec<Path
     // therefore graph.json) is deterministic regardless of the parallel walker's
     // completion order (8db19d6). Sort by the full string, not by PathBuf
     // components, to match Python's `sorted(key=str)`.
-    all_files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    all_files.sort_by_cached_key(|p| p.to_string_lossy().into_owned());
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf]   walk_dir: {:.2}s ({} files)",

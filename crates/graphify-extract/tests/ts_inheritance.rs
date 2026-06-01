@@ -29,7 +29,7 @@ fn sym_id(file: &str, sym: &str) -> String {
     make_id(&[&file_stem(Path::new(file)), sym])
 }
 
-fn has_inherits(
+fn has_edge(
     edges: &[indexmap::IndexMap<String, Value>],
     src_file: &str,
     src_sym: &str,
@@ -56,7 +56,7 @@ fn interface_extends_same_file() {
          export interface Derived extends Base { y: number; }\n",
     );
     let result = extract(&[f], Some(&root));
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "Derived",
@@ -77,7 +77,7 @@ fn interface_extends_multiple_same_file() {
          interface M extends A, B { m: number; }\n",
     );
     let result = extract(&[f], Some(&root));
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "M",
@@ -85,7 +85,7 @@ fn interface_extends_multiple_same_file() {
         "A",
         "inherits"
     ));
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "M",
@@ -104,7 +104,7 @@ fn class_extends_same_file() {
         "class Animal {}\nclass Dog extends Animal {}\n",
     );
     let result = extract(&[f], Some(&root));
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "Dog",
@@ -124,7 +124,7 @@ fn interface_extends_generic_base_same_file() {
          interface G extends Base<number> { y: number; }\n",
     );
     let result = extract(&[f], Some(&root));
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "G",
@@ -151,7 +151,7 @@ fn interface_extends_imported() {
         &[root.join("src").join("a.ts"), root.join("src").join("b.ts")],
         Some(&root),
     );
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "D",
@@ -175,7 +175,7 @@ fn imported_class_extends_still_works() {
         &[root.join("src").join("a.ts"), root.join("src").join("b.ts")],
         Some(&root),
     );
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "Cat",
@@ -195,7 +195,7 @@ fn class_implements_same_file_interface() {
          class Person implements Walker { walk() {} }\n",
     );
     let result = extract(&[f], Some(&root));
-    assert!(has_inherits(
+    assert!(has_edge(
         &result.edges,
         "src/a.ts",
         "Person",
