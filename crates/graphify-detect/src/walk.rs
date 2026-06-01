@@ -13,7 +13,7 @@ use rayon::prelude::*;
 
 use crate::extensions::{FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
 use crate::ignore::{
-    IgnorePatterns, could_contain_included_path, is_ignored, load_graphifyignore,
+    IgnorePatterns, could_contain_included_path, is_ignored, is_included, load_graphifyignore,
     load_graphifyinclude,
 };
 use crate::office::{convert_office_file, xlsx_to_markdown};
@@ -45,6 +45,7 @@ fn classify_one(
     memory_dir: &Path,
     converted_dir: &Path,
     ignore_patterns: &IgnorePatterns,
+    include_patterns: &IgnorePatterns,
 ) -> FileDecision {
     let in_memory = memory_dir.exists() && p.starts_with(memory_dir);
     if !in_memory && p.starts_with(converted_dir) {
@@ -53,7 +54,16 @@ fn classify_one(
     // Memory-dir sidecars bypass ignore filtering: a user's `.gitignore`
     // pattern (e.g. `*.md`) must not erase the `graphify-out/memory` notes we
     // generate ourselves. Mirrors graphify-py `detect()` (#1047).
-    if !in_memory && is_ignored(p, root, ignore_patterns) {
+    //
+    // A `.graphifyinclude` allowlist re-includes an otherwise-ignored file
+    // (gitignore-negation style, but in a dedicated file): the walker already
+    // descends into ignored directories that `could_contain_included_path`
+    // flags, and this is the matching file-level rescue. The sensitive-file
+    // guard below still runs, so an allowlist cannot pull secrets into the
+    // corpus. (graphify-py defines these helpers but never wired them in — the
+    // feature was left inert there; the Rust port completes it.)
+    if !in_memory && is_ignored(p, root, ignore_patterns) && !is_included(p, root, include_patterns)
+    {
         return FileDecision::Skip;
     }
     if is_sensitive(p) {
@@ -440,6 +450,7 @@ pub fn detect(
         &memory_dir,
         &converted_dir,
         &ignore_patterns,
+        &include_patterns,
         google_workspace,
     );
 
@@ -517,6 +528,7 @@ fn run_classify_phase(
     memory_dir: &Path,
     converted_dir: &Path,
     ignore_patterns: &crate::ignore::IgnorePatterns,
+    include_patterns: &crate::ignore::IgnorePatterns,
     google_workspace: bool,
 ) -> ClassifyOutput {
     let mut files: IndexMap<String, Vec<String>> = FILE_TYPE_KINDS
@@ -531,12 +543,30 @@ fn run_classify_phase(
     let decisions: Vec<FileDecision> = if all_files.len() >= PARALLEL_COUNT_THRESHOLD {
         all_files
             .par_iter()
-            .map(|p| classify_one(p, root, memory_dir, converted_dir, ignore_patterns))
+            .map(|p| {
+                classify_one(
+                    p,
+                    root,
+                    memory_dir,
+                    converted_dir,
+                    ignore_patterns,
+                    include_patterns,
+                )
+            })
             .collect()
     } else {
         all_files
             .iter()
-            .map(|p| classify_one(p, root, memory_dir, converted_dir, ignore_patterns))
+            .map(|p| {
+                classify_one(
+                    p,
+                    root,
+                    memory_dir,
+                    converted_dir,
+                    ignore_patterns,
+                    include_patterns,
+                )
+            })
             .collect()
     };
 

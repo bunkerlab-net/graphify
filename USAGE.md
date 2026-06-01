@@ -539,6 +539,24 @@ the LLM spend.
 
 ## Configuration
 
+### File selection (`.graphifyignore` / `.graphifyinclude`)
+
+`detect` — and therefore `extract` / `update` / `watch` — honours two optional control files at the scan root, on
+top of any `.gitignore`:
+
+- **`.graphifyignore`** — gitignore-syntax exclude list. Same last-match-wins and parent-exclusion rules as
+  `.gitignore` (a `!` re-include cannot rescue a file whose ancestor directory is excluded). Loaded from the scan
+  root up to the VCS root.
+- **`.graphifyinclude`** — gitignore-syntax **allowlist** that re-includes files an ignore rule would otherwise
+  drop. A file is kept when it (or an ancestor directory) matches an include pattern, even if `.graphifyignore` /
+  `.gitignore` excludes it. Anchored directory stems cover their whole subtree — both `/src` and the globbed
+  `/src*` pull in `src/deep/main.py`. The sensitive-file guard still runs after the allowlist, so an include can
+  never pull secrets (`.env`, private keys, etc.) into the corpus.
+
+Files under `graphify-out/memory/` are always detected regardless of either file. (`graphify-py` ships the
+`.graphifyinclude` matcher but never wires it into `detect`, so the allowlist is inert there; the Rust port
+completes the feature.)
+
 ### Environment variables
 
 | Variable                    | Effect                                                                                                                                              |

@@ -429,6 +429,12 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
 }
 
 /// Return `true` if a directory may contain files matched by `.graphifyinclude`.
+///
+/// Used to keep the walker from pruning a subtree that the allowlist would
+/// later accept. It mirrors [`anchored_include_matches`] so a directory is kept
+/// when it is the matched stem, lives inside the stem's subtree (a literal
+/// `/src` or globbed `/src*` covering `src/deep/main.py`), or is an ancestor of
+/// a more-specific pattern target.
 #[must_use]
 pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     if patterns.is_empty() {
@@ -457,10 +463,17 @@ pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePa
             if p.is_empty() {
                 continue;
             }
+            // `dir` is an ancestor of a more-specific pattern target (e.g. dir
+            // `src`, pattern `src/a/b.py`): descend to reach the target.
             if p == rel || p.starts_with(&format!("{rel}/")) {
                 return true;
             }
-            if fnmatch(rel, p) {
+            // `dir` is the matched stem itself or lives inside its subtree. Use
+            // the same anchored-subtree test as `is_included` so the
+            // descendant-covering semantics (a literal `/src` or globbed `/src*`
+            // pulling in `src/deep/main.py`) are honoured during traversal —
+            // otherwise the walker prunes subtrees the allowlist would accept.
+            if anchored_include_matches(rel, p) {
                 return true;
             }
         }

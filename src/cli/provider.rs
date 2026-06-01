@@ -60,7 +60,11 @@ fn save_registry(registry: &Map<String, Value>) -> Result<()> {
     }
     let body = serde_json::to_string_pretty(registry)?;
     // Write to a sibling temp file then rename, so a crash mid-write can't leave
-    // a truncated/corrupt registry (rename is atomic on the same filesystem).
+    // a truncated/corrupt registry. `std::fs::rename` replaces an existing
+    // destination on both Unix and Windows, but the exact atomicity / overwrite
+    // semantics are platform- and filesystem-dependent (e.g. Windows needs
+    // specific kernel support for POSIX-style atomic replace), so this is a
+    // best-effort guard rather than a hard atomicity guarantee.
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, format!("{body}\n"))?;
     if let Err(e) = std::fs::rename(&tmp, &path) {

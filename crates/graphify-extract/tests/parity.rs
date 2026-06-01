@@ -894,6 +894,58 @@ fn extract_swift_merges_extension_across_files() {
         "expected a single canonical Foo node, got {}: {foo_nodes:?}",
         foo_nodes.len()
     );
+    // The survivor must be the canonical *class* (declared in `Foo.swift`), not
+    // the extension node (declared in `Foo+Ext.swift`). A count-only assertion
+    // would still pass if the merge kept the wrong node, so pin down the origin.
+    let foo = foo_nodes[0];
+    let foo_src = foo
+        .get("source_file")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        std::path::Path::new(foo_src)
+            .file_name()
+            .and_then(|n| n.to_str()),
+        Some("Foo.swift"),
+        "retained Foo must be the class from Foo.swift, not the extension; got {foo_src:?}"
+    );
+    // Both the class's own method (`bar`) and the merged extension's method
+    // (`baz`) must hang off the surviving canonical node.
+    let foo_id = foo
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("Foo node has id");
+    assert!(
+        has_method_edge(&result, foo_id, ".bar()"),
+        "canonical Foo must keep its own class method `.bar()`"
+    );
+    assert!(
+        has_method_edge(&result, foo_id, ".baz()"),
+        "canonical Foo must absorb the merged extension method `.baz()`"
+    );
+}
+
+/// Whether a `method` edge runs from node `src_id` to a node labelled
+/// `target_label`. Used to assert which members hang off a Swift node after the
+/// `extension` merge pass remaps edges onto the canonical class.
+fn has_method_edge(
+    result: &graphify_extract::ExtractOutput,
+    src_id: &str,
+    target_label: &str,
+) -> bool {
+    result.edges.iter().any(|e| {
+        e.get("source").and_then(serde_json::Value::as_str) == Some(src_id)
+            && e.get("relation").and_then(serde_json::Value::as_str) == Some("method")
+            && e.get("target")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|tgt| {
+                    result.nodes.iter().any(|n| {
+                        n.get("id").and_then(serde_json::Value::as_str) == Some(tgt)
+                            && n.get("label").and_then(serde_json::Value::as_str)
+                                == Some(target_label)
+                    })
+                })
+    })
 }
 
 #[test]
@@ -922,6 +974,21 @@ fn extract_swift_same_file_class_and_extension_keeps_canonical() {
         1,
         "same-file class+extension must keep exactly one canonical Foo node, got {}: {foo_nodes:?}",
         foo_nodes.len()
+    );
+    // The single surviving node must carry both the class method (`bar`) and the
+    // extension method (`baz`), proving it is the real class node and not an
+    // extension-shaped remnant.
+    let foo_id = foo_nodes[0]
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("Foo node has id");
+    assert!(
+        has_method_edge(&result, foo_id, ".bar()"),
+        "canonical Foo must keep its own class method `.bar()`"
+    );
+    assert!(
+        has_method_edge(&result, foo_id, ".baz()"),
+        "canonical Foo must keep the same-file extension method `.baz()`"
     );
 }
 

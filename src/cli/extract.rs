@@ -229,6 +229,14 @@ fn detect_result_from_incremental(
     for (kind, paths) in &inc.unchanged_files {
         files.entry(kind.clone()).or_default().extend(paths.clone());
     }
+    // Sort each bucket so the reconstructed lists match a fresh `detect` walk
+    // byte-for-byte (which sorts every bucket — see `walk::detect`). Without
+    // this, concatenating changed-then-unchanged would interleave paths out of
+    // order and make incremental extraction non-deterministic relative to a
+    // full scan.
+    for bucket in files.values_mut() {
+        bucket.sort();
+    }
     let total_files = files.values().map(Vec::len).sum();
     graphify_detect::DetectResult {
         files,

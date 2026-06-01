@@ -249,3 +249,35 @@ fn detect_with_nested_subdirs() {
     let code: &Vec<String> = result.files.get("code").expect("key present");
     assert!(code.len() >= 3);
 }
+
+#[test]
+fn detect_graphifyinclude_rescues_ignored_subtree() {
+    // End-to-end allowlist: `.graphifyignore = *` ignores everything, while
+    // `.graphifyinclude = /src*` re-includes a glob-matched anchored directory
+    // and its whole subtree. The walker must descend past the ignored dirs
+    // (`could_contain_included_path`) AND rescue the files at classification time
+    // (`is_included`), so a deeply nested allowlisted file lands in the result
+    // while an unrelated file stays ignored.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src1/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("other")).expect("test invariant");
+    fs::write(root.join("src1/deep/main.py"), "x = 1").expect("test invariant");
+    fs::write(root.join("other/skip.py"), "y = 2").expect("test invariant");
+    fs::write(root.join(".graphifyignore"), "*\n").expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src*\n").expect("test invariant");
+
+    let result = detect(&root, None, None);
+    let code: &Vec<String> = result.files.get("code").expect("key present");
+    assert!(
+        code.iter()
+            .any(|f| std::path::Path::new(f).ends_with("src1/deep/main.py")),
+        "allowlisted `src1/deep/main.py` must be rescued from the `*` ignore, got {code:?}"
+    );
+    assert!(
+        !code
+            .iter()
+            .any(|f| std::path::Path::new(f).ends_with("skip.py")),
+        "non-allowlisted `other/skip.py` must stay ignored, got {code:?}"
+    );
+}
