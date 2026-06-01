@@ -125,6 +125,15 @@ fn add(
         ));
     };
 
+    // Reject NaN/+-Inf pricing up front: `serde_json` serializes non-finite
+    // floats to `null`, which the loader then reads back as the 0.0 default, so
+    // an invalid price would be silently lost rather than stored.
+    if !pricing_input.is_finite() || !pricing_output.is_finite() {
+        return Err(anyhow!(
+            "Error: --pricing-input and --pricing-output must be finite numbers."
+        ));
+    }
+
     let mut registry = load_registry()?;
     registry.insert(
         name.to_string(),

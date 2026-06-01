@@ -651,6 +651,39 @@ fn provider_malformed_registry_is_not_clobbered() {
         .stderr(contains("malformed"));
 }
 
+#[test]
+fn provider_add_rejects_non_finite_pricing() {
+    // A non-finite price (`nan`/`inf`) would serialize to JSON `null` and read
+    // back as the 0.0 default, silently losing the value, so it is rejected.
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .env("HOME", home.path())
+        .args([
+            "provider",
+            "add",
+            "nvidia",
+            "--base-url",
+            "http://x/v1",
+            "--default-model",
+            "m",
+            "--env-key",
+            "K",
+            "--pricing-input",
+            "nan",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("finite"));
+    // The rejected add must not have created a registry file.
+    assert!(
+        !home
+            .path()
+            .join(".graphify")
+            .join("providers.json")
+            .exists()
+    );
+}
+
 // ── label command shares the cluster-only handler (#1097) ───────────────────
 
 #[test]

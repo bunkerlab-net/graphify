@@ -575,6 +575,7 @@ fn run_classify_phase(
         root,
         converted_dir,
         ignore_patterns,
+        include_patterns,
         files: &mut files,
         to_count: &mut to_count,
         skipped_sensitive: &mut skipped_sensitive,
@@ -671,16 +672,27 @@ struct ConvertCtx<'a> {
     root: &'a Path,
     converted_dir: &'a Path,
     ignore_patterns: &'a IgnorePatterns,
+    include_patterns: &'a IgnorePatterns,
     files: &'a mut IndexMap<String, Vec<String>>,
     to_count: &'a mut Vec<(PathBuf, FileType)>,
     skipped_sensitive: &'a mut Vec<String>,
 }
 
 impl ConvertCtx<'_> {
-    /// Register a converted sidecar file. Word counting is deferred to a
-    /// parallel pass after all conversions have completed.
-    fn record(&mut self, md_path: &Path, ftype: FileType) {
-        if is_ignored(md_path, self.root, self.ignore_patterns) {
+    /// Register a converted sidecar file produced from `src`.
+    ///
+    /// The sidecar inherits its source's allowlist verdict: an ordinary source
+    /// still has its sidecar filtered through `.graphifyignore` (matching
+    /// graphify-py `detect()`), but a source rescued by `.graphifyinclude`
+    /// keeps its sidecar even when the converted path would otherwise be
+    /// ignored. The allowlist is keyed on source paths, so the verdict is taken
+    /// from `src` rather than the derived `md_path` — otherwise a global ignore
+    /// such as `*` would silently drop the very content the rescue was meant to
+    /// keep (the `Direct` path already honours this in `classify_one`). Word
+    /// counting is deferred to a parallel pass after all conversions complete.
+    fn record(&mut self, src: &Path, md_path: &Path, ftype: FileType) {
+        let source_rescued = is_included(src, self.root, self.include_patterns);
+        if !source_rescued && is_ignored(md_path, self.root, self.ignore_patterns) {
             return;
         }
         self.files
@@ -729,7 +741,7 @@ fn convert_google_workspace(
         None,
     );
     match convert_res {
-        Ok(Some(md_path)) => ctx.record(&md_path, ftype),
+        Ok(Some(md_path)) => ctx.record(p, &md_path, ftype),
         Ok(None) => ctx.skipped_sensitive.push(format!(
             "{} [Google Workspace export produced no readable text]",
             p.to_string_lossy()
@@ -744,7 +756,7 @@ fn convert_google_workspace(
 /// Convert a `.docx`/`.xlsx` to a markdown sidecar via `office::convert_office_file`.
 fn convert_office(ctx: &mut ConvertCtx<'_>, p: &Path, ftype: FileType) {
     match convert_office_file(p, ctx.converted_dir) {
-        Ok(Some(md_path)) => ctx.record(&md_path, ftype),
+        Ok(Some(md_path)) => ctx.record(p, &md_path, ftype),
         Ok(None) => ctx.skipped_sensitive.push(format!(
             "{} [office document contained no extractable text]",
             p.to_string_lossy()

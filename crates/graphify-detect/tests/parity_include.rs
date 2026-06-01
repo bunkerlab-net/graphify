@@ -307,3 +307,51 @@ fn detect_graphifyinclude_rescues_ignored_subtree() {
         "non-allowlisted `other/skip.py` must stay ignored, got {code:?}"
     );
 }
+
+/// Build a minimal valid DOCX (a ZIP holding `word/document.xml`) so `detect`'s
+/// office-conversion path produces a non-empty markdown sidecar.
+fn build_minimal_docx(path: &std::path::Path, body: &str) {
+    use std::io::Write;
+    let f = fs::File::create(path).expect("test invariant");
+    let mut zip = zip::ZipWriter::new(f);
+    let opts: zip::write::SimpleFileOptions =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("word/document.xml", opts)
+        .expect("test invariant");
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>{body}</w:t></w:r></w:p></w:body>
+</w:document>"#
+    );
+    zip.write_all(xml.as_bytes()).expect("test invariant");
+    zip.finish().expect("test invariant");
+}
+
+#[test]
+fn detect_graphifyinclude_rescues_converted_office_sidecar() {
+    // The allowlist rescue must extend to converted sidecars: an office doc that
+    // is ignored (`*`) but explicitly included is converted to a markdown
+    // sidecar under `graphify-out/converted/`. That sidecar path also matches the
+    // `*` ignore, so unless it inherits the source's allowlist verdict it would
+    // be dropped by `ConvertCtx::record` and the rescued content would silently
+    // vanish. Office files are never recorded directly - only their sidecar - so
+    // a non-empty `document` bucket here proves the rescue reached conversion.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    build_minimal_docx(&root.join("report.docx"), "quarterly numbers");
+    fs::write(root.join(".graphifyignore"), "*\n").expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "report.docx\n").expect("test invariant");
+
+    let result = detect(&root, None, None);
+    let docs: &Vec<String> = result.files.get("document").expect("key present");
+    assert!(
+        docs.iter().any(|f| {
+            std::path::Path::new(f)
+                .extension()
+                .is_some_and(|e| e == "md")
+                && f.contains("converted")
+        }),
+        "rescued `report.docx` sidecar must survive the `*` ignore, got {docs:?}"
+    );
+}
