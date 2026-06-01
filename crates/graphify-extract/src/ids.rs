@@ -65,6 +65,19 @@ pub fn file_stem(path: &Path) -> String {
     }
 }
 
+/// File-level node ID matching the skill.md spec: `{parent_dir}_{stem}` — one
+/// parent directory level, no extension.
+///
+/// `rel_path` MUST be relative to the project root so top-level files collapse
+/// to a bare stem (`setup.py` → `setup`) instead of picking up the root
+/// directory name. This must equal the ID semantic subagents generate, or AST
+/// and semantic extraction split a file into two disconnected ghost nodes
+/// (#1033). Mirrors Python `_file_node_id`.
+#[must_use]
+pub fn file_node_id(rel_path: &Path) -> String {
+    make_id1(&file_stem(rel_path))
+}
+
 #[cfg(test)]
 #[path = "ids_tests.rs"]
 mod ids_tests;

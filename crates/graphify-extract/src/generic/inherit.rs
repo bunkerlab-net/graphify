@@ -724,6 +724,18 @@ pub(super) fn emit_ts_inheritance(
                     }
                 }
             }
+        } else if child.kind() == "extends_type_clause" {
+            // Interface heritage (`interface A extends B, C`) is an
+            // extends_type_clause node directly under the declaration, NOT
+            // wrapped in class_heritage. Its base entries are the same node types
+            // extends_clause holds, so the entry helper is reusable. Without this
+            // branch interface inheritance is dropped entirely (#1095).
+            for name in super::references::ts_heritage_clause_entries(child, source) {
+                let base_nid = emit_base_node(&name, line, stem, str_path, nodes, seen_ids);
+                add_edge(
+                    class_nid, &base_nid, "inherits", line, str_path, None, edges,
+                );
+            }
         }
         if !cur.goto_next_sibling() {
             break;

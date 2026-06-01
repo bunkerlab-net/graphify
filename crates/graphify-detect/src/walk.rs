@@ -476,6 +476,11 @@ fn run_walk_phase(ctx: &WalkCtx<'_>, root: &Path, memory_dir: &Path) -> Vec<Path
             }
         }
     }
+    // Sort lexicographically by the path's string form so classification (and
+    // therefore graph.json) is deterministic regardless of the parallel walker's
+    // completion order (8db19d6). Sort by the full string, not by PathBuf
+    // components, to match Python's `sorted(key=str)`.
+    all_files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf]   walk_dir: {:.2}s ({} files)",
@@ -544,6 +549,12 @@ fn run_classify_phase(
             to_count.len()
         );
     }
+    // Sort each file-type bucket so the emitted file lists are deterministic
+    // regardless of walk/classify order (8db19d6).
+    for bucket in files.values_mut() {
+        bucket.sort();
+    }
+
     ClassifyOutput {
         files,
         to_count,

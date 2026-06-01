@@ -5,6 +5,17 @@ use anyhow::{Result, anyhow};
 
 use crate::cli::{build_analysis, load_graph};
 
+/// Community-labelling knobs for [`cmd_cluster_only`].
+#[derive(Clone, Copy, Default)]
+pub(crate) struct LabelOptions<'a> {
+    /// Keep `Community N` placeholders instead of LLM-naming (the `--no-label` flag).
+    pub no_label: bool,
+    /// Backend override for naming; `None` auto-detects from API keys.
+    pub backend: Option<&'a str>,
+    /// `graphify label` always (re)names even when a labels file exists.
+    pub force_relabel: bool,
+}
+
 /// Rerun community detection on an existing graph.json and regenerate the report.
 ///
 /// `exclude_hubs` is forwarded directly to `graphify_cluster::cluster` as the
@@ -21,6 +32,7 @@ pub(crate) fn cmd_cluster_only(
     resolution: f64,
     exclude_hubs: Option<f64>,
     min_community_size: usize,
+    opts: LabelOptions<'_>,
 ) -> Result<()> {
     let start = std::time::Instant::now();
     let graph_path = graph.map_or_else(
@@ -119,25 +131,47 @@ pub(crate) fn cmd_cluster_only(
     graphify_export::to_json(&g, &communities, &graph_path, true, None)?;
     eprintln!("      wrote {}", graph_path.display());
 
-    // Persist (or refresh) `.graphify_labels.json` so the HTML viz and
-    // subsequent exports can find community labels.  Loads existing labels
-    // first to preserve user-edited names; falls back to `"Community <cid>"`.
+    // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
+    // find community labels. Three paths, mirroring Python's cluster-only/label:
+    //   1. labels file exists & not forced → load it (preserve user edits), fill
+    //      any gaps with placeholders.
+    //   2. `--no-label` (and not forced) → all placeholders, no LLM call.
+    //   3. otherwise → auto-name with the configured backend (#1097); degrades
+    //      to placeholders on no-backend/error.
     let labels_path = graph_path.with_file_name(".graphify_labels.json");
-    let mut labels: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
-    if let Ok(text) = std::fs::read_to_string(&labels_path)
-        && let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
-    {
-        for (k, v) in &map {
-            if let (Ok(cid), Some(s)) = (k.parse::<i64>(), v.as_str()) {
-                labels.insert(cid, s.to_string());
+    let labels: indexmap::IndexMap<i64, String> = if labels_path.exists() && !opts.force_relabel {
+        let mut existing: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
+        if let Ok(text) = std::fs::read_to_string(&labels_path)
+            && let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_str::<serde_json::Value>(&text)
+        {
+            for (k, v) in &map {
+                if let (Ok(cid), Some(s)) = (k.parse::<i64>(), v.as_str()) {
+                    existing.insert(cid, s.to_string());
+                }
             }
         }
-    }
-    for cid in communities.keys() {
+        for cid in communities.keys() {
+            existing
+                .entry(*cid)
+                .or_insert_with(|| format!("Community {cid}"));
+        }
+        existing
+    } else if opts.no_label && !opts.force_relabel {
+        graphify_llm::placeholder_community_labels(&communities)
+    } else {
+        eprintln!("Labeling communities...");
+        let node_labels = node_label_map(&g);
+        let gods = god_node_ids(&g);
+        let (labels, _source) = graphify_llm::generate_community_labels(
+            &communities,
+            &node_labels,
+            &gods,
+            opts.backend,
+            false,
+        );
         labels
-            .entry(*cid)
-            .or_insert_with(|| format!("Community {cid}"));
-    }
+    };
     let labels_json: serde_json::Map<String, serde_json::Value> = labels
         .iter()
         .map(|(cid, name)| (cid.to_string(), serde_json::Value::String(name.clone())))
@@ -173,4 +207,28 @@ pub(crate) fn cmd_cluster_only(
     }
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
     Ok(())
+}
+
+/// Build `node_id → label` for community labelling prompts.
+fn node_label_map(g: &graphify_build::Graph) -> indexmap::IndexMap<String, String> {
+    g.nodes()
+        .filter_map(|(id, attrs)| {
+            attrs
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .map(|label| (id.clone(), label.to_string()))
+        })
+        .collect()
+}
+
+/// The set of god-node ids (used to bias which member labels are sampled first).
+fn god_node_ids(g: &graphify_build::Graph) -> indexmap::IndexSet<String> {
+    graphify_analyze::god_nodes(g, 20)
+        .into_iter()
+        .filter_map(|n| {
+            n.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
 }

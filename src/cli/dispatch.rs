@@ -26,7 +26,8 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
             force,
             no_cluster,
         } => cli::extract::cmd_update(&path, force, no_cluster),
-        cmd @ Command::ClusterOnly { .. } => dispatch_cluster_only(cmd),
+        cmd @ (Command::ClusterOnly { .. } | Command::Label { .. }) => dispatch_cluster_only(cmd),
+        Command::Provider { cmd } => cli::provider::cmd_provider(cmd),
         cmd @ Command::Query { .. } => dispatch_query(cmd),
         Command::Path { from, to, graph } => cli::query::cmd_path(&from, &to, graph.as_deref()),
         Command::Explain { node, graph } => cli::query::cmd_explain(&node, graph.as_deref()),
@@ -112,16 +113,58 @@ fn dispatch_install(platform: Option<&str>, positional: Option<&str>, project: b
 }
 
 fn dispatch_cluster_only(cmd: Command) -> Result<()> {
-    let Command::ClusterOnly {
+    // `cluster-only` and `label` share the same handler; `label` forces a relabel.
+    let (
         path,
         no_viz,
         graph,
         resolution,
         exclude_hubs,
         min_community_size,
-    } = cmd
-    else {
-        unreachable!("dispatch_cluster_only invoked with wrong variant")
+        no_label,
+        backend,
+        force,
+    ) = match cmd {
+        Command::ClusterOnly {
+            path,
+            no_viz,
+            graph,
+            resolution,
+            exclude_hubs,
+            min_community_size,
+            no_label,
+            backend,
+        } => (
+            path,
+            no_viz,
+            graph,
+            resolution,
+            exclude_hubs,
+            min_community_size,
+            no_label,
+            backend,
+            false,
+        ),
+        Command::Label {
+            path,
+            no_viz,
+            graph,
+            resolution,
+            exclude_hubs,
+            min_community_size,
+            backend,
+        } => (
+            path,
+            no_viz,
+            graph,
+            resolution,
+            exclude_hubs,
+            min_community_size,
+            false,
+            backend,
+            true,
+        ),
+        _ => unreachable!("dispatch_cluster_only invoked with wrong variant"),
     };
     cli::cluster_only::cmd_cluster_only(
         &path,
@@ -130,6 +173,11 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         resolution,
         exclude_hubs,
         min_community_size,
+        cli::cluster_only::LabelOptions {
+            no_label,
+            backend: backend.as_deref(),
+            force_relabel: force,
+        },
     )
 }
 

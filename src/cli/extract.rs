@@ -752,7 +752,7 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
         }
         Ok(())
     } else {
-        anyhow::bail!("Nothing to update or rebuild failed — check output above.")
+        anyhow::bail!("Nothing to update or rebuild failed - check output above.")
     }
 }
 
@@ -869,7 +869,7 @@ pub(crate) fn cmd_extract_global_add(
     match graphify_global::global_add(graph_path, &tag, &global_path, &manifest_path) {
         Ok(summary) => {
             if summary.nodes_added == 0 && summary.nodes_removed == 0 {
-                eprintln!("[graphify global] '{tag}' unchanged since last add — skipped.");
+                eprintln!("[graphify global] '{tag}' unchanged since last add - skipped.");
             } else {
                 eprintln!(
                     "[graphify global] '{tag}' merged into global graph \

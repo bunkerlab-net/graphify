@@ -134,3 +134,107 @@ fn graphifyignore_at_git_root_is_included() {
     assert!(!is_ignored(&main, &sub, &patterns));
     assert!(is_ignored(&dep, &sub, &patterns));
 }
+
+// ── #1087: anchored patterns must not leak a basename match into a subtree ─────
+//
+// `load_graphifyignore` canonicalises the root into the pattern anchors, so
+// anchored matching strips that canonical anchor from the target. pytest's
+// `tmp_path` is already resolved; mirror that by canonicalising here, otherwise
+// the macOS `/var → /private/var` symlink defeats the anchored strip_prefix.
+
+#[test]
+fn anchored_dir_not_matched_at_depth() {
+    // /inbox/ must NOT match src/inbox/ — only inbox/ at the anchor root.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let src_inbox = root.join("src").join("inbox");
+    std::fs::create_dir_all(&src_inbox).expect("create_dir_all");
+    let f = src_inbox.join("main.rs");
+    std::fs::write(&f, "fn main() {}").expect("write fixture");
+    std::fs::write(root.join(".graphifyignore"), "/inbox/\n").expect("write ignore");
+    let patterns = load_graphifyignore(&root);
+    assert!(
+        !is_ignored(&f, &root, &patterns),
+        "src/inbox/main.rs must NOT be ignored by /inbox/ — the pattern is anchored to root"
+    );
+    assert!(
+        !is_ignored(&src_inbox, &root, &patterns),
+        "src/inbox/ must NOT be ignored by /inbox/ — the pattern is anchored to root"
+    );
+}
+
+#[test]
+fn anchored_dir_matches_at_root() {
+    // /inbox/ must still match inbox/ at the anchor root (positive case).
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let inbox = root.join("inbox");
+    std::fs::create_dir_all(&inbox).expect("create_dir_all");
+    let f = inbox.join("data.json");
+    std::fs::write(&f, "{}").expect("write fixture");
+    std::fs::write(root.join(".graphifyignore"), "/inbox/\n").expect("write ignore");
+    let patterns = load_graphifyignore(&root);
+    assert!(
+        is_ignored(&f, &root, &patterns),
+        "inbox/data.json must be ignored by /inbox/"
+    );
+    assert!(
+        is_ignored(&inbox, &root, &patterns),
+        "inbox/ must be ignored by /inbox/"
+    );
+}
+
+#[test]
+fn anchored_file_not_matched_at_depth() {
+    // /build must not match src/build.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let src_build = root.join("src").join("build");
+    std::fs::create_dir_all(&src_build).expect("create_dir_all");
+    std::fs::write(root.join(".graphifyignore"), "/build\n").expect("write ignore");
+    let patterns = load_graphifyignore(&root);
+    assert!(
+        !is_ignored(&src_build, &root, &patterns),
+        "src/build must NOT be ignored by /build"
+    );
+}
+
+#[test]
+fn unanchored_dir_still_matches_at_depth() {
+    // inbox/ (no leading /) must still match src/inbox/ anywhere in the tree.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let src_inbox = root.join("src").join("inbox");
+    std::fs::create_dir_all(&src_inbox).expect("create_dir_all");
+    let f = src_inbox.join("main.rs");
+    std::fs::write(&f, "fn main() {}").expect("write fixture");
+    std::fs::write(root.join(".graphifyignore"), "inbox/\n").expect("write ignore");
+    let patterns = load_graphifyignore(&root);
+    assert!(
+        is_ignored(&f, &root, &patterns),
+        "src/inbox/main.rs must be ignored by unanchored inbox/"
+    );
+}
+
+#[test]
+fn anchored_multi_segment_pattern() {
+    // /src/inbox/ must match src/inbox/ but not x/src/inbox/.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    std::fs::create_dir_all(root.join("src").join("inbox")).expect("create_dir_all");
+    std::fs::create_dir_all(root.join("x").join("src").join("inbox")).expect("create_dir_all");
+    let target_ok = root.join("src").join("inbox").join("a.py");
+    std::fs::write(&target_ok, "x=1").expect("write fixture");
+    let target_bad = root.join("x").join("src").join("inbox").join("b.py");
+    std::fs::write(&target_bad, "x=1").expect("write fixture");
+    std::fs::write(root.join(".graphifyignore"), "/src/inbox/\n").expect("write ignore");
+    let patterns = load_graphifyignore(&root);
+    assert!(
+        is_ignored(&target_ok, &root, &patterns),
+        "src/inbox/a.py must be ignored by /src/inbox/"
+    );
+    assert!(
+        !is_ignored(&target_bad, &root, &patterns),
+        "x/src/inbox/b.py must NOT be ignored by /src/inbox/"
+    );
+}

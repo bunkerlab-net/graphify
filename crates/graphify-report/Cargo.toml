@@ -10,6 +10,7 @@ version.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+graphify-analyze = { workspace = true }
 graphify-build = { workspace = true }
 indexmap = { workspace = true }
 regex = { workspace = true }

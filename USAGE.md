@@ -141,11 +141,30 @@ commit's changes are lost under contention.
 Rerun clustering on an existing `graph.json` and regenerate the report and HTML viz. Useful after tweaking cluster
 parameters or when you only want to refresh `GRAPH_REPORT.md`.
 
+When no `.graphify_labels.json` exists yet, `cluster-only` auto-names communities with the configured LLM backend
+in a single batched call, falling back to `Community N` placeholders if no backend is configured or the call fails.
+An existing labels file is preserved (re-run `graphify label` to force a refresh).
+
 ```bash
 graphify cluster-only .
 graphify cluster-only . --no-viz                   # skip graph.html (saves time on >5k-node graphs)
 graphify cluster-only . --graph other/graph.json   # use a non-default graph location
+graphify cluster-only . --no-label                 # keep "Community N" placeholders (skip LLM naming)
+graphify cluster-only . --backend openai           # backend to use for naming (default: auto-detect)
 ```
+
+### `label <path>`
+
+`label` is `cluster-only` that **always** (re)names communities with the configured LLM backend, even when a
+`.graphify_labels.json` already exists. Use it to refresh names after the graph changed, or to switch backends.
+
+```bash
+graphify label .                       # re-name with the auto-detected backend
+graphify label . --backend gemini      # force a specific backend
+graphify label . --no-viz              # skip graph.html regeneration
+```
+
+If no backend is configured (no API key), `label` degrades to `Community N` placeholders and prints a hint.
 
 ---
 
@@ -556,6 +575,27 @@ roles), IMDS, and SSO. `AWS_REGION` alone is **not** sufficient to auto-select B
 present, otherwise auto-detection falls through to the next backend.
 
 Force a backend with `--backend`; override its default model with `--model`.
+
+#### Custom providers
+
+Any OpenAI-compatible endpoint can be registered as a custom backend and used like a built-in one (e.g.
+`graphify extract . --backend nvidia`, `graphify label . --backend nvidia`). Custom providers are stored in
+`~/.graphify/providers.json` and managed with the `provider` command:
+
+```bash
+graphify provider add nvidia \
+  --base-url https://integrate.api.nvidia.com/v1 \
+  --default-model minimaxai/minimax-m2.7 \
+  --env-key NVIDIA_API_KEY \
+  [--pricing-input 0.0 --pricing-output 0.0]
+graphify provider list                 # name + base URL of each registered provider
+graphify provider show nvidia          # full JSON config for one provider
+graphify provider remove nvidia
+```
+
+Built-in backend names cannot be shadowed. Auto-detection consults custom providers **after** all built-ins, in
+registry order, selecting the first whose `--env-key` variable is set. Missing `pricing` defaults to zero so cost
+estimation never fails.
 
 ### Determinism note
 

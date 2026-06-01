@@ -765,6 +765,29 @@ fn extract_js_resolves_pnpm_workspace_package() {
 }
 
 #[test]
+fn pnpm_workspace_dot_package_does_not_crash() {
+    // `packages: - '.'` in pnpm-workspace.yaml must resolve the root as a package
+    // without crashing workspace resolution (#1083; Python's `root.glob('.')`
+    // raised IndexError on 3.10).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write_file(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - '.'\n  - 'examples/*'\n",
+    );
+    write_file(&root.join("package.json"), "{\"name\": \"my-app\"}");
+    let src = root.join("index.ts");
+    write_file(&src, "import { foo } from 'my-app';\n");
+
+    // Must complete without panicking and still produce the file's nodes.
+    let result = extract(&[src], Some(root));
+    assert!(
+        !result.nodes.is_empty(),
+        "extraction produced no nodes for index.ts"
+    );
+}
+
+#[test]
 fn extract_ts_tsconfig_array_extends_alias_resolves_existing_ts_file() {
     // graphify-py #1017: TypeScript 5.0 allows `extends` as an array; later
     // entries override earlier ones. Before the fix, an array `extends`

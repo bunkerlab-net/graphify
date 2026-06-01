@@ -26,7 +26,7 @@ pub(crate) fn cmd_global(cmd: GlobalCmd) -> Result<()> {
             let global_path = graphify_global::global_graph_path();
             let summary = graphify_global::global_add(&graph, &tag, &global_path, &manifest_path)?;
             if summary.nodes_added == 0 && summary.nodes_removed == 0 {
-                println!("'{tag}' unchanged since last add — global graph not modified.");
+                println!("'{tag}' unchanged since last add - global graph not modified.");
             } else {
                 println!(
                     "Added '{tag}' to global graph: +{} nodes, -{} pruned. Global: {}",

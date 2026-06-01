@@ -39,7 +39,7 @@ fn safe_name(label: &str) -> String {
     if cleaned.is_empty() {
         "unnamed".to_string()
     } else {
-        cleaned
+        crate::util::cap_filename(&cleaned)
     }
 }
 

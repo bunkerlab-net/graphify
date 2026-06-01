@@ -33,7 +33,7 @@ pub(crate) fn cmd_clone(
         // Repo already present — pull to update. Mirrors Python's
         // `git -C <dest> pull [origin -- <branch>]` at __main__.py:1174.
         eprintln!(
-            "repo already cloned at {} — pulling latest ...",
+            "repo already cloned at {} - pulling latest ...",
             target.display()
         );
         let mut cmd = Proc::new("git");
@@ -48,7 +48,7 @@ pub(crate) fn cmd_clone(
             eprintln!("warning: git pull failed (exit {status}); local copy may be stale");
         }
     } else {
-        eprintln!("cloning {url} → {} ...", target.display());
+        eprintln!("cloning {url} -> {} ...", target.display());
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -310,9 +310,12 @@ fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
         }
 
         let matched = if anchored {
+            // Anchored patterns match the anchor-relative path directly — no
+            // subtree/basename fallback. Without this, `/inbox/` would leak into
+            // `src/inbox/` deep in the tree via segment matching (#1087).
             last_anchor_rel
                 .as_deref()
-                .is_some_and(|rel| rel_matches(rel, target_name, p))
+                .is_some_and(|rel| fnmatch(rel, p))
         } else {
             let root_matched = root_rel
                 .as_deref()
@@ -378,9 +381,12 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
             continue;
         }
         if anchored {
+            // Anchored include patterns match the anchor-relative path directly,
+            // mirroring the anchored ignore fix (#1087): no subtree/basename
+            // fallback, so `/src/foo` only matches at the anchor root.
             if path.strip_prefix(anchor).ok().is_some_and(|rel| {
                 let rel_str = path_to_forward_slash(rel);
-                rel_matches(&rel_str, target_name, p)
+                fnmatch(&rel_str, p)
             }) {
                 return true;
             }

@@ -1,0 +1,188 @@
+//! Parity tests for the custom LLM provider registry (#1084).
+//!
+//! Mirrors `graphify-py/tests/test_provider_registry.py`.
+#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
+
+use graphify_llm::{
+    CustomProvider, Pricing, call_llm, detect_backend_with, load_custom_providers_from,
+};
+use indexmap::IndexMap;
+use tempfile::tempdir;
+
+/// RAII guard that sets/restores env vars (mirrors the HTTP tests' guard).
+struct EnvGuard {
+    saved: Vec<(String, Option<String>)>,
+}
+impl EnvGuard {
+    fn new() -> Self {
+        Self { saved: vec![] }
+    }
+    fn set(&mut self, k: &str, v: &str) -> &mut Self {
+        self.saved.push((k.to_string(), std::env::var(k).ok()));
+        unsafe { std::env::set_var(k, v) };
+        self
+    }
+    fn unset(&mut self, k: &str) -> &mut Self {
+        self.saved.push((k.to_string(), std::env::var(k).ok()));
+        unsafe { std::env::remove_var(k) };
+        self
+    }
+}
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (k, prev) in self.saved.drain(..).rev() {
+            match prev {
+                Some(v) => unsafe { std::env::set_var(&k, &v) },
+                None => unsafe { std::env::remove_var(&k) },
+            }
+        }
+    }
+}
+
+#[test]
+fn custom_provider_load_returns_config() {
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{
+            "nvidia": {
+                "base_url": "https://integrate.api.nvidia.com/v1",
+                "default_model": "minimaxai/minimax-m2.7",
+                "env_key": "NVIDIA_API_KEY",
+                "pricing": {"input": 0.0, "output": 0.0},
+                "temperature": 0
+            }
+        }"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert!(loaded.contains_key("nvidia"));
+    assert_eq!(
+        loaded["nvidia"].base_url,
+        "https://integrate.api.nvidia.com/v1"
+    );
+}
+
+#[test]
+fn custom_provider_pricing_defaults_to_zero() {
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{
+            "mymodel": {
+                "base_url": "http://localhost:8080/v1",
+                "default_model": "llama3",
+                "env_key": "MY_API_KEY"
+            }
+        }"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert!(loaded.contains_key("mymodel"));
+    assert_eq!(loaded["mymodel"].pricing.input, 0.0);
+    assert_eq!(loaded["mymodel"].pricing.output, 0.0);
+}
+
+#[test]
+fn custom_provider_cannot_shadow_builtin() {
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{
+            "claude": {
+                "base_url": "http://evil.example.com/v1",
+                "default_model": "evil-model",
+                "env_key": "EVIL_KEY"
+            }
+        }"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert!(!loaded.contains_key("claude"));
+}
+
+#[test]
+fn detect_backend_custom_provider_after_builtins() {
+    let mut g = EnvGuard::new();
+    for key in [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "MOONSHOT_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OLLAMA_BASE_URL",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    ] {
+        g.unset(key);
+    }
+    g.set("MY_CUSTOM_KEY", "test-key");
+
+    let mut custom: IndexMap<String, CustomProvider> = IndexMap::new();
+    custom.insert(
+        "myprovider".to_string(),
+        CustomProvider {
+            name: "myprovider".to_string(),
+            base_url: "http://example.com/v1".to_string(),
+            default_model: "mymodel".to_string(),
+            env_key: "MY_CUSTOM_KEY".to_string(),
+            pricing: Pricing {
+                input: 0.0,
+                output: 0.0,
+            },
+            temperature: 0.0,
+        },
+    );
+
+    assert_eq!(detect_backend_with(&custom).as_deref(), Some("myprovider"));
+}
+
+#[test]
+fn custom_provider_call_llm_routes_via_openai_compat() {
+    // A custom provider registered in $HOME/.graphify/providers.json must drive a
+    // plain call through the OpenAI-compatible client (#1084). nextest isolates
+    // each test in its own process, so the HOME/env edits are safe.
+    let mut server = mockito::Server::new();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "choices": [{"message": {"content": "from custom"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4}
+            })
+            .to_string(),
+        )
+        .create();
+
+    let home = tempdir().expect("tempdir");
+    std::fs::create_dir_all(home.path().join(".graphify")).expect("mkdir .graphify");
+    std::fs::write(
+        home.path().join(".graphify").join("providers.json"),
+        format!(
+            r#"{{"custom1": {{"base_url": "{}", "default_model": "m", "env_key": "CUSTOM1_KEY"}}}}"#,
+            server.url()
+        ),
+    )
+    .expect("write providers.json");
+
+    let mut g = EnvGuard::new();
+    g.set("HOME", &home.path().to_string_lossy());
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("CUSTOM1_KEY", "secret");
+
+    let out = call_llm("ping", "custom1", 32).expect("custom provider call succeeds");
+    assert_eq!(out, "from custom");
+}

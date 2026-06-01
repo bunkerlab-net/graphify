@@ -179,6 +179,19 @@ pub fn format_backend_env_keys(backend: &str) -> String {
 /// resolved at call time by the AWS SDK.
 #[must_use]
 pub fn detect_backend() -> Option<String> {
+    detect_backend_with(&crate::providers::load_custom_providers())
+}
+
+/// [`detect_backend`] against an explicit custom-provider set.
+///
+/// Built-in backends take priority (gemini → kimi → claude → openai → deepseek →
+/// bedrock → ollama); only then are custom providers consulted, in registry
+/// order, returning the first whose `env_key` is set (#1084). Splitting the
+/// custom set out makes the priority ordering testable without a `providers.json`.
+#[must_use]
+pub fn detect_backend_with(
+    custom: &indexmap::IndexMap<String, crate::providers::CustomProvider>,
+) -> Option<String> {
     for backend in ["gemini", "kimi", "claude", "openai", "deepseek"] {
         if !get_backend_api_key(backend).is_empty() {
             return Some(backend.to_string());
@@ -187,12 +200,18 @@ pub fn detect_backend() -> Option<String> {
     if bedrock::credentials_appear_configured() {
         return Some("bedrock".to_string());
     }
-    // Ollama: checked last to avoid shadowing paid backends.
+    // Ollama: checked before custom providers to avoid shadowing a local model.
     if let Ok(url) = std::env::var("OLLAMA_BASE_URL")
         && !url.is_empty()
     {
         ollama::validate_ollama_base_url(&url);
         return Some("ollama".to_string());
+    }
+    // Custom providers last: a configured `env_key` selects the provider.
+    for (name, provider) in custom {
+        if std::env::var(&provider.env_key).is_ok_and(|v| !v.is_empty()) {
+            return Some(name.clone());
+        }
     }
     None
 }

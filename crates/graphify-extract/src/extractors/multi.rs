@@ -685,6 +685,22 @@ fn resolve_cross_file_java_imports(per_file: &[FileResult], paths: &[PathBuf]) -
     new_edges
 }
 
+/// Relativise `path` against `root`, falling back to canonicalising the path
+/// when a lexical strip fails (e.g. the path is relative, or differs from
+/// `root` only by a symlink such as macOS's `/var` → `/private/var`).
+///
+/// Mirrors Python's `path.relative_to(root)` with its
+/// `path.resolve().relative_to(root)` fallback. Returns `None` only when the
+/// path is genuinely outside `root`.
+fn relativise_under_root(path: &Path, root: &Path) -> Option<PathBuf> {
+    if let Ok(rel) = path.strip_prefix(root) {
+        return Some(rel.to_path_buf());
+    }
+    path.canonicalize()
+        .ok()
+        .and_then(|c| c.strip_prefix(root).map(Path::to_path_buf).ok())
+}
+
 // ── Main extract() ────────────────────────────────────────────────────────────
 
 /// Extract AST nodes and edges from a list of code files.
@@ -706,7 +722,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
 
     // Infer common root for ID relativisation
     let root: PathBuf = {
-        let r = if paths.len() == 1 {
+        let inferred = if paths.len() == 1 {
             paths[0]
                 .parent()
                 .map_or_else(|| PathBuf::from("."), PathBuf::from)
@@ -732,7 +748,12 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
                 paths[0].components().take(common_len).collect()
             }
         };
-        r.canonicalize().unwrap_or(r)
+        // An explicit `cache_root` overrides the inferred prefix, matching
+        // Python's `if cache_root is not None: root = cache_root`. The root
+        // drives both cache keys and the #1033 file-node-id relativisation, so
+        // a divergence here splits AST/semantic file nodes apart.
+        let base = cache_root.map_or(inferred, Path::to_path_buf);
+        base.canonicalize().unwrap_or(base)
     };
 
     let effective_root: &Path = cache_root.unwrap_or(&root);
@@ -803,15 +824,34 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     }
     all_edges.extend(cross_edges);
 
-    // Remap absolute file-node IDs to project-relative IDs (#502)
+    // Remap absolute file-node IDs to the canonical `{parent_dir}_{stem}` spec
+    // form so (a) edge endpoints are stable across machines (#502) and (b) AST
+    // file nodes match the IDs semantic subagents generate (#1033).
     let mut id_remap: HashMap<String, String> = HashMap::new();
+    // Symbol node IDs embed the file stem the extractor saw as a prefix. For a
+    // root-level file that stem picks up the absolute parent directory name, so
+    // a symbol becomes `<rootdir>_main_run` while the file node correctly
+    // relativises to `main` and the spec wants `main_run` — splitting the symbol
+    // into AST/semantic ghosts (#1096). Relativise the symbol prefix the same
+    // way, gated by `source_file` so two files sharing a prefix can't
+    // cross-contaminate. Keyed by the path string the extractor recorded in
+    // `source_file` → (old_prefix, new_prefix).
+    let mut prefix_remap: HashMap<String, (String, String)> = HashMap::new();
     for path in paths {
         let old_id = make_id1(&path.to_string_lossy());
-        if let Ok(rel) = path.strip_prefix(&root) {
-            let new_id = make_id1(&rel.to_string_lossy());
-            if old_id != new_id {
-                id_remap.insert(old_id, new_id);
-            }
+        // Resolve relative-to-root; a lexical strip can fail (path is relative, or
+        // differs from `root` only by a symlink), so fall back to canonicalising —
+        // mirrors Python's `resolve().relative_to(root)` fallback.
+        let Some(rel) = relativise_under_root(path, &root) else {
+            continue;
+        };
+        let new_id = crate::ids::file_node_id(&rel);
+        if old_id != new_id {
+            id_remap.insert(old_id, new_id.clone());
+        }
+        let old_pref = crate::ids::file_node_id(path);
+        if old_pref != new_id {
+            prefix_remap.insert(path.to_string_lossy().into_owned(), (old_pref, new_id));
         }
     }
     if !id_remap.is_empty() {
@@ -826,6 +866,51 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             }
             if let Some(new_id) = id_remap.get(&e.target) {
                 e.target = new_id.clone();
+            }
+        }
+    }
+    if !prefix_remap.is_empty() {
+        let mut sym_remap: HashMap<String, String> = HashMap::new();
+        for n in &all_nodes {
+            if n.source_file.is_empty() {
+                continue;
+            }
+            let Some((old_pref, new_pref)) = prefix_remap.get(&n.source_file) else {
+                continue;
+            };
+            // IDs are make_id output (lowercase word chars + `_`), so slicing at
+            // a byte offset is always on a char boundary.
+            if n.id.len() > old_pref.len()
+                && n.id.starts_with(old_pref.as_str())
+                && n.id.as_bytes()[old_pref.len()] == b'_'
+            {
+                let new_nid = format!("{new_pref}{}", &n.id[old_pref.len()..]);
+                if new_nid != n.id {
+                    sym_remap.insert(n.id.clone(), new_nid);
+                }
+            }
+        }
+        if !sym_remap.is_empty() {
+            for n in &mut all_nodes {
+                if let Some(new_id) = sym_remap.get(&n.id) {
+                    n.id = new_id.clone();
+                }
+            }
+            for e in &mut all_edges {
+                if let Some(new_id) = sym_remap.get(&e.source) {
+                    e.source = new_id.clone();
+                }
+                if let Some(new_id) = sym_remap.get(&e.target) {
+                    e.target = new_id.clone();
+                }
+            }
+            // raw_calls carry caller_nid (a symbol id) consumed by the cross-file
+            // call pass below — rewrite it too or those edges dangle on a stale
+            // source (#1096).
+            for rc in &mut all_raw_calls {
+                if let Some(new_id) = sym_remap.get(&rc.caller_nid) {
+                    rc.caller_nid = new_id.clone();
+                }
             }
         }
     }
@@ -892,15 +977,16 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             continue;
         }
         let sf_path = PathBuf::from(&n.source_file);
+        // Relativise the same way `id_remap` does so a symbol's file-nid matches
+        // its (relativised) file node id — including the canonicalise fallback
+        // for absolute paths that differ from `root` only by a symlink. Relative
+        // source paths are used verbatim (mirrors Python).
         let sf_rel = if sf_path.is_absolute() {
-            sf_path
-                .strip_prefix(&root)
-                .map(PathBuf::from)
-                .unwrap_or(sf_path)
+            relativise_under_root(&sf_path, &root).unwrap_or(sf_path)
         } else {
             sf_path
         };
-        nid_to_file_nid.insert(n.id.clone(), make_id1(&sf_rel.to_string_lossy()));
+        nid_to_file_nid.insert(n.id.clone(), crate::ids::file_node_id(&sf_rel));
     }
 
     let mut existing_pairs: std::collections::HashSet<(String, String)> = all_edges

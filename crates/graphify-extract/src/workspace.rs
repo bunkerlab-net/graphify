@@ -159,6 +159,12 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
 /// understand resolve to the empty list.
 fn glob_workspace_pattern(root: &Path, pattern: &str) -> Vec<PathBuf> {
     let pattern = pattern.trim_end_matches('/');
+    // A `.` / `./` entry means "the workspace root is itself a package" — resolve
+    // it to `root` directly rather than globbing (#1083; Python's `root.glob('.')`
+    // crashed on 3.10).
+    if pattern == "." {
+        return vec![root.to_path_buf()];
+    }
     if let Some(prefix) = pattern.strip_suffix("/**") {
         // recursive glob — walk every subdirectory
         let base = root.join(prefix);

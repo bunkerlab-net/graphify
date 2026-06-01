@@ -216,7 +216,7 @@ pub fn render_worktrees<S: BuildHasher>(prs: &[PrInfo], worktrees: &HashMap<Stri
         println!("  {}", cyan(path));
         if let Some(pr) = pr {
             println!(
-                "    {} {}  →  PR {}  [{}]  {}",
+                "    {} {}  ->  PR {}  [{}]  {}",
                 dim("branch:"),
                 branch,
                 bold(&format!("#{}", pr.number)),
@@ -244,7 +244,7 @@ pub fn render_conflicts(
     if actionable.is_empty() {
         println!(
             "{}",
-            dim("\n  No graph impact data — run with a valid graph.json to detect conflicts.\n")
+            dim("\n  No graph impact data - run with a valid graph.json to detect conflicts.\n")
         );
         return;
     }
@@ -264,7 +264,7 @@ pub fn render_conflicts(
     if conflicts.is_empty() {
         println!(
             "{}",
-            green("\n  No community overlap between open PRs — safe to merge in any order.\n")
+            green("\n  No community overlap between open PRs - safe to merge in any order.\n")
         );
         return;
     }
@@ -319,7 +319,12 @@ pub fn render_pr_detail(pr: &PrInfo) {
     );
     println!("  {}", pr.title);
     println!();
-    println!("  {}  {}  →  {}", dim("branch:"), pr.branch, pr.base_branch);
+    println!(
+        "  {}  {}  ->  {}",
+        dim("branch:"),
+        pr.branch,
+        pr.base_branch
+    );
     println!("  {}  {}", dim("author:"), pr.author);
     println!("  {} {}d ago", dim("updated:"), pr.days_old());
     println!(
