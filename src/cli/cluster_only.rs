@@ -178,7 +178,7 @@ pub(crate) fn cmd_cluster_only(
             &node_labels,
             &gods,
             opts.backend,
-            false,
+            false, // quiet
         );
         labels
     };

@@ -206,6 +206,10 @@ fn label_communities_real_path_via_custom_provider() {
     .expect("write providers.json");
 
     let mut g = EnvGuard::new();
+    // Hermetic setup: clear built-in backend keys so this stays a pure
+    // custom-provider labeling test. (`LABELPROV_KEY` is a registry env_key,
+    // untouched by scrub.)
+    g.scrub_backends();
     g.set("HOME", &home.path().to_string_lossy());
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("LABELPROV_KEY", "secret");

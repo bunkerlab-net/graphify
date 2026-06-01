@@ -1,7 +1,7 @@
 //! Parity tests for the custom LLM provider registry (#1084).
 //!
 //! Mirrors `graphify-py/tests/test_provider_registry.py`.
-#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
+#![allow(clippy::expect_used, clippy::float_cmp)]
 
 use graphify_llm::{
     CustomProvider, Pricing, call_llm, detect_backend_with, extract_files_direct,
