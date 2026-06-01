@@ -221,7 +221,9 @@ fn extract_without_manifest_is_full_scan() {
     let dir = tempfile::tempdir().unwrap();
     write_python_project(dir.path());
     let assert = cli_no_backend()
-        .args(["extract", dir.path().to_str().unwrap(), "--no-cluster"])
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
         .assert()
         .success();
     let out = assert.get_output();
@@ -658,12 +660,16 @@ fn label_no_backend_keeps_placeholders() {
     let dir = tempfile::tempdir().unwrap();
     write_python_project(dir.path());
     cli_no_backend()
-        .args(["extract", dir.path().to_str().unwrap(), "--no-cluster"])
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
         .assert()
         .success();
 
     cli_no_backend()
-        .args(["label", dir.path().to_str().unwrap(), "--no-viz"])
+        .arg("label")
+        .arg(dir.path())
+        .arg("--no-viz")
         .assert()
         .success();
 

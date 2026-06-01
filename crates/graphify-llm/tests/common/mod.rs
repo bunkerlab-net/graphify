@@ -8,6 +8,7 @@ pub struct EnvGuard {
 }
 
 impl EnvGuard {
+    #[must_use]
     pub fn new() -> Self {
         Self { saved: vec![] }
     }

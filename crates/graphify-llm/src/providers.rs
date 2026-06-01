@@ -83,6 +83,19 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
             let Some(obj) = cfg.as_object() else {
                 continue;
             };
+            // A provider needs all three required string fields to be usable;
+            // `graphify provider add` already rejects a record missing any of
+            // them, so a hand-edited registry entry that omits one (or leaves it
+            // blank) is non-functional. Skip it rather than insert a half-formed
+            // provider that can never authenticate or address an endpoint.
+            let required = ["base_url", "default_model", "env_key"].map(|key| {
+                obj.get(key)
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+            });
+            let [Some(base_url), Some(default_model), Some(env_key)] = required else {
+                continue;
+            };
             let pricing = obj.get("pricing").and_then(Value::as_object).map_or(
                 Pricing {
                     input: 0.0,
@@ -97,21 +110,9 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
                 name.clone(),
                 CustomProvider {
                     name,
-                    base_url: obj
-                        .get("base_url")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    default_model: obj
-                        .get("default_model")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    env_key: obj
-                        .get("env_key")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
+                    base_url: base_url.to_string(),
+                    default_model: default_model.to_string(),
+                    env_key: env_key.to_string(),
                     pricing,
                     temperature: obj
                         .get("temperature")

@@ -1841,6 +1841,13 @@ fn find_import_cycles_respects_max_cycle_length() {
     assert!(cycles.iter().all(|c| c.length <= 2));
 }
 
+/// A zero max length admits no cycles — not even self-loops (length 1).
+#[test]
+fn find_import_cycles_zero_max_length_returns_none() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    assert!(find_import_cycles_bounded(&g, 0, 20).is_empty());
+}
+
 /// `test_find_import_cycles_skips_nodes_without_source_file`
 #[test]
 fn find_import_cycles_skips_nodes_without_source_file() {
@@ -1873,6 +1880,26 @@ fn find_import_cycles_ignores_non_import_relations() {
     cycle_edge(&mut g, "a", "b", "calls", "src/a.ts", "INFERRED");
     cycle_edge(&mut g, "b", "a", "contains", "src/b.ts", "EXTRACTED");
     assert!(find_import_cycles(&g).is_empty());
+}
+
+/// `re_exports` edges are import-like and must close cycles too — Python treats
+/// them identically to `imports_from` in `find_import_cycles` (#961).
+#[test]
+fn find_import_cycles_detects_re_exports_cycle() {
+    let mut g = Graph::new(GraphKind::DiGraph);
+    cycle_node(&mut g, "a", "a.ts", Some("src/a.ts"));
+    cycle_node(&mut g, "b", "b.ts", Some("src/b.ts"));
+    // 2-cycle formed entirely via re_exports rather than imports_from.
+    cycle_edge(&mut g, "a", "b", "re_exports", "src/a.ts", "EXTRACTED");
+    cycle_edge(&mut g, "b", "a", "re_exports", "src/b.ts", "EXTRACTED");
+    let cycles = find_import_cycles(&g);
+    assert!(
+        cycles.iter().any(|c| {
+            let s: std::collections::HashSet<&str> = c.cycle.iter().map(String::as_str).collect();
+            s.contains("src/a.ts") && s.contains("src/b.ts")
+        }),
+        "re_exports cycle a<->b not detected: {cycles:?}"
+    );
 }
 
 /// `test_find_import_cycles_empty_graph`

@@ -80,6 +80,33 @@ fn custom_provider_pricing_defaults_to_zero() {
 }
 
 #[test]
+fn custom_provider_missing_required_field_is_skipped() {
+    // `provider add` rejects a record missing base_url/default_model/env_key, so
+    // a hand-edited registry entry that omits one is non-functional. The loader
+    // must skip it rather than insert a half-formed provider.
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{
+            "no_url":   {"default_model": "m", "env_key": "K"},
+            "no_model": {"base_url": "http://x/v1", "env_key": "K"},
+            "no_key":   {"base_url": "http://x/v1", "default_model": "m"},
+            "blank_url":{"base_url": "", "default_model": "m", "env_key": "K"},
+            "good":     {"base_url": "http://x/v1", "default_model": "m", "env_key": "K"}
+        }"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded.contains_key("good"));
+    for skipped in ["no_url", "no_model", "no_key", "blank_url"] {
+        assert!(!loaded.contains_key(skipped), "{skipped} should be skipped");
+    }
+}
+
+#[test]
 fn custom_provider_cannot_shadow_builtin() {
     let tmp = tempdir().expect("tempdir");
     let global = tmp.path().join("providers.json");

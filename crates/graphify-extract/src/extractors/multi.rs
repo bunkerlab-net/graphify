@@ -692,6 +692,7 @@ fn resolve_cross_file_java_imports(per_file: &[FileResult], paths: &[PathBuf]) -
 /// Mirrors Python's `path.relative_to(root)` with its
 /// `path.resolve().relative_to(root)` fallback. Returns `None` only when the
 /// path is genuinely outside `root`.
+#[must_use]
 fn relativise_under_root(path: &Path, root: &Path) -> Option<PathBuf> {
     if let Ok(rel) = path.strip_prefix(root) {
         return Some(rel.to_path_buf());

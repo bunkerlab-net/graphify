@@ -50,6 +50,14 @@ pub fn find_import_cycles_bounded(
     max_cycle_length: usize,
     top_n: usize,
 ) -> Vec<ImportCycle> {
+    // Every cycle spans at least one file, so a zero bound admits none. Return
+    // early — mirrors Python's `len(cycle) <= max_cycle_length` rejecting every
+    // cycle at max=0, and stops a self-loop (length 1) from leaking past the
+    // documented bound.
+    if max_cycle_length == 0 {
+        return Vec::new();
+    }
+
     let adj = build_file_graph(graph);
     if adj.values().all(IndexSet::is_empty) {
         return Vec::new();
@@ -152,7 +160,12 @@ fn enumerate_cycles(
     cap: usize,
 ) -> Vec<Vec<String>> {
     let mut out: Vec<Vec<String>> = Vec::new();
-    for start in adj.keys() {
+    // Visit start files in lexicographic order so that, when `cap` truncates a
+    // combinatorially large set, the cycles collected are a deterministic
+    // function of graph *content* rather than edge-insertion order.
+    let mut starts: Vec<&String> = adj.keys().collect();
+    starts.sort();
+    for start in starts {
         if out.len() >= cap {
             break;
         }
@@ -194,8 +207,12 @@ fn dfs_cycles<'a>(
     let Some(neighbors) = adj.get(current) else {
         return;
     };
-    for next in neighbors {
-        let next = next.as_str();
+    // Sorted neighbour traversal keeps cap-truncation deterministic by content
+    // (see `enumerate_cycles`). Neighbour sets are small (file-level fan-out),
+    // so sorting per visit is cheap.
+    let mut nbrs: Vec<&str> = neighbors.iter().map(String::as_str).collect();
+    nbrs.sort_unstable();
+    for next in nbrs {
         if next == start {
             // Closing edge → `path` is a complete normalised cycle.
             out.push(path.iter().map(|s| (*s).to_string()).collect());
