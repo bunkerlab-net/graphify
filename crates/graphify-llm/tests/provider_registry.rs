@@ -4,7 +4,8 @@
 #![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
 
 use graphify_llm::{
-    CustomProvider, Pricing, call_llm, detect_backend_with, load_custom_providers_from,
+    CustomProvider, Pricing, call_llm, detect_backend_with, extract_files_direct,
+    load_custom_providers_from,
 };
 use indexmap::IndexMap;
 use tempfile::tempdir;
@@ -185,4 +186,49 @@ fn custom_provider_call_llm_routes_via_openai_compat() {
 
     let out = call_llm("ping", "custom1", 32).expect("custom provider call succeeds");
     assert_eq!(out, "from custom");
+}
+
+#[test]
+fn custom_provider_extract_files_routes_via_openai_compat() {
+    // `extract_files_direct` with a custom provider must extract through the
+    // OpenAI-compatible client (#1084).
+    let mut server = mockito::Server::new();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "choices": [{
+                    "message": {"content": "{\"nodes\":[{\"id\":\"n1\"}],\"edges\":[]}"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4}
+            })
+            .to_string(),
+        )
+        .create();
+
+    let home = tempdir().expect("tempdir");
+    std::fs::create_dir_all(home.path().join(".graphify")).expect("mkdir .graphify");
+    std::fs::write(
+        home.path().join(".graphify").join("providers.json"),
+        format!(
+            r#"{{"custom2": {{"base_url": "{}", "default_model": "m", "env_key": "CUSTOM2_KEY"}}}}"#,
+            server.url()
+        ),
+    )
+    .expect("write providers.json");
+
+    let work = tempdir().expect("workdir");
+    let file = work.path().join("a.py");
+    std::fs::write(&file, "def f():\n    return 1\n").expect("write source");
+
+    let mut g = EnvGuard::new();
+    g.set("HOME", &home.path().to_string_lossy());
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("CUSTOM2_KEY", "secret");
+
+    let resp = extract_files_direct(&[file], "custom2", None, None, work.path())
+        .expect("custom provider extraction succeeds");
+    assert_eq!(resp.nodes.len(), 1);
 }

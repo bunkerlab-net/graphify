@@ -7,7 +7,8 @@
 use std::cell::Cell;
 
 use graphify_llm::{
-    generate_community_labels, generate_community_labels_with, label_communities_with,
+    generate_community_labels, generate_community_labels_with, label_communities,
+    label_communities_with,
 };
 use indexmap::{IndexMap, IndexSet};
 
@@ -75,6 +76,20 @@ fn label_communities_strips_code_fences() {
 }
 
 #[test]
+fn label_communities_extracts_json_from_surrounding_prose() {
+    // A reply that wraps the JSON in prose is salvaged by slicing the first `{`
+    // to the last `}`.
+    let (node_labels, communities) = graph();
+    let gods = IndexSet::new();
+    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
+        Ok("Here are the names: {\"0\":\"Orders\",\"1\":\"Pay\"} hope that helps".to_string())
+    })
+    .expect("labeling succeeds");
+    assert_eq!(labels[&0], "Orders");
+    assert_eq!(labels[&1], "Pay");
+}
+
+#[test]
 fn label_communities_malformed_errors() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
@@ -134,6 +149,74 @@ fn generate_community_labels_no_backend() {
     assert_eq!(source, "placeholder");
     assert_eq!(labels[&0], "Community 0");
     assert_eq!(labels[&1], "Community 1");
+}
+
+#[test]
+fn generate_community_labels_degrades_loud() {
+    // quiet=false exercises the warning branch; result is still placeholders.
+    let (node_labels, communities) = graph();
+    let gods = IndexSet::new();
+    let (labels, source) = generate_community_labels_with(
+        &communities,
+        &node_labels,
+        &gods,
+        Some("gemini"),
+        false,
+        |_, _, _| Ok("not json".to_string()),
+    );
+    assert_eq!(source, "placeholder");
+    assert_eq!(labels[&0], "Community 0");
+}
+
+#[test]
+fn label_communities_real_path_via_custom_provider() {
+    // Exercise the public (non-`_with`) wrappers end-to-end: a custom provider
+    // pointed at a mock server drives `call_llm`, and both `label_communities`
+    // and `generate_community_labels` parse the reply.
+    let mut server = mockito::Server::new();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "choices": [{
+                    "message": {"content": "{\"0\":\"Orders\",\"1\":\"Payments\"}"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4}
+            })
+            .to_string(),
+        )
+        .expect_at_least(1)
+        .create();
+
+    let home = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(home.path().join(".graphify")).expect("mkdir");
+    std::fs::write(
+        home.path().join(".graphify").join("providers.json"),
+        format!(
+            r#"{{"labelprov": {{"base_url": "{}", "default_model": "m", "env_key": "LABELPROV_KEY"}}}}"#,
+            server.url()
+        ),
+    )
+    .expect("write providers.json");
+
+    let mut g = EnvGuard::new();
+    g.set("HOME", &home.path().to_string_lossy());
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("LABELPROV_KEY", "secret");
+
+    let (node_labels, communities) = graph();
+    let gods = IndexSet::new();
+
+    let labels = label_communities(&communities, &node_labels, &gods, "labelprov").expect("labels");
+    assert_eq!(labels[&0], "Orders");
+    assert_eq!(labels[&1], "Payments");
+
+    let (labels, source) =
+        generate_community_labels(&communities, &node_labels, &gods, Some("labelprov"), true);
+    assert_eq!(source, "llm");
+    assert_eq!(labels[&0], "Orders");
 }
 
 /// RAII guard that sets/restores env vars.
