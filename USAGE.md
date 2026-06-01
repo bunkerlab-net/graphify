@@ -579,8 +579,10 @@ Force a backend with `--backend`; override its default model with `--model`.
 #### Custom providers
 
 Any OpenAI-compatible endpoint can be registered as a custom backend and used like a built-in one (e.g.
-`graphify extract . --backend nvidia`, `graphify label . --backend nvidia`). Custom providers are stored in
-`~/.graphify/providers.json` and managed with the `provider` command:
+`graphify extract . --backend nvidia`, `graphify label . --backend nvidia`). At extraction/labeling time custom
+providers are loaded from **both** `~/.graphify/providers.json` (user-global) and `.graphify/providers.json`
+(project-local, when present); if the same name appears in both, the global entry wins. The `provider` command
+manages the user-global registry:
 
 ```bash
 graphify provider add nvidia \
@@ -593,9 +595,10 @@ graphify provider show nvidia          # full JSON config for one provider
 graphify provider remove nvidia
 ```
 
-Built-in backend names cannot be shadowed. Auto-detection consults custom providers **after** all built-ins, in
+Built-in backend names cannot be shadowed, and a registry entry is ignored unless it supplies a non-empty
+`base_url`, `default_model`, and `env_key`. Auto-detection consults custom providers **after** all built-ins, in
 registry order, selecting the first whose `--env-key` variable is set. Missing `pricing` defaults to zero so cost
-estimation never fails.
+estimation never fails; an optional `max_completion_tokens` caps extraction output (default 8192).
 
 ### Determinism note
 

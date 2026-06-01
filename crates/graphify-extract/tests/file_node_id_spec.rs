@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::path::Path;
 
-use graphify_extract::extract;
+use graphify_extract::{extract, make_id1};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -99,10 +99,13 @@ fn top_level_file_symbol_ids_use_bare_stem() -> TestResult {
         ids.contains("main_run"),
         "expected bare-stem symbol 'main_run', got {ids:?}"
     );
-    // The root directory name must NOT appear in any symbol id.
+    // The root directory name must NOT appear in any symbol id. Normalise the
+    // dir name exactly as node ids are (`make_id1`) so the guard catches a leak
+    // regardless of which non-alphanumeric chars the temp dir name contains —
+    // the old `-`→`_`-only lowercasing missed `.`, `/`, etc.
     let rootname = root
         .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase().replace('-', "_"))
+        .map(|n| make_id1(&n.to_string_lossy()))
         .unwrap_or_default();
     assert!(
         rootname.is_empty() || !ids.iter().any(|i| i.contains(&rootname)),

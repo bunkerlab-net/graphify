@@ -68,6 +68,8 @@ fn custom_provider_max_completion_tokens_parsed_and_defaulted() {
         &global,
         r#"{
             "big": {"base_url": "http://x/v1", "default_model": "m", "env_key": "K", "max_completion_tokens": 16000},
+            "flt": {"base_url": "http://z/v1", "default_model": "m", "env_key": "K", "max_completion_tokens": 12000.0},
+            "neg": {"base_url": "http://w/v1", "default_model": "m", "env_key": "K", "max_completion_tokens": -5},
             "dflt": {"base_url": "http://y/v1", "default_model": "m", "env_key": "K"}
         }"#,
     )
@@ -75,6 +77,10 @@ fn custom_provider_max_completion_tokens_parsed_and_defaulted() {
 
     let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
     assert_eq!(loaded["big"].max_completion_tokens, 16000);
+    // A whole-number JSON float is accepted...
+    assert_eq!(loaded["flt"].max_completion_tokens, 12000);
+    // ...but a negative value falls back to the default rather than wrapping.
+    assert_eq!(loaded["neg"].max_completion_tokens, 8192);
     assert_eq!(loaded["dflt"].max_completion_tokens, 8192);
 }
 

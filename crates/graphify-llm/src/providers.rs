@@ -37,6 +37,24 @@ pub struct CustomProvider {
 /// matching Python's `cfg.get("max_completion_tokens", 8192)`.
 const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 8192;
 
+/// Parse a `max_completion_tokens` JSON value, accepting either an integer or a
+/// whole-number float (e.g. `8192.0`). Returns `None` for missing, negative,
+/// non-finite, or out-of-`u32`-range values so the caller falls back to the
+/// default rather than silently dropping a hand-written float budget.
+fn max_completion_tokens_from(v: &Value) -> Option<u32> {
+    if let Some(n) = v.as_u64() {
+        return u32::try_from(n).ok();
+    }
+    let f = v.as_f64()?;
+    if !f.is_finite() || f < 0.0 {
+        return None;
+    }
+    // Truncation is intentional: a token budget is an integer count.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = f as u64;
+    u32::try_from(n).ok()
+}
+
 /// Path to the `providers.json` registry.
 ///
 /// `global == true` → `~/.graphify/providers.json`; otherwise the
@@ -128,8 +146,7 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
                         .unwrap_or(0.0),
                     max_completion_tokens: obj
                         .get("max_completion_tokens")
-                        .and_then(Value::as_u64)
-                        .and_then(|v| u32::try_from(v).ok())
+                        .and_then(max_completion_tokens_from)
                         .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
                 },
             );
