@@ -27,7 +27,7 @@ use tempfile::tempdir;
 type TestResult = Result<(), Box<dyn Error>>;
 
 /// All node ids in the extraction result.
-fn ids(nodes: &[IndexMap<String, Value>]) -> HashSet<String> {
+fn node_ids(nodes: &[IndexMap<String, Value>]) -> HashSet<String> {
     nodes
         .iter()
         .filter_map(|n| n.get("id").and_then(Value::as_str).map(str::to_string))
@@ -49,7 +49,7 @@ fn file_node_id_uses_parent_dir_and_stem_no_extension() -> TestResult {
     write(&f, "def run():\n    pass\n")?;
 
     let result = extract(&[f], Some(&root));
-    let ids = ids(&result.nodes);
+    let ids = node_ids(&result.nodes);
 
     assert!(
         ids.contains("script_pipeline_step"),
@@ -73,7 +73,7 @@ fn top_level_file_node_id_is_bare_stem() -> TestResult {
     write(&f, "def configure():\n    pass\n")?;
 
     let result = extract(&[f], Some(&root));
-    let ids = ids(&result.nodes);
+    let ids = node_ids(&result.nodes);
 
     assert!(
         ids.contains("setup"),
@@ -93,7 +93,7 @@ fn top_level_file_symbol_ids_use_bare_stem() -> TestResult {
     write(&f, "def run():\n    return 1\n")?;
 
     let result = extract(&[f], Some(&root));
-    let ids = ids(&result.nodes);
+    let ids = node_ids(&result.nodes);
 
     assert!(
         ids.contains("main_run"),
@@ -139,7 +139,7 @@ fn nested_file_symbol_ids_unchanged() -> TestResult {
     write(&f, "def work():\n    return 2\n")?;
 
     let result = extract(&[f], Some(&root));
-    let ids = ids(&result.nodes);
+    let ids = node_ids(&result.nodes);
     assert!(ids.contains("sub_mod"));
     assert!(ids.contains("sub_mod_work"));
     Ok(())
@@ -155,7 +155,7 @@ fn symbol_and_file_ids_share_the_same_stem() -> TestResult {
     write(&f, "def run():\n    pass\n\nclass Stage:\n    pass\n")?;
 
     let result = extract(&[f], Some(&root));
-    let ids = ids(&result.nodes);
+    let ids = node_ids(&result.nodes);
 
     assert!(ids.contains("script_pipeline_step")); // file node
     assert!(ids.contains("script_pipeline_step_stage")); // class symbol shares stem
@@ -194,7 +194,7 @@ fn cross_file_import_edges_stay_connected() -> TestResult {
 
     let files = vec![pkg.join("models.py"), pkg.join("auth.py")];
     let result = extract(&files, Some(&root));
-    let ids = ids(&result.nodes);
+    let ids = node_ids(&result.nodes);
 
     assert!(ids.contains("pkg_models"));
     assert!(ids.contains("pkg_auth"));

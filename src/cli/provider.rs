@@ -63,7 +63,11 @@ fn save_registry(registry: &Map<String, Value>) -> Result<()> {
     // a truncated/corrupt registry (rename is atomic on the same filesystem).
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, format!("{body}\n"))?;
-    std::fs::rename(&tmp, &path)?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        // Don't leave the orphaned temp file behind on a failed rename.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }
 

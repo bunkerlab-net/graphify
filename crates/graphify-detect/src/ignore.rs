@@ -381,7 +381,7 @@ fn anchored_include_matches(rel_str: &str, p: &str) -> bool {
         || (rel_str.len() > p.len()
             && rel_str.as_bytes()[p.len()] == b'/'
             && rel_str.starts_with(p))
-        || (p.bytes().any(|b| b == b'*' || b == b'?') && fnmatch(rel_str, &format!("{p}/**")))
+        || ((p.contains('*') || p.contains('?')) && fnmatch(rel_str, &format!("{p}/**")))
 }
 
 /// Return `true` if `path` matches any `.graphifyinclude` allowlist pattern.

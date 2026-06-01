@@ -115,16 +115,35 @@ pub fn resolve_region() -> String {
 #[must_use]
 pub fn credentials_appear_configured() -> bool {
     let env_set = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty());
-    // Explicit static credentials.
-    (env_set("AWS_ACCESS_KEY_ID") && env_set("AWS_SECRET_ACCESS_KEY"))
-        // Profile in ~/.aws/credentials or ~/.aws/config.
-        || env_set("AWS_PROFILE")
-        // Web identity (IRSA on EKS, GitHub OIDC, etc.).
-        || env_set("AWS_WEB_IDENTITY_TOKEN_FILE")
-        // ECS task role.
-        || env_set("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-        || env_set("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+    // Explicit static credentials require BOTH the access key id and secret;
+    // every other entry point in `CREDENTIAL_ENV_VARS` is sufficient on its own.
+    if env_set("AWS_ACCESS_KEY_ID") && env_set("AWS_SECRET_ACCESS_KEY") {
+        return true;
+    }
+    CREDENTIAL_ENV_VARS
+        .iter()
+        .filter(|k| !matches!(**k, "AWS_ACCESS_KEY_ID" | "AWS_SECRET_ACCESS_KEY"))
+        .any(|k| env_set(k))
 }
+
+/// AWS credential-provider environment variables that
+/// [`credentials_appear_configured`] treats as evidence that credentials are
+/// configured. Centralised so the no-backend detection list
+/// ([`crate::backend_selection_env_vars`]) and its test scrub stay in lockstep
+/// with the detection logic above. `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+/// are listed individually but only count as credentials when both are present.
+pub const CREDENTIAL_ENV_VARS: &[&str] = &[
+    // Explicit static credentials (need both of these together).
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    // Profile in ~/.aws/credentials or ~/.aws/config.
+    "AWS_PROFILE",
+    // Web identity (IRSA on EKS, GitHub OIDC, etc.).
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    // ECS / container task roles.
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+];
 
 /// Process-wide tokio runtime used to drive the (async-only) AWS SDK.
 ///

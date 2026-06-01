@@ -55,8 +55,8 @@ pub mod tokenizer;
 pub mod tokens;
 
 pub use backends::{
-    BACKENDS, BackendConfig, Pricing, backend_config, detect_backend, detect_backend_with,
-    format_backend_env_keys, get_backend_api_key, router,
+    BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars, detect_backend,
+    detect_backend_with, format_backend_env_keys, get_backend_api_key, router,
 };
 pub use call::call_llm;
 pub use constants::{

@@ -202,7 +202,7 @@ pub fn detect_backend_with(
         return Some("bedrock".to_string());
     }
     // Ollama: checked before custom providers to avoid shadowing a local model.
-    if let Ok(url) = std::env::var("OLLAMA_BASE_URL")
+    if let Ok(url) = std::env::var(ollama::BASE_URL_ENV)
         && !url.is_empty()
     {
         ollama::validate_ollama_base_url(&url);
@@ -215,4 +215,27 @@ pub fn detect_backend_with(
         }
     }
     None
+}
+
+/// Every environment variable [`detect_backend`] consults to auto-select a
+/// built-in backend, in detection-priority order.
+///
+/// Built from the per-backend `ENV_KEY` constants, [`bedrock::CREDENTIAL_ENV_VARS`],
+/// and [`ollama::BASE_URL_ENV`] — the same names the detection logic above reads —
+/// so the list can never drift from it. Custom-provider `env_key`s are excluded
+/// because they are registry-defined, not statically known. Tests scrub exactly
+/// this set to drive the no-backend / custom-provider path deterministically.
+#[must_use]
+pub fn backend_selection_env_vars() -> Vec<&'static str> {
+    let mut vars = vec![
+        gemini::ENV_KEY,
+        gemini::ENV_KEY_FALLBACK,
+        kimi::ENV_KEY,
+        claude::ENV_KEY,
+        openai::ENV_KEY,
+        deepseek::ENV_KEY,
+    ];
+    vars.extend_from_slice(bedrock::CREDENTIAL_ENV_VARS);
+    vars.push(ollama::BASE_URL_ENV);
+    vars
 }
