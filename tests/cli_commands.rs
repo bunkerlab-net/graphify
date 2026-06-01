@@ -623,6 +623,32 @@ fn provider_show_missing_fails() {
         .stderr(contains("not found"));
 }
 
+#[test]
+fn provider_malformed_registry_is_not_clobbered() {
+    // A present-but-malformed providers.json must abort (rather than be silently
+    // overwritten), so the user's other providers aren't lost to a typo.
+    let home = tempfile::tempdir().unwrap();
+    let cfg = home.path().join(".graphify");
+    fs::create_dir_all(&cfg).unwrap();
+    fs::write(cfg.join("providers.json"), "{ this is not json").unwrap();
+    cli()
+        .env("HOME", home.path())
+        .args([
+            "provider",
+            "add",
+            "nvidia",
+            "--base-url",
+            "http://x/v1",
+            "--default-model",
+            "m",
+            "--env-key",
+            "K",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("malformed"));
+}
+
 // ── label command shares the cluster-only handler (#1097) ───────────────────
 
 #[test]

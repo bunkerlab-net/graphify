@@ -67,6 +67,23 @@ fn custom_provider_load_returns_config() {
 }
 
 #[test]
+fn custom_provider_identical_local_global_path_read_once() {
+    // When `$HOME` is unset the local and global paths coincide; the registry
+    // must still be read only once (no double-insert / wasted read).
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("providers.json");
+    std::fs::write(
+        &path,
+        r#"{"only": {"base_url": "http://x/v1", "default_model": "m", "env_key": "K"}}"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&path, &path);
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded.contains_key("only"));
+}
+
+#[test]
 fn custom_provider_pricing_defaults_to_zero() {
     let tmp = tempdir().expect("tempdir");
     let global = tmp.path().join("providers.json");

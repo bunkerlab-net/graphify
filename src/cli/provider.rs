@@ -12,10 +12,7 @@ use crate::cli::args::ProviderCommand;
 /// Dispatch a `provider` subcommand.
 pub(crate) fn cmd_provider(cmd: ProviderCommand) -> Result<()> {
     match cmd {
-        ProviderCommand::List => {
-            list();
-            Ok(())
-        }
+        ProviderCommand::List => list(),
         ProviderCommand::Show { name } => show(&name),
         ProviderCommand::Add {
             name,
@@ -36,14 +33,23 @@ pub(crate) fn cmd_provider(cmd: ProviderCommand) -> Result<()> {
     }
 }
 
-/// Load the global registry as an ordered JSON object (empty on missing/invalid).
-fn load_registry() -> Map<String, Value> {
+/// Load the global registry as an ordered JSON object. A missing file yields an
+/// empty registry; a file that exists but is unreadable or not a JSON object is
+/// an error, so `add`/`remove` never clobber a malformed file (a divergence from
+/// graphify-py, which silently overwrites it).
+fn load_registry() -> Result<Map<String, Value>> {
     let path = graphify_llm::custom_providers_path(true);
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default()
+    if !path.is_file() {
+        return Ok(Map::new());
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow!("malformed providers.json at {}: {e}", path.display()))?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow!("providers.json at {} is not a JSON object", path.display()))
 }
 
 /// Write the registry back, pretty-printed with a trailing newline (matches Python).
@@ -57,8 +63,8 @@ fn save_registry(registry: &Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-fn list() {
-    let registry = load_registry();
+fn list() -> Result<()> {
+    let registry = load_registry()?;
     if registry.is_empty() {
         println!("No custom providers registered.");
     } else {
@@ -70,10 +76,11 @@ fn list() {
             println!("  {name}  ({base})");
         }
     }
+    Ok(())
 }
 
 fn show(name: &str) -> Result<()> {
-    let registry = load_registry();
+    let registry = load_registry()?;
     let Some(cfg) = registry.get(name) else {
         return Err(anyhow!("Provider '{name}' not found."));
     };
@@ -106,7 +113,7 @@ fn add(
         ));
     };
 
-    let mut registry = load_registry();
+    let mut registry = load_registry()?;
     registry.insert(
         name.to_string(),
         json!({
@@ -123,7 +130,7 @@ fn add(
 }
 
 fn remove(name: &str) -> Result<()> {
-    let mut registry = load_registry();
+    let mut registry = load_registry()?;
     if registry.shift_remove(name).is_none() {
         return Err(anyhow!("Provider '{name}' not found."));
     }

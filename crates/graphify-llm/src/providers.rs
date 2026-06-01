@@ -36,14 +36,13 @@ pub struct CustomProvider {
 /// `_custom_providers_path`.
 #[must_use]
 pub fn custom_providers_path(global: bool) -> PathBuf {
-    if global {
-        home_dir()
-            .unwrap_or_default()
-            .join(".graphify")
-            .join("providers.json")
-    } else {
-        PathBuf::from(".graphify").join("providers.json")
+    // When `$HOME` is unset the global path falls back to the local one rather
+    // than resolving to a stray relative `.graphify/...` that would collide with
+    // — and be read twice as — the local path.
+    if global && let Some(home) = home_dir() {
+        return home.join(".graphify").join("providers.json");
     }
+    PathBuf::from(".graphify").join("providers.json")
 }
 
 /// User home directory from `$HOME` (matches the detect crate's resolution).
@@ -59,12 +58,18 @@ pub fn load_custom_providers() -> IndexMap<String, CustomProvider> {
 }
 
 /// Load custom providers from explicit `local`/`global` registry files (in that
-/// order — a later file overrides an earlier one for the same name). Malformed
-/// files are skipped silently, mirroring Python's broad `except`.
+/// order — a later file overrides an earlier one for the same name, so `global`
+/// wins, matching Python `_load_custom_providers`). Malformed files are skipped
+/// silently, mirroring Python's broad `except`. Identical `local`/`global` paths
+/// (e.g. when `$HOME` is unset) are read only once.
 #[must_use]
 pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<String, CustomProvider> {
     let mut providers: IndexMap<String, CustomProvider> = IndexMap::new();
-    for path in [local, global] {
+    let mut paths: Vec<&Path> = vec![local];
+    if global != local {
+        paths.push(global);
+    }
+    for path in paths {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
