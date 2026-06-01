@@ -3,11 +3,12 @@
 //! Ports `detect`, `collect_files`, and `_auto_follow_symlinks` from
 //! `graphify-py/graphify/detect.py`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ignore_walk::{WalkBuilder, WalkState};
+use indexmap::IndexMap;
 use rayon::prelude::*;
 
 use crate::extensions::{FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
@@ -89,8 +90,12 @@ pub const FILE_COUNT_UPPER: usize = 500;
 /// Full output of a [`detect`] run, analogous to the Python dict return.
 #[derive(Debug, Clone)]
 pub struct DetectResult {
-    /// Files grouped by type string (`"code"`, `"document"`, `"paper"`, `"image"`, `"video"`).
-    pub files: HashMap<String, Vec<String>>,
+    /// Files grouped by type string, in the fixed insertion order `"code"`,
+    /// `"document"`, `"paper"`, `"image"`, `"video"`. `IndexMap` (not `HashMap`)
+    /// keeps that order observable so the flattened extraction file list — and
+    /// hence `graph.json` node order and the manifest — is deterministic and
+    /// matches Python's insertion-ordered dict.
+    pub files: IndexMap<String, Vec<String>>,
     /// Total number of discovered files across all types.
     pub total_files: usize,
     /// Estimated total word count across all non-video files.
@@ -493,7 +498,7 @@ fn run_walk_phase(ctx: &WalkCtx<'_>, root: &Path, memory_dir: &Path) -> Vec<Path
 
 /// Output of [`run_classify_phase`].
 struct ClassifyOutput {
-    files: HashMap<String, Vec<String>>,
+    files: IndexMap<String, Vec<String>>,
     to_count: Vec<(PathBuf, FileType)>,
     skipped_sensitive: Vec<String>,
 }
@@ -508,7 +513,7 @@ fn run_classify_phase(
     ignore_patterns: &crate::ignore::IgnorePatterns,
     google_workspace: bool,
 ) -> ClassifyOutput {
-    let mut files: HashMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
+    let mut files: IndexMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
         .iter()
         .map(|k| ((*k).to_string(), Vec::new()))
         .collect();
@@ -630,7 +635,7 @@ struct ConvertCtx<'a> {
     root: &'a Path,
     converted_dir: &'a Path,
     ignore_patterns: &'a IgnorePatterns,
-    files: &'a mut HashMap<String, Vec<String>>,
+    files: &'a mut IndexMap<String, Vec<String>>,
     to_count: &'a mut Vec<(PathBuf, FileType)>,
     skipped_sensitive: &'a mut Vec<String>,
 }

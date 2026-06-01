@@ -215,8 +215,9 @@ fn detect_result_from_incremental(
     path: &std::path::Path,
     inc: &graphify_detect::IncrementalDetectResult,
 ) -> graphify_detect::DetectResult {
-    let mut files: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
+    // Seed in the canonical type order so the reconstructed `DetectResult`
+    // matches a fresh `detect` walk (and Python's insertion-ordered dict).
+    let mut files: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
     for (kind, paths) in &inc.changed_files {
         files.entry(kind.clone()).or_default().extend(paths.clone());
     }
@@ -647,15 +648,11 @@ fn render_html_viz(
 /// incremental code path. Mirrors `_save_manifest(... kind="both")` at
 /// `__main__.py:2891`.
 fn persist_manifest(
-    detect_files: &std::collections::HashMap<String, Vec<String>>,
+    detect_files: &indexmap::IndexMap<String, Vec<String>>,
     out_dir: &std::path::Path,
 ) {
     let manifest_path = out_dir.join("manifest.json");
-    let files_indexed: indexmap::IndexMap<String, Vec<String>> = detect_files
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if let Err(e) = graphify_detect::save_manifest(&files_indexed, &manifest_path, "both") {
+    if let Err(e) = graphify_detect::save_manifest(detect_files, &manifest_path, "both") {
         eprintln!("      warning: could not write manifest: {e}");
     }
 }

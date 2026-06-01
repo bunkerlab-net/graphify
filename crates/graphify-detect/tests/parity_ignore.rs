@@ -186,13 +186,19 @@ fn anchored_dir_matches_at_root() {
 
 #[test]
 fn anchored_file_not_matched_at_depth() {
-    // /build must not match src/build.
+    // /build must match build at the repo root, but NOT src/build at depth.
     let tmp = tempdir().expect("tempdir");
     let root = tmp.path().canonicalize().expect("canonicalize");
+    let root_build = root.join("build");
     let src_build = root.join("src").join("build");
     std::fs::create_dir_all(&src_build).expect("create_dir_all");
+    std::fs::create_dir_all(&root_build).expect("create_dir_all");
     std::fs::write(root.join(".graphifyignore"), "/build\n").expect("write ignore");
     let patterns = load_graphifyignore(&root);
+    assert!(
+        is_ignored(&root_build, &root, &patterns),
+        "root build/ must be ignored by /build"
+    );
     assert!(
         !is_ignored(&src_build, &root, &patterns),
         "src/build must NOT be ignored by /build"
