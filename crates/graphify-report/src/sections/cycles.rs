@@ -24,9 +24,9 @@ pub(crate) fn render_import_cycles(lines: &mut Vec<String>, graph: &Graph) {
         let Some(first) = c.cycle.first() else {
             continue;
         };
-        let mut path = c.cycle.clone();
-        path.push(first.clone());
-        let cycle_path = path.join(" -> ");
+        // Render the closed path `a -> b -> a` without cloning the cycle: join
+        // the files, then append the start file to close the loop.
+        let cycle_path = format!("{} -> {first}", c.cycle.join(" -> "));
         lines.push(format!("- {}-file cycle: `{cycle_path}`", c.length));
     }
 }
