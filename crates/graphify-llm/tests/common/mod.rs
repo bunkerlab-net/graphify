@@ -34,11 +34,14 @@ impl EnvGuard {
         self
     }
 
-    /// Unset every environment variable that `detect_backend` consults, so a
-    /// test can drive the no-backend / custom-provider path without the host's
-    /// real credentials leaking in. The exact set comes from
+    /// Unset the built-in backend-selection environment variables (the API
+    /// keys, Bedrock credential vars, and `OLLAMA_BASE_URL`) so a test can drive
+    /// the no-backend / custom-provider path without the host's real credentials
+    /// leaking in. The exact set comes from
     /// [`graphify_llm::backend_selection_env_vars`], so it can never drift from
-    /// the detection logic it mirrors.
+    /// the detection logic. This does NOT clear custom-provider `env_key`s —
+    /// those are registry-defined, not statically known, so a test relying on
+    /// one must set or unset it explicitly.
     pub fn scrub_backends(&mut self) -> &mut Self {
         for key in graphify_llm::backend_selection_env_vars() {
             self.unset(key);

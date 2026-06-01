@@ -58,6 +58,13 @@ pub fn find_import_cycles_bounded(
         return Vec::new();
     }
 
+    // Zero results requested: short-circuit before building the file graph. The
+    // `top_n * 10` cap would already yield nothing, but skipping the graph walk
+    // avoids wasted work.
+    if top_n == 0 {
+        return Vec::new();
+    }
+
     let adj = build_file_graph(graph);
     if adj.values().all(IndexSet::is_empty) {
         return Vec::new();

@@ -68,14 +68,17 @@ fn interface_extends_same_file() {
         "export interface Base { x: number; }\n\
          export interface Derived extends Base { y: number; }\n",
     )]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "Derived",
-        "src/a.ts",
-        "Base",
-        "inherits"
-    ));
+    assert!(
+        has_edge(
+            &result.edges,
+            "src/a.ts",
+            "Derived",
+            "src/a.ts",
+            "Base",
+            "inherits"
+        ),
+        "expected same-file `inherits` edge Derived -> Base"
+    );
 }
 
 #[test]
@@ -86,36 +89,31 @@ fn interface_extends_multiple_same_file() {
          interface B { b: number; }\n\
          interface M extends A, B { m: number; }\n",
     )]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "M",
-        "src/a.ts",
-        "A",
-        "inherits"
-    ));
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "M",
-        "src/a.ts",
-        "B",
-        "inherits"
-    ));
+    assert!(
+        has_edge(&result.edges, "src/a.ts", "M", "src/a.ts", "A", "inherits"),
+        "expected same-file `inherits` edge M -> A"
+    );
+    assert!(
+        has_edge(&result.edges, "src/a.ts", "M", "src/a.ts", "B", "inherits"),
+        "expected same-file `inherits` edge M -> B"
+    );
 }
 
 #[test]
 fn class_extends_same_file() {
     let (_tmp, result) =
         extract_files(&[("src/a.ts", "class Animal {}\nclass Dog extends Animal {}\n")]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "Dog",
-        "src/a.ts",
-        "Animal",
-        "inherits"
-    ));
+    assert!(
+        has_edge(
+            &result.edges,
+            "src/a.ts",
+            "Dog",
+            "src/a.ts",
+            "Animal",
+            "inherits"
+        ),
+        "expected same-file `inherits` edge Dog -> Animal"
+    );
 }
 
 #[test]
@@ -125,14 +123,17 @@ fn interface_extends_generic_base_same_file() {
         "interface Base<T> { x: T; }\n\
          interface G extends Base<number> { y: number; }\n",
     )]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "G",
-        "src/a.ts",
-        "Base",
-        "inherits"
-    ));
+    assert!(
+        has_edge(
+            &result.edges,
+            "src/a.ts",
+            "G",
+            "src/a.ts",
+            "Base",
+            "inherits"
+        ),
+        "expected same-file `inherits` edge G -> Base (generic base)"
+    );
 }
 
 #[test]
@@ -145,14 +146,17 @@ fn interface_extends_imported() {
         ),
         ("src/b.ts", "export interface Imported { z: number; }\n"),
     ]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "D",
-        "src/b.ts",
-        "Imported",
-        "inherits"
-    ));
+    assert!(
+        has_edge(
+            &result.edges,
+            "src/a.ts",
+            "D",
+            "src/b.ts",
+            "Imported",
+            "inherits"
+        ),
+        "expected cross-file `inherits` edge D -> Imported"
+    );
 }
 
 #[test]
@@ -165,14 +169,17 @@ fn imported_class_extends_still_works() {
         ),
         ("src/b.ts", "export class Imported {}\n"),
     ]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "Cat",
-        "src/b.ts",
-        "Imported",
-        "inherits"
-    ));
+    assert!(
+        has_edge(
+            &result.edges,
+            "src/a.ts",
+            "Cat",
+            "src/b.ts",
+            "Imported",
+            "inherits"
+        ),
+        "expected cross-file `inherits` edge Cat -> Imported"
+    );
 }
 
 #[test]
@@ -182,12 +189,15 @@ fn class_implements_same_file_interface() {
         "interface Walker { walk(): void; }\n\
          class Person implements Walker { walk() {} }\n",
     )]);
-    assert!(has_edge(
-        &result.edges,
-        "src/a.ts",
-        "Person",
-        "src/a.ts",
-        "Walker",
-        "implements"
-    ));
+    assert!(
+        has_edge(
+            &result.edges,
+            "src/a.ts",
+            "Person",
+            "src/a.ts",
+            "Walker",
+            "implements"
+        ),
+        "expected same-file `implements` edge Person -> Walker"
+    );
 }

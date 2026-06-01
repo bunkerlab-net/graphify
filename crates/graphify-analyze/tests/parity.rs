@@ -1848,6 +1848,13 @@ fn find_import_cycles_zero_max_length_returns_none() {
     assert!(find_import_cycles_bounded(&g, 0, 20).is_empty());
 }
 
+/// A zero `top_n` requests no results, so the enumeration short-circuits.
+#[test]
+fn find_import_cycles_zero_top_n_returns_none() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    assert!(find_import_cycles_bounded(&g, 5, 0).is_empty());
+}
+
 /// `test_find_import_cycles_skips_nodes_without_source_file`
 #[test]
 fn find_import_cycles_skips_nodes_without_source_file() {
