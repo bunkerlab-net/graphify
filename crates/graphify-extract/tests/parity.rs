@@ -897,6 +897,35 @@ fn extract_swift_merges_extension_across_files() {
 }
 
 #[test]
+fn extract_swift_same_file_class_and_extension_keeps_canonical() {
+    // A single file declaring both `class Foo` and `extension Foo` collapses to
+    // one `Foo` node via `seen_ids` (matching graphify-py), so the merge pass
+    // matching extension nodes by (source_file, label) cannot drop the canonical
+    // class: there is only ever one node per (file, label). Guards against a
+    // regression where same-file pairs would both be marked as extensions.
+    use graphify_extract::extract;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("Foo.swift");
+    std::fs::write(
+        &f,
+        "class Foo {\n    func bar() {}\n}\nextension Foo {\n    func baz() {}\n}\n",
+    )
+    .expect("test invariant");
+    let result = extract(std::slice::from_ref(&f), None);
+    let foo_nodes: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| n.get("label").and_then(serde_json::Value::as_str) == Some("Foo"))
+        .collect();
+    assert_eq!(
+        foo_nodes.len(),
+        1,
+        "same-file class+extension must keep exactly one canonical Foo node, got {}: {foo_nodes:?}",
+        foo_nodes.len()
+    );
+}
+
+#[test]
 fn extract_bash_source_user_defined_emits_calls_not_imports_from() {
     // When `source` is user-defined as a function (shadowing the builtin),
     // `source ./helpers.sh` must emit a `calls` edge to the function, not
