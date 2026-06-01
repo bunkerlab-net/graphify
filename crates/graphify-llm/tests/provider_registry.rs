@@ -157,24 +157,7 @@ fn custom_provider_cannot_shadow_builtin() {
 #[serial]
 fn detect_backend_custom_provider_after_builtins() {
     let mut g = EnvGuard::new();
-    for key in [
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "MOONSHOT_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "OLLAMA_BASE_URL",
-        "AWS_PROFILE",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_WEB_IDENTITY_TOKEN_FILE",
-        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-    ] {
-        g.unset(key);
-    }
+    g.scrub_backends();
     g.set("MY_CUSTOM_KEY", "test-key");
 
     let mut custom: IndexMap<String, CustomProvider> = IndexMap::new();

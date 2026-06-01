@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use graphify_extract::{extract, file_stem, make_id};
+use graphify_extract::{ExtractOutput, extract, file_stem, make_id};
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -22,6 +22,21 @@ fn write(path: &Path, text: &str) -> PathBuf {
     std::fs::create_dir_all(path.parent().expect("has parent")).expect("create dirs");
     std::fs::write(path, text).expect("write file");
     path.to_path_buf()
+}
+
+/// Write each `(relative path, contents)` pair under a fresh tempdir, then run
+/// `extract` over all of them in the given order. The returned `TempDir` must
+/// be kept in scope by the caller so the written files survive for the duration
+/// of the test.
+fn extract_files(files: &[(&str, &str)]) -> (tempfile::TempDir, ExtractOutput) {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let paths: Vec<PathBuf> = files
+        .iter()
+        .map(|(rel, contents)| write(&root.join(rel), contents))
+        .collect();
+    let result = extract(&paths, Some(&root));
+    (tmp, result)
 }
 
 /// `_make_id(_file_stem(src_file), src_sym)` → symbol node id.
@@ -48,14 +63,11 @@ fn has_edge(
 
 #[test]
 fn interface_extends_same_file() {
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    let f = write(
-        &root.join("src").join("a.ts"),
+    let (_tmp, result) = extract_files(&[(
+        "src/a.ts",
         "export interface Base { x: number; }\n\
          export interface Derived extends Base { y: number; }\n",
-    );
-    let result = extract(&[f], Some(&root));
+    )]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",
@@ -68,15 +80,12 @@ fn interface_extends_same_file() {
 
 #[test]
 fn interface_extends_multiple_same_file() {
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    let f = write(
-        &root.join("src").join("a.ts"),
+    let (_tmp, result) = extract_files(&[(
+        "src/a.ts",
         "interface A { a: number; }\n\
          interface B { b: number; }\n\
          interface M extends A, B { m: number; }\n",
-    );
-    let result = extract(&[f], Some(&root));
+    )]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",
@@ -97,13 +106,8 @@ fn interface_extends_multiple_same_file() {
 
 #[test]
 fn class_extends_same_file() {
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    let f = write(
-        &root.join("src").join("a.ts"),
-        "class Animal {}\nclass Dog extends Animal {}\n",
-    );
-    let result = extract(&[f], Some(&root));
+    let (_tmp, result) =
+        extract_files(&[("src/a.ts", "class Animal {}\nclass Dog extends Animal {}\n")]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",
@@ -116,14 +120,11 @@ fn class_extends_same_file() {
 
 #[test]
 fn interface_extends_generic_base_same_file() {
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    let f = write(
-        &root.join("src").join("a.ts"),
+    let (_tmp, result) = extract_files(&[(
+        "src/a.ts",
         "interface Base<T> { x: T; }\n\
          interface G extends Base<number> { y: number; }\n",
-    );
-    let result = extract(&[f], Some(&root));
+    )]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",
@@ -136,21 +137,14 @@ fn interface_extends_generic_base_same_file() {
 
 #[test]
 fn interface_extends_imported() {
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    write(
-        &root.join("src").join("b.ts"),
-        "export interface Imported { z: number; }\n",
-    );
-    write(
-        &root.join("src").join("a.ts"),
-        "import { Imported } from './b';\n\
-         export interface D extends Imported { d: number; }\n",
-    );
-    let result = extract(
-        &[root.join("src").join("a.ts"), root.join("src").join("b.ts")],
-        Some(&root),
-    );
+    let (_tmp, result) = extract_files(&[
+        (
+            "src/a.ts",
+            "import { Imported } from './b';\n\
+             export interface D extends Imported { d: number; }\n",
+        ),
+        ("src/b.ts", "export interface Imported { z: number; }\n"),
+    ]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",
@@ -164,17 +158,13 @@ fn interface_extends_imported() {
 #[test]
 fn imported_class_extends_still_works() {
     // Regression guard: the originally-working imported-class case must stay.
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    write(&root.join("src").join("b.ts"), "export class Imported {}\n");
-    write(
-        &root.join("src").join("a.ts"),
-        "import { Imported } from './b';\nclass Cat extends Imported {}\n",
-    );
-    let result = extract(
-        &[root.join("src").join("a.ts"), root.join("src").join("b.ts")],
-        Some(&root),
-    );
+    let (_tmp, result) = extract_files(&[
+        (
+            "src/a.ts",
+            "import { Imported } from './b';\nclass Cat extends Imported {}\n",
+        ),
+        ("src/b.ts", "export class Imported {}\n"),
+    ]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",
@@ -187,14 +177,11 @@ fn imported_class_extends_still_works() {
 
 #[test]
 fn class_implements_same_file_interface() {
-    let tmp = tempdir().expect("tempdir");
-    let root = tmp.path().canonicalize().expect("canonicalize");
-    let f = write(
-        &root.join("src").join("a.ts"),
+    let (_tmp, result) = extract_files(&[(
+        "src/a.ts",
         "interface Walker { walk(): void; }\n\
          class Person implements Walker { walk() {} }\n",
-    );
-    let result = extract(&[f], Some(&root));
+    )]);
     assert!(has_edge(
         &result.edges,
         "src/a.ts",

@@ -33,6 +33,36 @@ impl EnvGuard {
         unsafe { std::env::remove_var(k) };
         self
     }
+
+    /// Unset every environment variable that `detect_backend` consults, so a
+    /// test can drive the no-backend / custom-provider path without the host's
+    /// real credentials leaking in. The list mirrors the keys checked by
+    /// `backends::detect_backend_with` and `bedrock::credentials_appear_configured`
+    /// (notably `AWS_CONTAINER_CREDENTIALS_FULL_URI`) — keep it in lockstep with
+    /// them, and with `cli_no_backend()` in the binary's `tests/cli_commands.rs`.
+    pub fn scrub_backends(&mut self) -> &mut Self {
+        for key in [
+            // Built-in API keys (gemini -> kimi -> claude -> openai -> deepseek).
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "MOONSHOT_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            // Bedrock credential-provider entry points.
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_PROFILE",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            // Ollama (checked last before custom providers).
+            "OLLAMA_BASE_URL",
+        ] {
+            self.unset(key);
+        }
+        self
+    }
 }
 
 impl Drop for EnvGuard {

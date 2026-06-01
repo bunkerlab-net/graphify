@@ -144,24 +144,7 @@ fn generate_community_labels_no_backend() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut g = EnvGuard::new();
     g.set("HOME", &home.path().to_string_lossy());
-    for key in [
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "MOONSHOT_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "OLLAMA_BASE_URL",
-        "AWS_PROFILE",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_WEB_IDENTITY_TOKEN_FILE",
-        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-    ] {
-        g.unset(key);
-    }
+    g.scrub_backends();
 
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
@@ -195,7 +178,7 @@ fn label_communities_real_path_via_custom_provider() {
     // pointed at a mock server drives `call_llm`, and both `label_communities`
     // and `generate_community_labels` parse the reply.
     let mut server = mockito::Server::new();
-    let _m = server
+    let mock = server
         .mock("POST", "/chat/completions")
         .with_status(200)
         .with_body(
@@ -238,6 +221,10 @@ fn label_communities_real_path_via_custom_provider() {
         generate_community_labels(&communities, &node_labels, &gods, Some("labelprov"), true);
     assert_eq!(source, "llm");
     assert_eq!(labels[&0], "Orders");
+
+    // Enforce that the mock endpoint was actually hit, rather than relying on
+    // the label assertions alone.
+    mock.assert();
 }
 
 #[test]

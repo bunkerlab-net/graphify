@@ -56,8 +56,9 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   and env-var _names_ (values are never read).
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
 - **Local-first** — `graph.json` lives next to your code; no daemon, no cloud, no account.
-- **Optional LLM-driven semantic extraction** through OpenAI, Anthropic, Gemini, DeepSeek, Moonshot, Ollama, Bedrock,
-  or any OpenAI-compatible **custom provider** registered with `graphify provider add`.
+- **Optional LLM-driven semantic extraction** through OpenAI, Claude (Anthropic), Gemini, DeepSeek, Kimi (Moonshot),
+  Ollama, Bedrock, or any OpenAI-compatible **custom provider** registered with `graphify provider add`. The
+  `--backend` identifiers are `openai`, `claude`, `gemini`, `deepseek`, `kimi`, `ollama`, and `bedrock`.
 - **LLM community naming** — `graphify label` (or `cluster-only`) auto-names graph communities with the configured
   backend; degrades to `Community N` placeholders when no backend is available.
 - **AI-assistant integration** — drop-in installers for Claude Code, Codex, Amp, Cursor, Gemini CLI, GitHub Copilot,
