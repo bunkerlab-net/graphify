@@ -2,7 +2,7 @@
 //!
 //! Mirrors `graphify-py/tests/test_labeling.py`. The Python tests monkeypatch
 //! `_call_llm`; the Rust port injects the call via the `*_with` variants.
-#![allow(clippy::expect_used, clippy::float_cmp, unsafe_code)]
+#![allow(clippy::expect_used)]
 
 use std::cell::Cell;
 

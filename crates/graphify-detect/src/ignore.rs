@@ -365,6 +365,25 @@ pub fn is_ignored(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     eval_path(path, root, patterns)
 }
 
+/// Whether an anchored `.graphifyinclude` stem `p` (anchor-relative, no
+/// surrounding slashes) matches the anchor-relative path `rel_str` — the path
+/// itself or anything in its subtree.
+///
+/// For an allowlist an anchored directory (`/src`) covers its descendants
+/// (`src/main.py`), mirroring [`could_contain_included_path`]. This is the
+/// inverse of the anchored *ignore* fix (#1087): an ignore pattern must not leak
+/// into a subtree, but an include directory pulls its whole subtree in. A literal
+/// stem uses a zero-alloc byte check (`{p}/...`); a globbed stem (`src*`) needs
+/// `{p}/**` since this matcher's `*` does not cross `/` (the `format!` runs only
+/// for the rare globbed-include case).
+fn anchored_include_matches(rel_str: &str, p: &str) -> bool {
+    fnmatch(rel_str, p)
+        || (rel_str.len() > p.len()
+            && rel_str.as_bytes()[p.len()] == b'/'
+            && rel_str.starts_with(p))
+        || (p.bytes().any(|b| b == b'*' || b == b'?') && fnmatch(rel_str, &format!("{p}/**")))
+}
+
 /// Return `true` if `path` matches any `.graphifyinclude` allowlist pattern.
 #[must_use]
 pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
@@ -381,26 +400,11 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
             continue;
         }
         if anchored {
-            // Anchored include patterns match the anchor-relative path directly.
-            // For an *allowlist*, an anchored directory (`/src`) also covers its
-            // descendants (`src/main.py`), so a `"{p}/"`-prefix match is included
-            // too — mirroring `could_contain_included_path`. This is the inverse
-            // of the anchored *ignore* fix (#1087): an ignore pattern must not
-            // leak into a subtree at the wrong depth, but an include directory is
-            // meant to pull its whole subtree in.
-            if path.strip_prefix(anchor).ok().is_some_and(|rel| {
-                let rel_str = path_to_forward_slash(rel);
-                // Match the path itself, then its subtree. A literal directory
-                // stem uses a zero-alloc byte check (`{p}/...`); a globbed stem
-                // (`src*`) needs `{p}/**` since this matcher's `*` does not cross
-                // `/`. The format! only runs for the rare globbed-include case.
-                fnmatch(&rel_str, p)
-                    || (rel_str.len() > p.len()
-                        && rel_str.as_bytes()[p.len()] == b'/'
-                        && rel_str.starts_with(p))
-                    || (p.bytes().any(|b| b == b'*' || b == b'?')
-                        && fnmatch(&rel_str, &format!("{p}/**")))
-            }) {
+            if path
+                .strip_prefix(anchor)
+                .ok()
+                .is_some_and(|rel| anchored_include_matches(&path_to_forward_slash(rel), p))
+            {
                 return true;
             }
         } else {
