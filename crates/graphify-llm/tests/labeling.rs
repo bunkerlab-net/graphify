@@ -13,6 +13,9 @@ use graphify_llm::{
 use indexmap::{IndexMap, IndexSet};
 use serial_test::serial;
 
+mod common;
+use common::EnvGuard;
+
 /// community 0 = ordering, community 1 = payments.
 fn graph() -> (IndexMap<String, String>, IndexMap<i64, Vec<String>>) {
     let mut node_labels = IndexMap::new();
@@ -220,36 +223,6 @@ fn label_communities_real_path_via_custom_provider() {
         generate_community_labels(&communities, &node_labels, &gods, Some("labelprov"), true);
     assert_eq!(source, "llm");
     assert_eq!(labels[&0], "Orders");
-}
-
-/// RAII guard that sets/restores env vars.
-struct EnvGuard {
-    saved: Vec<(String, Option<String>)>,
-}
-impl EnvGuard {
-    fn new() -> Self {
-        Self { saved: vec![] }
-    }
-    fn set(&mut self, k: &str, v: &str) -> &mut Self {
-        self.saved.push((k.to_string(), std::env::var(k).ok()));
-        unsafe { std::env::set_var(k, v) };
-        self
-    }
-    fn unset(&mut self, k: &str) -> &mut Self {
-        self.saved.push((k.to_string(), std::env::var(k).ok()));
-        unsafe { std::env::remove_var(k) };
-        self
-    }
-}
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (k, prev) in self.saved.drain(..).rev() {
-            match prev {
-                Some(v) => unsafe { std::env::set_var(&k, &v) },
-                None => unsafe { std::env::remove_var(&k) },
-            }
-        }
-    }
 }
 
 #[test]

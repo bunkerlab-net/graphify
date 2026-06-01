@@ -121,6 +121,10 @@ fn build_file_graph(graph: &Graph) -> IndexMap<String, IndexSet<String>> {
             v_file
         } else if v_file == src_file {
             u_file
+        // Fallback: neither endpoint's source_file equals the edge's (e.g. path
+        // normalisation mismatch or inconsistent data). Prefer the non-empty,
+        // non-source endpoint, else fall back to `u_file`, so orientation still
+        // resolves to a valid target file.
         } else if !v_file.is_empty() && v_file != src_file {
             v_file
         } else {

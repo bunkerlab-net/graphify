@@ -11,35 +11,8 @@ use indexmap::IndexMap;
 use serial_test::serial;
 use tempfile::tempdir;
 
-/// RAII guard that sets/restores env vars (mirrors the HTTP tests' guard).
-struct EnvGuard {
-    saved: Vec<(String, Option<String>)>,
-}
-impl EnvGuard {
-    fn new() -> Self {
-        Self { saved: vec![] }
-    }
-    fn set(&mut self, k: &str, v: &str) -> &mut Self {
-        self.saved.push((k.to_string(), std::env::var(k).ok()));
-        unsafe { std::env::set_var(k, v) };
-        self
-    }
-    fn unset(&mut self, k: &str) -> &mut Self {
-        self.saved.push((k.to_string(), std::env::var(k).ok()));
-        unsafe { std::env::remove_var(k) };
-        self
-    }
-}
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (k, prev) in self.saved.drain(..).rev() {
-            match prev {
-                Some(v) => unsafe { std::env::set_var(&k, &v) },
-                None => unsafe { std::env::remove_var(&k) },
-            }
-        }
-    }
-}
+mod common;
+use common::EnvGuard;
 
 #[test]
 fn custom_provider_load_returns_config() {

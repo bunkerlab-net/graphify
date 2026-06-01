@@ -59,7 +59,11 @@ fn save_registry(registry: &Map<String, Value>) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let body = serde_json::to_string_pretty(&Value::Object(registry.clone()))?;
-    std::fs::write(&path, format!("{body}\n"))?;
+    // Write to a sibling temp file then rename, so a crash mid-write can't leave
+    // a truncated/corrupt registry (rename is atomic on the same filesystem).
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, format!("{body}\n"))?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
 }
 
