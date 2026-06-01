@@ -373,14 +373,14 @@ pub fn is_ignored(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
 /// (`src/main.py`), mirroring [`could_contain_included_path`]. This is the
 /// inverse of the anchored *ignore* fix (#1087): an ignore pattern must not leak
 /// into a subtree, but an include directory pulls its whole subtree in. A literal
-/// stem uses a zero-alloc byte check (`{p}/...`); a globbed stem (`src*`) needs
-/// `{p}/**` since this matcher's `*` does not cross `/` (the `format!` runs only
-/// for the rare globbed-include case).
+/// stem uses a zero-alloc `strip_prefix` check (`{p}/...`); a globbed stem
+/// (`src*`) needs `{p}/**` since this matcher's `*` does not cross `/` (the
+/// `format!` runs only for the rare globbed-include case).
 fn anchored_include_matches(rel_str: &str, p: &str) -> bool {
     fnmatch(rel_str, p)
-        || (rel_str.len() > p.len()
-            && rel_str.as_bytes()[p.len()] == b'/'
-            && rel_str.starts_with(p))
+        || rel_str
+            .strip_prefix(p)
+            .is_some_and(|rest| rest.starts_with('/'))
         || ((p.contains('*') || p.contains('?')) && fnmatch(rel_str, &format!("{p}/**")))
 }
 

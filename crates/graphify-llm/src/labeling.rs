@@ -66,7 +66,9 @@ fn community_label_lines(
             .chain(members.iter().filter(|m| !gods.contains(m.as_str())));
 
         let mut names: Vec<String> = Vec::new();
-        let mut seen: IndexSet<String> = IndexSet::new();
+        // Membership-only dedup: `names` carries the observable order, so the
+        // set never needs insertion-order tracking.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for nid in ranked {
             let raw = node_labels.get(nid).map_or(nid.as_str(), String::as_str);
             let label: String = raw
