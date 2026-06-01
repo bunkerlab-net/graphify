@@ -84,11 +84,18 @@ pub fn load_custom_providers() -> IndexMap<String, CustomProvider> {
     load_custom_providers_from(&custom_providers_path(false), &custom_providers_path(true))
 }
 
-/// Load custom providers from explicit `local`/`global` registry files (in that
-/// order — a later file overrides an earlier one for the same name, so `global`
-/// wins, matching Python `_load_custom_providers`). Malformed files are skipped
-/// silently, mirroring Python's broad `except`. Identical `local`/`global` paths
-/// (e.g. when `$HOME` is unset) are read only once.
+/// Load custom providers from explicit `local`/`global` registry files.
+///
+/// `local` (project `.graphify/providers.json`) is read first, then `global`
+/// (`~/.graphify/providers.json`); a later file overrides an earlier one for the
+/// same name, so **`global` wins**. This is deliberate and security-relevant, not
+/// just Python parity: a project-local registry can come from a cloned/untrusted
+/// repo, and letting it shadow a provider name the user defined globally would
+/// let the repo redirect that backend's `base_url` to an attacker-controlled
+/// endpoint and exfiltrate the API key resolved from the user's environment via
+/// `env_key`. Built-in names are separately un-shadowable. Malformed files are
+/// skipped silently (mirroring Python's broad `except`); identical `local`/
+/// `global` paths (e.g. when `$HOME` is unset) are read only once.
 #[must_use]
 pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<String, CustomProvider> {
     let mut providers: IndexMap<String, CustomProvider> = IndexMap::new();

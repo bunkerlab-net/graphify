@@ -390,7 +390,12 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
             // meant to pull its whole subtree in.
             if path.strip_prefix(anchor).ok().is_some_and(|rel| {
                 let rel_str = path_to_forward_slash(rel);
-                fnmatch(&rel_str, p) || rel_str.starts_with(&format!("{p}/"))
+                // Subtree match (`{p}/...`) via a byte check — no per-call `{p}/`
+                // String allocation.
+                fnmatch(&rel_str, p)
+                    || (rel_str.len() > p.len()
+                        && rel_str.as_bytes()[p.len()] == b'/'
+                        && rel_str.starts_with(p))
             }) {
                 return true;
             }
