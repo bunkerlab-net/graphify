@@ -210,6 +210,7 @@ pub(crate) fn cmd_cluster_only(
 }
 
 /// Build `node_id → label` for community labelling prompts.
+#[must_use]
 fn node_label_map(g: &graphify_build::Graph) -> indexmap::IndexMap<String, String> {
     g.nodes()
         .filter_map(|(id, attrs)| {
@@ -222,6 +223,7 @@ fn node_label_map(g: &graphify_build::Graph) -> indexmap::IndexMap<String, Strin
 }
 
 /// The set of god-node ids (used to bias which member labels are sampled first).
+#[must_use]
 fn god_node_ids(g: &graphify_build::Graph) -> indexmap::IndexSet<String> {
     graphify_analyze::god_nodes(g, 20)
         .into_iter()
