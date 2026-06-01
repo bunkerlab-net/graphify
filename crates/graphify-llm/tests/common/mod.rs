@@ -21,12 +21,15 @@ impl EnvGuard {
 
     pub fn set(&mut self, k: &str, v: &str) -> &mut Self {
         self.saved.push((k.to_string(), std::env::var(k).ok()));
+        // SAFETY: every test using EnvGuard is `#[serial]`, so no other thread
+        // reads or writes the process environment concurrently with this mutation.
         unsafe { std::env::set_var(k, v) };
         self
     }
 
     pub fn unset(&mut self, k: &str) -> &mut Self {
         self.saved.push((k.to_string(), std::env::var(k).ok()));
+        // SAFETY: see `set` — `#[serial]` execution rules out concurrent env access.
         unsafe { std::env::remove_var(k) };
         self
     }
@@ -35,6 +38,7 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         for (k, prev) in self.saved.drain(..).rev() {
+            // SAFETY: see `set` — `#[serial]` execution rules out concurrent env access.
             match prev {
                 Some(v) => unsafe { std::env::set_var(&k, &v) },
                 None => unsafe { std::env::remove_var(&k) },

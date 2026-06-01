@@ -182,7 +182,8 @@ pub fn detect_backend() -> Option<String> {
     detect_backend_with(&crate::providers::load_custom_providers())
 }
 
-/// [`detect_backend`] against an explicit custom-provider set.
+/// Detects the backend like [`detect_backend`], but against an explicit
+/// custom-provider set.
 ///
 /// Built-in backends take priority (gemini → kimi → claude → openai → deepseek →
 /// bedrock → ollama); only then are custom providers consulted, in registry
