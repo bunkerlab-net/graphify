@@ -21,11 +21,11 @@ pub(crate) fn render_import_cycles(lines: &mut Vec<String>, graph: &Graph) {
     }
 
     for c in &cycles {
-        if c.cycle.is_empty() {
+        let Some(first) = c.cycle.first() else {
             continue;
-        }
+        };
         let mut path = c.cycle.clone();
-        path.push(c.cycle[0].clone());
+        path.push(first.clone());
         let cycle_path = path.join(" -> ");
         lines.push(format!("- {}-file cycle: `{cycle_path}`", c.length));
     }
