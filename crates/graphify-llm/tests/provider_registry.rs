@@ -211,6 +211,10 @@ fn custom_provider_call_llm_routes_via_openai_compat() {
     .expect("write providers.json");
 
     let mut g = EnvGuard::new();
+    // Hermetic setup: clear built-in backend keys so this stays a pure
+    // custom-provider routing test even if `call_llm` ever grows a built-in
+    // fallback. (`CUSTOM1_KEY` is a registry env_key, untouched by scrub.)
+    g.scrub_backends();
     g.set("HOME", &home.path().to_string_lossy());
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("CUSTOM1_KEY", "secret");
@@ -256,6 +260,8 @@ fn custom_provider_extract_files_routes_via_openai_compat() {
     std::fs::write(&file, "def f():\n    return 1\n").expect("write source");
 
     let mut g = EnvGuard::new();
+    // Hermetic setup: see `custom_provider_call_llm_routes_via_openai_compat`.
+    g.scrub_backends();
     g.set("HOME", &home.path().to_string_lossy());
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     g.set("CUSTOM2_KEY", "secret");
