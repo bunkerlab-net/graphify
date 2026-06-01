@@ -38,9 +38,10 @@ pub struct CustomProvider {
 const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 8192;
 
 /// Parse a `max_completion_tokens` JSON value, accepting either an integer or a
-/// whole-number float (e.g. `8192.0`). Returns `None` for missing, negative,
-/// non-finite, or out-of-`u32`-range values so the caller falls back to the
-/// default rather than silently dropping a hand-written float budget.
+/// finite non-negative float, truncated toward zero (e.g. `8192.0` and `8192.9`
+/// both yield `8192`). Returns `None` for missing, negative, non-finite, or
+/// out-of-`u32`-range values so the caller falls back to the default rather than
+/// silently dropping a hand-written float budget.
 fn max_completion_tokens_from(v: &Value) -> Option<u32> {
     if let Some(n) = v.as_u64() {
         return u32::try_from(n).ok();

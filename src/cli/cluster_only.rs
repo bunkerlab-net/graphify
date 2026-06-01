@@ -133,22 +133,21 @@ pub(crate) fn cmd_cluster_only(
 
     // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
     // find community labels. Three paths, checked in this order:
-    //   1. `--no-label` (and not forced) → all placeholders, no LLM call, no file
-    //      read. Checked FIRST so the flag is honoured even when a labels file
-    //      already exists (it was previously shadowed and silently ignored).
-    //   2. labels file exists & not forced → load it (preserve user edits), fill
-    //      any gaps with placeholders. A malformed/unreadable file is NOT
-    //      overwritten — we warn and fall back to placeholders for this run so a
-    //      hand-curated file isn't silently clobbered (divergence from Python's
-    //      `__main__.py:2418-2448`, which degrades to placeholders and rewrites
-    //      the file; the Rust port treats that data loss as a bug).
+    //   1. labels file exists & not forced → load it (preserve user edits, fill
+    //      any gaps with placeholders). This runs whether or not `--no-label` is
+    //      set: an existing file already means no LLM call, so `--no-label` is a
+    //      harmless no-op here — crucially, it must NOT wipe hand-curated labels
+    //      to placeholders. A malformed/unreadable file is NOT overwritten — we
+    //      warn and fall back to placeholders for this run so the file isn't
+    //      silently clobbered (divergence from Python `__main__.py:2418-2448`,
+    //      which degrades to placeholders and rewrites the file).
+    //   2. `--no-label` (and not forced) with no labels file → placeholders, no
+    //      LLM call.
     //   3. otherwise → auto-name with the configured backend (#1097); degrades
     //      to placeholders on no-backend/error.
     let labels_path = graph_path.with_file_name(".graphify_labels.json");
     let mut skip_label_write = false;
-    let labels: indexmap::IndexMap<i64, String> = if opts.no_label && !opts.force_relabel {
-        graphify_llm::placeholder_community_labels(&communities)
-    } else if labels_path.exists() && !opts.force_relabel {
+    let labels: indexmap::IndexMap<i64, String> = if labels_path.exists() && !opts.force_relabel {
         match read_existing_labels(&labels_path) {
             Ok(mut existing) => {
                 for cid in communities.keys() {
@@ -168,6 +167,8 @@ pub(crate) fn cmd_cluster_only(
                 graphify_llm::placeholder_community_labels(&communities)
             }
         }
+    } else if opts.no_label && !opts.force_relabel {
+        graphify_llm::placeholder_community_labels(&communities)
     } else {
         eprintln!("Labeling communities...");
         let node_labels = node_label_map(&g);
@@ -259,10 +260,14 @@ fn node_label_map(g: &graphify_build::Graph) -> indexmap::IndexMap<String, Strin
         .collect()
 }
 
+/// Cap on the number of god-nodes sampled to bias community-label prompts,
+/// matching the `top_n=20` Python uses at the labelling boundary.
+const GOD_NODE_CAP: usize = 20;
+
 /// The set of god-node ids (used to bias which member labels are sampled first).
 #[must_use]
 fn god_node_ids(g: &graphify_build::Graph) -> indexmap::IndexSet<String> {
-    graphify_analyze::god_nodes(g, 20)
+    graphify_analyze::god_nodes(g, GOD_NODE_CAP)
         .into_iter()
         .filter_map(|n| {
             n.get("id")

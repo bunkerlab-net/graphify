@@ -465,10 +465,10 @@ fn write_min_graph(graph_path: &Path) {
 }
 
 #[test]
-fn cluster_only_no_label_overrides_existing_labels() {
-    // `--no-label` must produce `Community N` placeholders even when a labels
-    // file with curated names already exists. Previously the load-existing
-    // branch shadowed the flag, so `--no-label` was silently ignored.
+fn cluster_only_no_label_preserves_existing_labels() {
+    // `--no-label` must NOT wipe a curated labels file to placeholders. An
+    // existing file already means no LLM call, so `--no-label` is a harmless
+    // no-op here: the curated names are preserved, not clobbered.
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("graphify-out");
     fs::create_dir_all(&out).unwrap();
@@ -487,12 +487,34 @@ fn cluster_only_no_label_overrides_existing_labels() {
 
     let labels = fs::read_to_string(&labels_path).unwrap();
     assert!(
-        !labels.contains("Curated Name"),
-        "--no-label must overwrite curated names with placeholders: {labels}"
+        labels.contains("Curated Name"),
+        "--no-label must preserve curated names, not wipe them: {labels}"
     );
+}
+
+#[test]
+fn cluster_only_no_label_placeholders_when_no_file() {
+    // With no existing labels file, `--no-label` produces `Community N`
+    // placeholders (and no LLM call).
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    let labels_path = out.join(".graphify_labels.json");
+    write_min_graph(&graph_path);
+
+    cli()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--no-label")
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let labels = fs::read_to_string(&labels_path).unwrap();
     assert!(
         labels.contains("Community "),
-        "--no-label must write `Community N` placeholders: {labels}"
+        "--no-label with no file must write `Community N` placeholders: {labels}"
     );
 }
 
