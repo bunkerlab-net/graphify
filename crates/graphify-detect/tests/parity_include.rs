@@ -80,6 +80,32 @@ fn is_included_anchored_dir_matches_root_and_subtree() {
 }
 
 #[test]
+fn is_included_anchored_globbed_dir_matches_subtree() {
+    // An anchored globbed directory stem (`/src*`) includes glob-matched
+    // directories and everything beneath them — the matcher's `*` does not
+    // cross `/`, so the subtree match needs the `{p}/**` form.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src1/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("lib")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src*\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(
+        is_included(&root.join("src1"), &root, &patterns),
+        "/src* must match a glob-matched directory"
+    );
+    assert!(
+        is_included(&root.join("src1/deep/main.py"), &root, &patterns),
+        "/src* must include files beneath a glob-matched directory"
+    );
+    assert!(
+        !is_included(&root.join("lib/main.py"), &root, &patterns),
+        "/src* must not match an unrelated directory"
+    );
+}
+
+#[test]
 fn is_included_anchored_file_matches_only_at_root() {
     // An anchored file pattern (`/setup.py`) matches at the anchor root but not
     // a same-named file deeper in the tree.

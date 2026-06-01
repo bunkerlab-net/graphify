@@ -87,6 +87,12 @@ pub const CORPUS_UPPER_THRESHOLD: u64 = 500_000;
 /// File count above which the corpus is considered large regardless of word count.
 pub const FILE_COUNT_UPPER: usize = 500;
 
+/// Canonical file-type bucket keys, in the fixed order every [`DetectResult`]
+/// must present them (see [`DetectResult::files`]). Used both by the fresh
+/// `detect` walk and by callers that reconstruct a `DetectResult` (e.g. the
+/// incremental path) so the two produce structurally identical results.
+pub const FILE_TYPE_KINDS: [&str; 5] = ["code", "document", "paper", "image", "video"];
+
 /// Full output of a [`detect`] run, analogous to the Python dict return.
 #[derive(Debug, Clone)]
 pub struct DetectResult {
@@ -513,7 +519,7 @@ fn run_classify_phase(
     ignore_patterns: &crate::ignore::IgnorePatterns,
     google_workspace: bool,
 ) -> ClassifyOutput {
-    let mut files: IndexMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
+    let mut files: IndexMap<String, Vec<String>> = FILE_TYPE_KINDS
         .iter()
         .map(|k| ((*k).to_string(), Vec::new()))
         .collect();

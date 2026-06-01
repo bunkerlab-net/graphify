@@ -215,9 +215,14 @@ fn detect_result_from_incremental(
     path: &std::path::Path,
     inc: &graphify_detect::IncrementalDetectResult,
 ) -> graphify_detect::DetectResult {
-    // Seed in the canonical type order so the reconstructed `DetectResult`
-    // matches a fresh `detect` walk (and Python's insertion-ordered dict).
-    let mut files: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
+    // Seed all canonical buckets in fixed order (even when empty) so the
+    // reconstructed `DetectResult` is structurally identical to a fresh `detect`
+    // walk — same kinds, same order — rather than only the kinds that happen to
+    // have changed/unchanged files.
+    let mut files: indexmap::IndexMap<String, Vec<String>> = graphify_detect::FILE_TYPE_KINDS
+        .iter()
+        .map(|k| ((*k).to_string(), Vec::new()))
+        .collect();
     for (kind, paths) in &inc.changed_files {
         files.entry(kind.clone()).or_default().extend(paths.clone());
     }

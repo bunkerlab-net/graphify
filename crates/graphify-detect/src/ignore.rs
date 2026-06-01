@@ -390,12 +390,16 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
             // meant to pull its whole subtree in.
             if path.strip_prefix(anchor).ok().is_some_and(|rel| {
                 let rel_str = path_to_forward_slash(rel);
-                // Subtree match (`{p}/...`) via a byte check — no per-call `{p}/`
-                // String allocation.
+                // Match the path itself, then its subtree. A literal directory
+                // stem uses a zero-alloc byte check (`{p}/...`); a globbed stem
+                // (`src*`) needs `{p}/**` since this matcher's `*` does not cross
+                // `/`. The format! only runs for the rare globbed-include case.
                 fnmatch(&rel_str, p)
                     || (rel_str.len() > p.len()
                         && rel_str.as_bytes()[p.len()] == b'/'
                         && rel_str.starts_with(p))
+                    || (p.bytes().any(|b| b == b'*' || b == b'?')
+                        && fnmatch(&rel_str, &format!("{p}/**")))
             }) {
                 return true;
             }
