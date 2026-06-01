@@ -27,7 +27,15 @@ pub struct CustomProvider {
     pub pricing: Pricing,
     /// Sampling temperature (defaults to 0).
     pub temperature: f64,
+    /// Default output-token budget for extraction, before the
+    /// `GRAPHIFY_MAX_OUTPUT_TOKENS` override. Mirrors Python's
+    /// `cfg.get("max_completion_tokens", 8192)` on the OpenAI-compatible path.
+    pub max_completion_tokens: u32,
 }
+
+/// Fallback output-token budget when a provider omits `max_completion_tokens`,
+/// matching Python's `cfg.get("max_completion_tokens", 8192)`.
+const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 8192;
 
 /// Path to the `providers.json` registry.
 ///
@@ -118,6 +126,11 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
                         .get("temperature")
                         .and_then(Value::as_f64)
                         .unwrap_or(0.0),
+                    max_completion_tokens: obj
+                        .get("max_completion_tokens")
+                        .and_then(Value::as_u64)
+                        .and_then(|v| u32::try_from(v).ok())
+                        .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
                 },
             );
         }

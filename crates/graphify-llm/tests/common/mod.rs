@@ -7,6 +7,12 @@ pub struct EnvGuard {
     saved: Vec<(String, Option<String>)>,
 }
 
+impl Default for EnvGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EnvGuard {
     #[must_use]
     pub fn new() -> Self {

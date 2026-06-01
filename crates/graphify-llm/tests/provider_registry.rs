@@ -58,6 +58,27 @@ fn custom_provider_identical_local_global_path_read_once() {
 }
 
 #[test]
+fn custom_provider_max_completion_tokens_parsed_and_defaulted() {
+    // A provider may set `max_completion_tokens` (honoured on the extraction
+    // path, mirroring Python's `cfg.get("max_completion_tokens", 8192)`); when
+    // omitted it falls back to 8192.
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{
+            "big": {"base_url": "http://x/v1", "default_model": "m", "env_key": "K", "max_completion_tokens": 16000},
+            "dflt": {"base_url": "http://y/v1", "default_model": "m", "env_key": "K"}
+        }"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert_eq!(loaded["big"].max_completion_tokens, 16000);
+    assert_eq!(loaded["dflt"].max_completion_tokens, 8192);
+}
+
+#[test]
 fn custom_provider_pricing_defaults_to_zero() {
     let tmp = tempdir().expect("tempdir");
     let global = tmp.path().join("providers.json");
@@ -163,6 +184,7 @@ fn detect_backend_custom_provider_after_builtins() {
                 output: 0.0,
             },
             temperature: 0.0,
+            max_completion_tokens: 8192,
         },
     );
 

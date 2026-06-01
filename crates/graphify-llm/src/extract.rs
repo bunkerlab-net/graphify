@@ -165,7 +165,10 @@ fn extract_custom(
         .filter(|s| !s.is_empty())
         .unwrap_or(&provider.default_model);
     let user_msg = read_files(files, root);
-    let max_out = openai_compat::resolve_max_tokens(8192);
+    // Honour the provider's configured `max_completion_tokens` (default 8192),
+    // then apply the `GRAPHIFY_MAX_OUTPUT_TOKENS` override — mirroring Python's
+    // `_resolve_max_tokens(cfg.get("max_completion_tokens", 8192))` (llm.py:720).
+    let max_out = openai_compat::resolve_max_tokens(provider.max_completion_tokens);
     openai_compat::call_openai_compat(&openai_compat::OpenAiRequest {
         base_url: &provider.base_url,
         api_key: &key,
