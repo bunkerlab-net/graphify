@@ -381,12 +381,16 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
             continue;
         }
         if anchored {
-            // Anchored include patterns match the anchor-relative path directly,
-            // mirroring the anchored ignore fix (#1087): no subtree/basename
-            // fallback, so `/src/foo` only matches at the anchor root.
+            // Anchored include patterns match the anchor-relative path directly.
+            // For an *allowlist*, an anchored directory (`/src`) also covers its
+            // descendants (`src/main.py`), so a `"{p}/"`-prefix match is included
+            // too — mirroring `could_contain_included_path`. This is the inverse
+            // of the anchored *ignore* fix (#1087): an ignore pattern must not
+            // leak into a subtree at the wrong depth, but an include directory is
+            // meant to pull its whole subtree in.
             if path.strip_prefix(anchor).ok().is_some_and(|rel| {
                 let rel_str = path_to_forward_slash(rel);
-                fnmatch(&rel_str, p)
+                fnmatch(&rel_str, p) || rel_str.starts_with(&format!("{p}/"))
             }) {
                 return true;
             }

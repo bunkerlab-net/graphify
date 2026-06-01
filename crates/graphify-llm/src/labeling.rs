@@ -97,16 +97,14 @@ fn parse_label_response(
     labeled_cids: &[i64],
 ) -> Result<IndexMap<i64, String>, LlmError> {
     let cleaned = LABEL_FENCE_RE.replace_all(text.trim(), "").to_string();
-    let cleaned = if cleaned.starts_with('{') {
-        cleaned
-    } else if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
-        if end > start {
-            cleaned[start..=end].to_string()
-        } else {
-            cleaned
-        }
-    } else {
-        cleaned
+    // Always slice the first `{` … last `}` span, even when the reply already
+    // starts with `{`, so trailing prose (`{"0":"x"} hope that helps`) is
+    // dropped rather than failing the strict parse. Diverges from graphify-py
+    // (`llm.py:1308`), which only slices when the text does NOT start with `{`
+    // and therefore degrades such replies to placeholders.
+    let cleaned = match (cleaned.find('{'), cleaned.rfind('}')) {
+        (Some(start), Some(end)) if end > start => cleaned[start..=end].to_string(),
+        _ => cleaned,
     };
 
     let data: serde_json::Value =

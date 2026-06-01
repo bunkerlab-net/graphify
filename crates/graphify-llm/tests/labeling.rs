@@ -94,6 +94,21 @@ fn label_communities_extracts_json_from_surrounding_prose() {
 }
 
 #[test]
+fn label_communities_strips_trailing_prose_after_json() {
+    // A reply that leads with valid JSON but appends prose
+    // (`{"0":"x"} hope that helps`) must still parse: the sanitizer slices the
+    // first `{` … last `}` span even when the text already starts with `{`.
+    let (node_labels, communities) = graph();
+    let gods = IndexSet::new();
+    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
+        Ok(r#"{"0":"Orders","1":"Pay"} hope that helps"#.to_string())
+    })
+    .expect("labeling succeeds");
+    assert_eq!(labels[&0], "Orders");
+    assert_eq!(labels[&1], "Pay");
+}
+
+#[test]
 fn label_communities_malformed_errors() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();

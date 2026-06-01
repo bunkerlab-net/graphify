@@ -55,6 +55,56 @@ fn is_included_matches_glob() {
 }
 
 #[test]
+fn is_included_anchored_dir_matches_root_and_subtree() {
+    // An anchored allowlist directory (`/src`) includes the directory itself and
+    // everything beneath it, but not a same-named directory deeper in the tree.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("x/src")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(
+        is_included(&root.join("src"), &root, &patterns),
+        "/src must include the anchored directory itself"
+    );
+    assert!(
+        is_included(&root.join("src/deep/main.py"), &root, &patterns),
+        "/src must include files in its subtree"
+    );
+    assert!(
+        !is_included(&root.join("x/src"), &root, &patterns),
+        "/src is anchored to root and must NOT match a nested src/"
+    );
+}
+
+#[test]
+fn is_included_anchored_file_matches_only_at_root() {
+    // An anchored file pattern (`/setup.py`) matches at the anchor root but not
+    // a same-named file deeper in the tree.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("pkg")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/setup.py\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(is_included(&root.join("setup.py"), &root, &patterns));
+    assert!(!is_included(&root.join("pkg/setup.py"), &root, &patterns));
+}
+
+#[test]
+fn is_included_unanchored_matches_at_depth() {
+    // An unanchored pattern matches anywhere in the tree (not just the root).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("a/b")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "*.py\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+    assert!(is_included(&root.join("a/b/deep.py"), &root, &patterns));
+}
+
+#[test]
 fn is_included_with_no_patterns_is_false() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let empty = vec![];
