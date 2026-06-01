@@ -132,33 +132,42 @@ pub(crate) fn cmd_cluster_only(
     eprintln!("      wrote {}", graph_path.display());
 
     // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
-    // find community labels. Three paths, mirroring Python's cluster-only/label:
-    //   1. labels file exists & not forced → load it (preserve user edits), fill
-    //      any gaps with placeholders.
-    //   2. `--no-label` (and not forced) → all placeholders, no LLM call.
+    // find community labels. Three paths, checked in this order:
+    //   1. `--no-label` (and not forced) → all placeholders, no LLM call, no file
+    //      read. Checked FIRST so the flag is honoured even when a labels file
+    //      already exists (it was previously shadowed and silently ignored).
+    //   2. labels file exists & not forced → load it (preserve user edits), fill
+    //      any gaps with placeholders. A malformed/unreadable file is NOT
+    //      overwritten — we warn and fall back to placeholders for this run so a
+    //      hand-curated file isn't silently clobbered (divergence from Python's
+    //      `__main__.py:2418-2448`, which degrades to placeholders and rewrites
+    //      the file; the Rust port treats that data loss as a bug).
     //   3. otherwise → auto-name with the configured backend (#1097); degrades
     //      to placeholders on no-backend/error.
     let labels_path = graph_path.with_file_name(".graphify_labels.json");
-    let labels: indexmap::IndexMap<i64, String> = if labels_path.exists() && !opts.force_relabel {
-        let mut existing: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
-        if let Ok(text) = std::fs::read_to_string(&labels_path)
-            && let Ok(serde_json::Value::Object(map)) =
-                serde_json::from_str::<serde_json::Value>(&text)
-        {
-            for (k, v) in &map {
-                if let (Ok(cid), Some(s)) = (k.parse::<i64>(), v.as_str()) {
-                    existing.insert(cid, s.to_string());
+    let mut skip_label_write = false;
+    let labels: indexmap::IndexMap<i64, String> = if opts.no_label && !opts.force_relabel {
+        graphify_llm::placeholder_community_labels(&communities)
+    } else if labels_path.exists() && !opts.force_relabel {
+        match read_existing_labels(&labels_path) {
+            Ok(mut existing) => {
+                for cid in communities.keys() {
+                    existing
+                        .entry(*cid)
+                        .or_insert_with(|| format!("Community {cid}"));
                 }
+                existing
+            }
+            Err(e) => {
+                eprintln!(
+                    "      warning: could not read {} ({e}); using placeholders and \
+                     leaving the existing file untouched",
+                    labels_path.display()
+                );
+                skip_label_write = true;
+                graphify_llm::placeholder_community_labels(&communities)
             }
         }
-        for cid in communities.keys() {
-            existing
-                .entry(*cid)
-                .or_insert_with(|| format!("Community {cid}"));
-        }
-        existing
-    } else if opts.no_label && !opts.force_relabel {
-        graphify_llm::placeholder_community_labels(&communities)
     } else {
         eprintln!("Labeling communities...");
         let node_labels = node_label_map(&g);
@@ -172,15 +181,22 @@ pub(crate) fn cmd_cluster_only(
         );
         labels
     };
-    let labels_json: serde_json::Map<String, serde_json::Value> = labels
-        .iter()
-        .map(|(cid, name)| (cid.to_string(), serde_json::Value::String(name.clone())))
-        .collect();
-    std::fs::write(
-        &labels_path,
-        serde_json::to_string(&serde_json::Value::Object(labels_json))?,
-    )?;
-    eprintln!("      wrote {}", labels_path.display());
+    if skip_label_write {
+        eprintln!(
+            "      kept existing {} (not overwritten)",
+            labels_path.display()
+        );
+    } else {
+        let labels_json: serde_json::Map<String, serde_json::Value> = labels
+            .iter()
+            .map(|(cid, name)| (cid.to_string(), serde_json::Value::String(name.clone())))
+            .collect();
+        std::fs::write(
+            &labels_path,
+            serde_json::to_string(&serde_json::Value::Object(labels_json))?,
+        )?;
+        eprintln!("      wrote {}", labels_path.display());
+    }
 
     let html_path = graph_path.with_file_name("graph.html");
     if no_viz {
@@ -207,6 +223,27 @@ pub(crate) fn cmd_cluster_only(
     }
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
     Ok(())
+}
+
+/// Read an existing `.graphify_labels.json` into a `cid → name` map.
+///
+/// Returns `Err` when the file is unreadable or is not a JSON object, so the
+/// caller can avoid overwriting a malformed or hand-curated file with
+/// placeholders.
+fn read_existing_labels(path: &std::path::Path) -> Result<indexmap::IndexMap<i64, String>> {
+    let text = std::fs::read_to_string(path).map_err(|e| anyhow!("read failed: {e}"))?;
+    let serde_json::Value::Object(map) = serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|e| anyhow!("parse failed: {e}"))?
+    else {
+        return Err(anyhow!("not a JSON object"));
+    };
+    let mut existing: indexmap::IndexMap<i64, String> = indexmap::IndexMap::new();
+    for (k, v) in &map {
+        if let (Ok(cid), Some(s)) = (k.parse::<i64>(), v.as_str()) {
+            existing.insert(cid, s.to_string());
+        }
+    }
+    Ok(existing)
 }
 
 /// Build `node_id → label` for community labelling prompts.

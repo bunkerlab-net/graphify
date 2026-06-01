@@ -850,6 +850,17 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         if old_id != new_id {
             id_remap.insert(old_id, new_id.clone());
         }
+        // Import resolution (e.g. the pnpm `.`-package entry, #1083) canonicalises
+        // the resolved path, which on macOS rewrites `/tmp` → `/private/tmp`. That
+        // id differs from the input-path id keyed above, so an edge targeting the
+        // canonical spelling would dangle off the relativised file node. Map the
+        // canonical spelling to the same node so the resolved edge connects.
+        if let Ok(canon) = path.canonicalize() {
+            let canon_id = make_id1(&canon.to_string_lossy());
+            if canon_id != new_id {
+                id_remap.entry(canon_id).or_insert_with(|| new_id.clone());
+            }
+        }
         let old_pref = crate::ids::file_node_id(path);
         if old_pref != new_id {
             prefix_remap.insert(path.to_string_lossy().into_owned(), (old_pref, new_id));

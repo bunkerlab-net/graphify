@@ -785,6 +785,35 @@ fn pnpm_workspace_dot_package_does_not_crash() {
         !result.nodes.is_empty(),
         "extraction produced no nodes for index.ts"
     );
+
+    // The `.`-package must actually resolve: `import from 'my-app'` resolves to
+    // the root package's entry (index.ts), so there must be an `imports_from`
+    // edge whose target is a REAL node id (`index`), not a dangling
+    // absolute-path id. This guards the #1083 resolution + id-normalisation,
+    // not just crash-safety.
+    let node_ids: std::collections::HashSet<&str> = result
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    let resolved = result.edges.iter().any(|e| {
+        e.get("relation").and_then(serde_json::Value::as_str) == Some("imports_from")
+            && e.get("target")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| node_ids.contains(t))
+    });
+    assert!(
+        resolved,
+        "the pnpm `.`-package import must resolve to a real node; edges: {:?}",
+        result
+            .edges
+            .iter()
+            .map(|e| (
+                e.get("relation").and_then(serde_json::Value::as_str),
+                e.get("target").and_then(serde_json::Value::as_str)
+            ))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
