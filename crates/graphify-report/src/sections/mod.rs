@@ -4,6 +4,7 @@
 //! classification helpers live here because multiple sections need them.
 
 pub mod communities;
+pub mod cycles;
 pub mod detection;
 pub mod god_nodes;
 pub mod header;

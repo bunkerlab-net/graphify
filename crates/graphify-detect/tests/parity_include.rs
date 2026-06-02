@@ -55,6 +55,108 @@ fn is_included_matches_glob() {
 }
 
 #[test]
+fn is_included_anchored_dir_matches_root_and_subtree() {
+    // An anchored allowlist directory (`/src`) includes the directory itself and
+    // everything beneath it, but not a same-named directory deeper in the tree.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("x/src")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(
+        is_included(&root.join("src"), &root, &patterns),
+        "/src must include the anchored directory itself"
+    );
+    assert!(
+        is_included(&root.join("src/deep/main.py"), &root, &patterns),
+        "/src must include files in its subtree"
+    );
+    assert!(
+        !is_included(&root.join("x/src"), &root, &patterns),
+        "/src is anchored to root and must NOT match a nested src/"
+    );
+}
+
+#[test]
+fn is_included_anchored_globbed_dir_matches_subtree() {
+    // An anchored globbed directory stem (`/src*`) includes glob-matched
+    // directories and everything beneath them — the matcher's `*` does not
+    // cross `/`, so the subtree match needs the `{p}/**` form.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src1/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("lib")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src*\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(
+        is_included(&root.join("src1"), &root, &patterns),
+        "/src* must match a glob-matched directory"
+    );
+    assert!(
+        is_included(&root.join("src1/deep/main.py"), &root, &patterns),
+        "/src* must include files beneath a glob-matched directory"
+    );
+    assert!(
+        !is_included(&root.join("lib/main.py"), &root, &patterns),
+        "/src* must not match an unrelated directory"
+    );
+}
+
+#[test]
+fn is_included_anchored_question_glob_dir_matches_subtree() {
+    // An anchored `?`-glob stem (`/src?`) matches a single extra character and
+    // covers the subtree beneath the matched directory, exercising the `?`
+    // branch of `anchored_include_matches` (the `*` branch is covered above).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src1/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("lib")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src?\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(
+        is_included(&root.join("src1"), &root, &patterns),
+        "/src? must match a single-character-glob directory"
+    );
+    assert!(
+        is_included(&root.join("src1/deep/main.py"), &root, &patterns),
+        "/src? must include files beneath the matched directory"
+    );
+    assert!(
+        !is_included(&root.join("lib/main.py"), &root, &patterns),
+        "/src? must not match an unrelated directory"
+    );
+}
+
+#[test]
+fn is_included_anchored_file_matches_only_at_root() {
+    // An anchored file pattern (`/setup.py`) matches at the anchor root but not
+    // a same-named file deeper in the tree.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("pkg")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/setup.py\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+
+    assert!(is_included(&root.join("setup.py"), &root, &patterns));
+    assert!(!is_included(&root.join("pkg/setup.py"), &root, &patterns));
+}
+
+#[test]
+fn is_included_unanchored_matches_at_depth() {
+    // An unanchored pattern matches anywhere in the tree (not just the root).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("a/b")).expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "*.py\n").expect("test invariant");
+    let patterns = load_graphifyinclude(&root);
+    assert!(is_included(&root.join("a/b/deep.py"), &root, &patterns));
+}
+
+#[test]
 fn is_included_with_no_patterns_is_false() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let empty = vec![];
@@ -172,4 +274,84 @@ fn detect_with_nested_subdirs() {
     let result = detect(tmp.path(), None, None);
     let code: &Vec<String> = result.files.get("code").expect("key present");
     assert!(code.len() >= 3);
+}
+
+#[test]
+fn detect_graphifyinclude_rescues_ignored_subtree() {
+    // End-to-end allowlist: `.graphifyignore = *` ignores everything, while
+    // `.graphifyinclude = /src*` re-includes a glob-matched anchored directory
+    // and its whole subtree. The walker must descend past the ignored dirs
+    // (`could_contain_included_path`) AND rescue the files at classification time
+    // (`is_included`), so a deeply nested allowlisted file lands in the result
+    // while an unrelated file stays ignored.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    fs::create_dir_all(root.join("src1/deep")).expect("test invariant");
+    fs::create_dir_all(root.join("other")).expect("test invariant");
+    fs::write(root.join("src1/deep/main.py"), "x = 1").expect("test invariant");
+    fs::write(root.join("other/skip.py"), "y = 2").expect("test invariant");
+    fs::write(root.join(".graphifyignore"), "*\n").expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "/src*\n").expect("test invariant");
+
+    let result = detect(&root, None, None);
+    let code: &Vec<String> = result.files.get("code").expect("key present");
+    assert!(
+        code.iter()
+            .any(|f| std::path::Path::new(f).ends_with("src1/deep/main.py")),
+        "allowlisted `src1/deep/main.py` must be rescued from the `*` ignore, got {code:?}"
+    );
+    assert!(
+        !code
+            .iter()
+            .any(|f| std::path::Path::new(f).ends_with("skip.py")),
+        "non-allowlisted `other/skip.py` must stay ignored, got {code:?}"
+    );
+}
+
+/// Build a minimal valid DOCX (a ZIP holding `word/document.xml`) so `detect`'s
+/// office-conversion path produces a non-empty markdown sidecar.
+fn build_minimal_docx(path: &std::path::Path, body: &str) {
+    use std::io::Write;
+    let f = fs::File::create(path).expect("test invariant");
+    let mut zip = zip::ZipWriter::new(f);
+    let opts: zip::write::SimpleFileOptions =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("word/document.xml", opts)
+        .expect("test invariant");
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>{body}</w:t></w:r></w:p></w:body>
+</w:document>"#
+    );
+    zip.write_all(xml.as_bytes()).expect("test invariant");
+    zip.finish().expect("test invariant");
+}
+
+#[test]
+fn detect_graphifyinclude_rescues_converted_office_sidecar() {
+    // The allowlist rescue must extend to converted sidecars: an office doc that
+    // is ignored (`*`) but explicitly included is converted to a markdown
+    // sidecar under `graphify-out/converted/`. That sidecar path also matches the
+    // `*` ignore, so unless it inherits the source's allowlist verdict it would
+    // be dropped by `ConvertCtx::record` and the rescued content would silently
+    // vanish. Office files are never recorded directly - only their sidecar - so
+    // a non-empty `document` bucket here proves the rescue reached conversion.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    build_minimal_docx(&root.join("report.docx"), "quarterly numbers");
+    fs::write(root.join(".graphifyignore"), "*\n").expect("test invariant");
+    fs::write(root.join(".graphifyinclude"), "report.docx\n").expect("test invariant");
+
+    let result = detect(&root, None, None);
+    let docs: &Vec<String> = result.files.get("document").expect("key present");
+    assert!(
+        docs.iter().any(|f| {
+            std::path::Path::new(f)
+                .extension()
+                .is_some_and(|e| e == "md")
+                && f.contains("converted")
+        }),
+        "rescued `report.docx` sidecar must survive the `*` ignore, got {docs:?}"
+    );
 }

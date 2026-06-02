@@ -212,6 +212,31 @@ fn extract_incremental_mode_with_existing_manifest() {
         .stderr(contains("incremental scan"));
 }
 
+/// Mirrors `test_no_incremental_without_manifest`: a first extract with no
+/// manifest must run a full scan, never the incremental path. Asserts the
+/// specific incremental-mode phrases are absent (a bare "incremental" would also
+/// match the temp path or unrelated wording).
+#[test]
+fn extract_without_manifest_is_full_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    let assert = cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    let out = assert.get_output();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+    .to_lowercase();
+    assert!(!combined.contains("incremental update"), "{combined}");
+    assert!(!combined.contains("incremental scan"), "{combined}");
+}
+
 #[test]
 fn extract_default_mode_runs_full_pipeline() {
     let dir = tempfile::tempdir().unwrap();
@@ -512,4 +537,183 @@ fn check_update_prints_status() {
     fs::create_dir_all(&out).unwrap();
     fs::write(out.join("needs_update"), "1").unwrap();
     cli().arg("check-update").arg(dir.path()).assert().success();
+}
+
+// ── provider subcommand (#1084) ─────────────────────────────────────────────
+
+#[test]
+fn provider_add_list_show_remove_round_trip() {
+    // `provider` writes to $HOME/.graphify/providers.json; point HOME at a temp
+    // dir so the round-trip is isolated.
+    let home = tempfile::tempdir().unwrap();
+
+    cli()
+        .env("HOME", home.path())
+        .args([
+            "provider",
+            "add",
+            "nvidia",
+            "--base-url",
+            "https://integrate.api.nvidia.com/v1",
+            "--default-model",
+            "minimaxai/minimax-m2.7",
+            "--env-key",
+            "NVIDIA_API_KEY",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("Provider 'nvidia' added"));
+
+    cli()
+        .env("HOME", home.path())
+        .args(["provider", "list"])
+        .assert()
+        .success()
+        .stdout(contains("nvidia").and(contains("integrate.api.nvidia.com")));
+
+    cli()
+        .env("HOME", home.path())
+        .args(["provider", "show", "nvidia"])
+        .assert()
+        .success()
+        .stdout(contains("\"base_url\""));
+
+    cli()
+        .env("HOME", home.path())
+        .args(["provider", "remove", "nvidia"])
+        .assert()
+        .success()
+        .stdout(contains("Provider 'nvidia' removed"));
+
+    cli()
+        .env("HOME", home.path())
+        .args(["provider", "list"])
+        .assert()
+        .success()
+        .stdout(contains("No custom providers registered."));
+}
+
+#[test]
+fn provider_add_rejects_builtin_name() {
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .env("HOME", home.path())
+        .args([
+            "provider",
+            "add",
+            "claude",
+            "--base-url",
+            "http://x/v1",
+            "--default-model",
+            "m",
+            "--env-key",
+            "K",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("built-in provider"));
+}
+
+#[test]
+fn provider_show_missing_fails() {
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .env("HOME", home.path())
+        .args(["provider", "show", "ghost"])
+        .assert()
+        .failure()
+        .stderr(contains("not found"));
+}
+
+#[test]
+fn provider_malformed_registry_is_not_clobbered() {
+    // A present-but-malformed providers.json must abort (rather than be silently
+    // overwritten), so the user's other providers aren't lost to a typo.
+    let home = tempfile::tempdir().unwrap();
+    let cfg = home.path().join(".graphify");
+    fs::create_dir_all(&cfg).unwrap();
+    fs::write(cfg.join("providers.json"), "{ this is not json").unwrap();
+    cli()
+        .env("HOME", home.path())
+        .args([
+            "provider",
+            "add",
+            "nvidia",
+            "--base-url",
+            "http://x/v1",
+            "--default-model",
+            "m",
+            "--env-key",
+            "K",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("malformed"));
+}
+
+#[test]
+fn provider_add_rejects_non_finite_pricing() {
+    // A non-finite price (`nan`/`inf`) would serialize to JSON `null` and read
+    // back as the 0.0 default, silently losing the value, so it is rejected.
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .env("HOME", home.path())
+        .args([
+            "provider",
+            "add",
+            "nvidia",
+            "--base-url",
+            "http://x/v1",
+            "--default-model",
+            "m",
+            "--env-key",
+            "K",
+            "--pricing-input",
+            "nan",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("finite"));
+    // The rejected add must not have created a registry file.
+    assert!(
+        !home
+            .path()
+            .join(".graphify")
+            .join("providers.json")
+            .exists()
+    );
+}
+
+// ── label command shares the cluster-only handler (#1097) ───────────────────
+
+#[test]
+fn label_no_backend_keeps_placeholders() {
+    // With no backend configured, `label` degrades to `Community N` placeholders
+    // and still regenerates the report/labels file.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+
+    cli_no_backend()
+        .arg("label")
+        .arg(dir.path())
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let labels = fs::read_to_string(
+        dir.path()
+            .join("graphify-out")
+            .join(".graphify_labels.json"),
+    )
+    .unwrap();
+    assert!(
+        labels.contains("Community"),
+        "expected placeholder labels: {labels}"
+    );
 }

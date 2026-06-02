@@ -17,8 +17,8 @@
 #![allow(clippy::expect_used)]
 
 use graphify_analyze::{
-    SurpriseScoreInput, file_category, god_nodes, graph_diff, is_concept_node, is_json_key_node,
-    surprise_score, surprising_connections,
+    SurpriseScoreInput, file_category, find_import_cycles, find_import_cycles_bounded, god_nodes,
+    graph_diff, is_concept_node, is_json_key_node, surprise_score, surprising_connections,
 };
 use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_cluster::cluster;
@@ -1739,4 +1739,189 @@ fn ambiguous_edges_score_at_most_04() {
         }
     }
     assert!(found, "no AMBIGUOUS edges found in test fixture");
+}
+
+// ── test_analyze.py: find_import_cycles ──────────────────────────────────────
+
+/// Add a file (or external) node carrying a `source_file` attribute (or none).
+fn cycle_node(g: &mut Graph, id: &str, label: &str, source_file: Option<&str>) {
+    let mut m = IndexMap::new();
+    m.insert("label".to_string(), json!(label));
+    m.insert("file_type".to_string(), json!("code"));
+    if let Some(sf) = source_file {
+        m.insert("source_file".to_string(), json!(sf));
+    }
+    g.add_node(id, m);
+}
+
+/// Add an import-style edge carrying `relation` + `source_file` + `confidence`.
+fn cycle_edge(g: &mut Graph, src: &str, tgt: &str, relation: &str, source_file: &str, conf: &str) {
+    let mut m = IndexMap::new();
+    m.insert("relation".to_string(), json!(relation));
+    m.insert("source_file".to_string(), json!(source_file));
+    m.insert("confidence".to_string(), json!(conf));
+    g.add_edge(src, tgt, m);
+}
+
+/// Mirrors `_make_cycle_graph_directed`. Node ids are arbitrary — cycles are
+/// resolved purely from the `source_file` attribute, never the id/label.
+fn make_cycle_graph(kind: GraphKind) -> Graph {
+    let mut g = Graph::new(kind);
+    cycle_node(&mut g, "a", "a.ts", Some("src/a.ts"));
+    cycle_node(&mut g, "b", "b.ts", Some("src/b.ts"));
+    cycle_node(&mut g, "c", "c.ts", Some("src/c.ts"));
+    cycle_node(&mut g, "d", "d.ts", Some("src/d.ts"));
+    // External-like node (no source_file): must be skipped safely.
+    cycle_node(&mut g, "ext", "react", None);
+
+    // 2-cycle: a <-> b
+    cycle_edge(&mut g, "a", "b", "imports_from", "src/a.ts", "EXTRACTED");
+    cycle_edge(&mut g, "b", "a", "imports_from", "src/b.ts", "EXTRACTED");
+    // 3-cycle: b -> c -> d -> b
+    cycle_edge(&mut g, "b", "c", "imports_from", "src/b.ts", "EXTRACTED");
+    cycle_edge(&mut g, "c", "d", "imports_from", "src/c.ts", "EXTRACTED");
+    cycle_edge(&mut g, "d", "b", "imports_from", "src/d.ts", "EXTRACTED");
+    // Self-loop: c imports itself.
+    cycle_edge(&mut g, "c", "c", "imports_from", "src/c.ts", "EXTRACTED");
+    // Mixed edge types + an import edge whose target has no source_file: skipped.
+    cycle_edge(&mut g, "a", "ext", "calls", "src/a.ts", "INFERRED");
+    cycle_edge(&mut g, "a", "ext", "contains", "src/a.ts", "EXTRACTED");
+    cycle_edge(&mut g, "a", "ext", "imports_from", "src/a.ts", "EXTRACTED");
+    g
+}
+
+/// `test_find_import_cycles_returns_structured_records`
+#[test]
+fn find_import_cycles_returns_structured_records() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    let cycles = find_import_cycles(&g);
+    assert!(!cycles.is_empty());
+    let first = &cycles[0];
+    assert!(!first.cycle.is_empty());
+    assert_eq!(first.length, first.cycle.len());
+    assert_eq!(first.why, "circular dependency");
+}
+
+/// `test_find_import_cycles_detects_2_and_3_cycles`
+#[test]
+fn find_import_cycles_detects_2_and_3_cycles() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    let cycles = find_import_cycles(&g);
+    let sets: Vec<std::collections::HashSet<&str>> = cycles
+        .iter()
+        .map(|c| c.cycle.iter().map(String::as_str).collect())
+        .collect();
+    assert!(
+        sets.iter()
+            .any(|s| s.contains("src/a.ts") && s.contains("src/b.ts"))
+    );
+    assert!(
+        sets.iter()
+            .any(|s| s.contains("src/b.ts") && s.contains("src/c.ts") && s.contains("src/d.ts"))
+    );
+}
+
+/// `test_find_import_cycles_includes_self_loop_cycle`
+#[test]
+fn find_import_cycles_includes_self_loop_cycle() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    let cycles = find_import_cycles(&g);
+    assert!(
+        cycles
+            .iter()
+            .any(|c| c.cycle == vec!["src/c.ts".to_string()] && c.length == 1)
+    );
+}
+
+/// `test_find_import_cycles_respects_max_cycle_length`
+#[test]
+fn find_import_cycles_respects_max_cycle_length() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    let cycles = find_import_cycles_bounded(&g, 2, 20);
+    assert!(cycles.iter().all(|c| c.length <= 2));
+}
+
+/// A zero max length admits no cycles — not even self-loops (length 1).
+#[test]
+fn find_import_cycles_zero_max_length_returns_none() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    assert!(find_import_cycles_bounded(&g, 0, 20).is_empty());
+}
+
+/// A zero `top_n` requests no results, so the enumeration short-circuits.
+#[test]
+fn find_import_cycles_zero_top_n_returns_none() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    assert!(find_import_cycles_bounded(&g, 5, 0).is_empty());
+}
+
+/// `test_find_import_cycles_skips_nodes_without_source_file`
+#[test]
+fn find_import_cycles_skips_nodes_without_source_file() {
+    let g = make_cycle_graph(GraphKind::DiGraph);
+    let cycles = find_import_cycles(&g);
+    let flat = cycles
+        .iter()
+        .flat_map(|c| c.cycle.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(!flat.contains("react"));
+}
+
+/// `test_find_import_cycles_handles_undirected_graph_input`
+#[test]
+fn find_import_cycles_handles_undirected_graph_input() {
+    let g = make_cycle_graph(GraphKind::Graph);
+    let cycles = find_import_cycles(&g);
+    // Orientation is still resolved via each edge's `source_file`.
+    assert!(!cycles.is_empty());
+}
+
+/// `test_find_import_cycles_ignores_non_import_relations`
+#[test]
+fn find_import_cycles_ignores_non_import_relations() {
+    let mut g = Graph::new(GraphKind::DiGraph);
+    cycle_node(&mut g, "a", "a.ts", Some("src/a.ts"));
+    cycle_node(&mut g, "b", "b.ts", Some("src/b.ts"));
+    cycle_edge(&mut g, "a", "b", "calls", "src/a.ts", "INFERRED");
+    cycle_edge(&mut g, "b", "a", "contains", "src/b.ts", "EXTRACTED");
+    assert!(find_import_cycles(&g).is_empty());
+}
+
+/// `re_exports` edges are import-like and must close cycles too — Python treats
+/// them identically to `imports_from` in `find_import_cycles` (#961).
+#[test]
+fn find_import_cycles_detects_re_exports_cycle() {
+    let mut g = Graph::new(GraphKind::DiGraph);
+    cycle_node(&mut g, "a", "a.ts", Some("src/a.ts"));
+    cycle_node(&mut g, "b", "b.ts", Some("src/b.ts"));
+    // 2-cycle formed entirely via re_exports rather than imports_from.
+    cycle_edge(&mut g, "a", "b", "re_exports", "src/a.ts", "EXTRACTED");
+    cycle_edge(&mut g, "b", "a", "re_exports", "src/b.ts", "EXTRACTED");
+    let cycles = find_import_cycles(&g);
+    assert!(
+        cycles.iter().any(|c| {
+            let s: std::collections::HashSet<&str> = c.cycle.iter().map(String::as_str).collect();
+            s.contains("src/a.ts") && s.contains("src/b.ts")
+        }),
+        "re_exports cycle a<->b not detected: {cycles:?}"
+    );
+}
+
+/// `test_find_import_cycles_empty_graph`
+#[test]
+fn find_import_cycles_empty_graph() {
+    let g = Graph::new(GraphKind::DiGraph);
+    assert!(find_import_cycles(&g).is_empty());
+}
+
+/// `test_find_import_cycles_no_cycles`
+#[test]
+fn find_import_cycles_no_cycles() {
+    let mut g = Graph::new(GraphKind::DiGraph);
+    cycle_node(&mut g, "x", "x.ts", Some("x.ts"));
+    cycle_node(&mut g, "y", "y.ts", Some("y.ts"));
+    cycle_edge(&mut g, "x", "y", "imports_from", "x.ts", "EXTRACTED");
+    assert!(find_import_cycles(&g).is_empty());
 }

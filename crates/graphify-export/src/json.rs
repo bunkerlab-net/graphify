@@ -397,7 +397,7 @@ pub fn backup_if_protected(out_dir: &Path) -> Option<PathBuf> {
         Ok(Some(path)) => Some(path),
         Ok(None) => None,
         Err(e) => {
-            eprintln!("[graphify] warning: backup failed ({e}) — continuing with overwrite");
+            eprintln!("[graphify] warning: backup failed ({e}) - continuing with overwrite");
             None
         }
     }
@@ -426,7 +426,7 @@ fn try_backup(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("backup");
-        println!("[graphify] backed up {reason} graph ({copied} files) → {dir_name}/");
+        println!("[graphify] backed up {reason} graph ({copied} files) -> {dir_name}/");
         Ok(Some(backup_dir.to_path_buf()))
     } else {
         Ok(None)

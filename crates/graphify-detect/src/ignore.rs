@@ -310,9 +310,12 @@ fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
         }
 
         let matched = if anchored {
+            // Anchored patterns match the anchor-relative path directly — no
+            // subtree/basename fallback. Without this, `/inbox/` would leak into
+            // `src/inbox/` deep in the tree via segment matching (#1087).
             last_anchor_rel
                 .as_deref()
-                .is_some_and(|rel| rel_matches(rel, target_name, p))
+                .is_some_and(|rel| fnmatch(rel, p))
         } else {
             let root_matched = root_rel
                 .as_deref()
@@ -362,6 +365,25 @@ pub fn is_ignored(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     eval_path(path, root, patterns)
 }
 
+/// Whether an anchored `.graphifyinclude` stem `p` (anchor-relative, no
+/// surrounding slashes) matches the anchor-relative path `rel_str` — the path
+/// itself or anything in its subtree.
+///
+/// For an allowlist an anchored directory (`/src`) covers its descendants
+/// (`src/main.py`), mirroring [`could_contain_included_path`]. This is the
+/// inverse of the anchored *ignore* fix (#1087): an ignore pattern must not leak
+/// into a subtree, but an include directory pulls its whole subtree in. A literal
+/// stem uses a zero-alloc `strip_prefix` check (`{p}/...`); a globbed stem
+/// (`src*`) needs `{p}/**` since this matcher's `*` does not cross `/` (the
+/// `format!` runs only for the rare globbed-include case).
+fn anchored_include_matches(rel_str: &str, p: &str) -> bool {
+    fnmatch(rel_str, p)
+        || rel_str
+            .strip_prefix(p)
+            .is_some_and(|rest| rest.starts_with('/'))
+        || ((p.contains('*') || p.contains('?')) && fnmatch(rel_str, &format!("{p}/**")))
+}
+
 /// Return `true` if `path` matches any `.graphifyinclude` allowlist pattern.
 #[must_use]
 pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
@@ -378,10 +400,11 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
             continue;
         }
         if anchored {
-            if path.strip_prefix(anchor).ok().is_some_and(|rel| {
-                let rel_str = path_to_forward_slash(rel);
-                rel_matches(&rel_str, target_name, p)
-            }) {
+            if path
+                .strip_prefix(anchor)
+                .ok()
+                .is_some_and(|rel| anchored_include_matches(&path_to_forward_slash(rel), p))
+            {
                 return true;
             }
         } else {
@@ -406,6 +429,12 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
 }
 
 /// Return `true` if a directory may contain files matched by `.graphifyinclude`.
+///
+/// Used to keep the walker from pruning a subtree that the allowlist would
+/// later accept. It mirrors [`anchored_include_matches`] so a directory is kept
+/// when it is the matched stem, lives inside the stem's subtree (a literal
+/// `/src` or globbed `/src*` covering `src/deep/main.py`), or is an ancestor of
+/// a more-specific pattern target.
 #[must_use]
 pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     if patterns.is_empty() {
@@ -434,10 +463,17 @@ pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePa
             if p.is_empty() {
                 continue;
             }
+            // `dir` is an ancestor of a more-specific pattern target (e.g. dir
+            // `src`, pattern `src/a/b.py`): descend to reach the target.
             if p == rel || p.starts_with(&format!("{rel}/")) {
                 return true;
             }
-            if fnmatch(rel, p) {
+            // `dir` is the matched stem itself or lives inside its subtree. Use
+            // the same anchored-subtree test as `is_included` so the
+            // descendant-covering semantics (a literal `/src` or globbed `/src*`
+            // pulling in `src/deep/main.py`) are honoured during traversal —
+            // otherwise the walker prunes subtrees the allowlist would accept.
+            if anchored_include_matches(rel, p) {
                 return true;
             }
         }

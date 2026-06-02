@@ -239,11 +239,11 @@ fn is_type_like_definition(node: &Node) -> bool {
 ///
 /// Mirrors `_merge_swift_extensions` in graphify-py `extract.py`.
 pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
-    // Collect (nid, label) for every Swift class_declaration whose body
-    // contains the `extension` keyword. Re-parsing each Swift file once
-    // here is cheaper than threading a sidecar through the generic walker.
-    let mut extension_nids: HashSet<String> = HashSet::new();
-    let mut extension_labels: HashMap<String, String> = HashMap::new();
+    // Re-parse each Swift file to collect the type names declared as
+    // `extension Foo`, keyed by the file path string the extractor recorded in
+    // `source_file`. Re-parsing once here is cheaper than threading a sidecar
+    // through the generic walker.
+    let mut ext_names_by_file: HashMap<String, HashSet<String>> = HashMap::new();
 
     let mut parser = tree_sitter::Parser::new();
     if parser
@@ -263,14 +263,30 @@ pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &
         let Some(tree) = parser.parse(&source, None) else {
             continue;
         };
-        let stem = crate::ids::file_stem(path);
-        collect_swift_extensions(
-            tree.root_node(),
-            &source,
-            &stem,
-            &mut extension_nids,
-            &mut extension_labels,
-        );
+        let mut names: HashSet<String> = HashSet::new();
+        collect_swift_extension_names(tree.root_node(), &source, &mut names);
+        if !names.is_empty() {
+            ext_names_by_file.insert(path.to_string_lossy().into_owned(), names);
+        }
+    }
+
+    if ext_names_by_file.is_empty() {
+        return;
+    }
+
+    // Identify the actual extension nodes by (source_file, label) rather than a
+    // re-derived id — the file-node-id remap (#1033/#1096) rewrites symbol ids,
+    // so matching on the id we'd compute from the path no longer holds.
+    let mut extension_nids: HashSet<String> = HashSet::new();
+    let mut extension_labels: HashMap<String, String> = HashMap::new();
+    for node in nodes.iter() {
+        if ext_names_by_file
+            .get(&node.source_file)
+            .is_some_and(|names| names.contains(&node.label))
+        {
+            extension_nids.insert(node.id.clone());
+            extension_labels.insert(node.id.clone(), node.label.clone());
+        }
     }
 
     if extension_nids.is_empty() {
@@ -344,12 +360,10 @@ pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &
     *edges = rewritten;
 }
 
-fn collect_swift_extensions(
+fn collect_swift_extension_names(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    stem: &str,
-    extension_nids: &mut HashSet<String>,
-    extension_labels: &mut std::collections::HashMap<String, String>,
+    names: &mut HashSet<String>,
 ) {
     // tree-sitter `child()` takes a `u32` index while `child_count()` returns
     // `usize`. AST nodes never exceed 2^32 children in practice; truncate
@@ -376,15 +390,13 @@ fn collect_swift_extensions(
             if let Some(name) = name
                 && !name.is_empty()
             {
-                let nid = make_id(&[stem, &name]);
-                extension_labels.insert(nid.clone(), name);
-                extension_nids.insert(nid);
+                names.insert(name);
             }
         }
     }
     for i in 0..child_count {
         if let Some(child) = node.child(i) {
-            collect_swift_extensions(child, source, stem, extension_nids, extension_labels);
+            collect_swift_extension_names(child, source, names);
         }
     }
 }

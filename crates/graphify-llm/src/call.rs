@@ -21,6 +21,14 @@ use crate::{bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai,
 pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String, LlmError> {
     let max_tokens_u32 = u32::try_from(max_tokens).unwrap_or(u32::MAX);
 
+    // Custom (non-built-in) provider: route through the OpenAI-compatible client
+    // using the provider's base_url / model / env_key (#1084).
+    if !crate::providers::is_builtin_backend(backend)
+        && let Some(provider) = crate::providers::load_custom_providers().get(backend)
+    {
+        return call_custom_plain(provider, prompt, max_tokens_u32);
+    }
+
     let cfg = backend_config(backend).ok_or_else(|| {
         let available = BACKENDS
             .iter()
@@ -112,4 +120,29 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
         "ollama" => ollama::call_ollama_plain(&key, &ollama_base_url, mdl, prompt, max_tokens_u32),
         _ => unreachable!("backend_config already validated backend name"),
     }
+}
+
+/// Plain-text call against a custom OpenAI-compatible provider (#1084).
+fn call_custom_plain(
+    provider: &crate::providers::CustomProvider,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, LlmError> {
+    let key = std::env::var(&provider.env_key).unwrap_or_default();
+    if key.is_empty() {
+        return Err(LlmError::NoApiKey(format!(
+            "No API key for backend '{}'. Set {}.",
+            provider.name, provider.env_key
+        )));
+    }
+    kimi::call_plain_openai_compat(&kimi::PlainOpenAiRequest {
+        base_url: &provider.base_url,
+        api_key: &key,
+        model: &provider.default_model,
+        prompt,
+        temperature: Some(provider.temperature),
+        reasoning_effort: None,
+        disable_thinking: false,
+        max_tokens,
+    })
 }

@@ -12,6 +12,7 @@ use crate::error::ReportError;
 use crate::sections;
 use crate::sections::{
     communities::{render_communities, render_nav_hubs},
+    cycles::render_import_cycles,
     detection::{
         ConfidenceStats, render_ambiguous, render_corpus_check, render_gaps, render_summary,
     },
@@ -92,6 +93,8 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
     }
     render_god_nodes(&mut lines, god_node_list);
     render_surprising(&mut lines, surprise_list);
+    // Circular imports surfaced from the file-level dependency graph (#961).
+    render_import_cycles(&mut lines, graph);
     if let Some(hyperedges) = graph
         .graph_attrs
         .get("hyperedges")

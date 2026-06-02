@@ -41,11 +41,13 @@ mod error;
 pub mod extract;
 pub mod gemini;
 pub mod kimi;
+pub mod labeling;
 pub mod ollama;
 pub mod openai;
 pub mod openai_compat;
 pub mod parallel;
 pub mod parse;
+pub mod providers;
 pub mod read;
 mod response;
 pub mod retry;
@@ -53,8 +55,8 @@ pub mod tokenizer;
 pub mod tokens;
 
 pub use backends::{
-    BACKENDS, BackendConfig, Pricing, backend_config, detect_backend, format_backend_env_keys,
-    get_backend_api_key, router,
+    BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars, detect_backend,
+    detect_backend_with, format_backend_env_keys, get_backend_api_key, router,
 };
 pub use call::call_llm;
 pub use constants::{
@@ -63,11 +65,19 @@ pub use constants::{
 };
 pub use error::LlmError;
 pub use extract::{extract_files_direct, extract_files_direct_mode};
+pub use labeling::{
+    generate_community_labels, generate_community_labels_with, label_communities,
+    label_communities_with, placeholder_community_labels,
+};
 pub use parallel::{
     ChunkDoneCb, CorpusConfig, extract_corpus_parallel, extract_corpus_parallel_with_total,
     merge_into,
 };
 pub use parse::{empty_fragment, parse_llm_json, response_is_hollow};
+pub use providers::{
+    CustomProvider, custom_providers_path, is_builtin_backend, load_custom_providers,
+    load_custom_providers_from,
+};
 pub use read::read_files;
 pub use response::{LlmBackend, LlmResponse};
 pub use retry::{

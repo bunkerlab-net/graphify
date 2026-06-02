@@ -372,3 +372,61 @@ fn test_empty_graph_renders() {
         "no surprises message present"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Import Cycles section (#961)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_report_import_cycles_none_detected() {
+    // The default fixture has no import edges, so the section degrades gracefully.
+    let graph = make_graph();
+    let analysis = make_analysis();
+    let report = render_report(&graph, &analysis);
+    assert!(
+        report.contains("## Import Cycles"),
+        "import cycles section missing"
+    );
+    let section = report
+        .split("## Import Cycles")
+        .nth(1)
+        .expect("section body");
+    assert!(
+        section.contains("- None detected."),
+        "expected 'None detected.' when no cycles exist"
+    );
+}
+
+#[test]
+fn test_report_import_cycles_lists_cycle() {
+    // Two files importing each other form a 2-file cycle, rendered as a closed
+    // path `a -> b -> a`.
+    let extraction = json!({
+        "nodes": [
+            {"id": "a", "label": "a.ts", "file_type": "code", "source_file": "src/a.ts"},
+            {"id": "b", "label": "b.ts", "file_type": "code", "source_file": "src/b.ts"}
+        ],
+        "edges": [
+            {"source": "a", "target": "b", "relation": "imports_from",
+             "source_file": "src/a.ts", "confidence": "EXTRACTED"},
+            {"source": "b", "target": "a", "relation": "imports_from",
+             "source_file": "src/b.ts", "confidence": "EXTRACTED"}
+        ]
+    });
+    let graph = build_from_json(extraction, true, None).expect("build graph");
+    let analysis = json!({
+        "communities": {},
+        "cohesion_scores": {},
+        "community_labels": {},
+        "god_nodes": [],
+        "surprising_connections": [],
+        "detection_result": { "total_files": 2, "total_words": 0, "warning": null },
+        "token_cost": { "input": 0, "output": 0 },
+        "root": "./project"
+    });
+    let report = render_report(&graph, &analysis);
+    assert!(
+        report.contains("- 2-file cycle: `src/a.ts -> src/b.ts -> src/a.ts`"),
+        "expected the 2-file cycle line, got:\n{report}"
+    );
+}

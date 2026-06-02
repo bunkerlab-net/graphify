@@ -179,6 +179,20 @@ pub fn format_backend_env_keys(backend: &str) -> String {
 /// resolved at call time by the AWS SDK.
 #[must_use]
 pub fn detect_backend() -> Option<String> {
+    detect_backend_with(&crate::providers::load_custom_providers())
+}
+
+/// Detects the backend like [`detect_backend`], but against an explicit
+/// custom-provider set.
+///
+/// Built-in backends take priority (gemini → kimi → claude → openai → deepseek →
+/// bedrock → ollama); only then are custom providers consulted, in registry
+/// order, returning the first whose `env_key` is set (#1084). Splitting the
+/// custom set out makes the priority ordering testable without a `providers.json`.
+#[must_use]
+pub fn detect_backend_with(
+    custom: &indexmap::IndexMap<String, crate::providers::CustomProvider>,
+) -> Option<String> {
     for backend in ["gemini", "kimi", "claude", "openai", "deepseek"] {
         if !get_backend_api_key(backend).is_empty() {
             return Some(backend.to_string());
@@ -187,12 +201,41 @@ pub fn detect_backend() -> Option<String> {
     if bedrock::credentials_appear_configured() {
         return Some("bedrock".to_string());
     }
-    // Ollama: checked last to avoid shadowing paid backends.
-    if let Ok(url) = std::env::var("OLLAMA_BASE_URL")
+    // Ollama: checked before custom providers to avoid shadowing a local model.
+    if let Ok(url) = std::env::var(ollama::BASE_URL_ENV)
         && !url.is_empty()
     {
         ollama::validate_ollama_base_url(&url);
         return Some("ollama".to_string());
     }
+    // Custom providers last: a configured `env_key` selects the provider.
+    for (name, provider) in custom {
+        if std::env::var(&provider.env_key).is_ok_and(|v| !v.is_empty()) {
+            return Some(name.clone());
+        }
+    }
     None
+}
+
+/// Every environment variable [`detect_backend`] consults to auto-select a
+/// built-in backend, in detection-priority order.
+///
+/// Built from the per-backend `ENV_KEY` constants, [`bedrock::CREDENTIAL_ENV_VARS`],
+/// and [`ollama::BASE_URL_ENV`] — the same names the detection logic above reads —
+/// so the list can never drift from it. Custom-provider `env_key`s are excluded
+/// because they are registry-defined, not statically known. Tests scrub exactly
+/// this set to drive the no-backend / custom-provider path deterministically.
+#[must_use]
+pub fn backend_selection_env_vars() -> Vec<&'static str> {
+    let mut vars = vec![
+        gemini::ENV_KEY,
+        gemini::ENV_KEY_FALLBACK,
+        kimi::ENV_KEY,
+        claude::ENV_KEY,
+        openai::ENV_KEY,
+        deepseek::ENV_KEY,
+    ];
+    vars.extend_from_slice(bedrock::CREDENTIAL_ENV_VARS);
+    vars.push(ollama::BASE_URL_ENV);
+    vars
 }

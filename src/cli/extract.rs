@@ -215,13 +215,27 @@ fn detect_result_from_incremental(
     path: &std::path::Path,
     inc: &graphify_detect::IncrementalDetectResult,
 ) -> graphify_detect::DetectResult {
-    let mut files: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
+    // Seed all canonical buckets in fixed order (even when empty) so the
+    // reconstructed `DetectResult` is structurally identical to a fresh `detect`
+    // walk — same kinds, same order — rather than only the kinds that happen to
+    // have changed/unchanged files.
+    let mut files: indexmap::IndexMap<String, Vec<String>> = graphify_detect::FILE_TYPE_KINDS
+        .iter()
+        .map(|k| ((*k).to_string(), Vec::new()))
+        .collect();
     for (kind, paths) in &inc.changed_files {
         files.entry(kind.clone()).or_default().extend(paths.clone());
     }
     for (kind, paths) in &inc.unchanged_files {
         files.entry(kind.clone()).or_default().extend(paths.clone());
+    }
+    // Sort each bucket so the reconstructed lists match a fresh `detect` walk
+    // byte-for-byte (which sorts every bucket — see `walk::detect`). Without
+    // this, concatenating changed-then-unchanged would interleave paths out of
+    // order and make incremental extraction non-deterministic relative to a
+    // full scan.
+    for bucket in files.values_mut() {
+        bucket.sort();
     }
     let total_files = files.values().map(Vec::len).sum();
     graphify_detect::DetectResult {
@@ -647,15 +661,11 @@ fn render_html_viz(
 /// incremental code path. Mirrors `_save_manifest(... kind="both")` at
 /// `__main__.py:2891`.
 fn persist_manifest(
-    detect_files: &std::collections::HashMap<String, Vec<String>>,
+    detect_files: &indexmap::IndexMap<String, Vec<String>>,
     out_dir: &std::path::Path,
 ) {
     let manifest_path = out_dir.join("manifest.json");
-    let files_indexed: indexmap::IndexMap<String, Vec<String>> = detect_files
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if let Err(e) = graphify_detect::save_manifest(&files_indexed, &manifest_path, "both") {
+    if let Err(e) = graphify_detect::save_manifest(detect_files, &manifest_path, "both") {
         eprintln!("      warning: could not write manifest: {e}");
     }
 }
@@ -752,7 +762,7 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
         }
         Ok(())
     } else {
-        anyhow::bail!("Nothing to update or rebuild failed — check output above.")
+        anyhow::bail!("Nothing to update or rebuild failed - check output above.")
     }
 }
 
@@ -869,7 +879,7 @@ pub(crate) fn cmd_extract_global_add(
     match graphify_global::global_add(graph_path, &tag, &global_path, &manifest_path) {
         Ok(summary) => {
             if summary.nodes_added == 0 && summary.nodes_removed == 0 {
-                eprintln!("[graphify global] '{tag}' unchanged since last add — skipped.");
+                eprintln!("[graphify global] '{tag}' unchanged since last add - skipped.");
             } else {
                 eprintln!(
                     "[graphify global] '{tag}' merged into global graph \

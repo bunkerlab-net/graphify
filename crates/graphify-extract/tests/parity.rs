@@ -765,6 +765,58 @@ fn extract_js_resolves_pnpm_workspace_package() {
 }
 
 #[test]
+fn pnpm_workspace_dot_package_does_not_crash() {
+    // `packages: - '.'` in pnpm-workspace.yaml must resolve the root as a package
+    // without crashing workspace resolution (#1083; Python's `root.glob('.')`
+    // raised IndexError on 3.10).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write_file(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - '.'\n  - 'examples/*'\n",
+    );
+    write_file(&root.join("package.json"), "{\"name\": \"my-app\"}");
+    let src = root.join("index.ts");
+    write_file(&src, "import { foo } from 'my-app';\n");
+
+    // Must complete without panicking and still produce the file's nodes.
+    let result = extract(&[src], Some(root));
+    assert!(
+        !result.nodes.is_empty(),
+        "extraction produced no nodes for index.ts"
+    );
+
+    // The `.`-package must actually resolve: `import from 'my-app'` resolves to
+    // the root package's entry (index.ts), so there must be an `imports_from`
+    // edge whose target is a REAL node id (`index`), not a dangling
+    // absolute-path id. This guards the #1083 resolution + id-normalisation,
+    // not just crash-safety.
+    let node_ids: std::collections::HashSet<&str> = result
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    let resolved = result.edges.iter().any(|e| {
+        e.get("relation").and_then(serde_json::Value::as_str) == Some("imports_from")
+            && e.get("target")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| node_ids.contains(t))
+    });
+    assert!(
+        resolved,
+        "the pnpm `.`-package import must resolve to a real node; edges: {:?}",
+        result
+            .edges
+            .iter()
+            .map(|e| (
+                e.get("relation").and_then(serde_json::Value::as_str),
+                e.get("target").and_then(serde_json::Value::as_str)
+            ))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn extract_ts_tsconfig_array_extends_alias_resolves_existing_ts_file() {
     // graphify-py #1017: TypeScript 5.0 allows `extends` as an array; later
     // entries override earlier ones. Before the fix, an array `extends`
@@ -841,6 +893,102 @@ fn extract_swift_merges_extension_across_files() {
         1,
         "expected a single canonical Foo node, got {}: {foo_nodes:?}",
         foo_nodes.len()
+    );
+    // The survivor must be the canonical *class* (declared in `Foo.swift`), not
+    // the extension node (declared in `Foo+Ext.swift`). A count-only assertion
+    // would still pass if the merge kept the wrong node, so pin down the origin.
+    let foo = foo_nodes[0];
+    let foo_src = foo
+        .get("source_file")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        std::path::Path::new(foo_src)
+            .file_name()
+            .and_then(|n| n.to_str()),
+        Some("Foo.swift"),
+        "retained Foo must be the class from Foo.swift, not the extension; got {foo_src:?}"
+    );
+    // Both the class's own method (`bar`) and the merged extension's method
+    // (`baz`) must hang off the surviving canonical node.
+    let foo_id = foo
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("Foo node has id");
+    assert!(
+        has_method_edge(&result, foo_id, ".bar()"),
+        "canonical Foo must keep its own class method `.bar()`"
+    );
+    assert!(
+        has_method_edge(&result, foo_id, ".baz()"),
+        "canonical Foo must absorb the merged extension method `.baz()`"
+    );
+}
+
+/// Whether a `method` edge runs from node `src_id` to a node labelled
+/// `target_label`. Used to assert which members hang off a Swift node after the
+/// `extension` merge pass remaps edges onto the canonical class.
+fn has_method_edge(
+    result: &graphify_extract::ExtractOutput,
+    src_id: &str,
+    target_label: &str,
+) -> bool {
+    result.edges.iter().any(|e| {
+        e.get("source").and_then(serde_json::Value::as_str) == Some(src_id)
+            && e.get("relation").and_then(serde_json::Value::as_str) == Some("method")
+            && e.get("target")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|tgt| {
+                    result.nodes.iter().any(|n| {
+                        n.get("id").and_then(serde_json::Value::as_str) == Some(tgt)
+                            && n.get("label").and_then(serde_json::Value::as_str)
+                                == Some(target_label)
+                    })
+                })
+    })
+}
+
+#[test]
+fn extract_swift_same_file_class_and_extension_keeps_canonical() {
+    // A single file declaring both `class Foo` and `extension Foo` collapses to
+    // one `Foo` node via `seen_ids` (matching graphify-py), so the merge pass
+    // matching extension nodes by (source_file, label) cannot drop the canonical
+    // class: there is only ever one node per (file, label). Guards against a
+    // regression where same-file pairs would both be marked as extensions.
+    use graphify_extract::extract;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("Foo.swift");
+    std::fs::write(
+        &f,
+        "class Foo {\n    func bar() {}\n}\nextension Foo {\n    func baz() {}\n}\n",
+    )
+    .expect("test invariant");
+    let result = extract(std::slice::from_ref(&f), None);
+    let foo_nodes: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| n.get("label").and_then(serde_json::Value::as_str) == Some("Foo"))
+        .collect();
+    assert_eq!(
+        foo_nodes.len(),
+        1,
+        "same-file class+extension must keep exactly one canonical Foo node, got {}: {foo_nodes:?}",
+        foo_nodes.len()
+    );
+    // The single surviving node must carry both the class method (`bar`) and the
+    // extension method (`baz`), proving it is the real class node and not an
+    // extension-shaped remnant.
+    let foo_id = foo_nodes[0]
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("Foo node has id");
+    assert!(
+        has_method_edge(&result, foo_id, ".bar()"),
+        "canonical Foo must keep its own class method `.bar()`"
+    );
+    assert!(
+        has_method_edge(&result, foo_id, ".baz()"),
+        "canonical Foo must keep the same-file extension method `.baz()`"
     );
 }
 

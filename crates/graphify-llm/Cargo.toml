@@ -24,6 +24,7 @@ aws-sdk-bedrockruntime = { version = "1", default-features = false, features = [
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
 rayon = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

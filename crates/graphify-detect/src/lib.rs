@@ -37,4 +37,4 @@ pub use manifest::{
 };
 pub use sensitive::{SKIP_DIRS, SKIP_FILES, is_noise_dir, is_sensitive};
 pub use shebang::{env_command_args, shebang_interpreter};
-pub use walk::{DetectResult, auto_follow_symlinks, collect_files, detect};
+pub use walk::{DetectResult, FILE_TYPE_KINDS, auto_follow_symlinks, collect_files, detect};

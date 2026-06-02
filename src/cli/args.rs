@@ -108,6 +108,39 @@ pub(crate) enum Command {
         exclude_hubs: Option<f64>,
         #[arg(long = "min-community-size", default_value_t = 3)]
         min_community_size: usize,
+        /// Keep `Community N` placeholders (skip LLM community naming).
+        #[arg(long = "no-label")]
+        no_label: bool,
+        /// Backend to use for community naming (default: auto-detect).
+        #[arg(long)]
+        backend: Option<String>,
+    },
+
+    /// (Re)name communities with the configured LLM backend, regenerate report.
+    ///
+    /// Equivalent to `cluster-only` but always refreshes community names even
+    /// when a `.graphify_labels.json` already exists.
+    Label {
+        path: PathBuf,
+        #[arg(long = "no-viz")]
+        no_viz: bool,
+        #[arg(long)]
+        graph: Option<PathBuf>,
+        #[arg(long, default_value_t = 1.0)]
+        resolution: f64,
+        #[arg(long = "exclude-hubs")]
+        exclude_hubs: Option<f64>,
+        #[arg(long = "min-community-size", default_value_t = 3)]
+        min_community_size: usize,
+        /// Backend to use (default: auto-detect from API keys).
+        #[arg(long)]
+        backend: Option<String>,
+    },
+
+    /// Manage custom LLM providers (`graphify provider <add|list|show|remove>`).
+    Provider {
+        #[command(subcommand)]
+        cmd: ProviderCommand,
     },
 
     /// BFS traversal of graph.json for a question.
@@ -446,6 +479,32 @@ pub(crate) enum HookCmd {
     Uninstall,
     /// Check if git hooks are installed.
     Status,
+}
+
+/// Subcommands for the `provider` command group (custom LLM providers, #1084).
+#[derive(Debug, Subcommand)]
+pub(crate) enum ProviderCommand {
+    /// Register a custom OpenAI-compatible provider in `~/.graphify/providers.json`.
+    Add {
+        /// Provider name (the `--backend` selector).
+        name: String,
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
+        #[arg(long = "default-model")]
+        default_model: Option<String>,
+        #[arg(long = "env-key")]
+        env_key: Option<String>,
+        #[arg(long = "pricing-input")]
+        pricing_input: Option<f64>,
+        #[arg(long = "pricing-output")]
+        pricing_output: Option<f64>,
+    },
+    /// List registered custom providers.
+    List,
+    /// Print one provider's full configuration as JSON.
+    Show { name: String },
+    /// Remove a custom provider.
+    Remove { name: String },
 }
 
 /// Subcommands for the `global` command group.

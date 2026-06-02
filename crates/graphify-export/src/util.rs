@@ -1,6 +1,7 @@
 //! Shared utility constants and helpers used by every exporter format.
 
 use indexmap::IndexMap;
+use sha1::{Digest, Sha1};
 
 /// Community colors — shared across HTML, SVG, Obsidian, Canvas.
 pub const COMMUNITY_COLORS: [&str; 10] = [
@@ -117,6 +118,42 @@ pub fn yaml_str(s: &str) -> String {
         }
     }
     out
+}
+
+/// Cap a filename stem to 200 UTF-8 bytes so it stays under the 255-byte
+/// filesystem limit even after the `.md` extension and any dedup suffix are
+/// appended (#1094).
+///
+/// The cap is on BYTES, not chars: a label of multibyte characters (CJK,
+/// accented) can blow past 255 bytes well under 255 chars. When truncation
+/// happens an 8-char SHA-1 prefix of the full label is appended so two distinct
+/// labels sharing a long prefix yield distinct, deterministic filenames instead
+/// of colliding.
+///
+/// Mirrors Python `_cap_filename`.
+#[must_use]
+pub(crate) fn cap_filename(s: &str) -> String {
+    use std::fmt::Write as _;
+    const LIMIT: usize = 200;
+    let bytes = s.as_bytes();
+    if bytes.len() <= LIMIT {
+        return s.to_string();
+    }
+    // hexdigest()[:8] == first 4 bytes rendered as 8 hex chars.
+    let digest = Sha1::digest(bytes);
+    let mut hex = String::with_capacity(8);
+    for b in digest.iter().take(4) {
+        let _ = write!(hex, "{b:02x}");
+    }
+    // Reserve "_" + 8 hex chars.
+    let keep = LIMIT - 9;
+    // `bytes[..keep]` is a prefix of valid UTF-8, so the only invalid sequence
+    // is a split trailing char; drop it (matches Python's decode(_, "ignore")).
+    let end = match std::str::from_utf8(&bytes[..keep]) {
+        Ok(_) => keep,
+        Err(e) => e.valid_up_to(),
+    };
+    format!("{}_{hex}", &s[..end])
 }
 
 /// Default confidence → numeric score mapping.

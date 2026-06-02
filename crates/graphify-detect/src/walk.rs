@@ -3,16 +3,17 @@
 //! Ports `detect`, `collect_files`, and `_auto_follow_symlinks` from
 //! `graphify-py/graphify/detect.py`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ignore_walk::{WalkBuilder, WalkState};
+use indexmap::IndexMap;
 use rayon::prelude::*;
 
 use crate::extensions::{FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
 use crate::ignore::{
-    IgnorePatterns, could_contain_included_path, is_ignored, load_graphifyignore,
+    IgnorePatterns, could_contain_included_path, is_ignored, is_included, load_graphifyignore,
     load_graphifyinclude,
 };
 use crate::office::{convert_office_file, xlsx_to_markdown};
@@ -44,6 +45,7 @@ fn classify_one(
     memory_dir: &Path,
     converted_dir: &Path,
     ignore_patterns: &IgnorePatterns,
+    include_patterns: &IgnorePatterns,
 ) -> FileDecision {
     let in_memory = memory_dir.exists() && p.starts_with(memory_dir);
     if !in_memory && p.starts_with(converted_dir) {
@@ -52,7 +54,16 @@ fn classify_one(
     // Memory-dir sidecars bypass ignore filtering: a user's `.gitignore`
     // pattern (e.g. `*.md`) must not erase the `graphify-out/memory` notes we
     // generate ourselves. Mirrors graphify-py `detect()` (#1047).
-    if !in_memory && is_ignored(p, root, ignore_patterns) {
+    //
+    // A `.graphifyinclude` allowlist re-includes an otherwise-ignored file
+    // (gitignore-negation style, but in a dedicated file): the walker already
+    // descends into ignored directories that `could_contain_included_path`
+    // flags, and this is the matching file-level rescue. The sensitive-file
+    // guard below still runs, so an allowlist cannot pull secrets into the
+    // corpus. (graphify-py defines these helpers but never wired them in — the
+    // feature was left inert there; the Rust port completes it.)
+    if !in_memory && is_ignored(p, root, ignore_patterns) && !is_included(p, root, include_patterns)
+    {
         return FileDecision::Skip;
     }
     if is_sensitive(p) {
@@ -86,11 +97,21 @@ pub const CORPUS_UPPER_THRESHOLD: u64 = 500_000;
 /// File count above which the corpus is considered large regardless of word count.
 pub const FILE_COUNT_UPPER: usize = 500;
 
+/// Canonical file-type bucket keys, in the fixed order every [`DetectResult`]
+/// must present them (see [`DetectResult::files`]). Used both by the fresh
+/// `detect` walk and by callers that reconstruct a `DetectResult` (e.g. the
+/// incremental path) so the two produce structurally identical results.
+pub const FILE_TYPE_KINDS: [&str; 5] = ["code", "document", "paper", "image", "video"];
+
 /// Full output of a [`detect`] run, analogous to the Python dict return.
 #[derive(Debug, Clone)]
 pub struct DetectResult {
-    /// Files grouped by type string (`"code"`, `"document"`, `"paper"`, `"image"`, `"video"`).
-    pub files: HashMap<String, Vec<String>>,
+    /// Files grouped by type string, in the fixed insertion order `"code"`,
+    /// `"document"`, `"paper"`, `"image"`, `"video"`. `IndexMap` (not `HashMap`)
+    /// keeps that order observable so the flattened extraction file list — and
+    /// hence `graph.json` node order and the manifest — is deterministic and
+    /// matches Python's insertion-ordered dict.
+    pub files: IndexMap<String, Vec<String>>,
     /// Total number of discovered files across all types.
     pub total_files: usize,
     /// Estimated total word count across all non-video files.
@@ -429,6 +450,7 @@ pub fn detect(
         &memory_dir,
         &converted_dir,
         &ignore_patterns,
+        &include_patterns,
         google_workspace,
     );
 
@@ -476,6 +498,11 @@ fn run_walk_phase(ctx: &WalkCtx<'_>, root: &Path, memory_dir: &Path) -> Vec<Path
             }
         }
     }
+    // Sort lexicographically by the path's string form so classification (and
+    // therefore graph.json) is deterministic regardless of the parallel walker's
+    // completion order (8db19d6). Sort by the full string, not by PathBuf
+    // components, to match Python's `sorted(key=str)`.
+    all_files.sort_by_cached_key(|p| p.to_string_lossy().into_owned());
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf]   walk_dir: {:.2}s ({} files)",
@@ -488,7 +515,7 @@ fn run_walk_phase(ctx: &WalkCtx<'_>, root: &Path, memory_dir: &Path) -> Vec<Path
 
 /// Output of [`run_classify_phase`].
 struct ClassifyOutput {
-    files: HashMap<String, Vec<String>>,
+    files: IndexMap<String, Vec<String>>,
     to_count: Vec<(PathBuf, FileType)>,
     skipped_sensitive: Vec<String>,
 }
@@ -501,9 +528,10 @@ fn run_classify_phase(
     memory_dir: &Path,
     converted_dir: &Path,
     ignore_patterns: &crate::ignore::IgnorePatterns,
+    include_patterns: &crate::ignore::IgnorePatterns,
     google_workspace: bool,
 ) -> ClassifyOutput {
-    let mut files: HashMap<String, Vec<String>> = ["code", "document", "paper", "image", "video"]
+    let mut files: IndexMap<String, Vec<String>> = FILE_TYPE_KINDS
         .iter()
         .map(|k| ((*k).to_string(), Vec::new()))
         .collect();
@@ -515,12 +543,30 @@ fn run_classify_phase(
     let decisions: Vec<FileDecision> = if all_files.len() >= PARALLEL_COUNT_THRESHOLD {
         all_files
             .par_iter()
-            .map(|p| classify_one(p, root, memory_dir, converted_dir, ignore_patterns))
+            .map(|p| {
+                classify_one(
+                    p,
+                    root,
+                    memory_dir,
+                    converted_dir,
+                    ignore_patterns,
+                    include_patterns,
+                )
+            })
             .collect()
     } else {
         all_files
             .iter()
-            .map(|p| classify_one(p, root, memory_dir, converted_dir, ignore_patterns))
+            .map(|p| {
+                classify_one(
+                    p,
+                    root,
+                    memory_dir,
+                    converted_dir,
+                    ignore_patterns,
+                    include_patterns,
+                )
+            })
             .collect()
     };
 
@@ -529,6 +575,7 @@ fn run_classify_phase(
         root,
         converted_dir,
         ignore_patterns,
+        include_patterns,
         files: &mut files,
         to_count: &mut to_count,
         skipped_sensitive: &mut skipped_sensitive,
@@ -544,6 +591,12 @@ fn run_classify_phase(
             to_count.len()
         );
     }
+    // Sort each file-type bucket so the emitted file lists are deterministic
+    // regardless of walk/classify order (8db19d6).
+    for bucket in files.values_mut() {
+        bucket.sort();
+    }
+
     ClassifyOutput {
         files,
         to_count,
@@ -619,16 +672,27 @@ struct ConvertCtx<'a> {
     root: &'a Path,
     converted_dir: &'a Path,
     ignore_patterns: &'a IgnorePatterns,
-    files: &'a mut HashMap<String, Vec<String>>,
+    include_patterns: &'a IgnorePatterns,
+    files: &'a mut IndexMap<String, Vec<String>>,
     to_count: &'a mut Vec<(PathBuf, FileType)>,
     skipped_sensitive: &'a mut Vec<String>,
 }
 
 impl ConvertCtx<'_> {
-    /// Register a converted sidecar file. Word counting is deferred to a
-    /// parallel pass after all conversions have completed.
-    fn record(&mut self, md_path: &Path, ftype: FileType) {
-        if is_ignored(md_path, self.root, self.ignore_patterns) {
+    /// Register a converted sidecar file produced from `src`.
+    ///
+    /// The sidecar inherits its source's allowlist verdict: an ordinary source
+    /// still has its sidecar filtered through `.graphifyignore` (matching
+    /// graphify-py `detect()`), but a source rescued by `.graphifyinclude`
+    /// keeps its sidecar even when the converted path would otherwise be
+    /// ignored. The allowlist is keyed on source paths, so the verdict is taken
+    /// from `src` rather than the derived `md_path` — otherwise a global ignore
+    /// such as `*` would silently drop the very content the rescue was meant to
+    /// keep (the `Direct` path already honours this in `classify_one`). Word
+    /// counting is deferred to a parallel pass after all conversions complete.
+    fn record(&mut self, src: &Path, md_path: &Path, ftype: FileType) {
+        let source_rescued = is_included(src, self.root, self.include_patterns);
+        if !source_rescued && is_ignored(md_path, self.root, self.ignore_patterns) {
             return;
         }
         self.files
@@ -677,7 +741,7 @@ fn convert_google_workspace(
         None,
     );
     match convert_res {
-        Ok(Some(md_path)) => ctx.record(&md_path, ftype),
+        Ok(Some(md_path)) => ctx.record(p, &md_path, ftype),
         Ok(None) => ctx.skipped_sensitive.push(format!(
             "{} [Google Workspace export produced no readable text]",
             p.to_string_lossy()
@@ -692,7 +756,7 @@ fn convert_google_workspace(
 /// Convert a `.docx`/`.xlsx` to a markdown sidecar via `office::convert_office_file`.
 fn convert_office(ctx: &mut ConvertCtx<'_>, p: &Path, ftype: FileType) {
     match convert_office_file(p, ctx.converted_dir) {
-        Ok(Some(md_path)) => ctx.record(&md_path, ftype),
+        Ok(Some(md_path)) => ctx.record(p, &md_path, ftype),
         Ok(None) => ctx.skipped_sensitive.push(format!(
             "{} [office document contained no extractable text]",
             p.to_string_lossy()

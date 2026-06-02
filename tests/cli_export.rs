@@ -448,3 +448,101 @@ fn cluster_only_remaps_labels_to_previous_cids() {
          graph.json community attrs. actual={actual_cids:?} labels={label_cids:?}"
     );
 }
+
+/// Helper: write a minimal two-node connected graph so `cluster-only` resolves
+/// exactly one community.
+fn write_min_graph(graph_path: &Path) {
+    fs::write(
+        graph_path,
+        r#"{"nodes":[
+            {"id":"a","label":"A","file_type":"code","source_file":"a.py"},
+            {"id":"b","label":"B","file_type":"code","source_file":"b.py"}
+        ],"edges":[
+            {"source":"a","target":"b","context":"CALLS","confidence":"EXTRACTED","source_file":"a.py"}
+        ]}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn cluster_only_no_label_preserves_existing_labels() {
+    // `--no-label` must NOT wipe a curated labels file to placeholders. An
+    // existing file already means no LLM call, so `--no-label` is a harmless
+    // no-op here: the curated names are preserved, not clobbered.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    let labels_path = out.join(".graphify_labels.json");
+    write_min_graph(&graph_path);
+    fs::write(&labels_path, r#"{"0":"Curated Name"}"#).unwrap();
+
+    cli()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--no-label")
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let labels = fs::read_to_string(&labels_path).unwrap();
+    assert!(
+        labels.contains("Curated Name"),
+        "--no-label must preserve curated names, not wipe them: {labels}"
+    );
+}
+
+#[test]
+fn cluster_only_no_label_placeholders_when_no_file() {
+    // With no existing labels file, `--no-label` produces `Community N`
+    // placeholders (and no LLM call).
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    let labels_path = out.join(".graphify_labels.json");
+    write_min_graph(&graph_path);
+
+    cli()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--no-label")
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let labels = fs::read_to_string(&labels_path).unwrap();
+    assert!(
+        labels.contains("Community "),
+        "--no-label with no file must write `Community N` placeholders: {labels}"
+    );
+}
+
+#[test]
+fn cluster_only_does_not_clobber_malformed_labels() {
+    // A malformed `.graphify_labels.json` must be preserved (not silently
+    // overwritten with placeholders) so hand-curated edits aren't lost.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    let labels_path = out.join(".graphify_labels.json");
+    write_min_graph(&graph_path);
+    let malformed = "{ this is : not valid json ";
+    fs::write(&labels_path, malformed).unwrap();
+
+    cli()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--no-viz")
+        .assert()
+        .success()
+        .stderr(contains("leaving the existing file untouched"));
+
+    // The malformed file must be left exactly as written.
+    let after = fs::read_to_string(&labels_path).unwrap();
+    assert_eq!(
+        after, malformed,
+        "malformed labels file must not be clobbered"
+    );
+}

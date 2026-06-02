@@ -19,6 +19,7 @@ pub(crate) mod hooks;
 pub(crate) mod install;
 pub(crate) mod merge;
 pub(crate) mod merge_chunks;
+pub(crate) mod provider;
 pub(crate) mod prs;
 pub(crate) mod query;
 pub(crate) mod save_result;

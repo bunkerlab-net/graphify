@@ -40,6 +40,14 @@ pub fn extract_files_direct_mode(
     root: &Path,
     deep_mode: bool,
 ) -> Result<LlmResponse, LlmError> {
+    // Custom (non-built-in) provider: extract via the OpenAI-compatible client
+    // using the provider's base_url / model / env_key (#1084).
+    if !crate::providers::is_builtin_backend(backend)
+        && let Some(provider) = crate::providers::load_custom_providers().get(backend)
+    {
+        return extract_custom(provider, files, api_key, model, root, deep_mode);
+    }
+
     let cfg = backend_config(backend).ok_or_else(|| {
         let available = BACKENDS
             .iter()
@@ -131,4 +139,47 @@ pub fn extract_files_direct_mode(
         }
         _ => unreachable!("backend_config already validated backend name"),
     }
+}
+
+/// Extract via a custom OpenAI-compatible provider (#1084). Honors an explicit
+/// `api_key`/`model`, else falls back to the provider's `env_key`/`default_model`.
+fn extract_custom(
+    provider: &crate::providers::CustomProvider,
+    files: &[PathBuf],
+    api_key: Option<&str>,
+    model: Option<&str>,
+    root: &Path,
+    deep_mode: bool,
+) -> Result<LlmResponse, LlmError> {
+    let key = api_key
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::env::var(&provider.env_key).unwrap_or_default());
+    if key.is_empty() {
+        return Err(LlmError::NoApiKey(format!(
+            "No API key for backend '{}'. Set {} or pass api_key=.",
+            provider.name, provider.env_key
+        )));
+    }
+    let mdl = model
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&provider.default_model);
+    let user_msg = read_files(files, root);
+    // Honour the provider's configured `max_completion_tokens` (default 8192),
+    // then apply the `GRAPHIFY_MAX_OUTPUT_TOKENS` override — mirroring Python's
+    // `_resolve_max_tokens(cfg.get("max_completion_tokens", 8192))` (llm.py:720).
+    let max_out = openai_compat::resolve_max_tokens(provider.max_completion_tokens);
+    openai_compat::call_openai_compat(&openai_compat::OpenAiRequest {
+        base_url: &provider.base_url,
+        api_key: &key,
+        model: mdl,
+        messages: openai_compat::extraction_messages_for(&user_msg, deep_mode),
+        temperature: Some(provider.temperature),
+        reasoning_effort: None,
+        max_completion_tokens: max_out,
+        disable_thinking: false,
+        ollama_options: None,
+        backend_name: &provider.name,
+        timeout: openai_compat::api_timeout(),
+    })
 }

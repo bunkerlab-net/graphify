@@ -44,5 +44,5 @@ pub use extractors::{
     extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte, extract_swift,
     extract_verilog, extract_zig, is_mcp_config_path,
 };
-pub use ids::{file_stem, make_id, make_id1};
+pub use ids::{file_node_id, file_stem, make_id, make_id1};
 pub use types::{Edge, ExtractOutput, FileResult, Node, RawCall};

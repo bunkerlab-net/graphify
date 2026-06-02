@@ -141,11 +141,30 @@ commit's changes are lost under contention.
 Rerun clustering on an existing `graph.json` and regenerate the report and HTML viz. Useful after tweaking cluster
 parameters or when you only want to refresh `GRAPH_REPORT.md`.
 
+When no `.graphify_labels.json` exists yet, `cluster-only` auto-names communities with the configured LLM backend
+in a single batched call, falling back to `Community N` placeholders if no backend is configured or the call fails.
+An existing labels file is preserved (re-run `graphify label` to force a refresh).
+
 ```bash
 graphify cluster-only .
 graphify cluster-only . --no-viz                   # skip graph.html (saves time on >5k-node graphs)
 graphify cluster-only . --graph other/graph.json   # use a non-default graph location
+graphify cluster-only . --no-label                 # keep "Community N" placeholders (skip LLM naming)
+graphify cluster-only . --backend openai           # backend to use for naming (default: auto-detect)
 ```
+
+### `label <path>`
+
+`label` is `cluster-only` that **always** (re)names communities with the configured LLM backend, even when a
+`.graphify_labels.json` already exists. Use it to refresh names after the graph changed, or to switch backends.
+
+```bash
+graphify label .                       # re-name with the auto-detected backend
+graphify label . --backend gemini      # force a specific backend
+graphify label . --no-viz              # skip graph.html regeneration
+```
+
+If no backend is configured (no API key), `label` degrades to `Community N` placeholders and prints a hint.
 
 ---
 
@@ -520,6 +539,24 @@ the LLM spend.
 
 ## Configuration
 
+### File selection (`.graphifyignore` / `.graphifyinclude`)
+
+`detect` — and therefore `extract` / `update` / `watch` — honours two optional control files at the scan root, on
+top of any `.gitignore`:
+
+- **`.graphifyignore`** — gitignore-syntax exclude list. Same last-match-wins and parent-exclusion rules as
+  `.gitignore` (a `!` re-include cannot rescue a file whose ancestor directory is excluded). Loaded from the scan
+  root up to the VCS root.
+- **`.graphifyinclude`** — gitignore-syntax **allowlist** that re-includes files an ignore rule would otherwise
+  drop. A file is kept when it (or an ancestor directory) matches an include pattern, even if `.graphifyignore` /
+  `.gitignore` excludes it. Anchored directory stems cover their whole subtree — both `/src` and the globbed
+  `/src*` pull in `src/deep/main.py`. The sensitive-file guard still runs after the allowlist, so an include can
+  never pull secrets (`.env`, private keys, etc.) into the corpus.
+
+Files under `graphify-out/memory/` are always detected regardless of either file. (`graphify-py` ships the
+`.graphifyinclude` matcher but never wires it into `detect`, so the allowlist is inert there; the Rust port
+completes the feature.)
+
 ### Environment variables
 
 | Variable                    | Effect                                                                                                                                              |
@@ -556,6 +593,30 @@ roles), IMDS, and SSO. `AWS_REGION` alone is **not** sufficient to auto-select B
 present, otherwise auto-detection falls through to the next backend.
 
 Force a backend with `--backend`; override its default model with `--model`.
+
+#### Custom providers
+
+Any OpenAI-compatible endpoint can be registered as a custom backend and used like a built-in one (e.g.
+`graphify extract . --backend nvidia`, `graphify label . --backend nvidia`). At extraction/labeling time custom
+providers are loaded from **both** `~/.graphify/providers.json` (user-global) and `.graphify/providers.json`
+(project-local, when present); if the same name appears in both, the global entry wins. The `provider` command
+manages the user-global registry:
+
+```bash
+graphify provider add nvidia \
+  --base-url https://integrate.api.nvidia.com/v1 \
+  --default-model minimaxai/minimax-m2.7 \
+  --env-key NVIDIA_API_KEY \
+  [--pricing-input 0.0 --pricing-output 0.0]
+graphify provider list                 # name + base URL of each registered provider
+graphify provider show nvidia          # full JSON config for one provider
+graphify provider remove nvidia
+```
+
+Built-in backend names cannot be shadowed, and a registry entry is ignored unless it supplies a non-empty
+`base_url`, `default_model`, and `env_key`. Auto-detection consults custom providers **after** all built-ins, in
+registry order, selecting the first whose `--env-key` variable is set. Missing `pricing` defaults to zero so cost
+estimation never fails; an optional `max_completion_tokens` caps extraction output (default 8192).
 
 ### Determinism note
 
