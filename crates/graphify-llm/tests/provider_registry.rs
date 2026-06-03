@@ -205,6 +205,13 @@ fn provider_base_url_ok_scheme_and_warnings() {
     assert!(!provider_base_url_ok("gopher://x/", "bad2", true));
     // Plaintext http to a non-loopback host loads (warns to stderr).
     assert!(provider_base_url_ok("http://example.com/v1", "plain", true));
+    // A `127.`-prefixed *hostname* (not a 127.0.0.0/8 IP) is non-loopback, so it
+    // still loads but is treated as plaintext egress rather than silenced.
+    assert!(provider_base_url_ok(
+        "http://127.evil.com/v1",
+        "tricky",
+        true
+    ));
 }
 
 #[test]

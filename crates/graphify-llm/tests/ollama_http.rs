@@ -56,6 +56,9 @@ fn ollama_blocks_link_local_and_metadata() {
         "http://169.254.1.5:11434/v1",
         "http://metadata.google.internal/v1",
         "http://0.0.0.0:11434/v1",
+        // Bracketed IPv6 link-local literal (fe80::/10) — brackets are stripped
+        // before the IP check, matching Python's `urlparse().hostname`.
+        "http://[fe80::1]/v1",
     ] {
         assert!(
             validate_ollama_base_url(url, true).is_err(),
@@ -71,6 +74,8 @@ fn ollama_loopback_and_lan_do_not_raise() {
     // outcome rather than capturing stderr.)
     assert!(validate_ollama_base_url("http://localhost:11434/v1", true).is_ok());
     assert!(validate_ollama_base_url("http://192.168.1.50:11434/v1", true).is_ok());
+    // Bracketed IPv6 loopback is allowed (brackets stripped → "::1").
+    assert!(validate_ollama_base_url("http://[::1]:11434/v1", true).is_ok());
 }
 
 #[test]
@@ -87,6 +92,12 @@ fn ollama_alias_resolving_to_link_local_blocked() {
     assert!(!ollama_host_is_link_local_or_metadata_with(
         "example.com",
         resolves_to_public
+    ));
+    // A host resolving to an IPv6 link-local (fe80::/10) is also caught.
+    let resolves_to_v6_ll = |_host: &str| vec![IpAddr::from([0xfe80, 0, 0, 0, 0, 0, 0, 1])];
+    assert!(ollama_host_is_link_local_or_metadata_with(
+        "v6-host",
+        resolves_to_v6_ll
     ));
 }
 

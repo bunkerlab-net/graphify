@@ -58,6 +58,7 @@ pub fn claude_install(project_dir: &Path) -> Result<String, HooksError> {
 
 /// User-scope Claude skill destination (`SKILL.md`), honouring
 /// `CLAUDE_CONFIG_DIR`. Mirrors the path used by `install_platform_skill`.
+#[must_use]
 fn claude_user_skill_dst() -> PathBuf {
     if let Ok(cfg_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         PathBuf::from(cfg_dir)

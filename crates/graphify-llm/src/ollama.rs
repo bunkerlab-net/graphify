@@ -195,6 +195,14 @@ const METADATA_HOSTS: &[&str] = &[
 /// Resolve `host` to its IP addresses via the system resolver (getaddrinfo
 /// equivalent). Returns an empty vec on failure, matching Python's
 /// fail-open-to-`False` behaviour on a resolution error.
+///
+/// This resolution happens at validation time; the HTTP client re-resolves at
+/// send time, so a hostname is theoretically subject to TOCTOU / DNS-rebinding
+/// (a name that resolves to a public IP here could map to `169.254.169.254` at
+/// request time). That residual risk is accepted under graphify's threat model:
+/// `OLLAMA_BASE_URL` is local user configuration, not attacker-supplied input,
+/// and the check (F3) targets accidental/static metadata targets, not an active
+/// network attacker who already controls the user's resolver.
 fn resolve_host_ips(host: &str) -> Vec<std::net::IpAddr> {
     use std::net::ToSocketAddrs;
     // `ToSocketAddrs` requires a port; 0 is fine, we only read the resolved IP.
@@ -269,12 +277,27 @@ pub fn validate_ollama_base_url(url: &str, warn: bool) -> Result<(), LlmError> {
         }
         return Ok(());
     }
-    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    // `url::host_str()` returns an IPv6 literal WITH brackets (`[fe80::1]`);
+    // strip them so the address parses as an IP for the checks below, matching
+    // Python's `urlparse().hostname` (which yields the bracketless form).
+    let raw_host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    let host = raw_host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&raw_host)
+        .to_string();
     if ollama_host_is_link_local_or_metadata(&host) {
         return Err(LlmError::OllamaUrlBlocked(host));
     }
-    let is_loopback =
-        host == "localhost" || host == "127.0.0.1" || host == "::1" || host.starts_with("127.");
+    // Parse the 127.0.0.0/8 case as an IP rather than a `starts_with("127.")`
+    // prefix so a hostname like `127.evil.com` is correctly treated as
+    // non-loopback (and warned about). Deliberate divergence from graphify-py's
+    // literal `startswith("127.")`.
+    let is_loopback = host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
     if warn && !is_loopback {
         let scheme_note = if parsed.scheme() == "http" {
             " (UNENCRYPTED)"

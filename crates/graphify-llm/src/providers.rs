@@ -90,8 +90,15 @@ pub fn provider_base_url_ok(base_url: &str, name: &str, warn: bool) -> bool {
         return false;
     }
     let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
-    let is_loopback =
-        host == "localhost" || host == "127.0.0.1" || host == "::1" || host.starts_with("127.");
+    // Parse the 127.0.0.0/8 case as an IP rather than a `starts_with("127.")`
+    // prefix, so a hostname like `127.evil.com` is correctly treated as
+    // non-loopback (and therefore warned about over plaintext http). This is a
+    // deliberate divergence from graphify-py's literal `startswith("127.")`.
+    let is_loopback = host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
     if warn && parsed.scheme() == "http" && !is_loopback {
         eprintln!(
             "[graphify] WARNING: provider {name:?} sends your corpus to {host:?} over plaintext \

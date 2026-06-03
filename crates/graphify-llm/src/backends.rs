@@ -206,10 +206,11 @@ pub fn detect_backend_with(
         && !url.is_empty()
     {
         // Fail closed: a link-local / cloud-metadata `OLLAMA_BASE_URL` is an SSRF
-        // target, so it must never auto-select the ollama backend. The actual
-        // send paths (`call_llm` / extraction) re-validate and surface the error;
-        // here we simply decline to select ollama and fall through. (F3)
-        if ollama::validate_ollama_base_url(&url, true).is_ok() {
+        // target, so it must never auto-select the ollama backend. This is an
+        // early gate (`warn = false`); the actual send paths (`call_llm` /
+        // extraction) re-validate with `warn = true` and surface the single
+        // user-facing warning, so a non-loopback LAN host isn't warned twice. (F3)
+        if ollama::validate_ollama_base_url(&url, false).is_ok() {
             return Some("ollama".to_string());
         }
     }

@@ -61,6 +61,11 @@ pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
 /// `_kilo_uninstall`.
 pub(crate) fn cmd_kilo(cmd: &PlatformCmd) -> Result<()> {
     let cwd = std::env::current_dir()?;
+    // The shared `PlatformCmd::project` flag is intentionally ignored for Kilo:
+    // graphify-py's `kilo` command (`_kilo_install` / `_kilo_uninstall`) has no
+    // project-scope variant — the skill + command are always global and the
+    // `.kilo` plugin is always written under the current working directory.
+    // (CodeRabbit suggested branching on `project`; declined for parity.)
     let msg = match cmd {
         PlatformCmd::Install { .. } => kilo_install(&cwd)?,
         PlatformCmd::Uninstall { .. } => kilo_uninstall(&cwd)?,

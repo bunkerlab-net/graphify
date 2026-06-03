@@ -174,6 +174,11 @@ void checkDependencies(BuildContext context) {
 
 #[test]
 fn advanced_dart_features() {
+    // The `# ...` section markers are INTENTIONAL and copied byte-for-byte from
+    // graphify-py's test_dart.py fixture: `#` is not a Dart comment, so these
+    // lines survive comment-stripping and exercise that stray non-`//` lines do
+    // not break extraction. Do not "fix" them to `//` (CodeRabbit suggested it;
+    // declined — it would change what this fixture tests).
     let code = "
 import 'package:riverpod/riverpod.dart';
 

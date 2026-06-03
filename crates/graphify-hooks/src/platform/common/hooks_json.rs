@@ -40,6 +40,7 @@ pub(in crate::platform) fn settings_hook() -> Value {
 /// goes through. Reading the graph's own report under `graphify-out/` is
 /// suppressed so it never starts a feedback loop. The command is byte-identical
 /// to the Python reference so the rendered settings file matches exactly.
+#[must_use]
 pub(in crate::platform) fn read_settings_hook() -> Value {
     serde_json::json!({
         "matcher": "Read|Glob",

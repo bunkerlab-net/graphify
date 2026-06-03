@@ -52,7 +52,12 @@ static TRAILING_COMMA_RE: LazyLock<Regex> =
 /// `_strip_json_comments`.
 #[must_use]
 fn strip_json_comments(raw: &str) -> String {
-    let mut result = String::with_capacity(raw.len());
+    // Work on a byte buffer, not chars: only ASCII delimiters (`/`, `*`, `"`,
+    // `\`, `\n`) are ever inspected or dropped, and every other byte — including
+    // every continuation byte of a multibyte UTF-8 sequence — is pushed verbatim.
+    // Pushing `ch as char` would map a 0x80..=0xFF byte to a U+0080..=U+00FF code
+    // point and corrupt non-ASCII content, so we decode the buffer once at the end.
+    let mut result: Vec<u8> = Vec::with_capacity(raw.len());
     let bytes = raw.as_bytes();
     let mut in_string = false;
     let mut escaped = false;
@@ -67,7 +72,7 @@ fn strip_json_comments(raw: &str) -> String {
         if line_comment {
             if ch == b'\n' {
                 line_comment = false;
-                result.push('\n');
+                result.push(b'\n');
             }
             i += 1;
             continue;
@@ -82,7 +87,7 @@ fn strip_json_comments(raw: &str) -> String {
             continue;
         }
         if in_string {
-            result.push(ch as char);
+            result.push(ch);
             if escaped {
                 escaped = false;
             } else if ch == b'\\' {
@@ -103,13 +108,16 @@ fn strip_json_comments(raw: &str) -> String {
             i += 2;
             continue;
         }
-        result.push(ch as char);
+        result.push(ch);
         if ch == b'"' {
             in_string = true;
         }
         i += 1;
     }
-    TRAILING_COMMA_RE.replace_all(&result, "$1").into_owned()
+    // Only ASCII bytes were dropped and multibyte sequences are preserved intact,
+    // so the buffer is always valid UTF-8 and the lossy decode never substitutes.
+    let cleaned = String::from_utf8_lossy(&result);
+    TRAILING_COMMA_RE.replace_all(&cleaned, "$1").into_owned()
 }
 
 /// Load a Kilo config file as a JSON object, stripping JSONC comments for a

@@ -14,6 +14,32 @@ use serde_json::Value;
 use serial_test::serial;
 use url::Url;
 
+/// RAII guard that points `HOME` at a temp dir for the test's duration and
+/// restores it on drop (even on panic), so the global Kilo skill/command go into
+/// the temp dir. Used only by `#[serial(home_env)]` tests.
+struct HomeGuard {
+    prev: Option<std::ffi::OsString>,
+}
+
+impl HomeGuard {
+    fn set(home: &Path) -> Self {
+        let prev = std::env::var_os("HOME");
+        // SAFETY: `#[serial(home_env)]` serialises access to the process env.
+        unsafe { std::env::set_var("HOME", home) };
+        Self { prev }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        // SAFETY: see `set` — serialised by `#[serial(home_env)]`.
+        match &self.prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+}
+
 /// Compute the `file://` URI the installer registers for the plugin: resolve
 /// the (existing) parent dir, join the filename, then `from_file_path`.
 fn plugin_uri(project_dir: &Path) -> String {
@@ -152,16 +178,8 @@ fn kilo_install_writes_global_and_project_artifacts() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&home).expect("mkdir home");
     std::fs::create_dir_all(&project).expect("mkdir project");
-    // SAFETY: test-only HOME override; `#[serial(home_env)]` serialises access.
-    unsafe {
-        std::env::set_var("HOME", &home);
-    }
-    let result = kilo_install(&project);
-    // SAFETY: test-only cleanup.
-    unsafe {
-        std::env::remove_var("HOME");
-    }
-    result.expect("kilo install");
+    let _home = HomeGuard::set(&home);
+    kilo_install(&project).expect("kilo install");
     assert!(home.join(".config/kilo/skills/graphify/SKILL.md").exists());
     assert!(home.join(".config/kilo/command/graphify.md").exists());
     assert!(project.join("AGENTS.md").exists());
@@ -176,19 +194,9 @@ fn kilo_uninstall_removes_plugin_registration_and_command() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&home).expect("mkdir home");
     std::fs::create_dir_all(&project).expect("mkdir project");
-    // SAFETY: test-only HOME override.
-    unsafe {
-        std::env::set_var("HOME", &home);
-    }
-    let r = (|| {
-        kilo_install(&project)?;
-        kilo_uninstall(&project)
-    })();
-    // SAFETY: test-only cleanup.
-    unsafe {
-        std::env::remove_var("HOME");
-    }
-    r.expect("kilo install+uninstall");
+    let _home = HomeGuard::set(&home);
+    kilo_install(&project).expect("kilo install");
+    kilo_uninstall(&project).expect("kilo uninstall");
     assert!(!home.join(".config/kilo/command/graphify.md").exists());
     assert!(!home.join(".config/kilo/skills/graphify/SKILL.md").exists());
     assert!(!project.join(".kilo/plugins/graphify.js").exists());

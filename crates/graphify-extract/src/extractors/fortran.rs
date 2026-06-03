@@ -40,7 +40,12 @@ pub fn resolve_cpp_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+    if let Ok(cwd) = std::env::current_dir() {
+        return cwd.join(path);
+    }
+    // Last-resort fallback (cwd unavailable): prefix `./` so an attacker-named
+    // relative path like `-I/etc/x.F90` still can't be parsed as a cpp option.
+    Path::new(".").join(path)
 }
 
 /// Run the C preprocessor on a Fortran file to expand macros and `#include` directives.

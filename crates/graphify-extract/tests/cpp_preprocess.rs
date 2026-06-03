@@ -20,6 +20,10 @@ fn cpp_preprocess_passes_absolute_path() {
 
     let resolved = resolve_cpp_path(&f);
     let s = resolved.to_string_lossy();
+    // A POSIX absolute path begins with `/`; this is the property `cpp` relies on
+    // to never see the arg as an option. Windows absolute paths look like `C:\…`,
+    // so the leading-`/` check is Unix-only.
+    #[cfg(unix)]
     assert!(s.starts_with('/'), "path arg must be absolute, got {s:?}");
     assert!(
         !s.starts_with('-'),
