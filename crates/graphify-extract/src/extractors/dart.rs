@@ -740,13 +740,20 @@ impl DartExtractor {
                 let var_nid = make_id(&[&stem, single]);
                 self.add_node(&var_nid, single, "code", NodeSrc::File);
                 self.add_edge(&file_nid, &var_nid, "defines", None);
-                if let Some(vt) = var_type
-                    && !VARTYPE_BLACKLIST.contains(&vt)
-                {
+                if let Some(vt) = var_type {
+                    // Test the *cleaned* type against the blacklist. graphify-py
+                    // checks the raw `var_type`, so a generic primitive like
+                    // `Map<String, int>` (whose raw form isn't literally in the
+                    // set) slips through and emits a spurious `map` reference —
+                    // a blacklist-bypass bug. We strip generics/namespace first
+                    // so `Map<…>`/`List<…>` are correctly skipped (intentional
+                    // divergence; matches `process_typedefs`).
                     let clean_type = last_segment(strip_generic(vt));
-                    let type_nid = make_id1(clean_type);
-                    self.add_node(&type_nid, clean_type, "code", NodeSrc::Global);
-                    self.add_edge(&file_nid, &type_nid, "references", Some("variable_type"));
+                    if !VARTYPE_BLACKLIST.contains(&clean_type) {
+                        let type_nid = make_id1(clean_type);
+                        self.add_node(&type_nid, clean_type, "code", NodeSrc::Global);
+                        self.add_edge(&file_nid, &type_nid, "references", Some("variable_type"));
+                    }
                 }
             } else if let Some(destructured) = caps.get(3).map(|x| x.as_str()) {
                 for raw in destructured.split(',') {

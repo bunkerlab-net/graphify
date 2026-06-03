@@ -284,10 +284,9 @@ pub fn validate_ollama_base_url(url: &str, warn: bool) -> Result<(), LlmError> {
     let host = raw_host
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(&raw_host)
-        .to_string();
-    if ollama_host_is_link_local_or_metadata(&host) {
-        return Err(LlmError::OllamaUrlBlocked(host));
+        .unwrap_or(&raw_host);
+    if ollama_host_is_link_local_or_metadata(host) {
+        return Err(LlmError::OllamaUrlBlocked(host.to_string()));
     }
     // Parse the host as an IP and use `IpAddr::is_loopback` (covers 127.0.0.0/8
     // and `::1`) rather than a `starts_with("127.")` prefix, so a hostname like

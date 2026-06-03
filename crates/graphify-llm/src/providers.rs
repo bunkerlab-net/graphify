@@ -165,6 +165,10 @@ pub fn load_custom_providers() -> IndexMap<String, CustomProvider> {
 pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<String, CustomProvider> {
     let mut providers: IndexMap<String, CustomProvider> = IndexMap::new();
     let allow_local = local_providers_allowed();
+    // Plain path comparison (matches graphify-py and avoids extra filesystem
+    // I/O): the two paths are the fixed `.graphify/providers.json` and
+    // `~/.graphify/providers.json`, which only coincide when `$HOME` is unset,
+    // and that degenerate case is exactly what this byte comparison catches.
     let local_distinct = local != global;
 
     if local_distinct && !allow_local && local.is_file() {

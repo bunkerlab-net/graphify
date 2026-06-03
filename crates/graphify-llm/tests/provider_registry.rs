@@ -212,6 +212,14 @@ fn provider_base_url_ok_scheme_and_warnings() {
         "tricky",
         true
     ));
+    // Bracketed IPv6 loopback is silenced; IPv6 link-local loads but warns —
+    // both exercise the bracket-stripping + `IpAddr::is_loopback` path.
+    assert!(provider_base_url_ok(
+        "http://[::1]:8080/v1",
+        "v6local",
+        true
+    ));
+    assert!(provider_base_url_ok("http://[fe80::1]/v1", "v6ll", true));
 }
 
 #[test]

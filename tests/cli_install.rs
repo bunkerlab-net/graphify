@@ -16,8 +16,9 @@ fn uninstall_runs(platform: &str) {
     let dir = tempfile::tempdir().unwrap();
     cli()
         .current_dir(dir.path())
-        // Isolate HOME so user-scope skill removal (claude/gemini) stays inside
-        // the temp dir and never touches the developer's real config.
+        // Isolate HOME so any user-scope artifact removal (skills, commands,
+        // config for Claude/Gemini/Kilo/etc.) stays inside the temp dir and
+        // never touches the developer's real directories.
         .env("HOME", dir.path())
         .env_remove("CLAUDE_CONFIG_DIR")
         .arg(platform)
