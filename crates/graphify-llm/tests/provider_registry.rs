@@ -195,6 +195,8 @@ fn non_http_provider_base_url_rejected() {
 #[test]
 fn provider_base_url_ok_scheme_and_warnings() {
     // Rejects bad schemes; allows http(s); plaintext-http egress warns but loads.
+    // The third argument is `warn = true`, so this intentionally exercises the
+    // stderr-warning code paths.
     assert!(provider_base_url_ok("https://api.example/v1", "ok", true));
     assert!(provider_base_url_ok(
         "http://localhost:11434/v1",
