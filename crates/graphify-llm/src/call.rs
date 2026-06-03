@@ -41,15 +41,28 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
     let key = get_backend_api_key(backend);
 
     // Resolve once and reuse below — `OLLAMA_BASE_URL` may be needed both
-    // for the missing-key validation hook and for the actual `ollama`
-    // dispatch arm.
+    // for the hard-block validation and for the actual `ollama` dispatch arm.
     let ollama_base_url = std::env::var("OLLAMA_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
 
-    // Ollama: accept missing key, use sentinel.
-    let key = if key.is_empty() && backend == "ollama" {
-        ollama::validate_ollama_base_url(&ollama_base_url);
-        "ollama".to_string()
+    // Ollama: hard-block link-local / cloud-metadata targets (F3) for *every*
+    // ollama call, not only the no-key path. A non-empty OLLAMA_API_KEY must not
+    // let a metadata `OLLAMA_BASE_URL` slip past the validator — and because
+    // reaching a real local ollama needs GRAPHIFY_TEST_ALLOW_PRIVATE_IPS (which
+    // also disarms the downstream SSRF guard), this F3 check is the only metadata
+    // defence on the ollama path. graphify-py gates this behind `not key`
+    // (llm.py:1170); fixing that gap is a deliberate divergence
+    // (see [[feedback_python_bugs_are_not_requirements]]). The hard-block is
+    // unconditional; the LAN warning stays on the no-key path to avoid a
+    // spurious warning when the user has explicitly configured a key.
+    let key = if backend == "ollama" {
+        ollama::validate_ollama_base_url(&ollama_base_url, key.is_empty())?;
+        // Accept a missing key, using the "ollama" sentinel (Ollama ignores it).
+        if key.is_empty() {
+            "ollama".to_string()
+        } else {
+            key
+        }
     } else {
         key
     };

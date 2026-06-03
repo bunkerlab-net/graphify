@@ -448,7 +448,7 @@ Each writes a section to the platform's instructions file + (where applicable) a
 toward `graphify query` instead of grepping raw files.
 
 ```bash
-graphify claude install        # CLAUDE.md + PreToolUse hook (Claude Code)
+graphify claude install        # CLAUDE.md + two PreToolUse hooks (Bash search + Read/Glob)
 graphify gemini install        # GEMINI.md + BeforeTool hook (Gemini CLI)
 graphify cursor install        # .cursor/rules/graphify.mdc
 graphify vscode install        # .github/copilot-instructions.md + skill copy
@@ -465,14 +465,21 @@ graphify trae install          # AGENTS.md section
 graphify trae-cn install       # AGENTS.md section (Trae CN)
 graphify hermes install        # AGENTS.md section (Hermes)
 graphify kiro install          # .kiro/steering/graphify.md
+graphify kilo install          # native skill + /graphify command (~/.config/kilo) +
+                               #   AGENTS.md + .kilo/plugins/graphify.js (tool.execute.before)
 graphify antigravity install   # ~/.gemini/config/skills/graphify/SKILL.md + .agents/rules + .agents/workflows
-                               #   --project:  ./.agents/skills/graphify/SKILL.md (workspace-local skill)
+                               #   --project:  ./.agents/skills/... + .agents/rules + .agents/workflows
 graphify pi install            # global Pi config
 graphify devin install         # ~/.config/devin/skills/graphify/SKILL.md (Devin CLI)
 graphify devin install --project  # .devin/skills/... + .windsurf/rules/graphify.md
 ```
 
-Each has a matching `... uninstall`.
+Each has a matching `... uninstall`. `graphify claude uninstall` (and the
+aggregate `graphify uninstall`) now also remove the installed user-scope skill
+tree (`~/.claude/skills/graphify/`), not just the `CLAUDE.md` section — matching
+`gemini uninstall`. `graphify kilo uninstall` removes the global skill/command,
+the `.kilo` plugin, and deregisters it from `.kilo/kilo.json` (an existing
+`.kilo/kilo.jsonc` is read but never rewritten, so user comments are preserved).
 
 #### Project-scoped installs (`--project`)
 
@@ -559,17 +566,19 @@ completes the feature.)
 
 ### Environment variables
 
-| Variable                    | Effect                                                                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GRAPHIFY_OUT`              | Override the output directory name (default `graphify-out`).                                                                                        |
-| `GRAPHIFY_FORCE`            | Same effect as `--force` on `update`.                                                                                                               |
-| `GRAPHIFY_VIZ_NODE_LIMIT`   | Cap nodes before HTML export is skipped (default 5000).                                                                                             |
-| `GRAPHIFY_GOOGLE_WORKSPACE` | Truthy value enables `.gdoc/.gsheet/.gslides` export by default.                                                                                    |
-| `GRAPHIFY_BEDROCK_MODEL`    | Override the default model for the Bedrock backend.                                                                                                 |
-| `GRAPHIFY_BEDROCK_BASE_URL` | Override the Bedrock Runtime endpoint URL (mainly for tests).                                                                                       |
-| `GRAPHIFY_CLAUDE_CLI_MODEL` | Model passed to `claude -p --model` for the `claude-cli` backend (e.g. `haiku`, `sonnet`, or a full model id). Unset uses claude-cli's own default. |
-| `GRAPHIFY_CLUSTER_PROGRESS` | Truthy value prints per-level cluster progress to stderr.                                                                                           |
-| `GRAPHIFY_CLUSTER_BACKEND`  | `leiden` (default) or `louvain` to force the fallback.                                                                                              |
+| Variable                         | Effect                                                                                                                                              |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GRAPHIFY_OUT`                   | Override the output directory name (default `graphify-out`).                                                                                        |
+| `GRAPHIFY_FORCE`                 | Same effect as `--force` on `update`.                                                                                                               |
+| `GRAPHIFY_VIZ_NODE_LIMIT`        | Cap nodes before HTML export is skipped (default 5000).                                                                                             |
+| `GRAPHIFY_GOOGLE_WORKSPACE`      | Truthy value enables `.gdoc/.gsheet/.gslides` export by default.                                                                                    |
+| `GRAPHIFY_BEDROCK_MODEL`         | Override the default model for the Bedrock backend.                                                                                                 |
+| `GRAPHIFY_BEDROCK_BASE_URL`      | Override the Bedrock Runtime endpoint URL (mainly for tests).                                                                                       |
+| `GRAPHIFY_CLAUDE_CLI_MODEL`      | Model passed to `claude -p --model` for the `claude-cli` backend (e.g. `haiku`, `sonnet`, or a full model id). Unset uses claude-cli's own default. |
+| `GRAPHIFY_CLUSTER_PROGRESS`      | Truthy value prints per-level cluster progress to stderr.                                                                                           |
+| `GRAPHIFY_CLUSTER_BACKEND`       | `leiden` (default) or `louvain` to force the fallback.                                                                                              |
+| `GRAPHIFY_ALLOW_LOCAL_PROVIDERS` | Opt in to loading a project-local `.graphify/providers.json` (ignored by default; see Custom providers).                                            |
+| `OLLAMA_BASE_URL`                | Ollama endpoint (default `http://localhost:11434/v1`); a link-local/cloud-metadata host is refused, a general non-loopback host warns.              |
 
 ### LLM backends
 
@@ -598,9 +607,11 @@ Force a backend with `--backend`; override its default model with `--model`.
 
 Any OpenAI-compatible endpoint can be registered as a custom backend and used like a built-in one (e.g.
 `graphify extract . --backend nvidia`, `graphify label . --backend nvidia`). At extraction/labeling time custom
-providers are loaded from **both** `~/.graphify/providers.json` (user-global) and `.graphify/providers.json`
-(project-local, when present); if the same name appears in both, the global entry wins. The `provider` command
-manages the user-global registry:
+providers are loaded from `~/.graphify/providers.json` (user-global) only. A **project-local**
+`.graphify/providers.json` travels with a cloned/shared repo and decides where your corpus and API key are sent,
+so it is **ignored by default** (with a stderr warning) and loaded only when `GRAPHIFY_ALLOW_LOCAL_PROVIDERS=1`
+(or `true`/`yes`) is set — in which case it takes precedence over the global registry on a name clash. The
+`provider` command manages the user-global registry:
 
 ```bash
 graphify provider add nvidia \
@@ -614,7 +625,9 @@ graphify provider remove nvidia
 ```
 
 Built-in backend names cannot be shadowed, and a registry entry is ignored unless it supplies a non-empty
-`base_url`, `default_model`, and `env_key`. Auto-detection consults custom providers **after** all built-ins, in
+`base_url`, `default_model`, and `env_key`. The `base_url` must use an `http`/`https` scheme (a custom provider
+receives the full corpus plus the API key, so a non-`http(s)` `base_url` is rejected); plaintext `http` to a
+non-loopback host loads but warns. Auto-detection consults custom providers **after** all built-ins, in
 registry order, selecting the first whose `--env-key` variable is set. Missing `pricing` defaults to zero so cost
 estimation never fails; an optional `max_completion_tokens` caps extraction output (default 8192).
 
@@ -622,9 +635,10 @@ estimation never fails; an optional `max_completion_tokens` caps extraction outp
 
 `graph.json` is written with `serde_json` configured for `preserve_order`, so node and edge insertion order is preserved
 across runs. Cluster IDs come from a deterministic community-detection pass at resolution 1.0 — Leiden by default via
-`leiden-rs` with `random_seed=42`, or Louvain when `GRAPHIFY_CLUSTER_BACKEND=louvain` is set. Two extractions of the
-same input on the same machine should produce byte-identical JSON; cluster IDs can drift between machines with
-different rayon thread counts on graphs with degenerate communities.
+`leiden-rs` with `random_seed=42`, or Louvain when `GRAPHIFY_CLUSTER_BACKEND=louvain` is set. Communities are ordered
+by size descending with a lexicographic tiebreak on their sorted member list, so an identical grouping always receives
+identical integer community IDs run-to-run (no spurious "community churn" in a per-node cid diff). Two extractions of the
+same input on the same machine should produce byte-identical JSON.
 
 ---
 

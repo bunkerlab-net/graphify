@@ -11,6 +11,7 @@ use super::codex::{install_codex_hook, uninstall_codex_hook};
 use super::common::{
     AGENTS_MD_SECTION, CLAUDE_MD_MARKER, remove_graphify_section, replace_or_append_section,
 };
+use super::kilo::{install_kilo_plugin, uninstall_kilo_plugin};
 use super::opencode::{install_opencode_plugin, uninstall_opencode_plugin};
 use crate::HooksError;
 
@@ -51,6 +52,8 @@ pub fn agents_install(project_dir: &Path, platform: &str) -> Result<String, Hook
         msgs.push(install_codex_hook(project_dir)?);
     } else if platform == "opencode" {
         msgs.push(install_opencode_plugin(project_dir)?);
+    } else if platform == "kilo" {
+        msgs.push(install_kilo_plugin(project_dir)?);
     }
 
     let platform_cap = {
@@ -67,7 +70,7 @@ pub fn agents_install(project_dir: &Path, platform: &str) -> Result<String, Hook
     ));
     msgs.push("codebase questions and rebuild it after code changes.".to_string());
 
-    if !matches!(platform, "codex" | "opencode") {
+    if !matches!(platform, "codex" | "opencode" | "kilo") {
         msgs.push(String::new());
         msgs.push(
             "Note: unlike Claude Code, there is no PreToolUse hook equivalent for".to_string(),
@@ -91,14 +94,20 @@ pub fn agents_uninstall(project_dir: &Path, platform: &str) -> Result<String, Ho
     let mut msgs: Vec<String> = Vec::new();
     let target = project_dir.join("AGENTS.md");
 
+    // The Codex hook and the OpenCode / Kilo plugin live outside AGENTS.md, so
+    // they must be removed even when AGENTS.md is absent or lacks the graphify
+    // section — otherwise e.g. `kilo uninstall` (AGENTS.md gone but plugin
+    // present) would orphan the plugin / hook.
     if !target.exists() {
         msgs.push("No AGENTS.md found in current directory - nothing to do".to_string());
+        push_platform_extra_uninstall(&mut msgs, project_dir, platform)?;
         return Ok(msgs.join("\n"));
     }
 
     let content = fs::read_to_string(&target)?;
     if !content.contains(CLAUDE_MD_MARKER) {
         msgs.push("graphify section not found in AGENTS.md - nothing to do".to_string());
+        push_platform_extra_uninstall(&mut msgs, project_dir, platform)?;
         return Ok(msgs.join("\n"));
     }
 
@@ -117,11 +126,26 @@ pub fn agents_uninstall(project_dir: &Path, platform: &str) -> Result<String, Ho
         ));
     }
 
-    if platform == "opencode" {
-        msgs.push(uninstall_opencode_plugin(project_dir)?);
-    } else if platform == "codex" {
-        msgs.push(uninstall_codex_hook(project_dir)?);
-    }
+    push_platform_extra_uninstall(&mut msgs, project_dir, platform)?;
 
     Ok(msgs.join("\n"))
+}
+
+/// Remove the platform-specific artefact that lives outside AGENTS.md — the
+/// Codex `.codex/hooks.json` hook or the `OpenCode` / Kilo JS plugin — and
+/// append its status message. A no-op for platforms with no such artefact. Called in
+/// every `agents_uninstall` branch so the artefact is never orphaned by a
+/// missing or markerless AGENTS.md.
+fn push_platform_extra_uninstall(
+    msgs: &mut Vec<String>,
+    project_dir: &Path,
+    platform: &str,
+) -> Result<(), HooksError> {
+    match platform {
+        "codex" => msgs.push(uninstall_codex_hook(project_dir)?),
+        "opencode" => msgs.push(uninstall_opencode_plugin(project_dir)?),
+        "kilo" => msgs.push(uninstall_kilo_plugin(project_dir)?),
+        _ => {}
+    }
+    Ok(())
 }

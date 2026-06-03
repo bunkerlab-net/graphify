@@ -4,6 +4,10 @@
 //! exercise the dispatch and platform plumbing without touching the user's
 //! actual config directories.
 
+// File-top `expect_used`/`unwrap_used` suppression is the sanctioned project
+// convention for integration-test files (AGENTS.md "Strict lints"): a panic in
+// a CLI-test fixture (e.g. `tempdir()` failing) is itself a test failure, so the
+// blanket allow is kept rather than threading `Result` through every `#[test]`.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use assert_cmd::Command;
@@ -16,6 +20,11 @@ fn uninstall_runs(platform: &str) {
     let dir = tempfile::tempdir().unwrap();
     cli()
         .current_dir(dir.path())
+        // Isolate HOME so any user-scope artifact removal (skills, commands,
+        // config for Claude/Gemini/Kilo/etc.) stays inside the temp dir and
+        // never touches the developer's real directories.
+        .env("HOME", dir.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
         .arg(platform)
         .arg("uninstall")
         .assert()
@@ -45,6 +54,34 @@ fn vscode_uninstall_runs() {
 #[test]
 fn kiro_uninstall_runs() {
     uninstall_runs("kiro");
+}
+
+#[test]
+fn kilo_uninstall_runs() {
+    uninstall_runs("kilo");
+}
+
+#[test]
+fn kilo_install_runs_and_writes_artifacts() {
+    // `graphify kilo install` writes the global skill/command (under HOME) and
+    // the always-on project wiring (AGENTS.md + .kilo plugin) under cwd.
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("kilo")
+        .arg("install")
+        .assert()
+        .success();
+    assert!(
+        home.path()
+            .join(".config/kilo/command/graphify.md")
+            .exists()
+    );
+    assert!(project.path().join("AGENTS.md").exists());
+    assert!(project.path().join(".kilo/plugins/graphify.js").exists());
 }
 
 #[test]
@@ -92,6 +129,8 @@ fn uninstall_command_runs_globally() {
     let dir = tempfile::tempdir().unwrap();
     cli()
         .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
         .arg("uninstall")
         .assert()
         .success();
@@ -104,6 +143,8 @@ fn uninstall_purge_removes_graphify_out() {
     std::fs::write(dir.path().join("graphify-out").join("graph.json"), "{}").unwrap();
     cli()
         .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
         .arg("uninstall")
         .arg("--purge")
         .assert()

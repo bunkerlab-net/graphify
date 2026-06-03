@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::generic::walk::{first_child_kind, named_children};
 use crate::ids::{file_stem, make_id, make_id1};
@@ -24,15 +24,43 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
+/// Resolve *path* to an absolute path for safe use as a `cpp` argument (F5).
+///
+/// A corpus file is attacker-named and `cpp` does not accept a `--`
+/// end-of-options terminator, so a file named like `-I/etc/passwd.F90` would
+/// otherwise be parsed by `cpp` as an option. An absolute path always begins
+/// with `/`, so it can never look like an option. Mirrors Python's
+/// `path.resolve()`: resolve symlinks where possible, else join the current
+/// directory. Returns an absolute path in all normal cases; only if the current
+/// working directory cannot be read does it fall back to a `./`-prefixed
+/// relative path (still safe — it cannot be parsed as a `cpp` option).
+#[must_use]
+pub fn resolve_cpp_path(path: &Path) -> PathBuf {
+    if let Ok(canon) = path.canonicalize() {
+        return canon;
+    }
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        return cwd.join(path);
+    }
+    // Last-resort fallback (cwd unavailable): prefix `./` so an attacker-named
+    // relative path like `-I/etc/x.F90` still can't be parsed as a cpp option.
+    Path::new(".").join(path)
+}
+
 /// Run the C preprocessor on a Fortran file to expand macros and `#include` directives.
 ///
 /// Used for free-form Fortran files with `.F` / `.F90` / etc. extensions that use the
 /// C preprocessor. Falls back to reading the raw bytes if `cpp` is unavailable or fails.
 fn cpp_preprocess(path: &Path) -> Vec<u8> {
-    // Security: pass -nostdinc -I /dev/null to prevent file exfiltration
+    // Security: pass -nostdinc -I /dev/null to prevent file exfiltration, and an
+    // absolute path (resolve_cpp_path) so an attacker-named file can't be parsed
+    // as a cpp option (F5).
     let result = std::process::Command::new("cpp")
         .args(["-w", "-P", "-nostdinc", "-I", "/dev/null"])
-        .arg(path)
+        .arg(resolve_cpp_path(path))
         .output();
     match result {
         Ok(out) if out.status.success() && !out.stdout.is_empty() => out.stdout,

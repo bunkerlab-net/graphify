@@ -183,23 +183,120 @@ pub fn call_ollama_plain(
     })
 }
 
-/// Validate the Ollama base URL (warn, do not raise, matching Python behaviour).
-pub fn validate_ollama_base_url(url: &str) {
+/// Hosts that are always a metadata / SSRF target regardless of DNS resolution.
+const METADATA_HOSTS: &[&str] = &[
+    "metadata.google.internal",
+    "metadata.google.com",
+    "0.0.0.0",
+    "::",
+    "[::]",
+];
+
+/// Resolve `host` to its IP addresses via the system resolver (getaddrinfo
+/// equivalent). Returns an empty vec on failure, matching Python's
+/// fail-open-to-`False` behaviour on a resolution error.
+///
+/// This resolution happens at validation time; the HTTP client re-resolves at
+/// send time, so a hostname is theoretically subject to TOCTOU / DNS-rebinding
+/// (a name that resolves to a public IP here could map to `169.254.169.254` at
+/// request time). That residual risk is accepted under graphify's threat model:
+/// `OLLAMA_BASE_URL` is local user configuration, not attacker-supplied input,
+/// and the check (F3) targets accidental/static metadata targets, not an active
+/// network attacker who already controls the user's resolver.
+fn resolve_host_ips(host: &str) -> Vec<std::net::IpAddr> {
+    use std::net::ToSocketAddrs;
+    // `ToSocketAddrs` requires a port; 0 is fine, we only read the resolved IP.
+    (host, 0u16)
+        .to_socket_addrs()
+        .map(|iter| iter.map(|sa| sa.ip()).collect())
+        .unwrap_or_default()
+}
+
+/// `true` if `host` is, or resolves to, a link-local / cloud-metadata address.
+///
+/// Uses the real system resolver. See [`ollama_host_is_link_local_or_metadata_with`].
+#[must_use]
+pub fn ollama_host_is_link_local_or_metadata(host: &str) -> bool {
+    ollama_host_is_link_local_or_metadata_with(host, resolve_host_ips)
+}
+
+/// `true` if `host` is, or resolves to, a link-local / cloud-metadata address,
+/// using the supplied `resolve` function for DNS (injectable for testing).
+///
+/// A name pointing at `169.254.169.254` is caught too, not just literal IPs.
+/// General private/LAN addresses are deliberately NOT treated as metadata:
+/// people do run Ollama on trusted LAN boxes, so those only warn.
+#[must_use]
+pub fn ollama_host_is_link_local_or_metadata_with(
+    host: &str,
+    resolve: impl Fn(&str) -> Vec<std::net::IpAddr>,
+) -> bool {
+    use std::net::IpAddr;
+    if METADATA_HOSTS.contains(&host) {
+        return true;
+    }
+    if host.starts_with("169.254.") {
+        // link-local literal, includes the metadata IP 169.254.169.254
+        return true;
+    }
+    resolve(host).into_iter().any(|ip| match ip {
+        IpAddr::V4(v4) => v4.is_link_local(), // 169.254.0.0/16
+        IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80, // fe80::/10
+    })
+}
+
+/// Validate the Ollama base URL; warn on a risky-but-allowed target and
+/// hard-block link-local / cloud-metadata addresses (F3).
+///
+/// Sending an entire corpus to a non-loopback `http://` endpoint silently leaks
+/// proprietary code, but some users genuinely run Ollama on a LAN host they
+/// trust, so a general non-loopback target only warns. A link-local or cloud
+/// metadata address (169.254.x, `metadata.google.*`, or any host that resolves
+/// to one) is never a legitimate Ollama host and is a classic SSRF target, so we
+/// fail closed with [`LlmError::OllamaUrlBlocked`] there regardless of `warn`.
+/// Pass `warn = false` for an early gate that should hard-block but leave the
+/// user-facing warning to the later in-flow call.
+///
+/// # Errors
+///
+/// Returns [`LlmError::OllamaUrlBlocked`] when the host is, or resolves to, a
+/// link-local / cloud-metadata address.
+pub fn validate_ollama_base_url(url: &str, warn: bool) -> Result<(), LlmError> {
     let Ok(parsed) = url::Url::parse(url) else {
-        eprintln!("[graphify] WARNING: OLLAMA_BASE_URL={url:?} is not a parseable URL.");
-        return;
+        if warn {
+            eprintln!("[graphify] WARNING: OLLAMA_BASE_URL={url:?} is not a parseable URL.");
+        }
+        return Ok(());
     };
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        eprintln!(
-            "[graphify] WARNING: OLLAMA_BASE_URL has unexpected scheme {:?}; expected http or https.",
-            parsed.scheme()
-        );
-        return;
+        if warn {
+            eprintln!(
+                "[graphify] WARNING: OLLAMA_BASE_URL has unexpected scheme {:?}; expected http or https.",
+                parsed.scheme()
+            );
+        }
+        return Ok(());
     }
-    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
-    let is_loopback =
-        host == "localhost" || host == "127.0.0.1" || host == "::1" || host.starts_with("127.");
-    if !is_loopback {
+    // `url::host_str()` returns an IPv6 literal WITH brackets (`[fe80::1]`);
+    // strip them so the address parses as an IP for the checks below, matching
+    // Python's `urlparse().hostname` (which yields the bracketless form).
+    let raw_host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    let host = raw_host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&raw_host);
+    if ollama_host_is_link_local_or_metadata(host) {
+        return Err(LlmError::OllamaUrlBlocked(host.to_string()));
+    }
+    // Parse the host as an IP and use `IpAddr::is_loopback` (covers 127.0.0.0/8
+    // and `::1`) rather than a `starts_with("127.")` prefix, so a hostname like
+    // `127.evil.com` is correctly treated as non-loopback (and warned about).
+    // Deliberate divergence from graphify-py's literal `startswith("127.")`.
+    let is_loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if warn && !is_loopback {
         let scheme_note = if parsed.scheme() == "http" {
             " (UNENCRYPTED)"
         } else {
@@ -211,6 +308,7 @@ pub fn validate_ollama_base_url(url: &str) {
              Set OLLAMA_BASE_URL=http://localhost:11434/v1 to keep extraction local."
         );
     }
+    Ok(())
 }
 
 /// Default max tokens for ollama.

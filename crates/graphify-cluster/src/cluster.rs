@@ -128,13 +128,22 @@ pub fn cluster(
 
     let mut final_communities = apply_splits(raw.into_values().collect(), g, max_size);
 
-    final_communities.sort_unstable_by_key(|v| std::cmp::Reverse(v.len()));
+    // Sort each community's members first, then re-index by size descending with a
+    // lexicographic tiebreak on the sorted member list. The tiebreak makes this a
+    // TOTAL order, so an identical grouping always gets identical community IDs.
+    // Without it, the many equal-sized small communities are ordered by the
+    // partitioner's (not seed-stable) enumeration order, so their integer IDs
+    // permute run-to-run — which reads as massive "community churn" in a per-node
+    // cid diff even though the actual grouping is reproducible (#1090 follow-up).
+    for nodes in &mut final_communities {
+        nodes.sort_unstable();
+    }
+    final_communities.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
 
     final_communities
         .into_iter()
         .enumerate()
-        .map(|(i, mut nodes)| {
-            nodes.sort_unstable();
+        .map(|(i, nodes)| {
             #[allow(clippy::cast_possible_wrap)] // community index bounded by node count
             (i as i64, nodes)
         })

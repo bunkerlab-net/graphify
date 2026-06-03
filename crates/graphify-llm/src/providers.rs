@@ -56,6 +56,70 @@ fn max_completion_tokens_from(v: &Value) -> Option<u32> {
     u32::try_from(n).ok()
 }
 
+/// Environment opt-in that allows loading a project-local `providers.json` (F1).
+const ALLOW_LOCAL_ENV: &str = "GRAPHIFY_ALLOW_LOCAL_PROVIDERS";
+
+/// Structural safety check for a custom-provider `base_url` (F1).
+///
+/// A custom provider receives the full corpus plus the user's API key, so its
+/// `base_url` is an exfiltration channel. We deliberately do NOT run the ingest
+/// SSRF guard here: that blocks private/internal IPs, which would wrongly reject
+/// legitimate on-prem corporate LLM gateways. Instead we reject non-`http(s)`
+/// schemes outright and warn loudly when the corpus would leave over plaintext
+/// `http` to a non-loopback host. The primary control against trusting injected
+/// config is the [`ALLOW_LOCAL_ENV`] gate on project-local files.
+///
+/// Pass `warn = false` to run the structural check silently.
+#[must_use]
+pub fn provider_base_url_ok(base_url: &str, name: &str, warn: bool) -> bool {
+    let Ok(parsed) = url::Url::parse(base_url) else {
+        if warn {
+            eprintln!(
+                "[graphify] WARNING: provider {name:?} has an unparseable base_url; ignoring."
+            );
+        }
+        return false;
+    };
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        if warn {
+            eprintln!(
+                "[graphify] WARNING: provider {name:?} base_url scheme {:?} is not http/https; ignoring.",
+                parsed.scheme()
+            );
+        }
+        return false;
+    }
+    let raw_host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    // `url::host_str()` returns an IPv6 literal WITH brackets (`[::1]`); strip
+    // them so the address parses, matching Python's `urlparse().hostname`.
+    let host = raw_host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&raw_host);
+    // Parse the host as an IP and use `IpAddr::is_loopback` (covers 127.0.0.0/8
+    // and `::1`) rather than a `starts_with("127.")` prefix, so a hostname like
+    // `127.evil.com` is correctly treated as non-loopback (and warned about over
+    // plaintext http). Deliberate divergence from graphify-py's literal
+    // `startswith("127.")`.
+    let is_loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if warn && parsed.scheme() == "http" && !is_loopback {
+        eprintln!(
+            "[graphify] WARNING: provider {name:?} sends your corpus to {host:?} over plaintext \
+             http. Use https unless this is a trusted local endpoint."
+        );
+    }
+    true
+}
+
+/// `true` when the [`ALLOW_LOCAL_ENV`] opt-in is set to `1`/`true`/`yes`.
+fn local_providers_allowed() -> bool {
+    std::env::var(ALLOW_LOCAL_ENV)
+        .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 /// Path to the `providers.json` registry.
 ///
 /// `global == true` → `~/.graphify/providers.json`; otherwise the
@@ -86,23 +150,43 @@ pub fn load_custom_providers() -> IndexMap<String, CustomProvider> {
 
 /// Load custom providers from explicit `local`/`global` registry files.
 ///
-/// `local` (project `.graphify/providers.json`) is read first, then `global`
-/// (`~/.graphify/providers.json`); a later file overrides an earlier one for the
-/// same name, so **`global` wins**. This is deliberate and security-relevant, not
-/// just Python parity: a project-local registry can come from a cloned/untrusted
-/// repo, and letting it shadow a provider name the user defined globally would
-/// let the repo redirect that backend's `base_url` to an attacker-controlled
-/// endpoint and exfiltrate the API key resolved from the user's environment via
-/// `env_key`. Built-in names are separately un-shadowable. Malformed files are
-/// skipped silently (mirroring Python's broad `except`); identical `local`/
-/// `global` paths (e.g. when `$HOME` is unset) are read only once.
+/// A project-local `./.graphify/providers.json` travels with a cloned or shared
+/// repo and defines where the corpus + API key are sent, so loading it silently
+/// is a corpus/key exfiltration vector (F1). It is therefore **ignored by
+/// default** — only the user's own `global` (`~/.graphify/providers.json`) is
+/// trusted — and read solely when the [`ALLOW_LOCAL_ENV`] opt-in is set, in which
+/// case it takes precedence (read first; **first occurrence of a name wins**).
+/// A distinct project-local file that exists but is not opted in produces a
+/// stderr warning. Built-in names are un-shadowable, each provider's `base_url`
+/// must pass [`provider_base_url_ok`], malformed files are skipped silently, and
+/// identical `local`/`global` paths (e.g. when `$HOME` is unset) are read once
+/// without any local-gating warning.
 #[must_use]
 pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<String, CustomProvider> {
     let mut providers: IndexMap<String, CustomProvider> = IndexMap::new();
-    let mut paths: Vec<&Path> = vec![local];
-    if global != local {
-        paths.push(global);
+    let allow_local = local_providers_allowed();
+    // Plain path comparison (matches graphify-py and avoids extra filesystem
+    // I/O): the two paths are the fixed `.graphify/providers.json` and
+    // `~/.graphify/providers.json`, which only coincide when `$HOME` is unset,
+    // and that degenerate case is exactly what this byte comparison catches.
+    let local_distinct = local != global;
+
+    if local_distinct && !allow_local && local.is_file() {
+        eprintln!(
+            "[graphify] WARNING: ignoring project-local {} (custom providers control where your \
+             corpus and API key are sent). Set {ALLOW_LOCAL_ENV}=1 to load it.",
+            local.display()
+        );
     }
+
+    // Opted-in local is read first so it takes precedence on a name clash; the
+    // opt-in itself is the trust gate. Otherwise only the trusted global is read.
+    let mut paths: Vec<&Path> = Vec::new();
+    if local_distinct && allow_local {
+        paths.push(local);
+    }
+    paths.push(global);
+
     for path in paths {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
@@ -111,7 +195,8 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
             continue;
         };
         for (name, cfg) in map {
-            if is_builtin_backend(&name) {
+            // First occurrence of a name wins (built-ins are never shadowable).
+            if is_builtin_backend(&name) || providers.contains_key(&name) {
                 continue;
             }
             let Some(obj) = cfg.as_object() else {
@@ -130,6 +215,11 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
             let [Some(base_url), Some(default_model), Some(env_key)] = required else {
                 continue;
             };
+            // Reject a non-http(s) base_url (and warn on plaintext egress): the
+            // base_url decides where the corpus + API key are sent (F1).
+            if !provider_base_url_ok(base_url, &name, true) {
+                continue;
+            }
             let pricing = obj.get("pricing").and_then(Value::as_object).map_or(
                 Pricing {
                     input: 0.0,

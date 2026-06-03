@@ -18,6 +18,14 @@ pub(in crate::platform) const SKILL_MD: &str = include_str!("../../../skills/ski
 pub(in crate::platform) const SKILL_VSCODE_MD: &str =
     include_str!("../../../skills/skill-vscode.md");
 
+/// Kilo Code `/graphify` command file (`~/.config/kilo/command/graphify.md`).
+///
+/// Kilo supports a native slash-command that hands off to the graphify skill;
+/// this is the command definition, byte-identical to graphify-py's
+/// `command-kilo.md`.
+pub(in crate::platform) const COMMAND_KILO_MD: &str =
+    include_str!("../../../skills/command-kilo.md");
+
 // All other platform variants reuse the canonical skill. The Python
 // distribution shipped per-platform variants only to encode bespoke
 // subagent-dispatch syntax — the Rust binary runs the whole pipeline as a

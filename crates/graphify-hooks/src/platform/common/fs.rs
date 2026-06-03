@@ -209,3 +209,16 @@ pub(in crate::platform) fn dirs_home() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_or_else(|_| PathBuf::from("."), PathBuf::from)
 }
+
+/// The `CLAUDE_CONFIG_DIR` override as a `PathBuf`, or `None` when unset.
+///
+/// An *empty* value is treated as unset: `std::env::var` returns `Ok("")` for
+/// `CLAUDE_CONFIG_DIR=`, and joining an empty `PathBuf` would silently produce a
+/// stray *relative* `skills/graphify/SKILL.md` (or `CLAUDE.md`) that the install
+/// path writes but the uninstall path can never find. Falling back to the home
+/// directory in that case keeps install and uninstall pointed at the same file.
+pub(in crate::platform) fn claude_config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}

@@ -28,6 +28,7 @@ thiserror = { workspace = true }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+lopdf = "0.40"
 tempfile = { workspace = true }
 
 [lints]

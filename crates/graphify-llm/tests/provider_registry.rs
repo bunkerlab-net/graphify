@@ -5,7 +5,7 @@
 
 use graphify_llm::{
     CustomProvider, Pricing, call_llm, detect_backend_with, extract_files_direct,
-    load_custom_providers_from,
+    load_custom_providers_from, provider_base_url_ok,
 };
 use indexmap::IndexMap;
 use serial_test::serial;
@@ -131,6 +131,97 @@ fn custom_provider_missing_required_field_is_skipped() {
     for skipped in ["no_url", "no_model", "no_key", "blank_url"] {
         assert!(!loaded.contains_key(skipped), "{skipped} should be skipped");
     }
+}
+
+// ── F1: project-local gating + base_url validation (port of test_provider_registry.py) ──
+
+#[test]
+#[serial]
+fn project_local_providers_ignored_without_optin() {
+    // A project-local ./.graphify/providers.json is NOT loaded by default (F1):
+    // it travels with a cloned/shared repo and controls where the corpus + API
+    // key are sent, so loading it silently is an exfiltration vector.
+    let tmp = tempdir().expect("tempdir");
+    let local = tmp.path().join("local.json");
+    std::fs::write(
+        &local,
+        r#"{"evil": {"base_url": "https://attacker.example/v1", "default_model": "m", "env_key": "K"}}"#,
+    )
+    .expect("write local.json");
+    let missing_global = tmp.path().join("global.json"); // does not exist
+
+    let mut g = EnvGuard::new();
+    g.unset("GRAPHIFY_ALLOW_LOCAL_PROVIDERS");
+
+    let loaded = load_custom_providers_from(&local, &missing_global);
+    assert!(!loaded.contains_key("evil"));
+}
+
+#[test]
+#[serial]
+fn project_local_providers_loaded_with_optin() {
+    // With explicit opt-in the project-local file is honoured (F1).
+    let tmp = tempdir().expect("tempdir");
+    let local = tmp.path().join("local.json");
+    std::fs::write(
+        &local,
+        r#"{"lab": {"base_url": "https://lab.internal/v1", "default_model": "m", "env_key": "K"}}"#,
+    )
+    .expect("write local.json");
+    let missing_global = tmp.path().join("global.json");
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_ALLOW_LOCAL_PROVIDERS", "1");
+
+    let loaded = load_custom_providers_from(&local, &missing_global);
+    assert!(loaded.contains_key("lab"));
+}
+
+#[test]
+fn non_http_provider_base_url_rejected() {
+    // A provider whose base_url uses a non-http(s) scheme is skipped on load (F1).
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{"sneaky": {"base_url": "file:///etc/passwd", "default_model": "m", "env_key": "K"}}"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert!(!loaded.contains_key("sneaky"));
+}
+
+#[test]
+fn provider_base_url_ok_scheme_and_warnings() {
+    // Rejects bad schemes; allows http(s); plaintext-http egress warns but loads.
+    // The third argument is `warn = true`, so this intentionally exercises the
+    // stderr-warning code paths.
+    assert!(provider_base_url_ok("https://api.example/v1", "ok", true));
+    assert!(provider_base_url_ok(
+        "http://localhost:11434/v1",
+        "local",
+        true
+    ));
+    assert!(!provider_base_url_ok("file:///etc/passwd", "bad", true));
+    assert!(!provider_base_url_ok("gopher://x/", "bad2", true));
+    // Plaintext http to a non-loopback host loads (warns to stderr).
+    assert!(provider_base_url_ok("http://example.com/v1", "plain", true));
+    // A `127.`-prefixed *hostname* (not a 127.0.0.0/8 IP) is non-loopback, so it
+    // still loads but is treated as plaintext egress rather than silenced.
+    assert!(provider_base_url_ok(
+        "http://127.evil.com/v1",
+        "tricky",
+        true
+    ));
+    // Bracketed IPv6 loopback is silenced; IPv6 link-local loads but warns —
+    // both exercise the bracket-stripping + `IpAddr::is_loopback` path.
+    assert!(provider_base_url_ok(
+        "http://[::1]:8080/v1",
+        "v6local",
+        true
+    ));
+    assert!(provider_base_url_ok("http://[fe80::1]/v1", "v6ll", true));
 }
 
 #[test]

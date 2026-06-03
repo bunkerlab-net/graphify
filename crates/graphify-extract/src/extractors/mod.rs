@@ -392,7 +392,7 @@ pub use elixir::extract_elixir;
 pub use julia::extract_julia;
 
 // ── Fortran ───────────────────────────────────────────────────────────────────
-pub use fortran::extract_fortran;
+pub use fortran::{extract_fortran, resolve_cpp_path};
 
 // ── ObjC ──────────────────────────────────────────────────────────────────────
 pub use objc::extract_objc;

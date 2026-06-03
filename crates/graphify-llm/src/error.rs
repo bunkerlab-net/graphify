@@ -45,4 +45,12 @@ pub enum LlmError {
     /// Caller-supplied input was rejected (e.g. zero token budget).
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    /// `OLLAMA_BASE_URL` points at a link-local / cloud-metadata address — a
+    /// classic SSRF target — so the corpus is refused there (F3).
+    #[error(
+        "OLLAMA_BASE_URL points at a link-local/metadata address ({0:?}); \
+         refusing to send the corpus there. Set it to a real Ollama host."
+    )]
+    OllamaUrlBlocked(String),
 }

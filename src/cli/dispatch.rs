@@ -75,6 +75,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         Command::Vscode { cmd: c } => cli::install::cmd_platform("vscode", &c),
         Command::Copilot { cmd: c } => cli::install::cmd_platform("copilot", &c),
         Command::Kiro { cmd: c } => cli::install::cmd_platform("kiro", &c),
+        Command::Kilo { cmd: c } => cli::install::cmd_kilo(&c),
         Command::Pi { cmd: c } => cli::install::cmd_platform("pi", &c),
         Command::Antigravity { cmd: c } => cli::install::cmd_platform("antigravity", &c),
         Command::Codex { cmd: c } => cli::install::cmd_platform("codex", &c),
