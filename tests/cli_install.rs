@@ -4,6 +4,10 @@
 //! exercise the dispatch and platform plumbing without touching the user's
 //! actual config directories.
 
+// File-top `expect_used`/`unwrap_used` suppression is the sanctioned project
+// convention for integration-test files (AGENTS.md "Strict lints"): a panic in
+// a CLI-test fixture (e.g. `tempdir()` failing) is itself a test failure, so the
+// blanket allow is kept rather than threading `Result` through every `#[test]`.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use assert_cmd::Command;

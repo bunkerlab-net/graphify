@@ -145,7 +145,18 @@ fn zip_within_caps_inner(
 /// text (e.g. scanned image-only PDF). Never propagates an error to the caller.
 #[must_use]
 pub fn extract_pdf_text(path: &Path) -> String {
-    if !file_within_size_cap(path, OFFICE_MAX_RAW_BYTES) {
+    extract_pdf_text_with(path, OFFICE_MAX_RAW_BYTES)
+}
+
+/// [`extract_pdf_text`] with an explicit on-disk size cap (F2).
+///
+/// The cap is a parameter — not the module constant directly — so the parity
+/// tests can prove the size screen (not a parse error) is what yields an empty
+/// string, by extracting the *same* valid PDF under a large cap and a tiny one.
+/// Python monkeypatches the module constant; the Rust seam is an explicit arg.
+#[must_use]
+pub fn extract_pdf_text_with(path: &Path, max_raw: u64) -> String {
+    if !file_within_size_cap(path, max_raw) {
         return String::new();
     }
     extract_pdf_text_inner(path).unwrap_or_default()
@@ -583,6 +594,16 @@ pub struct XlsxStructure {
 /// Returns a default empty structure on any error.
 #[must_use]
 pub fn xlsx_extract_structure(path: &Path) -> XlsxStructure {
+    // Apply the same zip-bomb screen as `xlsx_to_markdown`: this is a public
+    // XLSX parsing entry point, so it must honour the F2 decompression/ratio
+    // caps before calamine opens the archive. graphify-py leaves this path
+    // unguarded but flags (detect.py F-035) that it must be bomb-audited before
+    // being wired into a dispatcher; we apply the guard here so the function is
+    // safe for any caller. Divergence: Rust hardens the path now rather than
+    // deferring the audit (see [[feedback_python_bugs_are_not_requirements]]).
+    if !zip_within_caps(path) {
+        return XlsxStructure::default();
+    }
     xlsx_extract_structure_inner(path).unwrap_or_default()
 }
 

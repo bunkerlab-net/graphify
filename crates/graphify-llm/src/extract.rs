@@ -62,17 +62,26 @@ pub fn extract_files_direct_mode(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| get_backend_api_key(backend));
 
-    // Ollama: use sentinel "ollama" key when none configured.
-    let key = if key.is_empty() && backend == "ollama" {
+    // Ollama: hard-block link-local / cloud-metadata targets (F3) for *every*
+    // ollama call, not only the no-key path — a non-empty OLLAMA_API_KEY must
+    // not let a metadata `OLLAMA_BASE_URL` slip past the validator (graphify-py
+    // gates this behind `not key` at llm.py:751; fixing that gap is a deliberate
+    // divergence, see [[feedback_python_bugs_are_not_requirements]]). The no-key
+    // warning + "ollama" sentinel stay on the empty-key path.
+    let key = if backend == "ollama" {
         let ollama_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-        ollama::validate_ollama_base_url(&ollama_url, true)?;
-        eprintln!(
-            "[graphify] WARNING: ollama backend selected with no OLLAMA_API_KEY set; \
-             sending corpus to {ollama_url}. Set OLLAMA_API_KEY (any non-empty value) \
-             to suppress this warning."
-        );
-        "ollama".to_string()
+        ollama::validate_ollama_base_url(&ollama_url, key.is_empty())?;
+        if key.is_empty() {
+            eprintln!(
+                "[graphify] WARNING: ollama backend selected with no OLLAMA_API_KEY set; \
+                 sending corpus to {ollama_url}. Set OLLAMA_API_KEY (any non-empty value) \
+                 to suppress this warning."
+            );
+            "ollama".to_string()
+        } else {
+            key
+        }
     } else {
         key
     };

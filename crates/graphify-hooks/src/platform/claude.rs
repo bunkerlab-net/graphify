@@ -11,8 +11,8 @@ use serde_json::Value;
 
 use super::common::{
     CLAUDE_MD_MARKER, CLAUDE_MD_SECTION, READ_SETTINGS_HOOK_MATCHER, SETTINGS_HOOK_MATCHER,
-    dirs_home, read_json_or_empty, read_settings_hook, remove_graphify_section, remove_skill,
-    replace_or_append_section, settings_hook, write_json,
+    claude_config_dir, dirs_home, read_json_or_empty, read_settings_hook, remove_graphify_section,
+    remove_skill, replace_or_append_section, settings_hook, write_json,
 };
 use crate::HooksError;
 
@@ -60,18 +60,31 @@ pub fn claude_install(project_dir: &Path) -> Result<String, HooksError> {
 /// `CLAUDE_CONFIG_DIR`. Mirrors the path used by `install_platform_skill`.
 #[must_use]
 fn claude_user_skill_dst() -> PathBuf {
-    if let Ok(cfg_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-        PathBuf::from(cfg_dir)
-            .join("skills")
-            .join("graphify")
-            .join("SKILL.md")
-    } else {
-        dirs_home()
-            .join(".claude")
-            .join("skills")
-            .join("graphify")
-            .join("SKILL.md")
-    }
+    // `claude_config_dir()` treats an empty `CLAUDE_CONFIG_DIR` as unset so this
+    // never collapses to a stray relative path the installer would never match.
+    claude_config_dir()
+        .unwrap_or_else(|| dirs_home().join(".claude"))
+        .join("skills")
+        .join("graphify")
+        .join("SKILL.md")
+}
+
+/// True when a `PreToolUse` entry's nested `hooks[].command` mentions graphify.
+///
+/// Inspecting the command strings (not the whole serialized entry via
+/// `to_string()`) avoids a stray match on an unrelated field that merely
+/// contains the substring "graphify", mirroring the precise matching the
+/// install path uses.
+fn hook_targets_graphify(hook: &Value) -> bool {
+    hook.get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|steps| {
+            steps.iter().any(|step| {
+                step.get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| c.contains("graphify"))
+            })
+        })
 }
 
 /// Remove the graphify skill tree (`SKILL.md` + version stamp), the graphify
@@ -158,20 +171,7 @@ pub fn install_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
             let is_stale_matcher = matcher == "Glob|Grep"
                 || matcher == SETTINGS_HOOK_MATCHER
                 || matcher == READ_SETTINGS_HOOK_MATCHER;
-            // Inspect nested `hooks[].command` strings instead of stringifying
-            // the whole entry, so unrelated fields can't accidentally trigger
-            // the "stale graphify hook" branch.
-            let has_graphify = h
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|inner| {
-                    inner.iter().any(|step| {
-                        step.get("command")
-                            .and_then(Value::as_str)
-                            .is_some_and(|c| c.contains("graphify"))
-                    })
-                });
-            !(is_stale_matcher && has_graphify)
+            !(is_stale_matcher && hook_targets_graphify(h))
         });
         // Two hooks: the Bash search nudge and the Read/Glob nudge (#1114).
         arr.push(settings_hook());
@@ -208,7 +208,7 @@ pub fn uninstall_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
         let is_stale = matcher == "Glob|Grep"
             || matcher == SETTINGS_HOOK_MATCHER
             || matcher == READ_SETTINGS_HOOK_MATCHER;
-        !(is_stale && h.to_string().contains("graphify"))
+        !(is_stale && hook_targets_graphify(h))
     });
     if arr.len() == before {
         return Ok(String::new());

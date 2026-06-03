@@ -105,17 +105,30 @@ fn ollama_alias_resolving_to_link_local_blocked() {
 #[test]
 #[serial_test::serial(env)]
 fn call_llm_blocks_metadata_ollama_url_at_call_site() {
-    // End-to-end: the link-local/metadata block fires through `call_llm`, not
-    // just the standalone validator. Ollama's no-API-key path (the real-world
-    // path) is where the URL is validated, so leave OLLAMA_API_KEY empty.
-    let mut g = EnvGuard::new();
-    g.set("OLLAMA_BASE_URL", "http://169.254.169.254/v1");
-    g.set("OLLAMA_API_KEY", "");
-    let result = call_llm("ping", "ollama", 32);
-    assert!(
-        result.is_err(),
-        "metadata OLLAMA_BASE_URL must be refused at the call site"
-    );
+    // End-to-end: the link-local/metadata hard-block fires through `call_llm`,
+    // not just the standalone validator — and it must fire regardless of whether
+    // an OLLAMA_API_KEY is set. A non-empty key previously skipped the F3 check
+    // (the graphify-py gap we diverge from); both branches are asserted here.
+    {
+        // No API key (the real-world ollama path).
+        let mut g = EnvGuard::new();
+        g.set("OLLAMA_BASE_URL", "http://169.254.169.254/v1");
+        g.set("OLLAMA_API_KEY", "");
+        assert!(
+            call_llm("ping", "ollama", 32).is_err(),
+            "metadata OLLAMA_BASE_URL must be refused at the call site (no key)"
+        );
+    }
+    {
+        // Non-empty API key must NOT let a metadata base URL slip past F3.
+        let mut g = EnvGuard::new();
+        g.set("OLLAMA_BASE_URL", "http://169.254.169.254/v1");
+        g.set("OLLAMA_API_KEY", "nonempty");
+        assert!(
+            call_llm("ping", "ollama", 32).is_err(),
+            "metadata OLLAMA_BASE_URL must be refused even with an API key set"
+        );
+    }
 }
 
 #[test]

@@ -2,11 +2,10 @@
 //! a home-directory skill file (no project-local files).
 
 use std::fs;
-use std::path::PathBuf;
 
 use crate::HooksError;
 
-use super::fs::{dirs_home, install_skill};
+use super::fs::{claude_config_dir, dirs_home, install_skill};
 use super::skills::{
     SKILL_AIDER_MD, SKILL_CLAW_MD, SKILL_CODEX_MD, SKILL_COPILOT_MD, SKILL_DROID_MD, SKILL_KIRO_MD,
     SKILL_MD, SKILL_OPENCODE_MD, SKILL_PI_MD, SKILL_REGISTRATION, SKILL_TRAE_MD, SKILL_WINDOWS_MD,
@@ -32,13 +31,11 @@ pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
     let (skill_content, home_rel) = skill_for(platform, false)?;
 
     let skill_dst = if matches!(platform, "claude" | "windows") {
-        if let Ok(cfg_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-            PathBuf::from(cfg_dir)
-                .join("skills")
-                .join("graphify")
-                .join("SKILL.md")
-        } else {
-            dirs_home().join(home_rel)
+        // Empty `CLAUDE_CONFIG_DIR` is treated as unset (see `claude_config_dir`)
+        // so install and uninstall agree on the destination.
+        match claude_config_dir() {
+            Some(cfg_dir) => cfg_dir.join("skills").join("graphify").join("SKILL.md"),
+            None => dirs_home().join(home_rel),
         }
     } else {
         dirs_home().join(home_rel)
@@ -48,10 +45,9 @@ pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
     let mut msgs = vec![format!("  skill installed  ->  {}", skill_dst.display())];
 
     if matches!(platform, "claude" | "windows") {
-        let claude_md = if let Ok(cfg_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-            PathBuf::from(cfg_dir).join("CLAUDE.md")
-        } else {
-            dirs_home().join(".claude").join("CLAUDE.md")
+        let claude_md = match claude_config_dir() {
+            Some(cfg_dir) => cfg_dir.join("CLAUDE.md"),
+            None => dirs_home().join(".claude").join("CLAUDE.md"),
         };
         if claude_md.exists() {
             let content = fs::read_to_string(&claude_md)?;

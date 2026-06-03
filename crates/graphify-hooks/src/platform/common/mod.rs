@@ -37,7 +37,8 @@ pub use uninstall_all::uninstall_all;
 // Internal (platform-only) re-exports so per-platform files can keep using
 // `super::common::{install_skill, dirs_home, ...}`.
 pub(super) use fs::{
-    dirs_home, install_skill, read_json_or_empty, remove_graphify_section, remove_skill, write_json,
+    claude_config_dir, dirs_home, install_skill, read_json_or_empty, remove_graphify_section,
+    remove_skill, write_json,
 };
 pub(super) use hooks_json::{gemini_hook, read_settings_hook, settings_hook};
 pub(super) use skills::{

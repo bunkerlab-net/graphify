@@ -23,6 +23,7 @@ const KILO_CONFIG_JSON: &str = "kilo.json";
 const KILO_CONFIG_JSONC: &str = "kilo.jsonc";
 
 /// Global Kilo skill destination (`~/.config/kilo/skills/graphify/SKILL.md`).
+#[must_use]
 fn kilo_skill_dst() -> PathBuf {
     dirs_home()
         .join(".config")
@@ -34,6 +35,7 @@ fn kilo_skill_dst() -> PathBuf {
 
 /// Global Kilo `/graphify` command destination
 /// (`~/.config/kilo/command/graphify.md`).
+#[must_use]
 fn kilo_command_dst() -> PathBuf {
     dirs_home()
         .join(".config")
@@ -144,6 +146,7 @@ fn load_json_like(config_file: &Path) -> Value {
 
 /// Resolve the Kilo config file to *read* from: prefer `.kilo/kilo.json`, then
 /// `.kilo/kilo.jsonc`, else default to `.kilo/kilo.json`.
+#[must_use]
 fn kilo_config_path(project_dir: &Path) -> PathBuf {
     let kilo_dir = project_dir.join(".kilo");
     let json_path = kilo_dir.join(KILO_CONFIG_JSON);
@@ -159,6 +162,7 @@ fn kilo_config_path(project_dir: &Path) -> PathBuf {
 
 /// Config file to *write* automated edits to — always `.kilo/kilo.json`, so an
 /// existing `.kilo/kilo.jsonc` (with the user's comments) is never rewritten.
+#[must_use]
 fn kilo_config_write_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".kilo").join(KILO_CONFIG_JSON)
 }
