@@ -1000,7 +1000,10 @@ pub fn extract_dart(path: &Path) -> FileResult {
         }
         && let Some(parent_dir) = path.parent()
         // `canonicalize` resolves symlinks AND requires existence, matching
-        // Python's `resolve()` + `exists()` guard.
+        // Python's `resolve()` + `exists()` guard. If the referenced parent is
+        // missing, canonicalize fails, the redirect is skipped, and the file is
+        // extracted standalone (its own file node + stem) — same fallback as the
+        // Python reference when `parent_path.exists()` is false.
         && let Ok(resolved) = parent_dir.join(parent_ref).canonicalize()
     {
         stem = file_stem(&resolved);

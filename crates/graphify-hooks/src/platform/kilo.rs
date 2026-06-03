@@ -163,15 +163,25 @@ fn kilo_config_write_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".kilo").join(KILO_CONFIG_JSON)
 }
 
-/// `file://` URI of the plugin path, resolving the (existing) parent directory
-/// for symlinks. Mirrors Python's `plugin_file.resolve().as_uri()`, which works
-/// even after the plugin file itself is deleted (uninstall) because the parent
-/// directory still exists.
+/// `file://` URI of the plugin path. Mirrors Python's
+/// `plugin_file.resolve().as_uri()`: resolve the parent directory's symlinks
+/// when it exists (the normal uninstall case — only the plugin file itself was
+/// removed), else fall back to a lexical absolute path so an entry is still
+/// computed and a stale `kilo.json` registration can be deregistered.
+#[must_use]
 fn plugin_uri(plugin_file: &Path) -> Option<String> {
     let parent = plugin_file.parent()?;
     let name = plugin_file.file_name()?;
-    let resolved = parent.canonicalize().ok()?.join(name);
-    Url::from_file_path(&resolved).ok().map(|u| u.to_string())
+    let resolved_parent = parent.canonicalize().unwrap_or_else(|_| {
+        if parent.is_absolute() {
+            parent.to_path_buf()
+        } else {
+            std::env::current_dir().map_or_else(|_| parent.to_path_buf(), |cwd| cwd.join(parent))
+        }
+    });
+    Url::from_file_path(resolved_parent.join(name))
+        .ok()
+        .map(|u| u.to_string())
 }
 
 /// Write the `graphify.js` plugin and register it in `.kilo/kilo.json` without
@@ -291,6 +301,7 @@ pub fn uninstall_kilo_plugin(project_dir: &Path) -> Result<String, HooksError> {
 
 /// Display `path` relative to `project_dir` when possible (matches Python's
 /// `relative_to(project_dir)` in the install messages), else the full path.
+#[must_use]
 fn display_rel(path: &Path, project_dir: &Path) -> String {
     path.strip_prefix(project_dir)
         .unwrap_or(path)
