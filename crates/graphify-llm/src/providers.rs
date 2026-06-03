@@ -89,7 +89,13 @@ pub fn provider_base_url_ok(base_url: &str, name: &str, warn: bool) -> bool {
         }
         return false;
     }
-    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    let raw_host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    // `url::host_str()` returns an IPv6 literal WITH brackets (`[::1]`); strip
+    // them so the address parses, matching Python's `urlparse().hostname`.
+    let host = raw_host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&raw_host);
     // Parse the 127.0.0.0/8 case as an IP rather than a `starts_with("127.")`
     // prefix, so a hostname like `127.evil.com` is correctly treated as
     // non-loopback (and therefore warned about over plaintext http). This is a

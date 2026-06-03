@@ -255,6 +255,7 @@ fn find_bytes(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 }
 
 /// Split a comma-separated type list, respecting `<>` nesting depth.
+#[must_use]
 fn split_types(text: &str) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     let mut current = String::new();

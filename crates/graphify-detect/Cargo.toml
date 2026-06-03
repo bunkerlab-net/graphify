@@ -29,7 +29,6 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

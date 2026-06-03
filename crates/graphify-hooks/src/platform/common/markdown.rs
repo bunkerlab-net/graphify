@@ -165,9 +165,11 @@ export const GraphifyPlugin = async ({ directory }) => {
 
 /// Kilo Code `tool.execute.before` plugin (`.kilo/plugins/graphify.js`).
 ///
-/// Mirrors the `OpenCode` plugin: injects a one-shot graph reminder into the next
-/// `bash` command's output when `graphify-out/graph.json` exists. Byte-identical
-/// to the Python `_KILO_PLUGIN_JS`.
+/// Structurally mirrors the `OpenCode` plugin (one-shot graph reminder injected
+/// into the next `bash` command when `graphify-out/graph.json` exists), but the
+/// injected echo text differs — this one points at `GRAPH_REPORT.md` — so it is
+/// not byte-identical to the `OpenCode` plugin. It IS byte-identical to the
+/// Python `_KILO_PLUGIN_JS`.
 pub const KILO_PLUGIN_JS: &str = r#"// graphify Kilo plugin
 // Injects a knowledge graph reminder before bash tool calls when the graph exists.
 import { existsSync } from "fs";

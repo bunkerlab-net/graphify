@@ -30,8 +30,10 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 /// end-of-options terminator, so a file named like `-I/etc/passwd.F90` would
 /// otherwise be parsed by `cpp` as an option. An absolute path always begins
 /// with `/`, so it can never look like an option. Mirrors Python's
-/// `path.resolve()`: resolve symlinks where possible, else fall back to a
-/// current-directory join so the result is still absolute.
+/// `path.resolve()`: resolve symlinks where possible, else join the current
+/// directory. Returns an absolute path in all normal cases; only if the current
+/// working directory cannot be read does it fall back to a `./`-prefixed
+/// relative path (still safe — it cannot be parsed as a `cpp` option).
 #[must_use]
 pub fn resolve_cpp_path(path: &Path) -> PathBuf {
     if let Ok(canon) = path.canonicalize() {

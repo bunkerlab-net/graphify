@@ -40,6 +40,13 @@ pub(in crate::platform) fn settings_hook() -> Value {
 /// goes through. Reading the graph's own report under `graphify-out/` is
 /// suppressed so it never starts a feedback loop. The command is byte-identical
 /// to the Python reference so the rendered settings file matches exactly.
+///
+/// The command is deliberately kept as one whole literal rather than composed
+/// from fragments (a reviewer suggested decomposing it): it must stay
+/// byte-for-byte identical to graphify-py's `_READ_SETTINGS_HOOK["command"]`,
+/// and a single literal makes that correspondence verifiable at a glance. Its
+/// runtime behaviour is validated by `tests/read_hook.rs`, which executes it via
+/// `sh -c` against crafted stdin.
 #[must_use]
 pub(in crate::platform) fn read_settings_hook() -> Value {
     serde_json::json!({
