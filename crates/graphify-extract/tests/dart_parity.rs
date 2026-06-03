@@ -461,12 +461,11 @@ void runDI(BuildContext context) {
     // E. Bug E: object-destructuring variables
     assert!(node(nodes, |n| n.label == "myVar").is_some());
     assert!(node(nodes, |n| n.label == "myAge").is_some());
-    // The destructure keys (name/age) must NOT become variables
-    assert!(
-        node(nodes, |n| n.label.contains("name")
-            || n.label.contains("age"))
-        .is_none()
-    );
+    // The destructure keys (name/age) must NOT become variables. Exact-match
+    // (graphify-py uses a substring `in` check, which only passes because of
+    // case — `"age"` is not in `"myAge"`; exact equality is unambiguous and
+    // avoids matching an unrelated label like `username`).
+    assert!(node(nodes, |n| n.label == "name" || n.label == "age").is_none());
 
     // F. Bug C: GoRouter query-parameter route mapping
     let nav = edge(edges, |e| {
