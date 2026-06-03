@@ -66,7 +66,7 @@ pub fn extract_files_direct_mode(
     let key = if key.is_empty() && backend == "ollama" {
         let ollama_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-        ollama::validate_ollama_base_url(&ollama_url);
+        ollama::validate_ollama_base_url(&ollama_url, true)?;
         eprintln!(
             "[graphify] WARNING: ollama backend selected with no OLLAMA_API_KEY set; \
              sending corpus to {ollama_url}. Set OLLAMA_API_KEY (any non-empty value) \

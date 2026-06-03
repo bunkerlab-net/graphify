@@ -76,7 +76,7 @@ pub use parallel::{
 pub use parse::{empty_fragment, parse_llm_json, response_is_hollow};
 pub use providers::{
     CustomProvider, custom_providers_path, is_builtin_backend, load_custom_providers,
-    load_custom_providers_from,
+    load_custom_providers_from, provider_base_url_ok,
 };
 pub use read::read_files;
 pub use response::{LlmBackend, LlmResponse};

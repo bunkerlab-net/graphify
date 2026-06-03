@@ -5,8 +5,11 @@
 //! Each constant is byte-identical to the Python reference, so the rendered
 //! files match exactly.
 
-/// `PreToolUse` hook matcher registered in `.claude/settings.json`.
+/// `PreToolUse` hook matcher registered in `.claude/settings.json` (Bash search).
 pub const SETTINGS_HOOK_MATCHER: &str = "Bash";
+
+/// `PreToolUse` hook matcher for the Read/Glob nudge (#1114).
+pub const READ_SETTINGS_HOOK_MATCHER: &str = "Read|Glob";
 
 /// Claude Code CLAUDE.md section marker.
 pub const CLAUDE_MD_MARKER: &str = "## graphify";
@@ -159,3 +162,32 @@ export const GraphifyPlugin = async ({ directory }) => {
   };
 };
 ";
+
+/// Kilo Code `tool.execute.before` plugin (`.kilo/plugins/graphify.js`).
+///
+/// Mirrors the `OpenCode` plugin: injects a one-shot graph reminder into the next
+/// `bash` command's output when `graphify-out/graph.json` exists. Byte-identical
+/// to the Python `_KILO_PLUGIN_JS`.
+pub const KILO_PLUGIN_JS: &str = r#"// graphify Kilo plugin
+// Injects a knowledge graph reminder before bash tool calls when the graph exists.
+import { existsSync } from "fs";
+import { join } from "path";
+
+export const GraphifyPlugin = async ({ directory }) => {
+  let reminded = false;
+
+  return {
+    "tool.execute.before": async (input, output) => {
+      if (reminded) return;
+      if (!existsSync(join(directory, "graphify-out", "graph.json"))) return;
+
+      if (input.tool === "bash") {
+        output.args.command =
+          'echo "[graphify] Knowledge graph available. Read graphify-out/GRAPH_REPORT.md for god nodes and architecture context before searching files." && ' +
+          output.args.command;
+        reminded = true;
+      }
+    },
+  };
+};
+"#;

@@ -10,9 +10,10 @@ use graphify_hooks::platform::{
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
     claude_uninstall, copilot_install, copilot_uninstall, cursor_install, cursor_uninstall,
     devin_install, devin_project_install, devin_project_uninstall, devin_uninstall, gemini_install,
-    gemini_uninstall, install_platform_skill, install_platform_skill_project, kiro_install,
-    kiro_uninstall, pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project,
-    vscode_install, vscode_uninstall,
+    gemini_uninstall, install_kilo_skill_and_command, install_platform_skill,
+    install_platform_skill_project, kilo_install, kilo_uninstall, kiro_install, kiro_uninstall,
+    pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project, vscode_install,
+    vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
@@ -23,11 +24,46 @@ use crate::cli::args::PlatformCmd;
 /// under the current working directory instead of the user home
 /// directory. Mirrors the Python `--project` flag (#931).
 pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
+    // Antigravity's project install lays down the full always-on layer
+    // (skill + rules + workflow), not just the skill — matching graphify-py's
+    // `_project_install("antigravity")`. The generic skill-only installer would
+    // orphan the rules/workflow that uninstall removes.
+    if project && platform == "antigravity" {
+        let cwd = std::env::current_dir()?;
+        let msg = antigravity_install(&cwd, true)?;
+        println!("{msg}");
+        return Ok(());
+    }
+    // Kilo's skill + `/graphify` command are global artefacts (the generic
+    // skill installer doesn't know the command file), matching graphify-py's
+    // `install(platform="kilo")`. The always-on project wiring is installed by
+    // `graphify kilo install` (see `cmd_kilo`).
+    if platform == "kilo" {
+        let msg = install_kilo_skill_and_command()?;
+        println!("{msg}");
+        return Ok(());
+    }
     let msg = if project {
         let cwd = std::env::current_dir()?;
         install_platform_skill_project(platform, &cwd)?
     } else {
         install_platform_skill(platform)?
+    };
+    println!("{msg}");
+    Ok(())
+}
+
+/// Install or uninstall the full Kilo Code integration (#512).
+///
+/// `kilo install` writes the native skill + `/graphify` command globally and the
+/// always-on `AGENTS.md` + `.kilo` plugin under the current project; `kilo
+/// uninstall` reverses both. Mirrors graphify-py's `_kilo_install` /
+/// `_kilo_uninstall`.
+pub(crate) fn cmd_kilo(cmd: &PlatformCmd) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let msg = match cmd {
+        PlatformCmd::Install { .. } => kilo_install(&cwd)?,
+        PlatformCmd::Uninstall { .. } => kilo_uninstall(&cwd)?,
     };
     println!("{msg}");
     Ok(())
@@ -60,9 +96,10 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("devin", PlatformCmd::Install { .. }) => devin_install()?,
         ("devin", PlatformCmd::Uninstall { .. }) => devin_uninstall()?,
         // Antigravity has bespoke project-scope handling: a `--project` install
-        // writes only the workspace-local skill (rules + workflow are global-only;
-        // `antigravity_install` early-returns for projects). Matched before the
-        // generic `--project` branch.
+        // writes the full always-on layer (skill + rules + workflow) under the
+        // workspace, and `antigravity_install` prints the global-only MCP hint
+        // only for non-project installs. Matched before the generic `--project`
+        // branch.
         ("antigravity", PlatformCmd::Install { project: true }) => antigravity_install(&cwd, true)?,
         ("antigravity", PlatformCmd::Uninstall { project: true }) => {
             antigravity_uninstall(&cwd, true)?

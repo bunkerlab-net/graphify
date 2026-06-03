@@ -394,6 +394,30 @@ fn test_replace_or_append_idempotent() {
 // claude_install / claude_uninstall (test_claude_md.py)
 // ---------------------------------------------------------------------------
 
+/// Run `claude_uninstall` with `HOME` overridden to `skill_home` (and
+/// `CLAUDE_CONFIG_DIR` cleared) so the user-scope skill-tree removal (#1121)
+/// stays inside the temp dir instead of touching the real home. Mirrors
+/// `gemini_uninstall_to`.
+fn claude_uninstall_to(project_dir: &Path, skill_home: &Path) -> String {
+    let prev_cfg = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    // SAFETY: test-only env override; `#[serial(home_env)]` serialises access.
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var("HOME", skill_home);
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
+    }
+    let r = claude_uninstall(project_dir).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::remove_var("HOME");
+        if let Some(v) = prev_cfg {
+            std::env::set_var("CLAUDE_CONFIG_DIR", v);
+        }
+    }
+    r
+}
+
 #[test]
 fn test_install_creates_claude_md() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -435,10 +459,12 @@ fn test_install_is_idempotent() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_uninstall_removes_section() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     claude_install(dir.path()).expect("test invariant");
-    claude_uninstall(dir.path()).expect("test invariant");
+    claude_uninstall_to(dir.path(), home.path());
     let target = dir.path().join("CLAUDE.md");
     if target.exists() {
         assert!(!target.read_to_string_unwrap().contains(CLAUDE_MD_MARKER));
@@ -446,12 +472,14 @@ fn test_uninstall_removes_section() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_uninstall_preserves_other_content() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("CLAUDE.md");
     fs::write(&target, "# My Project\n\nSome rules.\n").expect("write fixture");
     claude_install(dir.path()).expect("test invariant");
-    claude_uninstall(dir.path()).expect("test invariant");
+    claude_uninstall_to(dir.path(), home.path());
     assert!(target.exists());
     let content = target.read_to_string_unwrap();
     assert!(content.contains("My Project"));
@@ -460,19 +488,41 @@ fn test_uninstall_preserves_other_content() {
 }
 
 #[test]
+#[serial(home_env)]
 fn test_uninstall_no_op_when_not_installed() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("CLAUDE.md");
     fs::write(&target, "# Other stuff\n").expect("write fixture");
-    let msg = claude_uninstall(dir.path()).expect("test invariant");
+    let msg = claude_uninstall_to(dir.path(), home.path());
     assert!(msg.contains("not found") || msg.contains("nothing to do"));
 }
 
 #[test]
+#[serial(home_env)]
 fn test_uninstall_no_op_when_no_file() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let msg = claude_uninstall(dir.path()).expect("test invariant");
+    let home = tempfile::tempdir().expect("tempdir");
+    let msg = claude_uninstall_to(dir.path(), home.path());
     assert!(msg.contains("No CLAUDE.md") || msg.contains("nothing to do"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_uninstall_removes_user_skill_tree_preserving_siblings() {
+    // claude_uninstall must remove the orphaned user-scope skill tree (#1121),
+    // mirroring gemini_uninstall — but scoped removal must keep sibling files.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    install_skill_to(home.path(), "claude");
+    let skill = home.path().join(".claude/skills/graphify/SKILL.md");
+    assert!(skill.exists(), "precondition: skill installed");
+    let sibling = home.path().join(".claude/skills/user_notes.md");
+    fs::write(&sibling, "keep me").expect("write sibling");
+
+    claude_uninstall_to(dir.path(), home.path());
+    assert!(!skill.exists(), "skill tree should be removed on uninstall");
+    assert!(sibling.exists(), "sibling user file must be preserved");
 }
 
 // ---------------------------------------------------------------------------
@@ -522,8 +572,9 @@ fn test_install_settings_json_idempotent() {
 #[serial(home_env)]
 fn test_uninstall_removes_settings_hook() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
     claude_install(dir.path()).expect("test invariant");
-    claude_uninstall(dir.path()).expect("test invariant");
+    claude_uninstall_to(dir.path(), home.path());
     let settings_path = dir.path().join(".claude").join("settings.json");
     if settings_path.exists() {
         let settings: serde_json::Value =
@@ -1538,14 +1589,15 @@ fn test_antigravity_uninstall_project_removes_project_skill_only() {
     assert!(!project_skill.exists(), "project skill must be removed");
 }
 
-/// #1079: a `--project` install writes only the workspace-local skill — never
-/// the rules or workflow files. Those are global-only because the workflow text
-/// hardcodes the shared `~/.gemini/config/skills/...` skill path; emitting it
-/// for a project-local skill would dangle. Mirrors graphify-py's
-/// `_project_install("antigravity")`, which copies the skill alone.
+/// A `--project` install lays down the full always-on layer (skill + rules +
+/// workflow) under the workspace, with the native tool-discovery frontmatter
+/// injected into the skill — mirrors graphify-py's `_project_install`
+/// → `_antigravity_finalize` (the project install no longer orphans the
+/// rules/workflow the uninstall path removes). The shared global skill is left
+/// untouched.
 #[test]
 #[serial(home_env)]
-fn test_antigravity_install_project_writes_skill_only() {
+fn test_antigravity_install_project_writes_full_layer() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: test-only HOME override.
@@ -1557,17 +1609,20 @@ fn test_antigravity_install_project_writes_skill_only() {
     unsafe {
         std::env::remove_var("HOME");
     }
+    let skill = dir.path().join(".agents/skills/graphify/SKILL.md");
+    assert!(skill.exists(), "project skill must be written");
     assert!(
-        dir.path().join(".agents/skills/graphify/SKILL.md").exists(),
-        "project skill must be written"
+        dir.path().join(".agents/rules/graphify.md").exists(),
+        "project install must write rules"
     );
     assert!(
-        !dir.path().join(".agents/rules/graphify.md").exists(),
-        "project install must not write rules"
+        dir.path().join(".agents/workflows/graphify.md").exists(),
+        "project install must write workflow"
     );
+    // Native tool-discovery frontmatter is injected into the skill.
     assert!(
-        !dir.path().join(".agents/workflows/graphify.md").exists(),
-        "project install must not write workflow"
+        skill.read_to_string_unwrap().starts_with("---\n"),
+        "frontmatter must be injected into the project skill"
     );
     // The global skill location must stay untouched by a project install.
     assert!(

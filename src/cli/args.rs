@@ -407,6 +407,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    /// Install or uninstall graphify integration for Kilo Code.
+    Kilo {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
     /// Install or uninstall graphify integration for Pi.
     Pi {
         #[command(subcommand)]

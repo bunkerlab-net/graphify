@@ -10,11 +10,11 @@
 //! writes a workspace-local skill at `.agents/skills/graphify/SKILL.md`
 //! instead.
 //!
-//! A `--project` install writes *only* the skill — the rules and workflow files
-//! are global-only, matching graphify-py's `_project_install("antigravity")`.
-//! That is deliberate: the workflow text points at the shared
-//! `~/.gemini/config/skills/...` skill, so emitting it alongside a
-//! workspace-local skill would reference the wrong location.
+//! Both the global and `--project` installs lay down the full always-on layer
+//! (frontmatter + `.agents/rules/graphify.md` + `.agents/workflows/graphify.md`),
+//! matching graphify-py's shared `_antigravity_finalize` — a project install
+//! that wrote only the skill orphaned the rules/workflow the uninstall path
+//! already removes. Only the global install prints the MCP-config setup hint.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -72,14 +72,8 @@ pub fn antigravity_install(project_dir: &Path, project: bool) -> Result<String, 
         }
     }
 
-    // A `--project` install stops here: only the workspace-local skill is
-    // written, mirroring graphify-py's `_project_install("antigravity")`. The
-    // rules, workflow, and MCP setup hint are global-only because the workflow
-    // text references the shared `~/.gemini/config/skills/...` skill.
-    if project {
-        return Ok(msgs.join("\n"));
-    }
-
+    // Both global and `--project` installs write the always-on rules + workflow
+    // under `project_dir/.agents/` (graphify-py's shared `_antigravity_finalize`).
     let rules_path = project_dir.join(ANTIGRAVITY_RULES_PATH);
     if let Some(parent) = rules_path.parent() {
         fs::create_dir_all(parent)?;
@@ -124,6 +118,13 @@ pub fn antigravity_install(project_dir: &Path, project: bool) -> Result<String, 
             "graphify workflow written to {}",
             wf_path.display()
         ));
+    }
+
+    // The MCP-config setup hint references the shared global skill location, so
+    // it is printed only by the global install (matches graphify-py, where the
+    // hint lives in `_antigravity_install`, not the shared `_antigravity_finalize`).
+    if project {
+        return Ok(msgs.join("\n"));
     }
 
     msgs.push(String::new());

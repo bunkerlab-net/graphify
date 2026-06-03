@@ -283,6 +283,39 @@ fn cluster_communities_sorted_size_desc() {
 }
 
 #[test]
+fn cluster_equal_sized_communities_total_order_and_stable() {
+    // Several disjoint equal-sized (2-node) communities. The #1090 follow-up
+    // tiebreak orders equal-sized communities lexicographically by their sorted
+    // member list, making the ID assignment a TOTAL order — so an identical
+    // grouping always yields identical community IDs run-to-run.
+    let mut g = Graph::new(GraphKind::Graph);
+    for (u, v) in [("c", "d"), ("a", "b"), ("e", "f")] {
+        g.add_node(u, indexmap::IndexMap::new());
+        g.add_node(v, indexmap::IndexMap::new());
+        let mut attrs = indexmap::IndexMap::new();
+        attrs.insert("weight".to_string(), json!(1.0));
+        g.add_edge(u, v, attrs);
+    }
+
+    let communities = cluster(&g, 1.0, None);
+    // Among equal-sized communities, ascending id ⇒ ascending sorted-member list.
+    let ordered: Vec<(i64, Vec<String>)> =
+        communities.iter().map(|(k, v)| (*k, v.clone())).collect();
+    for w in ordered.windows(2) {
+        if w[0].1.len() == w[1].1.len() {
+            assert!(
+                w[0].1 <= w[1].1,
+                "equal-sized communities not in lexicographic member order: {ordered:?}"
+            );
+        }
+    }
+
+    // Identical grouping ⇒ identical IDs on a second run.
+    let again = cluster(&g, 1.0, None);
+    assert_eq!(communities, again, "community IDs not stable across runs");
+}
+
+#[test]
 fn cluster_nodes_within_community_sorted_alpha() {
     let g = make_graph();
     let communities = cluster(&g, 1.0, None);

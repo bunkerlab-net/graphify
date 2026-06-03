@@ -2,7 +2,12 @@
 
 #![allow(clippy::expect_used, unsafe_code)]
 
-use graphify_llm::ollama::{call_ollama, call_ollama_plain, validate_ollama_base_url};
+use std::net::IpAddr;
+
+use graphify_llm::ollama::{
+    call_ollama, call_ollama_plain, ollama_host_is_link_local_or_metadata_with,
+    validate_ollama_base_url,
+};
 use serde_json::json;
 
 struct EnvGuard {
@@ -34,10 +39,62 @@ impl Drop for EnvGuard {
 
 #[test]
 fn validate_ollama_base_url_doesnt_panic() {
-    // The validator just logs warnings — should not panic on any input.
-    validate_ollama_base_url("http://localhost:11434/v1");
-    validate_ollama_base_url("https://remote-ollama.example.com");
-    validate_ollama_base_url("not-a-url-at-all");
+    // Loopback, a legit remote host, and an unparseable string all succeed
+    // (warnings only) — none of these is a link-local / metadata target.
+    assert!(validate_ollama_base_url("http://localhost:11434/v1", true).is_ok());
+    assert!(validate_ollama_base_url("https://remote-ollama.example.com", true).is_ok());
+    assert!(validate_ollama_base_url("not-a-url-at-all", true).is_ok());
+}
+
+// ── F3: link-local / cloud-metadata hard-block (port of test_ollama.py) ──────
+
+#[test]
+fn ollama_blocks_link_local_and_metadata() {
+    // Link-local / cloud-metadata Ollama targets fail closed (F3).
+    for url in [
+        "http://169.254.169.254/v1",
+        "http://169.254.1.5:11434/v1",
+        "http://metadata.google.internal/v1",
+        "http://0.0.0.0:11434/v1",
+    ] {
+        assert!(
+            validate_ollama_base_url(url, true).is_err(),
+            "{url} should be blocked"
+        );
+    }
+}
+
+#[test]
+fn ollama_loopback_and_lan_do_not_raise() {
+    // Loopback is allowed silently; a general LAN host warns but is allowed.
+    // (Rust emits the warning via eprintln; the test asserts the allow/block
+    // outcome rather than capturing stderr.)
+    assert!(validate_ollama_base_url("http://localhost:11434/v1", true).is_ok());
+    assert!(validate_ollama_base_url("http://192.168.1.50:11434/v1", true).is_ok());
+}
+
+#[test]
+fn ollama_alias_resolving_to_link_local_blocked() {
+    // A hostname that RESOLVES to a link-local IP is caught, not just literals.
+    // The resolver is injected here (Python monkeypatches socket.getaddrinfo).
+    let resolves_to_metadata = |_host: &str| vec![IpAddr::from([169, 254, 169, 254])];
+    assert!(ollama_host_is_link_local_or_metadata_with(
+        "innocent-looking-host",
+        resolves_to_metadata
+    ));
+    // A host resolving to a normal public IP is not flagged.
+    let resolves_to_public = |_host: &str| vec![IpAddr::from([93, 184, 216, 34])];
+    assert!(!ollama_host_is_link_local_or_metadata_with(
+        "example.com",
+        resolves_to_public
+    ));
+}
+
+#[test]
+fn ollama_warn_false_still_hard_blocks() {
+    // warn=false suppresses the LAN warning but never the metadata hard-block.
+    assert!(validate_ollama_base_url("http://192.168.1.50:11434/v1", false).is_ok());
+    assert!(validate_ollama_base_url("http://169.254.169.254/v1", false).is_err());
 }
 
 #[test]

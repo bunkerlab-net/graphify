@@ -16,6 +16,123 @@ use sha2::{Digest as _, Sha256};
 
 use crate::error::DetectError;
 
+// ── Resource caps for untrusted office/PDF files (F2) ──────────────────────────
+//
+// A corpus is attacker-controllable (graphify runs on cloned/shared folders),
+// and .docx/.xlsx are zip+XML containers: a few-KB zip-bomb can decompress to
+// gigabytes and OOM-kill the process at parse time. Screen the file before any
+// parser touches it.
+
+/// Maximum on-disk size of an office/PDF file we will parse (50 MiB).
+pub const OFFICE_MAX_RAW_BYTES: u64 = 50 * 1024 * 1024;
+/// Maximum total uncompressed size of a zip-based office file (512 MiB).
+pub const OFFICE_MAX_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum uncompressed:compressed ratio for a zip-based office file.
+pub const OFFICE_MAX_COMPRESSION_RATIO: u64 = 200;
+
+/// True if *path* exists and its on-disk size is within *cap* bytes.
+///
+/// Used as a cheap first screen before any parser opens the file. Returns
+/// `false` for a missing or unstattable path (fail closed).
+#[must_use]
+pub fn file_within_size_cap(path: &Path, cap: u64) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() <= cap)
+}
+
+/// Reject a zip-based office file that is a likely zip/XML bomb, using the
+/// default production caps.
+#[must_use]
+pub fn zip_within_caps(path: &Path) -> bool {
+    zip_within_caps_with(
+        path,
+        OFFICE_MAX_RAW_BYTES,
+        OFFICE_MAX_DECOMPRESSED_BYTES,
+        OFFICE_MAX_COMPRESSION_RATIO,
+    )
+}
+
+/// Reject a zip-based office file that is a likely zip/XML bomb.
+///
+/// Two layers, because the zip central-directory sizes are attacker-controlled:
+/// 1. A cheap pre-filter on the declared sizes (on-disk cap, summed-uncompressed
+///    cap, compression ratio) that rejects an honest bomb without decompressing.
+/// 2. An authoritative pass that stream-decompresses every member with a hard
+///    byte ceiling, so a member that under-declares its size in the central
+///    directory cannot expand past the cap undetected. Decompression is chunked
+///    and bounded, so checking a bomb never materializes more than the ceiling.
+///
+/// The caps are parameters (not the module constants directly) so the parity
+/// tests can exercise the ratio and streaming-ceiling paths with small caps.
+#[must_use]
+pub fn zip_within_caps_with(
+    path: &Path,
+    max_raw: u64,
+    max_decompressed: u64,
+    max_ratio: u64,
+) -> bool {
+    if !file_within_size_cap(path, max_raw) {
+        return false;
+    }
+    zip_within_caps_inner(path, max_decompressed, max_ratio).unwrap_or(false)
+}
+
+/// Inner fallible zip-bomb screen. Any zip/IO error fails closed (`false`).
+fn zip_within_caps_inner(
+    path: &Path,
+    max_decompressed: u64,
+    max_ratio: u64,
+) -> Result<bool, DetectError> {
+    use std::io::BufReader;
+    use zip::ZipArchive;
+
+    let file = std::fs::File::open(path).map_err(DetectError::Io)?;
+    let mut archive =
+        ZipArchive::new(BufReader::new(file)).map_err(|e| DetectError::Office(e.to_string()))?;
+
+    // 1. Cheap pre-filter on the declared central-directory sizes.
+    let mut declared: u64 = 0;
+    let mut compressed: u64 = 0;
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| DetectError::Office(e.to_string()))?;
+        declared = declared.saturating_add(entry.size());
+        compressed = compressed.saturating_add(entry.compressed_size());
+    }
+    if declared > max_decompressed {
+        return Ok(false);
+    }
+    let compressed = compressed.max(1);
+    // Float division to match Python's `declared / compressed > ratio`. Both
+    // operands are < 512 MiB here (declared is capped just above), well within
+    // f64's exact-integer range, so the comparison is exact.
+    #[allow(clippy::cast_precision_loss)] // operands bounded by max_decompressed
+    if declared as f64 / compressed as f64 > max_ratio as f64 {
+        return Ok(false);
+    }
+
+    // 2. Authoritative bounded-decompression pass: a member can under-declare its
+    //    central-directory size, so stream every member with a hard byte ceiling.
+    let mut total: u64 = 0;
+    let mut buf = vec![0u8; 1024 * 1024];
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| DetectError::Office(e.to_string()))?;
+        loop {
+            let n = entry.read(&mut buf).map_err(DetectError::Io)?;
+            if n == 0 {
+                break;
+            }
+            total = total.saturating_add(n as u64);
+            if total > max_decompressed {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 // ── PDF extraction ────────────────────────────────────────────────────────────
 
 /// Extract plain text from a PDF file.
@@ -27,6 +144,9 @@ use crate::error::DetectError;
 /// text (e.g. scanned image-only PDF). Never propagates an error to the caller.
 #[must_use]
 pub fn extract_pdf_text(path: &Path) -> String {
+    if !file_within_size_cap(path, OFFICE_MAX_RAW_BYTES) {
+        return String::new();
+    }
     extract_pdf_text_inner(path).unwrap_or_default()
 }
 
@@ -103,6 +223,9 @@ struct DocxState {
 /// Returns an empty string on any error (e.g. file not found, corrupt zip).
 #[must_use]
 pub fn docx_to_markdown(path: &Path) -> String {
+    if !zip_within_caps(path) {
+        return String::new();
+    }
     docx_to_markdown_inner(path).unwrap_or_default()
 }
 
@@ -354,6 +477,9 @@ fn local_name(raw: &[u8]) -> &str {
 /// error.
 #[must_use]
 pub fn xlsx_to_markdown(path: &Path) -> String {
+    if !zip_within_caps(path) {
+        return String::new();
+    }
     xlsx_to_markdown_inner(path).unwrap_or_default()
 }
 

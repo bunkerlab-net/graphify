@@ -55,6 +55,9 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var _names_ (values are never read).
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
+  Untrusted office/PDF files are screened before parsing (50 MiB on-disk cap; `.docx`/`.xlsx` zip-bomb guard at
+  512 MiB decompressed / 200:1 ratio) and silently skipped if they exceed the limits, so a malicious corpus file
+  cannot OOM a scan.
 - **Local-first** — `graph.json` lives next to your code; no daemon, no cloud, no account.
 - **Optional LLM-driven semantic extraction** through OpenAI, Claude (Anthropic), Gemini, DeepSeek, Kimi (Moonshot),
   Ollama, Bedrock, or any OpenAI-compatible **custom provider** registered with `graphify provider add`. The
@@ -62,7 +65,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 - **LLM community naming** — `graphify label` (or `cluster-only`) auto-names graph communities with the configured
   backend; degrades to `Community N` placeholders when no backend is available.
 - **AI-assistant integration** — drop-in installers for Claude Code, Codex, Amp, Cursor, Gemini CLI, GitHub Copilot,
-  VS Code, OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Pi, Devin CLI, Google Antigravity, and more.
+  VS Code, OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Kilo Code, Pi, Devin CLI, Google Antigravity, and more.
 - **MCP server** for any MCP-capable assistant (`graphify serve`).
 - **Git hooks + merge driver** so two branches editing the same `graph.json` produce a union-merged result.
 - **Cross-repo global graph** — aggregate every project you care about into one `~/.graphify/global-graph.json`.

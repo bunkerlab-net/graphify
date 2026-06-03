@@ -28,8 +28,9 @@ pub use install_skill::{
 };
 pub use markdown::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, ANTIGRAVITY_WORKFLOW, CLAUDE_MD_MARKER,
-    CLAUDE_MD_SECTION, CURSOR_RULE, GEMINI_MD_SECTION, KIRO_STEERING, OPENCODE_PLUGIN_JS,
-    SETTINGS_HOOK_MATCHER, VSCODE_INSTRUCTIONS_SECTION,
+    CLAUDE_MD_SECTION, CURSOR_RULE, GEMINI_MD_SECTION, KILO_PLUGIN_JS, KIRO_STEERING,
+    OPENCODE_PLUGIN_JS, READ_SETTINGS_HOOK_MATCHER, SETTINGS_HOOK_MATCHER,
+    VSCODE_INSTRUCTIONS_SECTION,
 };
 pub use uninstall_all::uninstall_all;
 
@@ -38,5 +39,7 @@ pub use uninstall_all::uninstall_all;
 pub(super) use fs::{
     dirs_home, install_skill, read_json_or_empty, remove_graphify_section, remove_skill, write_json,
 };
-pub(super) use hooks_json::{gemini_hook, settings_hook};
-pub(super) use skills::{SKILL_COPILOT_MD, SKILL_KIRO_MD, SKILL_MD, SKILL_PI_MD, SKILL_VSCODE_MD};
+pub(super) use hooks_json::{gemini_hook, read_settings_hook, settings_hook};
+pub(super) use skills::{
+    COMMAND_KILO_MD, SKILL_COPILOT_MD, SKILL_KIRO_MD, SKILL_MD, SKILL_PI_MD, SKILL_VSCODE_MD,
+};

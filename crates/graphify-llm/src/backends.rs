@@ -205,8 +205,13 @@ pub fn detect_backend_with(
     if let Ok(url) = std::env::var(ollama::BASE_URL_ENV)
         && !url.is_empty()
     {
-        ollama::validate_ollama_base_url(&url);
-        return Some("ollama".to_string());
+        // Fail closed: a link-local / cloud-metadata `OLLAMA_BASE_URL` is an SSRF
+        // target, so it must never auto-select the ollama backend. The actual
+        // send paths (`call_llm` / extraction) re-validate and surface the error;
+        // here we simply decline to select ollama and fall through. (F3)
+        if ollama::validate_ollama_base_url(&url, true).is_ok() {
+            return Some("ollama".to_string());
+        }
     }
     // Custom providers last: a configured `env_key` selects the provider.
     for (name, provider) in custom {

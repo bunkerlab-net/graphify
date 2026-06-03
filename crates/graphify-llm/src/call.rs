@@ -48,7 +48,7 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
 
     // Ollama: accept missing key, use sentinel.
     let key = if key.is_empty() && backend == "ollama" {
-        ollama::validate_ollama_base_url(&ollama_base_url);
+        ollama::validate_ollama_base_url(&ollama_base_url, true)?;
         "ollama".to_string()
     } else {
         key
