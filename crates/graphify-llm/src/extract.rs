@@ -62,6 +62,12 @@ pub fn extract_files_direct_mode(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| get_backend_api_key(backend));
 
+    // Resolve once and reuse below — `OLLAMA_BASE_URL` feeds both the F3
+    // hard-block validation and the actual `ollama` dispatch arm, so reading it
+    // a second time could validate a different value than the one sent.
+    let ollama_base_url = std::env::var("OLLAMA_BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
+
     // Ollama: hard-block link-local / cloud-metadata targets (F3) for *every*
     // ollama call, not only the no-key path — a non-empty OLLAMA_API_KEY must
     // not let a metadata `OLLAMA_BASE_URL` slip past the validator (graphify-py
@@ -69,14 +75,12 @@ pub fn extract_files_direct_mode(
     // divergence, see [[feedback_python_bugs_are_not_requirements]]). The no-key
     // warning + "ollama" sentinel stay on the empty-key path.
     let key = if backend == "ollama" {
-        let ollama_url = std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-        ollama::validate_ollama_base_url(&ollama_url, key.is_empty())?;
+        ollama::validate_ollama_base_url(&ollama_base_url, key.is_empty())?;
         if key.is_empty() {
             eprintln!(
                 "[graphify] WARNING: ollama backend selected with no OLLAMA_API_KEY set; \
-                 sending corpus to {ollama_url}. Set OLLAMA_API_KEY (any non-empty value) \
-                 to suppress this warning."
+                 sending corpus to {ollama_base_url}. Set OLLAMA_API_KEY (any non-empty \
+                 value) to suppress this warning."
             );
             "ollama".to_string()
         } else {
@@ -141,10 +145,8 @@ pub fn extract_files_direct_mode(
             deepseek::call_deepseek(&key, mdl, &msgs, max_out)
         }
         "ollama" => {
-            let base_url = std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
             let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
-            ollama::call_ollama(&key, &base_url, mdl, &msgs, max_out, &user_msg)
+            ollama::call_ollama(&key, &ollama_base_url, mdl, &msgs, max_out, &user_msg)
         }
         _ => unreachable!("backend_config already validated backend name"),
     }
