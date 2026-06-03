@@ -90,7 +90,10 @@ pub fn claude_uninstall(project_dir: &Path) -> Result<String, HooksError> {
     let mut msgs: Vec<String> = Vec::new();
 
     // Remove the user-scope skill tree first, mirroring Python's
-    // `_remove_skill_file("claude", project=False)` ordering.
+    // `_remove_skill_file("claude", project=False)` ordering. The message is
+    // emitted when the skill is present (before the best-effort `remove_skill`,
+    // which returns `()` and ignores errors) — the same ordering `gemini_uninstall`
+    // uses, so a reviewer's "message before op" note is intentional here.
     let skill_dst = claude_user_skill_dst();
     if skill_dst.exists() {
         msgs.push(format!("  skill removed    ->  {}", skill_dst.display()));

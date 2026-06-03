@@ -113,8 +113,9 @@ fn zip_within_caps_inner(
 
     // 2. Authoritative bounded-decompression pass: a member can under-declare its
     //    central-directory size, so stream every member with a hard byte ceiling.
+    //    The chunk size only bounds peak read memory (64 KiB), not the result.
     let mut total: u64 = 0;
-    let mut buf = vec![0u8; 1024 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)

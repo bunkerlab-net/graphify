@@ -4,6 +4,7 @@
 
 use std::net::IpAddr;
 
+use graphify_llm::call_llm;
 use graphify_llm::ollama::{
     call_ollama, call_ollama_plain, ollama_host_is_link_local_or_metadata_with,
     validate_ollama_base_url,
@@ -99,6 +100,22 @@ fn ollama_alias_resolving_to_link_local_blocked() {
         "v6-host",
         resolves_to_v6_ll
     ));
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn call_llm_blocks_metadata_ollama_url_at_call_site() {
+    // End-to-end: the link-local/metadata block fires through `call_llm`, not
+    // just the standalone validator. Ollama's no-API-key path (the real-world
+    // path) is where the URL is validated, so leave OLLAMA_API_KEY empty.
+    let mut g = EnvGuard::new();
+    g.set("OLLAMA_BASE_URL", "http://169.254.169.254/v1");
+    g.set("OLLAMA_API_KEY", "");
+    let result = call_llm("ping", "ollama", 32);
+    assert!(
+        result.is_err(),
+        "metadata OLLAMA_BASE_URL must be refused at the call site"
+    );
 }
 
 #[test]

@@ -289,14 +289,13 @@ pub fn validate_ollama_base_url(url: &str, warn: bool) -> Result<(), LlmError> {
     if ollama_host_is_link_local_or_metadata(&host) {
         return Err(LlmError::OllamaUrlBlocked(host));
     }
-    // Parse the 127.0.0.0/8 case as an IP rather than a `starts_with("127.")`
-    // prefix so a hostname like `127.evil.com` is correctly treated as
-    // non-loopback (and warned about). Deliberate divergence from graphify-py's
-    // literal `startswith("127.")`.
+    // Parse the host as an IP and use `IpAddr::is_loopback` (covers 127.0.0.0/8
+    // and `::1`) rather than a `starts_with("127.")` prefix, so a hostname like
+    // `127.evil.com` is correctly treated as non-loopback (and warned about).
+    // Deliberate divergence from graphify-py's literal `startswith("127.")`.
     let is_loopback = host == "localhost"
-        || host == "::1"
         || host
-            .parse::<std::net::Ipv4Addr>()
+            .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback());
     if warn && !is_loopback {
         let scheme_note = if parsed.scheme() == "http" {
