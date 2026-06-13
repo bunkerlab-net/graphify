@@ -14,7 +14,7 @@ graphify-google = { workspace = true }
 hex = { workspace = true }
 ignore_walk = { version = "0.4", package = "ignore" }
 indexmap = { workspace = true }
-lopdf = "0.40"
+lopdf = "0.41"
 md5 = "0.8"
 quick-xml = "0.40"
 rayon = { workspace = true }
@@ -28,7 +28,7 @@ thiserror = { workspace = true }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-lopdf = "0.40"
+lopdf = "0.41"
 tempfile = { workspace = true }
 
 [lints]
