@@ -38,9 +38,7 @@ pub fn validate_url(url: &str) -> Result<String, SecurityError> {
     // skip the private-IP block so mockito-driven tests can hit 127.0.0.1.
     // The env var name is deliberately verbose to avoid accidental enablement
     // and never appears in production deployment guidance.
-    let allow_private = std::env::var("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS")
-        .ok()
-        .is_some_and(|v| v == "1");
+    let allow_private = std::env::var("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS").is_ok_and(|v| v == "1");
     validate_url_with(url, allow_private)
 }
 

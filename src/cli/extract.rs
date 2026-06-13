@@ -720,8 +720,7 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
     // already rebuilding). Recovers the scan root from `.graphify_root` when
     // the user invoked update from inside graphify-out instead of the project.
     let env_force = std::env::var("GRAPHIFY_FORCE")
-        .ok()
-        .is_some_and(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"));
+        .is_ok_and(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"));
     let effective_force = force || env_force;
 
     let watch_path: std::path::PathBuf = if path.exists() {
