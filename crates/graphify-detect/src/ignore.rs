@@ -402,13 +402,12 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
         if anchored {
             if path
                 .strip_prefix(anchor)
-                .ok()
-                .is_some_and(|rel| anchored_include_matches(&path_to_forward_slash(rel), p))
+                .is_ok_and(|rel| anchored_include_matches(&path_to_forward_slash(rel), p))
             {
                 return true;
             }
         } else {
-            let root_matched = path.strip_prefix(root).ok().is_some_and(|rel| {
+            let root_matched = path.strip_prefix(root).is_ok_and(|rel| {
                 let rel_str = path_to_forward_slash(rel);
                 rel_matches(&rel_str, target_name, p)
             });
@@ -416,7 +415,7 @@ pub fn is_included(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool 
                 return true;
             }
             if anchor != root
-                && path.strip_prefix(anchor).ok().is_some_and(|rel| {
+                && path.strip_prefix(anchor).is_ok_and(|rel| {
                     let rel_str = path_to_forward_slash(rel);
                     rel_matches(&rel_str, target_name, p)
                 })
