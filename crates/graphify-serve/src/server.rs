@@ -281,7 +281,7 @@ fn dispatch(
                 .get("arguments")
                 .and_then(Value::as_object)
                 .unwrap_or(&empty_args);
-            let text = dispatch_tool(name, graph, communities, arguments, idf_cache);
+            let text = dispatch_tool(name, graph, communities, arguments, idf_cache, graph_path);
             Some(ok_response(
                 &id,
                 json!({"content": [{"type": "text", "text": text}]}),
@@ -328,9 +328,17 @@ fn dispatch_tool(
     communities: &IndexMap<i64, Vec<String>>,
     arguments: &serde_json::Map<String, Value>,
     idf_cache: &mut HashMap<String, f64>,
+    graph_path: &str,
 ) -> String {
     match name {
-        "query_graph" => tool_query_graph(graph, arguments, idf_cache),
+        "query_graph" => {
+            // Log the MCP query (kind="mcp_query") with timing + mode/depth/budget,
+            // mirroring graphify-py's serve._tool_query_graph (#1128).
+            let t0 = std::time::Instant::now();
+            let result = tool_query_graph(graph, arguments, idf_cache);
+            log_mcp_query(arguments, graph_path, &result, t0.elapsed());
+            result
+        }
         "get_node" => tool_get_node(graph, arguments),
         "get_neighbors" => tool_get_neighbors(graph, arguments),
         "get_community" => tool_get_community(graph, communities, arguments),
@@ -360,6 +368,44 @@ fn dispatch_tool(
         }
         other => format!("Unknown tool: {other}"),
     }
+}
+
+/// Append a `kind="mcp_query"` record to the query log (fail-silent), with the
+/// same `mode` / `depth` / `token_budget` defaults [`tool_query_graph`] applies.
+fn log_mcp_query(
+    arguments: &serde_json::Map<String, Value>,
+    graph_path: &str,
+    result: &str,
+    elapsed: std::time::Duration,
+) {
+    let Some(question) = arguments.get("question").and_then(Value::as_str) else {
+        return;
+    };
+    let mode = arguments
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("bfs");
+    let depth = arguments
+        .get("depth")
+        .and_then(Value::as_u64)
+        .map_or(3, |d| d.min(6));
+    let budget = arguments
+        .get("token_budget")
+        .and_then(Value::as_u64)
+        .unwrap_or(2000);
+    let mut extra = IndexMap::new();
+    extra.insert("mode".to_string(), json!(mode));
+    extra.insert("depth".to_string(), json!(depth));
+    extra.insert("token_budget".to_string(), json!(budget));
+    crate::querylog::log_query(&crate::querylog::QueryLog {
+        kind: "mcp_query",
+        question,
+        corpus: graph_path,
+        result: Some(result),
+        duration_ms: Some(elapsed.as_secs_f64() * 1000.0),
+        extra,
+        ..crate::querylog::QueryLog::default()
+    });
 }
 
 /// Dispatch a `resources/read` MCP request by URI to the matching resource reader.
