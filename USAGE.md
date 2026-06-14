@@ -95,7 +95,17 @@ graphify extract . --google-workspace    # also export .gdoc/.gsheet/.gslides si
 graphify extract . --global              # merge result into ~/.graphify/global-graph.json
 graphify extract . --global --as my-repo # custom tag for --global
 graphify extract . --mode deep           # aggressive INFERRED-edge semantic extraction
+graphify extract . --cargo               # also add crate→crate dependency edges from Cargo.toml
+graphify extract . --postgres "$DSN"     # also add a live PostgreSQL schema (needs the `postgres` build feature)
 ```
+
+`--cargo` walks the Cargo workspace/package manifests and emits one `crate:<name>` node per internal package
+plus a `crate_depends_on` edge for each internal dependency. `--postgres <DSN>` reconstructs a live database
+schema as graph nodes/edges; it is compiled only with the `postgres` build feature
+(`cargo install graphify --features postgres`) and otherwise exits with an error. Both augment a normal path
+scan (unlike graphify-py, the Rust `extract` keeps `<PATH>` required — point it at an empty directory to
+introspect a database alone). Raster images in the corpus reach the LLM as vision input; see
+[LLM backends](#llm-backends).
 
 Optional LLM-driven semantic extraction is wired through `--backend`/`--model`/`--mode`/`--token-budget`/
 `--max-concurrency`/`--api-timeout`/`--max-workers` (see `graphify extract --help` and the
@@ -371,10 +381,17 @@ Set `GRAPHIFY_NO_BACKUP=1` to disable backups entirely.
 ```bash
 graphify export neo4j                                            # → graphify-out/cypher.txt (import via cypher-shell)
 graphify export neo4j --push bolt://localhost:7687 --password ** # push directly to a live Neo4j instance
+graphify export falkordb                                         # → graphify-out/cypher.txt (OpenCypher, FalkorDB-compatible)
+graphify export falkordb --push falkordb://localhost:6379        # push directly to a live FalkorDB instance
 ```
 
 `export neo4j` defaults to writing a Cypher script. With `--push <uri>` it streams nodes and relationships to a live
 Neo4j instance. The password can come from `--password` or the `NEO4J_PASSWORD` env var; the user defaults to `neo4j`.
+
+`export falkordb` writes the same `cypher.txt` by default (FalkorDB is OpenCypher-compatible). `--push <falkordb://…>`
+streams the graph into a live FalkorDB instance via `GRAPH.QUERY` and is compiled only with the `falkordb` build
+feature (`cargo install graphify --features falkordb`); without it, `--push` exits with an error while the
+`cypher.txt` path still works. Optional `--user` / `--password` (or `FALKORDB_PASSWORD`) supply auth.
 
 ---
 
@@ -435,12 +452,27 @@ stale; you re-extract on demand.
 ### MCP server (Claude Desktop, Codex, etc.)
 
 ```bash
-graphify serve                       # stdio-only JSON-RPC, mounts graphify-out/graph.json
+graphify serve                       # stdio JSON-RPC (default), mounts graphify-out/graph.json
 graphify serve --graph other.json
+graphify serve --transport http      # Streamable HTTP on http://127.0.0.1:8080/mcp
+graphify serve --transport http --host 0.0.0.0 --port 9000 --api-key SECRET
+graphify serve --transport http --json-response   # single JSON reply instead of an SSE stream
 ```
 
 Exposes tools `query_graph`, `get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, `shortest_path`
 to any MCP client.
+
+The default `stdio` transport is the per-developer mode. The **Streamable HTTP**
+transport (MCP spec 2025-03-26) lets one shared process host the graph for a
+team; it is compiled only with the `http` build feature
+(`cargo install graphify --features http`) and otherwise `--transport http`
+exits with an error. Flags: `--host` / `--port` (bind address, default
+`127.0.0.1:8080`), `--api-key` (required via `Authorization: Bearer <key>` or
+`X-API-Key: <key>`; env `GRAPHIFY_API_KEY`), `--path` (mount path, default
+`/mcp`), `--json-response` (one `application/json` reply instead of an SSE
+stream), `--stateless` (skip per-session ids), and `--session-timeout`
+(accepted for compatibility; a no-op since graphify keeps no per-session state).
+Binding `0.0.0.0` without an `--api-key` prints a warning.
 
 ### Per-platform installers
 
@@ -449,6 +481,7 @@ toward `graphify query` instead of grepping raw files.
 
 ```bash
 graphify claude install        # CLAUDE.md + two PreToolUse hooks (Bash search + Read/Glob)
+graphify codebuddy install     # CODEBUDDY.md + .codebuddy/settings.json PreToolUse hooks + skill
 graphify gemini install        # GEMINI.md + BeforeTool hook (Gemini CLI)
 graphify cursor install        # .cursor/rules/graphify.mdc
 graphify vscode install        # .github/copilot-instructions.md + skill copy
@@ -582,18 +615,28 @@ completes the feature.)
 
 ### LLM backends
 
-The semantic-extraction layer routes to one of: `gemini`, `kimi`, `claude`, `openai`, `deepseek`, `ollama`, `bedrock`.
-The active backend is auto-detected from environment variables:
+The semantic-extraction layer routes to one of: `gemini`, `kimi`, `claude`, `openai`, `deepseek`, `ollama`,
+`bedrock`, `azure`. The active backend is auto-detected from environment variables:
 
-| Backend    | Required env                                         |
-| ---------- | ---------------------------------------------------- |
-| `openai`   | `OPENAI_API_KEY`                                     |
-| `gemini`   | `GOOGLE_API_KEY`                                     |
-| `claude`   | `ANTHROPIC_API_KEY`                                  |
-| `kimi`     | `MOONSHOT_API_KEY`                                   |
-| `deepseek` | `DEEPSEEK_API_KEY`                                   |
-| `ollama`   | local daemon — set `OLLAMA_HOST` if non-default      |
-| `bedrock`  | Any AWS credential-chain entry — see paragraph below |
+| Backend    | Required env                                            |
+| ---------- | ------------------------------------------------------- |
+| `openai`   | `OPENAI_API_KEY`                                        |
+| `gemini`   | `GOOGLE_API_KEY`                                        |
+| `claude`   | `ANTHROPIC_API_KEY`                                     |
+| `kimi`     | `MOONSHOT_API_KEY`                                      |
+| `deepseek` | `DEEPSEEK_API_KEY`                                      |
+| `ollama`   | local daemon — set `OLLAMA_HOST` if non-default         |
+| `bedrock`  | Any AWS credential-chain entry — see paragraph below    |
+| `azure`    | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`        |
+
+The Azure OpenAI backend posts to `{endpoint}/openai/deployments/{model}/chat/completions` with an `api-key`
+header. The deployment/model resolves from `--model`, else `AZURE_OPENAI_DEPLOYMENT` / `GRAPHIFY_AZURE_MODEL`
+(default `gpt-4o`); the API version defaults to `2024-12-01-preview` (override with `AZURE_OPENAI_API_VERSION`).
+
+**Vision.** `claude`, `openai`, `gemini`, `kimi`, and `bedrock` send raster images (PNG/JPG/GIF/WebP) as visual
+input, and `claude-cli` reads them by path via its Read tool; other backends (including `azure`, `deepseek`, and
+custom providers) record each image as a text-reference node so it still becomes a graph node. Ollama is opt-in via
+`GRAPHIFY_OLLAMA_VISION=1` once a vision-capable model is selected.
 
 The Bedrock backend uses `aws-sdk-bedrockruntime`, which resolves credentials through the standard AWS provider chain:
 `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (with optional `AWS_SESSION_TOKEN`), `AWS_PROFILE` from
