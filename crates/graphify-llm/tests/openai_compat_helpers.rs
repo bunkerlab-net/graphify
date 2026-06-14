@@ -4,7 +4,8 @@
 
 use graphify_llm::openai_compat::{
     OpenAiRequest, api_timeout, call_openai_compat, derive_ollama_num_ctx, extraction_messages,
-    plain_messages, resolve_max_tokens, safe_parse_response,
+    model_requires_default_temperature, plain_messages, resolve_max_tokens, resolve_temperature,
+    safe_parse_response,
 };
 use serde_json::json;
 use std::time::Duration;
@@ -225,4 +226,89 @@ fn call_openai_compat_rejects_bad_scheme() {
         timeout: Duration::from_secs(1),
     };
     assert!(call_openai_compat(&req).is_err());
+}
+
+// ── temperature resolution (#1191) ───────────────────────────────────────────
+
+#[test]
+fn model_requires_default_temperature_true_for_reasoning_models() {
+    for model in [
+        "o1",
+        "o1-preview",
+        "o1-mini",
+        "o3",
+        "o3-mini",
+        "o4-mini",
+        "gpt-5",
+        "gpt-5-mini",
+        "openai/o3-mini",
+    ] {
+        assert!(
+            model_requires_default_temperature(model),
+            "{model} should require default temperature"
+        );
+    }
+}
+
+#[test]
+fn model_requires_default_temperature_false_for_normal_models() {
+    for model in [
+        "gpt-4.1-mini",
+        "gpt-4o",
+        "gpt-4.1",
+        "kimi-k2.6",
+        "deepseek-v4-flash",
+        "",
+        "o1x",
+        "go3",
+    ] {
+        assert!(
+            !model_requires_default_temperature(model),
+            "{model} should NOT require default temperature"
+        );
+    }
+}
+
+#[serial_test::serial(env)]
+#[test]
+fn resolve_temperature_default_for_normal_model() {
+    let mut g = EnvGuard::new();
+    g.remove("GRAPHIFY_LLM_TEMPERATURE");
+    assert_eq!(resolve_temperature(Some(0.0), "gpt-4.1-mini"), Some(0.0));
+}
+
+#[serial_test::serial(env)]
+#[test]
+fn resolve_temperature_omitted_for_reasoning_model() {
+    let mut g = EnvGuard::new();
+    g.remove("GRAPHIFY_LLM_TEMPERATURE");
+    assert_eq!(resolve_temperature(Some(0.0), "o3-mini"), None);
+    assert_eq!(resolve_temperature(Some(0.0), "gpt-5"), None);
+}
+
+#[serial_test::serial(env)]
+#[test]
+fn resolve_temperature_env_var_numeric_overrides() {
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_LLM_TEMPERATURE", "0.7");
+    assert_eq!(resolve_temperature(Some(0.0), "gpt-4.1-mini"), Some(0.7));
+    // Env var wins even for a reasoning model (explicit user choice).
+    assert_eq!(resolve_temperature(Some(0.0), "o3-mini"), Some(0.7));
+}
+
+#[serial_test::serial(env)]
+#[test]
+fn resolve_temperature_env_var_none_omits() {
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_LLM_TEMPERATURE", "none");
+    assert_eq!(resolve_temperature(Some(0.0), "gpt-4.1-mini"), None);
+}
+
+#[serial_test::serial(env)]
+#[test]
+fn resolve_temperature_env_var_invalid_falls_back() {
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_LLM_TEMPERATURE", "hot");
+    assert_eq!(resolve_temperature(Some(0.0), "gpt-4.1-mini"), Some(0.0));
+    assert_eq!(resolve_temperature(Some(0.0), "o3-mini"), None);
 }

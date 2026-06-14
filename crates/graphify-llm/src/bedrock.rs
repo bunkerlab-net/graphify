@@ -24,7 +24,7 @@ use aws_sdk_bedrockruntime::types::{
 use serde_json::json;
 use tokio::runtime::Runtime;
 
-use crate::openai_compat::resolve_max_tokens;
+use crate::openai_compat::{resolve_max_tokens, resolve_temperature};
 use crate::{
     EXTRACTION_SYSTEM, LlmBackend, LlmError, LlmResponse, parse_llm_json, response_is_hollow,
 };
@@ -226,9 +226,14 @@ pub fn call_bedrock_with_system(
     let sdk_messages = build_messages(messages)?;
     let system = SystemContentBlock::Text(system_prompt.to_string());
 
+    // Honour GRAPHIFY_LLM_TEMPERATURE / reasoning-model omission (#1191). The
+    // Converse API treats temperature as optional; omit it when resolved to None.
+    #[allow(clippy::cast_possible_truncation)]
+    // temperature is a small bounded value; f64 -> f32 loss is immaterial
+    let temperature = resolve_temperature(Some(0.0), model).map(|t| t as f32);
     let inference = InferenceConfiguration::builder()
         .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))
-        .temperature(0.0)
+        .set_temperature(temperature)
         .build();
 
     let output = runtime().block_on(async {
@@ -388,9 +393,13 @@ pub fn call_bedrock_plain(
             .map_err(|e| LlmError::Parse(format!("bedrock message build failed: {e}")))?,
     ];
 
+    // Honour GRAPHIFY_LLM_TEMPERATURE / reasoning-model omission (#1191).
+    #[allow(clippy::cast_possible_truncation)]
+    // temperature is a small bounded value; f64 -> f32 loss is immaterial
+    let temperature = resolve_temperature(Some(0.0), model).map(|t| t as f32);
     let inference = InferenceConfiguration::builder()
         .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))
-        .temperature(0.0)
+        .set_temperature(temperature)
         .build();
 
     let output = runtime().block_on(async {
