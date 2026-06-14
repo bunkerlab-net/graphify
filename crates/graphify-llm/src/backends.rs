@@ -5,7 +5,8 @@
 //! and environment-key resolution layer shared by all call sites.
 
 use crate::{
-    LlmBackend, LlmError, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai,
+    LlmBackend, LlmError, azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama,
+    openai,
 };
 
 /// Pricing entry (USD per 1M tokens).
@@ -87,6 +88,16 @@ pub const BACKENDS: &[BackendConfig] = &[
         default_max_tokens: 16_384,
     },
     BackendConfig {
+        name: "azure",
+        default_model: azure::DEFAULT_MODEL,
+        // gpt-4o pricing; may mis-estimate other deployments.
+        pricing: Pricing {
+            input: 2.50,
+            output: 10.00,
+        },
+        default_max_tokens: 16_384,
+    },
+    BackendConfig {
         name: "bedrock",
         default_model: bedrock::DEFAULT_MODEL,
         pricing: Pricing {
@@ -124,6 +135,7 @@ pub fn router(name: &str) -> Result<Box<dyn LlmBackend>, LlmError> {
         "openai" => Ok(Box::new(openai::OpenAiBackend::from_env())),
         "deepseek" => Ok(Box::new(deepseek::DeepSeekBackend::from_env())),
         "ollama" => Ok(Box::new(ollama::OllamaBackend::from_env())),
+        "azure" => Ok(Box::new(azure::AzureBackend::from_env())),
         "bedrock" => Ok(Box::new(bedrock::BedrockBackend::from_env())),
         "claude-cli" => Ok(Box::new(claude_cli::ClaudeCliBackend::new())),
         other => {
@@ -147,6 +159,7 @@ pub fn get_backend_api_key(backend: &str) -> String {
         "openai" => std::env::var(openai::ENV_KEY).unwrap_or_default(),
         "deepseek" => std::env::var(deepseek::ENV_KEY).unwrap_or_default(),
         "ollama" => std::env::var(ollama::ENV_KEY).unwrap_or_default(),
+        "azure" => std::env::var(azure::ENV_KEY).unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -161,14 +174,15 @@ pub fn format_backend_env_keys(backend: &str) -> String {
         "openai" => openai::ENV_KEY.to_string(),
         "deepseek" => deepseek::ENV_KEY.to_string(),
         "ollama" => ollama::ENV_KEY.to_string(),
+        "azure" => format!("{} + {}", azure::ENV_KEY, azure::ENDPOINT_ENV),
         _ => "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (or AWS_PROFILE)".to_string(),
     }
 }
 
 /// Detect which backend has a key configured.
 ///
-/// Priority: gemini → kimi → claude → openai → deepseek → bedrock → ollama.
-/// Returns `None` if no backend is configured.
+/// Priority: gemini → kimi → claude → openai → deepseek → azure → bedrock →
+/// ollama. Returns `None` if no backend is configured.
 ///
 /// Bedrock requires that AWS credentials actually appear to be configured —
 /// not just `AWS_REGION` — otherwise every extraction chunk would fail with
@@ -186,9 +200,10 @@ pub fn detect_backend() -> Option<String> {
 /// custom-provider set.
 ///
 /// Built-in backends take priority (gemini → kimi → claude → openai → deepseek →
-/// bedrock → ollama); only then are custom providers consulted, in registry
-/// order, returning the first whose `env_key` is set (#1084). Splitting the
-/// custom set out makes the priority ordering testable without a `providers.json`.
+/// azure → bedrock → ollama); only then are custom providers consulted, in
+/// registry order, returning the first whose `env_key` is set (#1084). Splitting
+/// the custom set out makes the priority ordering testable without a
+/// `providers.json`.
 #[must_use]
 pub fn detect_backend_with(
     custom: &indexmap::IndexMap<String, crate::providers::CustomProvider>,
@@ -197,6 +212,13 @@ pub fn detect_backend_with(
         if !get_backend_api_key(backend).is_empty() {
             return Some(backend.to_string());
         }
+    }
+    // Azure needs BOTH a key and an endpoint (a bare key is not enough to route
+    // a request), so it is gated on `AZURE_OPENAI_ENDPOINT` as well.
+    if !get_backend_api_key("azure").is_empty()
+        && std::env::var(azure::ENDPOINT_ENV).is_ok_and(|v| !v.trim().is_empty())
+    {
+        return Some("azure".to_string());
     }
     if bedrock::credentials_appear_configured() {
         return Some("bedrock".to_string());
@@ -240,6 +262,8 @@ pub fn backend_selection_env_vars() -> Vec<&'static str> {
         claude::ENV_KEY,
         openai::ENV_KEY,
         deepseek::ENV_KEY,
+        azure::ENV_KEY,
+        azure::ENDPOINT_ENV,
     ];
     vars.extend_from_slice(bedrock::CREDENTIAL_ENV_VARS);
     vars.push(ollama::BASE_URL_ENV);

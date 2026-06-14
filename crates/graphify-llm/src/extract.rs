@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
 use crate::read::read_files;
 use crate::{LlmError, LlmResponse};
-use crate::{bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat};
+use crate::{
+    azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
+};
 
 /// Extract semantic nodes/edges from a list of files using the given backend.
 ///
@@ -147,6 +149,17 @@ pub fn extract_files_direct_mode(
         "ollama" => {
             let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
             ollama::call_ollama(&key, &ollama_base_url, mdl, &msgs, max_out, &user_msg)
+        }
+        "azure" => {
+            // Azure resolves its deployment from the environment when the caller
+            // did not pass an explicit `--model` (mirrors the env-derived
+            // `default_model` in Python's BACKENDS["azure"]).
+            let azure_mdl = model
+                .filter(|s| !s.is_empty())
+                .map_or_else(azure::resolve_model, str::to_string);
+            let endpoint = azure::resolve_endpoint()?;
+            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
+            azure::call_azure(&key, &endpoint, &azure_mdl, &msgs, max_out)
         }
         _ => unreachable!("backend_config already validated backend name"),
     }

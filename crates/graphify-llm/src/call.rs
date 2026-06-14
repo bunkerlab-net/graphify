@@ -6,7 +6,9 @@
 
 use crate::LlmError;
 use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
-use crate::{bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat};
+use crate::{
+    azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
+};
 
 /// Send a plain-text `prompt` to the named `backend` and return the text reply.
 ///
@@ -153,6 +155,13 @@ pub fn call_llm_with_model(
         "openai" => openai::call_openai_plain(&key, mdl, prompt, max_tokens_u32),
         "deepseek" => deepseek::call_deepseek_plain(&key, mdl, prompt, max_tokens_u32),
         "ollama" => ollama::call_ollama_plain(&key, &ollama_base_url, mdl, prompt, max_tokens_u32),
+        "azure" => {
+            // Resolve the deployment from the environment when no override is
+            // given, then require AZURE_OPENAI_ENDPOINT.
+            let azure_mdl = model.map_or_else(azure::resolve_model, str::to_string);
+            let endpoint = azure::resolve_endpoint()?;
+            azure::call_azure_plain(&key, &endpoint, &azure_mdl, prompt, max_tokens_u32)
+        }
         _ => unreachable!("backend_config already validated backend name"),
     }
 }

@@ -72,6 +72,8 @@ fn clear_backend_envs(g: &mut EnvGuard) {
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "DEEPSEEK_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
         "OLLAMA_BASE_URL",
         "AWS_PROFILE",
         "AWS_REGION",
@@ -454,6 +456,42 @@ fn test_estimate_cost_nonzero_for_paid_backend() {
 fn test_estimate_cost_unknown_backend_returns_zero() {
     let cost = estimate_cost("nonexistent-backend", 1_000_000, 1_000_000);
     assert_eq!(cost, 0.0_f64);
+}
+
+#[test]
+fn test_estimate_cost_azure_no_keyerror() {
+    // azure pricing: $2.50/M input, $10.00/M output (gpt-4o).
+    let cost = estimate_cost("azure", 1_000_000, 500_000);
+    assert!((cost - (2.50_f64 + 5.00_f64)).abs() < 1e-9, "got {cost}");
+}
+
+// ── Azure backend detection (#azure) ──────────────────────────────────────
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_returns_azure_when_both_vars_set() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AZURE_OPENAI_API_KEY", "azure-key");
+    g.set(
+        "AZURE_OPENAI_ENDPOINT",
+        "https://my-resource.openai.azure.com/",
+    );
+
+    assert_eq!(detect_backend().as_deref(), Some("azure"));
+    assert_eq!(graphify_llm::get_backend_api_key("azure"), "azure-key");
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_azure_requires_endpoint_not_just_key() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AZURE_OPENAI_API_KEY", "azure-key");
+    g.remove("AZURE_OPENAI_ENDPOINT");
+
+    // A bare key without an endpoint must NOT auto-select azure.
+    assert_ne!(detect_backend().as_deref(), Some("azure"));
 }
 
 // ---------------------------------------------------------------------------
