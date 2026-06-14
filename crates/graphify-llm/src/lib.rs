@@ -78,7 +78,7 @@ pub use providers::{
     CustomProvider, custom_providers_path, is_builtin_backend, load_custom_providers,
     load_custom_providers_from, provider_base_url_ok,
 };
-pub use read::read_files;
+pub use read::{neutralise_injection_sentinels, read_files, wrap_untrusted};
 pub use response::{LlmBackend, LlmResponse};
 pub use retry::{
     extract_with_adaptive_retry, looks_like_context_exceeded, looks_like_context_exceeded_dyn,
