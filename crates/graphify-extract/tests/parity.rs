@@ -1214,6 +1214,66 @@ fn extract_json_no_self_loops() {
     }
 }
 
+/// `test_extract_json_data_file_skipped`: a data-shaped `.json` (eval fixture /
+/// dataset) must NOT emit per-key nodes (#1224).
+#[test]
+fn extract_json_data_file_skipped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("cases.json");
+    std::fs::write(
+        &data,
+        r#"{"generation": {"target": "gpt-4", "cases_file": "c.json", "num_cases": 12},
+            "prompt_inputs_spec": {"a": 1, "b": 2},
+            "suite": [{"name": "x"}, {"name": "y"}]}"#,
+    )
+    .expect("write fixture");
+    let result = extract_json(&data);
+    assert!(result.nodes.is_empty(), "nodes: {:?}", result.nodes);
+    assert!(result.edges.is_empty(), "edges: {:?}", result.edges);
+}
+
+/// `test_extract_json_top_level_array_skipped`: a JSON file whose root is an
+/// array is data, never a config/manifest.
+#[test]
+fn extract_json_top_level_array_skipped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("records.json");
+    std::fs::write(&data, r#"[{"id": 1}, {"id": 2}]"#).expect("write fixture");
+    let result = extract_json(&data);
+    assert!(result.nodes.is_empty());
+    assert!(result.edges.is_empty());
+}
+
+/// `test_extract_json_config_by_filename_still_extracted`: `tsconfig.json` must
+/// still be AST-extracted even without telltale keys.
+#[test]
+fn extract_json_config_by_filename_still_extracted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg = tmp.path().join("tsconfig.json");
+    std::fs::write(&cfg, r#"{"compilerOptions": {"strict": true}}"#).expect("write fixture");
+    let result = extract_json(&cfg);
+    assert!(!result.nodes.is_empty(), "config json should be extracted");
+}
+
+/// `test_extract_json_config_by_key_probe`: an arbitrarily-named JSON with
+/// config keys (`dependencies`) is still extracted.
+#[test]
+fn extract_json_config_by_key_probe() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg = tmp.path().join("weird-name.json");
+    std::fs::write(&cfg, r#"{"dependencies": {"lodash": "^4"}}"#).expect("write fixture");
+    let result = extract_json(&cfg);
+    let import_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports")
+        .collect();
+    assert!(
+        import_edges.iter().any(|e| e.target.contains("lodash")),
+        "expected lodash import edge: {import_edges:?}"
+    );
+}
+
 // ── Astro extractor ───────────────────────────────────────────────────────────
 
 fn write_file(path: &Path, body: &str) {
