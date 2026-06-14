@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use serde_json::Value;
 
 use graphify_build::{prefix_graph_for_global, prune_repo_from_graph};
@@ -86,42 +86,63 @@ pub fn global_add(
     let mut global = load_graph_from_file(graph_path)?;
     let removed = prune_repo_from_graph(&mut global, repo_tag);
 
-    let external_labels: IndexSet<String> = global
-        .nodes()
-        .filter(|(_, attrs)| {
-            attrs
-                .get("source_file")
-                .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
-        })
-        .filter_map(|(_, attrs)| attrs.get("label").and_then(Value::as_str).map(String::from))
-        .collect();
+    // Map each external library label already present in the global graph to
+    // its node ID, so a duplicate external contributed by this repo can be
+    // rewired onto the existing node. Last writer wins, matching the Python
+    // dict comprehension.
+    let mut external_labels: IndexMap<String, String> = IndexMap::new();
+    for (id, attrs) in global.nodes() {
+        let no_source = attrs
+            .get("source_file")
+            .is_none_or(|v| v.as_str().is_none_or(str::is_empty));
+        if no_source
+            && let Some(label) = attrs.get("label").and_then(Value::as_str)
+            && !label.is_empty()
+        {
+            external_labels.insert(label.to_string(), id.clone());
+        }
+    }
 
-    let nodes_to_skip: IndexSet<String> = prefixed
-        .nodes()
-        .filter(|(_, attrs)| {
-            let no_source = attrs
-                .get("source_file")
-                .is_none_or(|v| v.as_str().is_none_or(str::is_empty));
-            let label = attrs.get("label").and_then(Value::as_str).unwrap_or("");
-            no_source && !label.is_empty() && external_labels.contains(label)
-        })
-        .map(|(id, _)| id.clone())
-        .collect();
-
+    // Map each deduplicated external in the incoming prefixed graph onto the
+    // existing global node so that edges incident to it can be rewired instead
+    // of dropped.
+    let mut remap: IndexMap<String, String> = IndexMap::new();
     for (id, attrs) in prefixed.nodes() {
-        if !nodes_to_skip.contains(id) {
+        let no_source = attrs
+            .get("source_file")
+            .is_none_or(|v| v.as_str().is_none_or(str::is_empty));
+        if no_source
+            && let Some(label) = attrs.get("label").and_then(Value::as_str)
+            && let Some(existing) = external_labels.get(label)
+        {
+            remap.insert(id.clone(), existing.clone());
+        }
+    }
+
+    // Add prefixed nodes except the deduplicated externals.
+    for (id, attrs) in prefixed.nodes() {
+        if !remap.contains_key(id) {
             global.add_node(id, attrs.clone());
         }
     }
+    // Rewire edges through the remap table; skip self-loops it may introduce.
     let mut edges_added: usize = 0;
     for edge in prefixed.edges() {
-        if !nodes_to_skip.contains(&edge.source) && !nodes_to_skip.contains(&edge.target) {
-            global.add_edge(&edge.source, &edge.target, edge.attrs.clone());
+        let u = remap
+            .get(&edge.source)
+            .cloned()
+            .unwrap_or_else(|| edge.source.clone());
+        let v = remap
+            .get(&edge.target)
+            .cloned()
+            .unwrap_or_else(|| edge.target.clone());
+        if u != v {
+            global.add_edge(&u, &v, edge.attrs.clone());
             edges_added += 1;
         }
     }
 
-    let added = prefixed.node_count() - nodes_to_skip.len();
+    let added = prefixed.node_count() - remap.len();
     save_graph_to_file(graph_path, &global)?;
 
     manifest.repos.insert(

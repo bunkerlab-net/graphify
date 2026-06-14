@@ -34,6 +34,14 @@ fn make_graph(nodes: &[(&str, &[(&str, &str)])], edges: &[(&str, &str)]) -> Grap
     g
 }
 
+/// Build an attribute map from `(key, value)` string pairs.
+fn attrs(pairs: &[(&str, &str)]) -> IndexMap<String, Value> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), Value::String((*v).to_string())))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // build helpers (prefix_graph_for_global / prune_repo_from_graph)
 // ---------------------------------------------------------------------------
@@ -210,6 +218,81 @@ fn test_global_add_two_repos_no_collision() {
     assert!(merged.contains_node("repoA::userservice"));
     assert!(merged.contains_node("repoB::userservice"));
     assert_eq!(merged.node_count(), 2); // no silent collapse
+}
+
+// Mirrors: test_global_add_rewires_edges_to_deduplicated_externals
+#[test]
+fn test_global_add_rewires_edges_to_deduplicated_externals() {
+    let tmp = tempdir().expect("tempdir");
+
+    let mut ga = Graph::new(GraphKind::Graph);
+    ga.add_node(
+        "moda",
+        attrs(&[("label", "ModA"), ("source_file", "src/a.py")]),
+    );
+    ga.add_node("requests", attrs(&[("label", "requests")]));
+    ga.add_edge("moda", "requests", attrs(&[("relation", "imports")]));
+
+    let mut gb = Graph::new(GraphKind::Graph);
+    gb.add_node(
+        "modb",
+        attrs(&[("label", "ModB"), ("source_file", "src/b.py")]),
+    );
+    gb.add_node("requests", attrs(&[("label", "requests")]));
+    gb.add_edge("modb", "requests", attrs(&[("relation", "imports")]));
+
+    let src1 = write_graph_file(tmp.path(), "graph1.json", &ga);
+    let src2 = write_graph_file(tmp.path(), "graph2.json", &gb);
+
+    let global_dir = tmp.path().join(".graphify");
+    let graph_path = global_dir.join("global-graph.json");
+    let manifest_path = global_dir.join("global-manifest.json");
+
+    global_add(&src1, "repoA", &graph_path, &manifest_path).expect("test invariant");
+    global_add(&src2, "repoB", &graph_path, &manifest_path).expect("test invariant");
+
+    let merged = load_graph_from_file(&graph_path).expect("test invariant");
+
+    // repoB's external "requests" was deduplicated against repoA's.
+    assert!(merged.contains_node("repoA::requests"));
+    assert!(!merged.contains_node("repoB::requests"));
+    // repoA's edge is untouched.
+    assert!(merged.edge_data("repoA::moda", "repoA::requests").is_some());
+    // repoB's edge must be rewired to the existing external node, not dropped.
+    let rewired = merged
+        .edge_data("repoB::modb", "repoA::requests")
+        .expect("rewired edge present");
+    assert_eq!(
+        rewired.get("relation").and_then(Value::as_str),
+        Some("imports")
+    );
+}
+
+// Rust-side regression: a corrupt global manifest is backed up (not silently
+// wiped) so the user does not lose every tracked repo. Mirrors the data-loss
+// fix in `global_graph._load_manifest`.
+#[test]
+fn test_corrupt_manifest_backed_up_not_wiped() {
+    let tmp = tempdir().expect("tempdir");
+    let manifest_path = tmp.path().join("global-manifest.json");
+    std::fs::write(&manifest_path, "{ not valid json").expect("write");
+
+    // Reading through the public API returns the empty default ...
+    let repos = global_list(&manifest_path);
+    assert!(repos.is_empty());
+
+    // ... and the corrupt original is moved aside to a timestamped backup.
+    assert!(!manifest_path.exists());
+    let backups = std::fs::read_dir(tmp.path())
+        .expect("readdir")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .contains("global-manifest.json.corrupt.")
+        })
+        .count();
+    assert_eq!(backups, 1);
 }
 
 // Mirrors: test_global_remove
