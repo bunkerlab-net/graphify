@@ -355,13 +355,7 @@ pub fn call_claude_cli_inner(
         )));
     }
 
-    let envelope: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
-        LlmError::ClaudeCliError(format!(
-            "claude -p produced unparseable JSON envelope: {e}; \
-             first 500 chars of stdout: {:?}",
-            stdout.chars().take(500).collect::<String>()
-        ))
-    })?;
+    let envelope = claude_cli_envelope(&stdout)?;
 
     let raw_content = envelope
         .get("result")
@@ -452,12 +446,46 @@ pub fn call_claude_cli_plain(user_message: &str, _max_tokens: u32) -> Result<Str
             "claude -p exited {code}: {snippet}"
         )));
     }
-    let envelope: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
-        LlmError::ClaudeCliError(format!("claude -p produced unparseable JSON envelope: {e}"))
-    })?;
+    let envelope = claude_cli_envelope(&stdout)?;
     Ok(envelope
         .get("result")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string())
+}
+
+/// Parse the JSON from `claude -p --output-format json`, normalizing both
+/// envelope shapes (#edfe581). Older CLIs returned a single envelope object;
+/// CLI >= ~2.1 emits a JSON ARRAY of streamed event objects (system init,
+/// assistant turns, optional rate-limit event, and a terminal
+/// `{"type":"result"}`). Returns the result dict either way.
+fn claude_cli_envelope(stdout: &str) -> Result<serde_json::Value, LlmError> {
+    let snippet = || stdout.chars().take(500).collect::<String>();
+    let parsed: serde_json::Value = serde_json::from_str(stdout).map_err(|e| {
+        LlmError::ClaudeCliError(format!(
+            "claude -p produced unparseable JSON envelope: {e}; \
+             first 500 chars of stdout: {:?}",
+            snippet()
+        ))
+    })?;
+    let Some(events) = parsed.as_array() else {
+        return Ok(parsed);
+    };
+    // Prefer the terminal {"type":"result"} event; fall back to the last
+    // object in the stream.
+    if let Some(result) = events
+        .iter()
+        .rev()
+        .find(|e| e.get("type").and_then(serde_json::Value::as_str) == Some("result"))
+    {
+        return Ok(result.clone());
+    }
+    if let Some(last) = events.last().filter(|e| e.is_object()) {
+        return Ok(last.clone());
+    }
+    Err(LlmError::ClaudeCliError(format!(
+        "claude -p returned a JSON array with no result object; \
+         first 500 chars of stdout: {:?}",
+        snippet()
+    )))
 }

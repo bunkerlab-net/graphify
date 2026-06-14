@@ -829,6 +829,55 @@ fn test_claude_cli_token_accounting_includes_cache() {
     assert_eq!(result.finish_reason, "stop");
 }
 
+/// CLI >= 2.1 emits a JSON ARRAY of streamed events terminated by a
+/// `{"type":"result"}` object; it must parse identically to the legacy single
+/// envelope (#edfe581).
+#[test]
+fn test_claude_cli_handles_json_array_envelope() {
+    let inner = extraction_result_json();
+    let result_obj: serde_json::Value =
+        serde_json::from_str(&cli_envelope(&inner, "end_turn", 6, 11)).expect("result obj");
+    let array = json!([
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {}},
+        {"type": "rate_limit_event"},
+        result_obj,
+    ])
+    .to_string();
+    let runner = MockRunner {
+        stdout: array,
+        code: 0,
+    };
+    let result = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+    )
+    .expect("array envelope should parse");
+    assert_eq!(result.nodes.len(), 2);
+    assert_eq!(result.edges.len(), 1);
+    assert_eq!(result.input_tokens, 6 + 17837 + 30800);
+}
+
+/// A JSON array with no result object and a non-object tail is a hard error.
+#[test]
+fn test_claude_cli_array_without_result_object_errors() {
+    let array = json!([{"type": "system"}, "not-an-object-tail"]).to_string();
+    let runner = MockRunner {
+        stdout: array,
+        code: 0,
+    };
+    let err = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None)
+        .expect_err("should error");
+    match err {
+        graphify_llm::LlmError::ClaudeCliError(m) => {
+            assert!(m.contains("no result object"), "unexpected message: {m}");
+        }
+        other => panic!("expected ClaudeCliError, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_claude_cli_finish_reason_length_on_max_tokens() {
     let inner = extraction_result_json();
