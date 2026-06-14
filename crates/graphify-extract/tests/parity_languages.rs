@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use graphify_extract::{
-    FileResult, extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp,
+    FileResult, extract_apex, extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp,
     extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf, extract_dmi,
     extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
     extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package, extract_lua,
@@ -752,6 +752,128 @@ fn slnx_invalid_xml() -> Result<(), Box<dyn std::error::Error>> {
 fn slnx_missing_file() {
     let r = extract_slnx(Path::new("/nonexistent/file.slnx"));
     assert!(r.error.is_some());
+}
+
+// ── Salesforce Apex (.cls / .trigger) — test_languages.py ────────────────────
+
+/// `test_apex_class_extraction`
+#[test]
+fn apex_class_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"AccountService"));
+}
+
+/// `test_apex_enum_extraction`
+#[test]
+fn apex_enum_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"AccountStatus"));
+}
+
+/// `test_apex_interface_extraction`
+#[test]
+fn apex_interface_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"Notifiable"));
+}
+
+/// `test_apex_method_extraction`
+#[test]
+fn apex_method_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    let ls = labels(&r);
+    for m in [
+        "getAccounts",
+        "updateAccountsAsync",
+        "createAccounts",
+        "deleteOldAccounts",
+    ] {
+        assert!(
+            ls.iter().any(|l| l.contains(m)),
+            "missing method {m}: {ls:?}"
+        );
+    }
+}
+
+/// `test_apex_contains_and_method_relations`
+#[test]
+fn apex_contains_and_method_relations() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    let rels = relations(&r);
+    assert!(rels.contains("contains"));
+    assert!(rels.contains("method"));
+}
+
+/// `test_apex_soql_uses_edge`
+#[test]
+fn apex_soql_uses_edge() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(relations(&r).contains("uses"));
+    assert!(labels(&r).contains(&"Account"));
+}
+
+/// `test_apex_dml_uses_edge`
+#[test]
+fn apex_dml_uses_edge() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    let dml: Vec<&str> = r
+        .nodes
+        .iter()
+        .map(|n| n.label.as_str())
+        .filter(|l| matches!(*l, "insert" | "update" | "delete" | "upsert"))
+        .collect();
+    assert!(!dml.is_empty(), "expected DML nodes: {dml:?}");
+}
+
+/// `test_apex_file_node_present`
+#[test]
+fn apex_file_node_present() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"sample.cls"));
+}
+
+/// `test_apex_trigger_extraction`
+#[test]
+fn apex_trigger_extraction() {
+    let r = extract_apex(&fixtures().join("sample.trigger"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"sample.trigger"), "{ls:?}");
+    assert!(ls.contains(&"AccountTrigger"), "{ls:?}");
+}
+
+/// `test_apex_trigger_uses_sobject`
+#[test]
+fn apex_trigger_uses_sobject() {
+    let r = extract_apex(&fixtures().join("sample.trigger"));
+    assert!(relations(&r).contains("uses"));
+    assert!(labels(&r).contains(&"Account"));
+}
+
+/// `test_apex_missing_file_returns_empty`
+#[test]
+fn apex_missing_file_returns_empty() {
+    let r = extract_apex(Path::new("nonexistent.cls"));
+    assert!(r.nodes.is_empty());
+    assert!(r.edges.is_empty());
+}
+
+/// `test_apex_no_dangling_edges`
+#[test]
+fn apex_no_dangling_edges() {
+    for fixture in ["sample.cls", "sample.trigger"] {
+        let r = extract_apex(&fixtures().join(fixture));
+        let ids: std::collections::HashSet<&str> = r.nodes.iter().map(|n| n.id.as_str()).collect();
+        for e in &r.edges {
+            assert!(
+                ids.contains(e.source.as_str()),
+                "dangling source in {fixture}: {e:?}"
+            );
+            assert!(
+                ids.contains(e.target.as_str()),
+                "dangling target in {fixture}: {e:?}"
+            );
+        }
+    }
 }
 
 #[test]

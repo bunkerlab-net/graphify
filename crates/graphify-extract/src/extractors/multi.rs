@@ -21,10 +21,10 @@ use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::extractors::{
-    extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
-    extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf, extract_dmi,
-    extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
-    extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
+    extract_apex, extract_astro, extract_bash, extract_blade, extract_c, extract_cpp,
+    extract_csharp, extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf,
+    extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy,
+    extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
     extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
     extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
     extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte,
@@ -99,6 +99,7 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "dmf" => Some(extract_dmf),
         "sln" => Some(extract_sln),
         "slnx" => Some(extract_slnx),
+        "cls" | "trigger" => Some(extract_apex),
         "csproj" | "fsproj" | "vbproj" => Some(extract_csproj),
         "razor" | "cshtml" => Some(extract_razor),
         _ => None,

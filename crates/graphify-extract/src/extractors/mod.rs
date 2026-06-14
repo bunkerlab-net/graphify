@@ -2,6 +2,7 @@
 //!
 //! Each function mirrors a Python `extract_<lang>` function from `extract.py`.
 
+pub mod apex;
 pub mod bash;
 pub mod blade;
 pub mod dart;
@@ -399,6 +400,9 @@ pub use objc::extract_objc;
 
 // ── Bash ──────────────────────────────────────────────────────────────────────
 pub use bash::extract_bash;
+
+// ── Apex ──────────────────────────────────────────────────────────────────────
+pub use apex::extract_apex;
 
 // ── JSON ──────────────────────────────────────────────────────────────────────
 pub use json_lang::extract_json;
