@@ -171,7 +171,122 @@ fn value_to_sort_string(v: &Value) -> String {
     }
 }
 
-pub(crate) fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<&str>) {
+/// `(basename, label)` key for a node, or `None` when either is empty.
+fn ghost_key(attrs: &IndexMap<String, Value>) -> Option<(String, String)> {
+    let label = attrs
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if label.is_empty() {
+        return None;
+    }
+    let sf = attrs
+        .get("source_file")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if sf.is_empty() {
+        return None;
+    }
+    let basename = std::path::Path::new(sf)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if basename.is_empty() {
+        return None;
+    }
+    Some((basename.to_string(), label.to_string()))
+}
+
+/// Python-style truthiness for the `source_location` canonical signal.
+fn is_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_none_or(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
+/// Merge LLM ghost-duplicate nodes into their AST canonical nodes (#1145,
+/// extended #1271).
+///
+/// AST extraction uses parent-qualified IDs (`mingpt_bpe_get_pairs`) while the
+/// LLM emits bare-stem IDs (`bpe_get_pairs`) for the same symbol. Canonical
+/// nodes are those stamped `_origin == "ast"` (AST always wins) or carrying a
+/// `source_location`; any non-AST node sharing `(basename, label)` with a
+/// canonical node is a ghost. Ghost nodes are removed from `graph` and a
+/// `ghost_id -> canonical_id` remap is returned so [`add_edges`] can re-point
+/// their edges.
+pub(crate) fn merge_ghost_duplicates(graph: &mut Graph) -> IndexMap<String, String> {
+    // Pass 1: collect canonical nodes — AST-origin nodes take precedence over
+    // LLM nodes; among non-AST nodes the first occurrence per key wins.
+    let mut loc_nodes: IndexMap<(String, String), String> = IndexMap::new();
+    for (nid, attrs) in graph.nodes() {
+        let Some(key) = ghost_key(attrs) else {
+            continue;
+        };
+        let is_ast = attrs.get("_origin").and_then(Value::as_str) == Some("ast");
+        let has_loc = attrs.get("source_location").is_some_and(is_truthy);
+        // AST-origin nodes always overwrite; non-AST only when the key is unseen.
+        if is_ast || (has_loc && !loc_nodes.contains_key(&key)) {
+            loc_nodes.insert(key, nid.clone());
+        }
+    }
+
+    // Pass 2: a non-AST node sharing a key with a different canonical node is a
+    // ghost (last ghost per key, mirroring the Python dict overwrite).
+    let mut noloc_nodes: IndexMap<(String, String), String> = IndexMap::new();
+    for (nid, attrs) in graph.nodes() {
+        if attrs.get("_origin").and_then(Value::as_str) == Some("ast") {
+            continue; // AST nodes are never ghosts
+        }
+        let Some(key) = ghost_key(attrs) else {
+            continue;
+        };
+        if loc_nodes.get(&key).is_some_and(|canon| canon != nid) {
+            noloc_nodes.insert(key, nid.clone());
+        }
+    }
+
+    let mut ghost_remap: IndexMap<String, String> = IndexMap::new();
+    for (key, ghost_id) in &noloc_nodes {
+        if let Some(canonical) = loc_nodes.get(key) {
+            ghost_remap.insert(ghost_id.clone(), canonical.clone());
+        }
+    }
+
+    let ghost_ids: Vec<String> = ghost_remap.keys().cloned().collect();
+    graph.remove_nodes_from(ghost_ids.iter().map(String::as_str));
+    ghost_remap
+}
+
+/// Build the normalised-ID lookup table, injecting `ghost_id -> canonical_id`
+/// remaps so edges referencing a removed ghost node re-point to its canonical
+/// AST replacement. Resolution always normalises the lookup key, so only the
+/// normalised ghost-id mapping is consulted.
+fn build_norm_to_id(
+    node_ids: &IndexSet<String>,
+    ghost_remap: &IndexMap<String, String>,
+) -> IndexMap<String, String> {
+    let mut norm_to_id: IndexMap<String, String> = node_ids
+        .iter()
+        .map(|nid| (normalize_id(nid), nid.clone()))
+        .collect();
+    for (ghost_id, canonical_id) in ghost_remap {
+        norm_to_id.insert(normalize_id(ghost_id), canonical_id.clone());
+    }
+    norm_to_id
+}
+
+pub(crate) fn add_edges(
+    graph: &mut Graph,
+    extraction: &Value,
+    root_str: Option<&str>,
+    ghost_remap: &IndexMap<String, String>,
+) {
     let Some(edges) = extraction
         .as_object()
         .and_then(|o| o.get("edges"))
@@ -180,10 +295,7 @@ pub(crate) fn add_edges(graph: &mut Graph, extraction: &Value, root_str: Option<
         return;
     };
     let node_ids: IndexSet<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
-    let norm_to_id: IndexMap<String, String> = node_ids
-        .iter()
-        .map(|nid| (normalize_id(nid), nid.clone()))
-        .collect();
+    let norm_to_id = build_norm_to_id(&node_ids, ghost_remap);
     // Snapshot each node's `source_file` so the cross-language `calls`
     // INFERRED filter can resolve language families without re-borrowing
     // `graph` from inside the per-edge closure.
