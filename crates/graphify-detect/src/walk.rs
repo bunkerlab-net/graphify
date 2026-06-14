@@ -221,9 +221,14 @@ fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> Vec<PathBuf> {
         if is_noise_dir(dir_name, parent_name) {
             return false;
         }
-        let has_negation = ignore_patterns.iter().any(|(_, p)| p.starts_with('!'));
-        if !has_negation
-            && is_ignored(path, &root, &ignore_patterns)
+        // Negations need no special-casing: `is_ignored` applies last-match-wins
+        // (so `!dir/` un-ignores a directory and it won't be pruned) and the
+        // gitignore parent-exclusion rule (a `!` cannot rescue a file beneath an
+        // excluded dir), so descending an ignored directory to look for a
+        // re-included file is never necessary (#1276). The previous blanket
+        // `has_negation` check disabled pruning for EVERY ignored dir whenever any
+        // `!` rule existed — a pathological slowdown on large repos for no gain.
+        if is_ignored(path, &root, &ignore_patterns)
             && !could_contain_included_path(path, &root, &include_patterns)
         {
             return false;
@@ -358,9 +363,9 @@ fn walk_dir(
             if is_noise_dir(dir_name, parent_name) {
                 continue;
             }
-            let has_negation = ctx.ignore_patterns.iter().any(|(_, p)| p.starts_with('!'));
-            if !has_negation
-                && is_ignored(&subdir, ctx.root, ctx.ignore_patterns)
+            // See `walk_dir_parallel`: negations need no special-casing here, so
+            // ignored directories are always pruned (#1276).
+            if is_ignored(&subdir, ctx.root, ctx.ignore_patterns)
                 && !could_contain_included_path(&subdir, ctx.root, ctx.include_patterns)
             {
                 continue;

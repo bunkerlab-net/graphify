@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use hex;
 use sha2::{Digest as _, Sha256};
+use unicode_normalization::UnicodeNormalization as _;
 
 use crate::error::DetectError;
 
@@ -691,9 +692,17 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
 
     // Stable name derived from the resolved absolute path (mirrors Python).
     // Normalize separators to `/` so a manifest written on Windows and
-    // read on Unix (or vice versa) produces the same sidecar name.
+    // read on Unix (or vice versa) produces the same sidecar name. NFC-normalize
+    // the path too: on macOS (HFS+/APFS) directory listing returns filenames in
+    // NFD while directly-constructed paths are NFC, so the same source file would
+    // otherwise hash to different sidecars across runs — making `--update`
+    // re-extract every Office file (#1226).
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let normalized = resolved.to_string_lossy().replace('\\', "/");
+    let normalized: String = resolved
+        .to_string_lossy()
+        .replace('\\', "/")
+        .nfc()
+        .collect();
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let digest = hex::encode(hasher.finalize());
@@ -704,6 +713,13 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
         .and_then(|s| s.to_str())
         .unwrap_or("document");
     let out_path = out_dir.join(format!("{stem}_{name_hash}.md"));
+
+    // Once the hash is stable the sidecar name is deterministic; skip rewriting
+    // an existing sidecar so an unchanged source never churns its mtime (which
+    // would otherwise still flag it as changed in `detect_incremental`).
+    if out_path.exists() {
+        return Ok(Some(out_path));
+    }
 
     let content = format!(
         "<!-- converted from {} -->\n\n{text}",

@@ -78,30 +78,74 @@ const CREDENTIAL_KEYWORDS: &[&str] = &[
 /// Maps to Python: `(?<![a-zA-Z0-9])tokens?(?![a-zA-Z])`
 const TOKEN_KEYWORDS: &[&str] = &["token", "tokens"];
 
-/// Match `keyword` against `lowered_bytes` with Python lookaround semantics:
-/// - Not preceded by `[a-zA-Z0-9]`
-/// - Not followed by `[a-zA-Z]`
+/// Scan `lowered_bytes` for any keyword in `group` using Python lookaround
+/// semantics (not preceded by `[a-zA-Z0-9]`, not followed by `[a-zA-Z]`),
+/// returning `(any_hit, any_match_ends_at_end)`.
 ///
-/// Caller pre-lowercases the text exactly once per filename and passes its
-/// bytes. The keyword arrays ([`CREDENTIAL_KEYWORDS`], [`TOKEN_KEYWORDS`])
-/// are already lowercase, so no lowercase work happens here at all.
-fn word_boundary_match_bytes(lowered_bytes: &[u8], keyword: &str) -> bool {
-    let kw_bytes = keyword.as_bytes();
-    let kw_len = kw_bytes.len();
-    if kw_len == 0 || lowered_bytes.len() < kw_len {
+/// `any_match_ends_at_end` reports whether some accepted match ends exactly at
+/// the end of the buffer — i.e. the keyword is the trailing word, which is what
+/// distinguishes a credential store (`api_token`) from a topic slug
+/// (`token-economics`). The keyword arrays already include plural forms so the
+/// regex `(...)s?` suffix is covered.
+fn group_match(lowered_bytes: &[u8], group: &[&str]) -> (bool, bool) {
+    let n = lowered_bytes.len();
+    let mut any_hit = false;
+    let mut ends_at_end = false;
+    for keyword in group {
+        let kw = keyword.as_bytes();
+        let kw_len = kw.len();
+        if kw_len == 0 || n < kw_len {
+            continue;
+        }
+        let mut i = 0;
+        while i + kw_len <= n {
+            if &lowered_bytes[i..i + kw_len] == kw {
+                let pre_ok = i == 0 || !lowered_bytes[i - 1].is_ascii_alphanumeric();
+                let end = i + kw_len;
+                let post_ok = end >= n || !lowered_bytes[end].is_ascii_alphabetic();
+                if pre_ok && post_ok {
+                    any_hit = true;
+                    if end == n {
+                        ends_at_end = true;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+    (any_hit, ends_at_end)
+}
+
+/// True if a generic secret keyword appears *load-bearing* in `name`.
+///
+/// Secret-store files name their contents, and in English compounds the content
+/// noun is the head, which comes last (`github-personal-access-token`,
+/// `api_token`). A keyword that is neither at the end of the stem nor in a short
+/// (<=2 word) name is a topic word in a descriptive slug
+/// (`token-economics-of-recall.md`, `password-policy-discussion.md`) and must
+/// not silently drop the file from the graph (#436, #718).
+fn generic_keyword_hit(name: &str) -> bool {
+    // Stem = name up to the first dot, ignoring leading dots so dotfiles like
+    // `.token` keep their keyword.
+    let stem = name.trim_start_matches('.');
+    let stem = stem.split('.').next().unwrap_or("");
+    if stem.is_empty() {
         return false;
     }
-    let mut i = 0;
-    while i + kw_len <= lowered_bytes.len() {
-        if &lowered_bytes[i..i + kw_len] == kw_bytes {
-            let pre_ok = i == 0 || !lowered_bytes[i - 1].is_ascii_alphanumeric();
-            let post_ok = i + kw_len >= lowered_bytes.len()
-                || !lowered_bytes[i + kw_len].is_ascii_alphabetic();
-            if pre_ok && post_ok {
-                return true;
-            }
+    let lowered = stem.to_ascii_lowercase();
+    let bytes = lowered.as_bytes();
+    let word_count = stem
+        .split(|c: char| c == '-' || c == '_' || c.is_whitespace())
+        .filter(|w| !w.is_empty())
+        .count();
+    for group in [CREDENTIAL_KEYWORDS, TOKEN_KEYWORDS] {
+        let (hit, ends_at_end) = group_match(bytes, group);
+        if ends_at_end {
+            return true; // keyword ends the stem -> names the contents
         }
-        i += 1;
+        if hit && word_count <= 2 {
+            return true; // short name like token_config / secret_handler
+        }
     }
     false
 }
@@ -109,7 +153,10 @@ fn word_boundary_match_bytes(lowered_bytes: &[u8], keyword: &str) -> bool {
 /// Return `true` if this file likely contains secrets and should be skipped.
 ///
 /// Stage 1: any **parent** directory is a known secrets dir (`parts[:-1]`).
-/// Stage 2: filename pattern match.
+/// Stage 2: specific filename patterns (extensions, credential-store names) —
+///          always apply.
+/// Stage 3: generic keywords (`token`, `secret`, …) — only when load-bearing
+///          in the filename, so a topic slug is not mistaken for a credential.
 #[must_use]
 pub fn is_sensitive(path: &Path) -> bool {
     // Stage 1: check parent directories (all components except the last)
@@ -126,7 +173,7 @@ pub fn is_sensitive(path: &Path) -> bool {
             return true;
         }
     }
-    // Stage 2: filename pattern match
+    // Stage 2: specific filename patterns
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -134,24 +181,8 @@ pub fn is_sensitive(path: &Path) -> bool {
     if SIMPLE_PATTERNS.iter().any(|p| p.is_match(name)) {
         return true;
     }
-    // Lowercase the filename exactly once and reuse for every keyword scan.
-    // The keyword arrays are pre-lowercased compile-time constants, so the
-    // hot loop does no String allocation at all.
-    let lowered = name.to_ascii_lowercase();
-    let lowered_bytes = lowered.as_bytes();
-    if CREDENTIAL_KEYWORDS
-        .iter()
-        .any(|kw| word_boundary_match_bytes(lowered_bytes, kw))
-    {
-        return true;
-    }
-    if TOKEN_KEYWORDS
-        .iter()
-        .any(|kw| word_boundary_match_bytes(lowered_bytes, kw))
-    {
-        return true;
-    }
-    false
+    // Stage 3: generic keywords, only when load-bearing in the name
+    generic_keyword_hit(name)
 }
 
 /// Directory names to always skip.

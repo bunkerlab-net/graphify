@@ -5,7 +5,10 @@
 
 use graphify_detect::{
     Manifest, detect_incremental,
-    manifest::{detect_incremental_with_manifest, load_manifest_from_path, save_manifest_to_path},
+    manifest::{
+        detect_incremental_with_manifest, load_manifest_from_path,
+        load_manifest_from_path_with_root, save_manifest_to_path, save_manifest_to_path_with_root,
+    },
     save_manifest,
     walk::detect,
 };
@@ -365,5 +368,251 @@ fn detect_incremental_struct_new_total_matches_changed_count() {
         result.new_total,
         total_changed + total_unchanged,
         "new_total must equal changed + unchanged file counts"
+    );
+}
+
+// ── #777: portable manifest paths ───────────────────────────────────────────
+
+/// Build the `kind -> [path]` files map the manifest writer expects.
+fn files_map(pairs: &[(&str, &str)]) -> IndexMap<String, Vec<String>> {
+    let mut m: IndexMap<String, Vec<String>> = IndexMap::new();
+    for (kind, path) in pairs {
+        m.entry((*kind).to_string())
+            .or_default()
+            .push((*path).to_string());
+    }
+    m
+}
+
+#[test]
+fn save_manifest_relativizes_keys_when_root_given() {
+    let tmp = tempdir().expect("tempdir");
+    // Canonicalize so the test root matches the symlink-resolved form the
+    // relativizer compares against (pytest's tmp_path is already resolved).
+    let root_buf = tmp.path().canonicalize().expect("canon");
+    let root = root_buf.as_path();
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(root.join("src").join("foo.py"), "def x(): pass\n").expect("write");
+    std::fs::write(root.join("doc.md"), "hello\n").expect("write");
+
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let files = files_map(&[
+        ("code", &root.join("src").join("foo.py").to_string_lossy()),
+        ("document", &root.join("doc.md").to_string_lossy()),
+    ]);
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root)).expect("save");
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
+            .expect("parse");
+    let keys: std::collections::BTreeSet<&str> = raw
+        .as_object()
+        .expect("obj")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        ["doc.md", "src/foo.py"].into_iter().collect(),
+        "on-disk keys must be relative posix paths"
+    );
+
+    // Loaded with root → callers see absolute keys back (root is already
+    // canonical, so a plain join reproduces the absolutized key).
+    let loaded = load_manifest_from_path_with_root(&manifest_path, Some(root)).expect("load");
+    let abs_foo = root
+        .join("src")
+        .join("foo.py")
+        .to_string_lossy()
+        .into_owned();
+    let abs_doc = root.join("doc.md").to_string_lossy().into_owned();
+    assert!(loaded.contains_key(&abs_foo));
+    assert!(loaded.contains_key(&abs_doc));
+}
+
+#[test]
+fn save_manifest_without_root_keeps_absolute_keys() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    let f = root.join("foo.py");
+    std::fs::write(&f, "pass\n").expect("write");
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let files = files_map(&[("code", &f.to_string_lossy())]);
+    save_manifest_to_path(&files, &manifest_path, "both").expect("save");
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
+            .expect("parse");
+    let key = raw
+        .as_object()
+        .expect("obj")
+        .keys()
+        .next()
+        .expect("key")
+        .clone();
+    // Without root the key is stored verbatim (the absolute path passed in),
+    // not relativized and not canonicalized.
+    assert!(
+        Path::new(&key).is_absolute(),
+        "key must stay absolute, got {key}"
+    );
+    assert_eq!(key, f.to_string_lossy());
+}
+
+#[test]
+fn load_manifest_absolutizes_relative_keys() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    std::fs::create_dir_all(manifest_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string(&serde_json::json!({
+            "src/foo.py": {"mtime": 0.0, "ast_hash": "h1", "semantic_hash": ""},
+            "doc.md": {"mtime": 0.0, "ast_hash": "h2", "semantic_hash": ""},
+        }))
+        .expect("ser"),
+    )
+    .expect("write");
+
+    let loaded = load_manifest_from_path_with_root(&manifest_path, Some(root)).expect("load");
+    let root_resolved = root.canonicalize().expect("canon");
+    assert!(
+        loaded.contains_key(
+            &root_resolved
+                .join("src")
+                .join("foo.py")
+                .to_string_lossy()
+                .into_owned()
+        )
+    );
+    assert!(loaded.contains_key(&root_resolved.join("doc.md").to_string_lossy().into_owned()));
+}
+
+#[test]
+fn load_manifest_passes_through_legacy_absolute_keys() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    std::fs::create_dir_all(manifest_path.parent().expect("parent")).expect("mkdir");
+    let abs_key = root
+        .canonicalize()
+        .expect("canon")
+        .join("foo.py")
+        .to_string_lossy()
+        .into_owned();
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string(&serde_json::json!({
+            abs_key.clone(): {"mtime": 0.0, "ast_hash": "h", "semantic_hash": ""},
+        }))
+        .expect("ser"),
+    )
+    .expect("write");
+
+    let loaded = load_manifest_from_path_with_root(&manifest_path, Some(root)).expect("load");
+    assert!(loaded.contains_key(&abs_key));
+}
+
+#[test]
+fn save_manifest_out_of_root_keeps_absolute() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    // A file outside `root` (sibling dir) must keep its absolute key.
+    let outside = tmp.path().join("sibling.py");
+    std::fs::write(&outside, "pass\n").expect("write");
+
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let files = files_map(&[("code", &outside.to_string_lossy())]);
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(&root)).expect("save");
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
+            .expect("parse");
+    let key = raw.as_object().expect("obj").keys().next().expect("key");
+    assert!(
+        Path::new(key).is_absolute(),
+        "out-of-root entries keep absolute keys, got {key}"
+    );
+}
+
+#[test]
+fn detect_incremental_portable_across_paths() {
+    let tmp = tempdir().expect("tempdir");
+    // Canonicalize the base so sub-roots are symlink-resolved (macOS /var).
+    let base = tmp.path().canonicalize().expect("canon");
+    // First "machine": create corpus, save manifest with root.
+    let repo_a = base.join("repo_a");
+    std::fs::create_dir_all(repo_a.join("src")).expect("mkdir a");
+    std::fs::write(repo_a.join("src").join("foo.py"), "pass\n").expect("write");
+    std::fs::write(repo_a.join("doc.md"), "hello\n").expect("write");
+    let manifest_a = repo_a.join("graphify-out").join("manifest.json");
+    let files = files_map(&[
+        ("code", &repo_a.join("src").join("foo.py").to_string_lossy()),
+        ("document", &repo_a.join("doc.md").to_string_lossy()),
+    ]);
+    save_manifest_to_path_with_root(&files, &manifest_a, "both", Some(&repo_a)).expect("save");
+
+    // Second "machine": same corpus at a different absolute prefix + copied manifest.
+    let repo_b = base.join("repo_b");
+    std::fs::create_dir_all(repo_b.join("src")).expect("mkdir b");
+    std::fs::write(repo_b.join("src").join("foo.py"), "pass\n").expect("write");
+    std::fs::write(repo_b.join("doc.md"), "hello\n").expect("write");
+    std::fs::create_dir_all(repo_b.join("graphify-out")).expect("mkdir out");
+    std::fs::copy(
+        &manifest_a,
+        repo_b.join("graphify-out").join("manifest.json"),
+    )
+    .expect("copy");
+
+    let inc = detect_incremental(&repo_b, &Manifest::new()).expect("incremental");
+    assert_eq!(inc.new_total, 2);
+    let changed: Vec<&String> = inc.changed_files.values().flatten().collect();
+    assert!(
+        changed.is_empty(),
+        "manifest must port across absolute paths; changed={changed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn save_manifest_in_root_symlink_roundtrips() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("sub")).expect("mkdir");
+    let target = root.join("sub").join("target.py");
+    std::fs::write(&target, "pass\n").expect("write");
+    let alias = root.join("alias.py");
+    std::os::unix::fs::symlink(&target, &alias).expect("symlink");
+
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    // Use the resolved-root view of the alias so strip_prefix succeeds even when
+    // the tempdir root itself contains a symlinked component (e.g. /tmp on macOS).
+    let alias_key = root
+        .canonicalize()
+        .expect("canon")
+        .join("alias.py")
+        .to_string_lossy()
+        .into_owned();
+    let files = files_map(&[("code", &alias_key)]);
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root)).expect("save");
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
+            .expect("parse");
+    let keys: Vec<&str> = raw
+        .as_object()
+        .expect("obj")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        keys.contains(&"alias.py"),
+        "symlink stored under own name, got {keys:?}"
+    );
+    assert!(
+        !keys.contains(&"sub/target.py"),
+        "must not store resolved target, got {keys:?}"
     );
 }

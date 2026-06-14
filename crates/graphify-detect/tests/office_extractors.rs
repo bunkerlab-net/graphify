@@ -311,3 +311,61 @@ fn convert_office_file_real_docx_writes_md() {
     let md = fs::read_to_string(&out_path).expect("read fixture");
     assert!(md.contains("convertible doc"));
 }
+
+// ── #1226: NFC-stable sidecar names + skip rewriting existing sidecars ───────
+
+#[test]
+fn convert_office_file_hash_stable_across_nfc_nfd() {
+    // The sidecar hash must be identical whether the source path arrives in NFC
+    // or NFD form (macOS os.walk yields NFD; constructed Paths are NFC).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = tmp.path().join("report");
+    fs::create_dir_all(&base).expect("create_dir_all");
+    let out_dir = tmp.path().join("converted");
+    let nfc = base.join("caf\u{e9}.docx"); // é precomposed
+    let nfd = base.join("cafe\u{301}.docx"); // e + combining acute
+    build_minimal_docx(&nfc, "hello world");
+    build_minimal_docx(&nfd, "hello world");
+
+    let out_nfc = convert_office_file(&nfc, &out_dir)
+        .expect("convert")
+        .expect("sidecar");
+    let out_nfd = convert_office_file(&nfd, &out_dir)
+        .expect("convert")
+        .expect("sidecar");
+
+    let suffix = |p: &std::path::Path| -> String {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.rsplit('_').next())
+            .expect("hash suffix")
+            .to_string()
+    };
+    assert_eq!(suffix(&out_nfc), suffix(&out_nfd));
+}
+
+#[test]
+fn convert_office_file_does_not_rewrite_existing_sidecar() {
+    // A second conversion of an unchanged source must not rewrite the sidecar,
+    // so its content (and mtime) stays put for detect_incremental.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out_dir = tmp.path().join("converted");
+    let src = tmp.path().join("doc.docx");
+    build_minimal_docx(&src, "hello world");
+
+    let first = convert_office_file(&src, &out_dir)
+        .expect("convert")
+        .expect("sidecar");
+    // Overwrite with a sentinel; a rewrite would clobber it.
+    fs::write(&first, "SENTINEL").expect("write sentinel");
+
+    let second = convert_office_file(&src, &out_dir)
+        .expect("convert")
+        .expect("sidecar");
+    assert_eq!(second, first);
+    assert_eq!(
+        fs::read_to_string(&first).expect("read"),
+        "SENTINEL",
+        "existing sidecar must not be rewritten"
+    );
+}

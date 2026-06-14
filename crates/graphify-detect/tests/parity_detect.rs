@@ -4,6 +4,7 @@
 #![allow(clippy::expect_used)]
 
 use graphify_detect::walk::detect;
+use graphify_detect::{Manifest, detect_incremental};
 use tempfile::tempdir;
 
 #[test]
@@ -489,4 +490,71 @@ fn detect_graphifyignore_takes_precedence_over_gitignore() {
     let code = &result.files["code"];
     assert!(code.iter().any(|f| f.contains("main.py")));
     assert!(!code.iter().any(|f| f.contains("other.py")));
+}
+
+// ── #1276: a single `!` negation must not disable directory pruning ──────────
+
+#[test]
+fn negation_does_not_disable_directory_pruning() {
+    // `!docs/**` must not switch off pruning of the unrelated ignored `myignored/`
+    // dir. Output stays correct either way; this guards that the negation still
+    // re-includes docs/*.md, real source is found, and nothing leaks out of the
+    // ignored dir.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::write(root.join(".graphifyignore"), "myignored/\n*.md\n!docs/**\n").expect("write");
+    let deep = root.join("myignored").join("deep").join("deeper");
+    std::fs::create_dir_all(&deep).expect("mkdir deep");
+    std::fs::write(deep.join("junk.py"), "x = 1").expect("write junk");
+    std::fs::create_dir_all(root.join("docs")).expect("mkdir docs");
+    std::fs::write(root.join("docs").join("guide.md"), "# guide").expect("write guide");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+    std::fs::write(root.join("src").join("app.py"), "y = 2").expect("write app");
+
+    let result = detect(root, None, None);
+    let all_files: Vec<&String> = result.files.values().flatten().collect();
+    assert!(all_files.iter().any(|p| p.ends_with("app.py")));
+    assert!(all_files.iter().any(|p| p.ends_with("guide.md")));
+    assert!(
+        !all_files.iter().any(|p| p.contains("junk.py")),
+        "junk.py under ignored myignored/ must not leak out"
+    );
+}
+
+// ── #1163: detect_incremental must survive a dict-valued mtime ───────────────
+
+#[test]
+fn detect_incremental_survives_dict_valued_mtime() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    let src = root.join("mod.py");
+    std::fs::write(&src, "def f():\n    return 1\n").expect("write src");
+
+    let manifest_dir = root.join("graphify-out");
+    std::fs::create_dir_all(&manifest_dir).expect("mkdir");
+    let abs_key = src
+        .canonicalize()
+        .expect("canon")
+        .to_string_lossy()
+        .into_owned();
+    // Drifted entry: mtime stored as a nested dict rather than a float.
+    let drifted = serde_json::json!({
+        abs_key: {
+            "mtime": {"mtime": 123.0},
+            "ast_hash": "deadbeefdeadbeefdeadbeefdeadbeef",
+            "semantic_hash": "cafebabecafebabecafebabecafebabe",
+        }
+    });
+    std::fs::write(
+        manifest_dir.join("manifest.json"),
+        serde_json::to_string(&drifted).expect("ser"),
+    )
+    .expect("write manifest");
+
+    // Must not panic; the drifted file is re-verified by hash and treated as new.
+    let result = detect_incremental(root, &Manifest::new()).expect("incremental");
+    let changed: Vec<&String> = result.changed_files.values().flatten().collect();
+    let unchanged: Vec<&String> = result.unchanged_files.values().flatten().collect();
+    assert!(changed.iter().any(|f| f.contains("mod.py")));
+    assert!(!unchanged.iter().any(|f| f.contains("mod.py")));
 }

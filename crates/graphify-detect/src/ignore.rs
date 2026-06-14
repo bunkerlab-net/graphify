@@ -337,12 +337,43 @@ fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     result
 }
 
+/// Per-scan memoization cache for [`is_ignored_with_cache`]: maps an evaluated
+/// target path to its last-match-wins ignore verdict. Sharing one across a scan
+/// means files under the same subtree do not re-evaluate the same ancestor
+/// patterns. Mirrors Python's `_is_ignored(..., _cache=)`.
+pub type IgnoreEvalCache = std::collections::HashMap<std::path::PathBuf, bool>;
+
 /// Return `true` if the path should be ignored per `.graphifyignore` patterns.
 ///
 /// Uses gitignore last-match-wins semantics with parent-exclusion rule:
 /// a `!` re-include cannot rescue a file whose ancestor directory is excluded.
 #[must_use]
 pub fn is_ignored(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
+    is_ignored_impl(path, root, patterns, None)
+}
+
+/// Like [`is_ignored`], but memoizes per-target `eval_path` results in `cache`.
+///
+/// The verdict is identical to [`is_ignored`]; the cache only avoids
+/// re-evaluating shared ancestor directories. Pass a single cache across all
+/// calls in one scan.
+#[must_use]
+pub fn is_ignored_with_cache(
+    path: &Path,
+    root: &Path,
+    patterns: &IgnorePatterns,
+    cache: &mut IgnoreEvalCache,
+) -> bool {
+    is_ignored_impl(path, root, patterns, Some(cache))
+}
+
+/// Shared body for [`is_ignored`] / [`is_ignored_with_cache`].
+fn is_ignored_impl(
+    path: &Path,
+    root: &Path,
+    patterns: &IgnorePatterns,
+    mut cache: Option<&mut IgnoreEvalCache>,
+) -> bool {
     if patterns.is_empty() {
         return false;
     }
@@ -358,11 +389,31 @@ pub fn is_ignored(path: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
     let mut ancestor = root.to_path_buf();
     for part in rel_parts.iter().take(rel_parts.len().saturating_sub(1)) {
         ancestor = ancestor.join(part);
-        if eval_path(&ancestor, root, patterns) {
+        if eval_cached(&ancestor, root, patterns, cache.as_deref_mut()) {
             return true;
         }
     }
-    eval_path(path, root, patterns)
+    eval_cached(path, root, patterns, cache)
+}
+
+/// Evaluate `target`, consulting/populating `cache` when present.
+fn eval_cached(
+    target: &Path,
+    root: &Path,
+    patterns: &IgnorePatterns,
+    cache: Option<&mut IgnoreEvalCache>,
+) -> bool {
+    match cache {
+        Some(c) => {
+            if let Some(&v) = c.get(target) {
+                return v;
+            }
+            let v = eval_path(target, root, patterns);
+            c.insert(target.to_path_buf(), v);
+            v
+        }
+        None => eval_path(target, root, patterns),
+    }
 }
 
 /// Whether an anchored `.graphifyinclude` stem `p` (anchor-relative, no
