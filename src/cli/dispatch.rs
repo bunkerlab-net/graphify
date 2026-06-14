@@ -124,6 +124,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         min_community_size,
         no_label,
         backend,
+        model,
         force,
     ) = match cmd {
         Command::ClusterOnly {
@@ -135,6 +136,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             no_label,
             backend,
+            model,
         } => (
             path,
             no_viz,
@@ -144,6 +146,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             no_label,
             backend,
+            model,
             false,
         ),
         Command::Label {
@@ -154,6 +157,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             exclude_hubs,
             min_community_size,
             backend,
+            model,
         } => (
             path,
             no_viz,
@@ -163,6 +167,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             false,
             backend,
+            model,
             true,
         ),
         _ => unreachable!("dispatch_cluster_only invoked with wrong variant"),
@@ -177,6 +182,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         cli::cluster_only::LabelOptions {
             no_label,
             backend: backend.as_deref(),
+            model: model.as_deref(),
             force_relabel: force,
         },
     )

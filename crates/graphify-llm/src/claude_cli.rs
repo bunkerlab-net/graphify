@@ -22,13 +22,16 @@ pub trait ClaudeRunner: Send + Sync {
     ///
     /// `system_prompt` carries the extraction system prompt passed via
     /// `--system-prompt` (replacing Claude Code's default coding-agent prompt,
-    /// per #1062); `None` passes no system prompt. `timeout` bounds the
+    /// per #1062); `None` passes no system prompt. `model` overrides the CLI's
+    /// default model via `--model` when `Some` (#b304331); `None` falls back to
+    /// the `GRAPHIFY_CLAUDE_CLI_MODEL` env override. `timeout` bounds the
     /// subprocess wall-clock (`GRAPHIFY_API_TIMEOUT`, #1112); the process is
     /// killed and a timeout error returned if it is exceeded.
     fn run(
         &self,
         user_message: &str,
         system_prompt: Option<&str>,
+        model: Option<&str>,
         timeout: Duration,
     ) -> (String, String, i32);
 }
@@ -46,6 +49,7 @@ impl ClaudeRunner for RealClaudeRunner {
         &self,
         user_message: &str,
         system_prompt: Option<&str>,
+        model: Option<&str>,
         timeout: Duration,
     ) -> (String, String, i32) {
         let Some(program) = resolve_claude_command() else {
@@ -57,7 +61,11 @@ impl ClaudeRunner for RealClaudeRunner {
                 1,
             );
         };
-        let model = claude_cli_model_override();
+        // Explicit per-call override wins; otherwise fall back to the env knob.
+        let model = model
+            .map(str::to_string)
+            .filter(|m| !m.trim().is_empty())
+            .or_else(claude_cli_model_override);
         let args = build_claude_cli_args(system_prompt, model.as_deref());
         let mut cmd = std::process::Command::new(&program);
         cmd.args(&args);
@@ -344,10 +352,14 @@ pub fn call_claude_cli_with_runner_system(
     if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
-    call_claude_cli_inner(runner, user_message, max_tokens, Some(system))
+    call_claude_cli_inner(runner, user_message, max_tokens, Some(system), None)
 }
 
 /// Inner CLI call (extraction path — injects `system_prompt` when `Some`).
+///
+/// `model` overrides the CLI's default model via `--model` when `Some`; the
+/// extraction path passes `None` and relies on the `GRAPHIFY_CLAUDE_CLI_MODEL`
+/// env override resolved inside the runner.
 ///
 /// # Errors
 /// Returns [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
@@ -356,10 +368,12 @@ pub fn call_claude_cli_inner(
     user_message: &str,
     _max_tokens: u32,
     system_prompt: Option<&str>,
+    model: Option<&str>,
 ) -> Result<LlmResponse, LlmError> {
     let (stdout, stderr, code) = runner.run(
         user_message,
         system_prompt,
+        model,
         crate::openai_compat::api_timeout(),
     );
 
@@ -448,13 +462,30 @@ pub fn call_claude_cli_inner(
 /// # Errors
 /// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
 /// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
-pub fn call_claude_cli_plain(user_message: &str, _max_tokens: u32) -> Result<String, LlmError> {
+pub fn call_claude_cli_plain(user_message: &str, max_tokens: u32) -> Result<String, LlmError> {
+    call_claude_cli_plain_with_model(user_message, max_tokens, None)
+}
+
+/// [`call_claude_cli_plain`] with an optional `--model` override (#b304331).
+///
+/// # Errors
+/// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
+/// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
+pub fn call_claude_cli_plain_with_model(
+    user_message: &str,
+    _max_tokens: u32,
+    model: Option<&str>,
+) -> Result<String, LlmError> {
     if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
     let runner = RealClaudeRunner;
-    let (stdout, stderr, code) =
-        runner.run(user_message, None, crate::openai_compat::api_timeout());
+    let (stdout, stderr, code) = runner.run(
+        user_message,
+        None,
+        model,
+        crate::openai_compat::api_timeout(),
+    );
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
         return Err(LlmError::ClaudeCliError(format!(

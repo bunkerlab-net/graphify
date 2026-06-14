@@ -114,6 +114,9 @@ pub(crate) enum Command {
         /// Backend to use for community naming (default: auto-detect).
         #[arg(long)]
         backend: Option<String>,
+        /// Model to use for community naming (default: backend default).
+        #[arg(long)]
+        model: Option<String>,
     },
 
     /// (Re)name communities with the configured LLM backend, regenerate report.
@@ -135,6 +138,9 @@ pub(crate) enum Command {
         /// Backend to use (default: auto-detect from API keys).
         #[arg(long)]
         backend: Option<String>,
+        /// Model to use for community naming (default: backend default).
+        #[arg(long)]
+        model: Option<String>,
     },
 
     /// Manage custom LLM providers (`graphify provider <add|list|show|remove>`).

@@ -7,7 +7,7 @@
 use std::cell::Cell;
 
 use graphify_llm::{
-    generate_community_labels, generate_community_labels_with, label_communities,
+    LabelOptions, generate_community_labels, generate_community_labels_with, label_communities,
     label_communities_with,
 };
 use indexmap::{IndexMap, IndexSet};
@@ -29,6 +29,35 @@ fn graph() -> (IndexMap<String, String>, IndexMap<i64, Vec<String>>) {
     (node_labels, communities)
 }
 
+/// `n_communities` two-node communities, ids `0..n`, all equal size so the
+/// ordering inside `label_communities` is stable insertion order. Mirrors
+/// Python's `_wide_graph`.
+fn wide_graph(n: i64) -> (IndexMap<String, String>, IndexMap<i64, Vec<String>>) {
+    let mut node_labels = IndexMap::new();
+    let mut communities = IndexMap::new();
+    for cid in 0..n {
+        let a = format!("c{cid}_a");
+        let b = format!("c{cid}_b");
+        node_labels.insert(a.clone(), format!("node_{cid}_a"));
+        node_labels.insert(b.clone(), format!("node_{cid}_b"));
+        communities.insert(cid, vec![a, b]);
+    }
+    (node_labels, communities)
+}
+
+/// Parse the community ids a prompt batch asks about (lines `Community <id>: …`),
+/// mirroring the Python fakes' prompt-scraping.
+fn cids_in_prompt(prompt: &str) -> Vec<i64> {
+    prompt
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("Community ")?;
+            let id = rest.split_once(':')?.0.trim();
+            id.parse::<i64>().ok()
+        })
+        .collect()
+}
+
 #[test]
 fn label_communities_happy_path() {
     let (node_labels, communities) = graph();
@@ -40,7 +69,8 @@ fn label_communities_happy_path() {
         &node_labels,
         &gods,
         "gemini",
-        |prompt, backend, _max| {
+        LabelOptions::default(),
+        |prompt, backend, _max, _model| {
             captured.set(Some((prompt.to_string(), backend.to_string())));
             Ok(r#"{"0": "Order Management", "1": "Payment Flow"}"#.to_string())
         },
@@ -56,12 +86,48 @@ fn label_communities_happy_path() {
 }
 
 #[test]
+fn label_communities_passes_model_override() {
+    // The model override threads through to the injected call (#b304331).
+    let (node_labels, communities) = graph();
+    let gods = IndexSet::new();
+    let captured: Cell<Option<(String, Option<String>)>> = Cell::new(None);
+
+    let opts = LabelOptions {
+        model: Some("gemini-3.1-flash-lite"),
+        ..LabelOptions::default()
+    };
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |_prompt, backend, _max, model| {
+            captured.set(Some((backend.to_string(), model.map(str::to_string))));
+            Ok(r#"{"0": "Order Management", "1": "Payment Flow"}"#.to_string())
+        },
+    )
+    .expect("labeling succeeds");
+
+    assert_eq!(labels[&0], "Order Management");
+    assert_eq!(labels[&1], "Payment Flow");
+    let (backend, model) = captured.take().expect("call invoked");
+    assert_eq!(backend, "gemini");
+    assert_eq!(model.as_deref(), Some("gemini-3.1-flash-lite"));
+}
+
+#[test]
 fn label_communities_partial_reply_fills_placeholder() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        Ok(r#"{"0": "Order Management"}"#.to_string())
-    })
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| Ok(r#"{"0": "Order Management"}"#.to_string()),
+    )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Order Management");
     assert_eq!(labels[&1], "Community 1"); // missing cid falls back
@@ -71,9 +137,14 @@ fn label_communities_partial_reply_fills_placeholder() {
 fn label_communities_strips_code_fences() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        Ok("```json\n{\"0\":\"Orders\",\"1\":\"Pay\"}\n```".to_string())
-    })
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| Ok("```json\n{\"0\":\"Orders\",\"1\":\"Pay\"}\n```".to_string()),
+    )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Orders");
     assert_eq!(labels[&1], "Pay");
@@ -85,9 +156,16 @@ fn label_communities_extracts_json_from_surrounding_prose() {
     // to the last `}`.
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        Ok("Here are the names: {\"0\":\"Orders\",\"1\":\"Pay\"} hope that helps".to_string())
-    })
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| {
+            Ok("Here are the names: {\"0\":\"Orders\",\"1\":\"Pay\"} hope that helps".to_string())
+        },
+    )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Orders");
     assert_eq!(labels[&1], "Pay");
@@ -100,9 +178,14 @@ fn label_communities_strips_trailing_prose_after_json() {
     // first `{` … last `}` span even when the text already starts with `{`.
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        Ok(r#"{"0":"Orders","1":"Pay"} hope that helps"#.to_string())
-    })
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| Ok(r#"{"0":"Orders","1":"Pay"} hope that helps"#.to_string()),
+    )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Orders");
     assert_eq!(labels[&1], "Pay");
@@ -112,9 +195,14 @@ fn label_communities_strips_trailing_prose_after_json() {
 fn label_communities_malformed_errors() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let result = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        Ok("sorry, I cannot help".to_string())
-    });
+    let result = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| Ok("sorry, I cannot help".to_string()),
+    );
     assert!(result.is_err());
 }
 
@@ -127,8 +215,9 @@ fn generate_community_labels_degrades_on_error() {
         &node_labels,
         &gods,
         Some("gemini"),
+        None,
         true,
-        |_, _, _| Ok("not json".to_string()),
+        |_, _, _, _| Ok("not json".to_string()),
     );
     assert_eq!(source, "placeholder");
     assert_eq!(labels[&0], "Community 0");
@@ -148,7 +237,8 @@ fn generate_community_labels_no_backend() {
 
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let (labels, source) = generate_community_labels(&communities, &node_labels, &gods, None, true);
+    let (labels, source) =
+        generate_community_labels(&communities, &node_labels, &gods, None, None, true);
     assert_eq!(source, "placeholder");
     assert_eq!(labels[&0], "Community 0");
     assert_eq!(labels[&1], "Community 1");
@@ -164,8 +254,9 @@ fn generate_community_labels_degrades_loud() {
         &node_labels,
         &gods,
         Some("gemini"),
+        None,
         false,
-        |_, _, _| Ok("not json".to_string()),
+        |_, _, _, _| Ok("not json".to_string()),
     );
     assert_eq!(source, "placeholder");
     assert_eq!(labels[&0], "Community 0");
@@ -217,12 +308,25 @@ fn label_communities_real_path_via_custom_provider() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
 
-    let labels = label_communities(&communities, &node_labels, &gods, "labelprov").expect("labels");
+    let labels = label_communities(
+        &communities,
+        &node_labels,
+        &gods,
+        "labelprov",
+        LabelOptions::default(),
+    )
+    .expect("labels");
     assert_eq!(labels[&0], "Orders");
     assert_eq!(labels[&1], "Payments");
 
-    let (labels, source) =
-        generate_community_labels(&communities, &node_labels, &gods, Some("labelprov"), true);
+    let (labels, source) = generate_community_labels(
+        &communities,
+        &node_labels,
+        &gods,
+        Some("labelprov"),
+        None,
+        true,
+    );
     assert_eq!(source, "llm");
     assert_eq!(labels[&0], "Orders");
 
@@ -240,8 +344,9 @@ fn generate_community_labels_success() {
         &node_labels,
         &gods,
         Some("gemini"),
+        None,
         true,
-        |_, _, _| Ok(r#"{"0":"Orders","1":"Payments"}"#.to_string()),
+        |_, _, _, _| Ok(r#"{"0":"Orders","1":"Payments"}"#.to_string()),
     );
     assert_eq!(source, "llm");
     assert_eq!(labels[&0], "Orders");
@@ -255,9 +360,14 @@ fn gods_as_ids_do_not_crash() {
     let (node_labels, communities) = graph();
     let mut gods = IndexSet::new();
     gods.insert("order_repo".to_string());
-    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        Ok(r#"{"0":"Orders","1":"Pay"}"#.to_string())
-    })
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| Ok(r#"{"0":"Orders","1":"Pay"}"#.to_string()),
+    )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Orders");
     assert_eq!(labels[&1], "Pay");
@@ -271,11 +381,173 @@ fn empty_communities_returns_placeholders() {
     let gods = IndexSet::new();
     let called = Cell::new(false);
     // community with no resolvable nodes -> no prompt line -> no backend call.
-    let labels = label_communities_with(&communities, &node_labels, &gods, "gemini", |_, _, _| {
-        called.set(true);
-        Ok("{}".to_string())
-    })
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| {
+            called.set(true);
+            Ok("{}".to_string())
+        },
+    )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Community 0");
     assert!(!called.get());
+}
+
+// ---------------------------------------------------------------------------
+// Multi-batch labeling (#7477b46): a single prompt with >100 communities
+// overflows the 16k context window of self-hosted reasoning models.
+// label_communities now splits into batches so coverage stays complete.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn label_communities_batches_when_over_batch_size() {
+    let (node_labels, communities) = wide_graph(250);
+    let gods = IndexSet::new();
+    let calls: std::cell::RefCell<Vec<usize>> = std::cell::RefCell::new(Vec::new());
+
+    let opts = LabelOptions {
+        batch_size: 100,
+        ..LabelOptions::default()
+    };
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |prompt, _backend, _max, _model| {
+            let cids = cids_in_prompt(prompt);
+            calls.borrow_mut().push(cids.len());
+            let body = cids
+                .iter()
+                .map(|c| format!("\"{c}\": \"Cluster {c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds");
+
+    // 250 communities / 100 per batch -> 3 batches (100, 100, 50).
+    assert_eq!(*calls.borrow(), vec![100, 100, 50]);
+    // Every community got a real name, none left as a placeholder.
+    assert_eq!(labels.len(), 250);
+    assert!(
+        labels.values().all(|name| name.starts_with("Cluster ")),
+        "some communities still have placeholders"
+    );
+}
+
+#[test]
+fn label_communities_partial_batch_failure_keeps_successful_batches() {
+    let (node_labels, communities) = wide_graph(150);
+    let gods = IndexSet::new();
+    let n_calls = Cell::new(0u32);
+
+    let opts = LabelOptions {
+        batch_size: 50,
+        ..LabelOptions::default()
+    };
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |prompt, _backend, _max, _model| {
+            n_calls.set(n_calls.get() + 1);
+            let cids = cids_in_prompt(prompt);
+            if n_calls.get() == 2 {
+                return Err(graphify_llm::LlmError::Http(
+                    "simulated transient backend failure".to_string(),
+                ));
+            }
+            let body = cids
+                .iter()
+                .map(|c| format!("\"{c}\": \"Named {c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds despite one batch failing");
+
+    // 3 batches; the second fails. First and third produce real labels; the
+    // failed batch's cids stay as placeholders.
+    let real = labels
+        .values()
+        .filter(|name| name.starts_with("Named "))
+        .count();
+    let placeholder = labels
+        .values()
+        .filter(|name| name.starts_with("Community "))
+        .count();
+    assert_eq!(
+        real, 100,
+        "expected 100 real labels from 2 successful batches"
+    );
+    assert_eq!(
+        placeholder, 50,
+        "expected 50 placeholders from the failed batch"
+    );
+}
+
+#[test]
+fn label_communities_all_batches_fail_raises() {
+    let (node_labels, communities) = wide_graph(150);
+    let gods = IndexSet::new();
+    let opts = LabelOptions {
+        batch_size: 50,
+        ..LabelOptions::default()
+    };
+    // Every batch fails -> propagate so generate_community_labels can degrade.
+    let result = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |_, _, _, _| Err(graphify_llm::LlmError::Http("backend down".to_string())),
+    );
+    let err = result.expect_err("all batches failed");
+    assert!(err.to_string().contains("backend down"));
+}
+
+#[test]
+fn label_communities_max_communities_caps_total() {
+    // Backwards compat: explicit max_communities still caps the total labeled.
+    let (node_labels, communities) = wide_graph(150);
+    let gods = IndexSet::new();
+    let captured: std::cell::RefCell<Vec<i64>> = std::cell::RefCell::new(Vec::new());
+
+    let opts = LabelOptions {
+        max_communities: Some(40),
+        batch_size: 100,
+        ..LabelOptions::default()
+    };
+    label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |prompt, _backend, _max, _model| {
+            let cids = cids_in_prompt(prompt);
+            captured.borrow_mut().extend(&cids);
+            let body = cids
+                .iter()
+                .map(|c| format!("\"{c}\": \"X{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds");
+
+    // Only 40 communities should have been sent to the backend.
+    assert_eq!(captured.borrow().len(), 40);
 }

@@ -4,7 +4,8 @@
 //! into `graphify-py/graphify/llm.py`. When graphify runs inside an
 //! orchestrating agent, the agent names communities itself (skill.md Step 5).
 //! When run as a bare CLI there is no agent, so these helpers ask the configured
-//! backend to name communities in ONE batched call.
+//! backend to name communities in batches of [`LABEL_BATCH_SIZE`] (so each
+//! prompt fits a 16k-token context window).
 //!
 //! Unlike the Python original, the graph is not passed in directly — a
 //! `graphify_build::Graph` would couple this low-level crate to the graph model.
@@ -16,14 +17,50 @@ use regex::Regex;
 
 use crate::LlmError;
 use crate::backends::detect_backend;
-use crate::call::call_llm;
+use crate::call::call_llm_with_model;
+use crate::openai_compat::resolve_max_tokens;
 
-/// Cap on LLM-named communities; the tail keeps `Community N` placeholders.
-const LABEL_MAX_COMMUNITIES: usize = 200;
+/// Legacy soft-cap on LLM-named communities; kept for callers that want to pin
+/// it via [`LabelOptions::max_communities`]. `None` (the default) labels every
+/// community.
+pub const LABEL_MAX_COMMUNITIES: usize = 200;
 /// Node labels sampled per community for the prompt.
 const LABEL_TOP_K: usize = 12;
 /// Individual labels are truncated to this many chars to keep the prompt small.
 const LABEL_MAXLEN: usize = 60;
+/// Communities per LLM call; sized for ~16k-token context windows. Splitting
+/// into batches keeps self-hosted 16k models (Qwen3, Llama 3.1 8B) from
+/// overflowing context and dropping the whole labeling pass to placeholders.
+pub const LABEL_BATCH_SIZE: usize = 100;
+
+/// Knobs for [`label_communities`] / [`label_communities_with`].
+///
+/// Mirrors the keyword arguments of Python's `label_communities`: `model`,
+/// `max_communities`, `top_k`, and `batch_size`. [`LabelOptions::default`]
+/// reproduces the Python defaults (label every community in batches of
+/// [`LABEL_BATCH_SIZE`], no model override).
+#[derive(Clone, Copy, Debug)]
+pub struct LabelOptions<'a> {
+    /// Optional model override forwarded to the backend (`None` = backend default).
+    pub model: Option<&'a str>,
+    /// Cap on the total number of communities labeled; `None` labels all.
+    pub max_communities: Option<usize>,
+    /// Node labels sampled per community for the prompt.
+    pub top_k: usize,
+    /// Communities per LLM call.
+    pub batch_size: usize,
+}
+
+impl Default for LabelOptions<'_> {
+    fn default() -> Self {
+        Self {
+            model: None,
+            max_communities: None,
+            top_k: LABEL_TOP_K,
+            batch_size: LABEL_BATCH_SIZE,
+        }
+    }
+}
 
 /// Leading/trailing markdown code-fence stripper. Known-good literal pattern.
 #[allow(clippy::expect_used)]
@@ -133,80 +170,128 @@ fn parse_label_response(
 
 /// Return a complete `{cid: name}` map using `backend` for naming.
 ///
-/// Placeholders (`Community N`) are used for any community the backend did not
-/// name. Errors on backend/parse failure — callers wanting graceful degradation
-/// should use [`generate_community_labels`].
+/// Communities are labeled in batches of [`LabelOptions::batch_size`] so each
+/// prompt fits a 16k-token context window. Placeholders (`Community N`) are used
+/// for any community the backend did not name. Per-batch failures are logged to
+/// stderr and skipped — surviving batches still contribute labels. Errors only
+/// when *every* batch fails (leaving no labels) so callers wanting graceful
+/// degradation can use [`generate_community_labels`].
 ///
 /// # Errors
-/// Propagates [`LlmError`] from the backend call or a malformed JSON reply.
+/// Propagates the first batch's [`LlmError`] when no batch produced any labels.
 pub fn label_communities(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,
     gods: &IndexSet<String>,
     backend: &str,
+    opts: LabelOptions<'_>,
 ) -> Result<IndexMap<i64, String>, LlmError> {
-    label_communities_with(communities, node_labels, gods, backend, |prompt, b, max| {
-        call_llm(prompt, b, max as usize)
-    })
+    label_communities_with(
+        communities,
+        node_labels,
+        gods,
+        backend,
+        opts,
+        |prompt, b, max, model| call_llm_with_model(prompt, b, max as usize, model),
+    )
 }
 
 /// [`label_communities`] with an injectable LLM call — `call(prompt, backend,
-/// max_tokens)`. Useful for testing without the network, or to route the call
-/// through a custom client.
+/// max_tokens, model)`. Useful for testing without the network, or to route the
+/// call through a custom client.
 ///
 /// # Errors
-/// Propagates whatever `call` returns, plus parse errors on a malformed reply.
+/// Propagates the first batch's error when no batch produced any labels.
 pub fn label_communities_with<F>(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,
     gods: &IndexSet<String>,
     backend: &str,
+    opts: LabelOptions<'_>,
     call: F,
 ) -> Result<IndexMap<i64, String>, LlmError>
 where
-    F: Fn(&str, &str, u32) -> Result<String, LlmError>,
+    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError>,
 {
     let mut labels = placeholder_community_labels(communities);
-    let (lines, labeled_cids) = community_label_lines(
-        communities,
-        node_labels,
-        gods,
-        LABEL_MAX_COMMUNITIES,
-        LABEL_TOP_K,
-    );
+    let cap = opts.max_communities.unwrap_or_else(|| communities.len());
+    let (lines, labeled_cids) =
+        community_label_lines(communities, node_labels, gods, cap, opts.top_k);
     if lines.is_empty() {
         return Ok(labels);
     }
 
-    let prompt = format!(
-        "You are naming clusters in a knowledge graph. For each community below, \
-         return a concise 2-5 word plain-language name describing what it is about \
-         (e.g. \"Order Management\", \"Payment Flow\", \"Auth Middleware\"). \
-         Respond ONLY with a JSON object mapping the community id (as a string) to \
-         its name - no prose, no markdown fences.\n\n{}",
-        lines.join("\n")
-    );
+    // `lines` and `labeled_cids` are parallel: line[i] describes labeled_cids[i].
+    let batch_size = opts.batch_size.max(1);
+    let total = labeled_cids.len();
+    let n_batches = total.div_ceil(batch_size);
+    let mut written = 0usize;
+    let mut first_error: Option<LlmError> = None;
 
-    let labeled_len = u32::try_from(labeled_cids.len()).unwrap_or(u32::MAX);
-    let max_tokens = 16u32
-        .saturating_mul(labeled_len)
-        .saturating_add(40)
-        .min(4096);
-    let text = call(&prompt, backend, max_tokens)?;
-    labels.extend(parse_label_response(&text, &labeled_cids)?);
+    for batch_idx in 0..n_batches {
+        let start = batch_idx * batch_size;
+        let end = (start + batch_size).min(total);
+        let batch_lines = &lines[start..end];
+        let batch_cids = &labeled_cids[start..end];
+
+        let prompt = format!(
+            "You are naming clusters in a knowledge graph. For each community below, \
+             return a concise 2-5 word plain-language name describing what it is about \
+             (e.g. \"Order Management\", \"Payment Flow\", \"Auth Middleware\"). \
+             Respond ONLY with a JSON object mapping the community id (as a string) to \
+             its name - no prose, no markdown fences.\n\n{}",
+            batch_lines.join("\n")
+        );
+
+        // 24 tok/community covers a 2-5 word JSON entry (id, quotes, punctuation).
+        // Cap at 8192 for 16k-context models; honour GRAPHIFY_MAX_OUTPUT_TOKENS.
+        let default_tokens = 64usize
+            .saturating_add(24usize.saturating_mul(batch_cids.len()))
+            .min(8192);
+        let max_tokens = resolve_max_tokens(u32::try_from(default_tokens).unwrap_or(8192));
+
+        match call(&prompt, backend, max_tokens, opts.model)
+            .and_then(|text| parse_label_response(&text, batch_cids))
+        {
+            Ok(parsed) => {
+                written += parsed.len();
+                labels.extend(parsed);
+            }
+            Err(exc) => {
+                eprintln!(
+                    "[graphify label] batch {}/{n_batches} ({} communities) failed: {exc}",
+                    batch_idx + 1,
+                    batch_cids.len(),
+                );
+                if first_error.is_none() {
+                    first_error = Some(exc);
+                }
+            }
+        }
+    }
+
+    // Every batch failed and produced nothing: propagate so
+    // generate_community_labels degrades cleanly to placeholders.
+    if written == 0
+        && let Some(err) = first_error
+    {
+        return Err(err);
+    }
     Ok(labels)
 }
 
 /// CLI entry point: resolve a backend, name communities, and degrade to
 /// `Community N` placeholders on any failure (no backend, API error, malformed
-/// reply). Returns `(labels, source)` where `source` is `"llm"` or
-/// `"placeholder"`. Never errors.
+/// reply). `model` overrides the backend's default model (`--model`, #b304331).
+/// Returns `(labels, source)` where `source` is `"llm"` or `"placeholder"`.
+/// Never errors.
 #[must_use]
 pub fn generate_community_labels(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,
     gods: &IndexSet<String>,
     backend: Option<&str>,
+    model: Option<&str>,
     quiet: bool,
 ) -> (IndexMap<i64, String>, &'static str) {
     generate_community_labels_with(
@@ -214,24 +299,26 @@ pub fn generate_community_labels(
         node_labels,
         gods,
         backend,
+        model,
         quiet,
-        |prompt, b, max| call_llm(prompt, b, max as usize),
+        |prompt, b, max, m| call_llm_with_model(prompt, b, max as usize, m),
     )
 }
 
 /// [`generate_community_labels`] with an injectable LLM call — `call(prompt,
-/// backend, max_tokens)`. Used by the public wrapper and by tests.
+/// backend, max_tokens, model)`. Used by the public wrapper and by tests.
 #[must_use]
 pub fn generate_community_labels_with<F>(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,
     gods: &IndexSet<String>,
     backend: Option<&str>,
+    model: Option<&str>,
     quiet: bool,
     call: F,
 ) -> (IndexMap<i64, String>, &'static str)
 where
-    F: Fn(&str, &str, u32) -> Result<String, LlmError>,
+    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError>,
 {
     let resolved = match backend {
         Some(b) if !b.is_empty() => Some(b.to_string()),
@@ -246,7 +333,11 @@ where
         }
         return (placeholder_community_labels(communities), "placeholder");
     };
-    match label_communities_with(communities, node_labels, gods, &backend, call) {
+    let opts = LabelOptions {
+        model,
+        ..LabelOptions::default()
+    };
+    match label_communities_with(communities, node_labels, gods, &backend, opts, call) {
         Ok(labels) => (labels, "llm"),
         Err(exc) => {
             if !quiet {

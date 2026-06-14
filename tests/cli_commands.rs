@@ -717,3 +717,40 @@ fn label_no_backend_keeps_placeholders() {
         "expected placeholder labels: {labels}"
     );
 }
+
+#[test]
+fn label_accepts_model_flag() {
+    // `label --model` parses and threads through to the labeling path (#b304331).
+    // With no backend key the run still degrades to placeholders, proving the
+    // flag is accepted end-to-end without error.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+
+    cli_no_backend()
+        .arg("label")
+        .arg(dir.path())
+        .arg("--backend")
+        .arg("gemini")
+        .arg("--model")
+        .arg("gemini-3.1-flash-lite")
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let labels = fs::read_to_string(
+        dir.path()
+            .join("graphify-out")
+            .join(".graphify_labels.json"),
+    )
+    .unwrap();
+    assert!(
+        labels.contains("Community"),
+        "expected placeholder labels: {labels}"
+    );
+}

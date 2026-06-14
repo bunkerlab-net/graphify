@@ -58,7 +58,7 @@ pub use backends::{
     BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars, detect_backend,
     detect_backend_with, format_backend_env_keys, get_backend_api_key, router,
 };
-pub use call::call_llm;
+pub use call::{call_llm, call_llm_with_model};
 pub use constants::{
     DEEP_EXTRACTION_SUFFIX, EXTRACTION_SYSTEM, FILE_CHAR_CAP, LLM_JSON_MAX_BYTES,
     PER_FILE_OVERHEAD_CHARS, extraction_system,
@@ -66,8 +66,9 @@ pub use constants::{
 pub use error::LlmError;
 pub use extract::{extract_files_direct, extract_files_direct_mode};
 pub use labeling::{
-    generate_community_labels, generate_community_labels_with, label_communities,
-    label_communities_with, placeholder_community_labels,
+    LABEL_BATCH_SIZE, LABEL_MAX_COMMUNITIES, LabelOptions, generate_community_labels,
+    generate_community_labels_with, label_communities, label_communities_with,
+    placeholder_community_labels,
 };
 pub use parallel::{
     ChunkDoneCb, CorpusConfig, extract_corpus_parallel, extract_corpus_parallel_with_total,

@@ -718,6 +718,7 @@ impl ClaudeRunner for MockRunner {
         &self,
         _user_message: &str,
         _system_prompt: Option<&str>,
+        _model: Option<&str>,
         _timeout: std::time::Duration,
     ) -> (String, String, i32) {
         (self.stdout.clone(), String::new(), self.code)
@@ -735,12 +736,48 @@ impl ClaudeRunner for TimeoutRecordingRunner {
         &self,
         _user_message: &str,
         _system_prompt: Option<&str>,
+        _model: Option<&str>,
         timeout: std::time::Duration,
     ) -> (String, String, i32) {
         *self.seen.lock().expect("lock") = Some(timeout);
         // Minimal valid envelope so the caller parses without erroring.
         ("{\"result\": \"{}\"}".to_string(), String::new(), 0)
     }
+}
+
+/// Runner that records the `model` it was handed, so we can assert an explicit
+/// model override reaches the claude-cli runner (#b304331).
+struct ModelRecordingRunner {
+    seen: std::sync::Mutex<Option<String>>,
+}
+
+impl ClaudeRunner for ModelRecordingRunner {
+    fn run(
+        &self,
+        _user_message: &str,
+        _system_prompt: Option<&str>,
+        model: Option<&str>,
+        _timeout: std::time::Duration,
+    ) -> (String, String, i32) {
+        *self.seen.lock().expect("lock") = model.map(str::to_string);
+        ("{\"result\": \"{}\"}".to_string(), String::new(), 0)
+    }
+}
+
+/// `call_claude_cli_inner` threads an explicit `--model` override into the runner.
+#[test]
+fn claude_cli_inner_threads_model_override() {
+    let runner = ModelRecordingRunner {
+        seen: std::sync::Mutex::new(None),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        None,
+        Some("haiku"),
+    );
+    assert_eq!(runner.seen.lock().expect("lock").as_deref(), Some("haiku"));
 }
 
 /// `test_claude_cli_extraction_honours_timeout`: the resolved
@@ -752,7 +789,7 @@ fn claude_cli_extraction_honours_timeout() {
     let runner = TimeoutRecordingRunner {
         seen: std::sync::Mutex::new(None),
     };
-    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None);
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None, None);
     assert_eq!(
         *runner.seen.lock().expect("lock"),
         Some(std::time::Duration::from_secs(30))
@@ -767,7 +804,7 @@ fn claude_cli_extraction_default_timeout() {
     let runner = TimeoutRecordingRunner {
         seen: std::sync::Mutex::new(None),
     };
-    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None);
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None, None);
     assert_eq!(
         *runner.seen.lock().expect("lock"),
         Some(std::time::Duration::from_mins(10))
@@ -794,6 +831,7 @@ fn test_claude_cli_returns_parsed_nodes_and_edges() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -815,6 +853,7 @@ fn test_claude_cli_token_accounting_includes_cache() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -853,6 +892,7 @@ fn test_claude_cli_handles_json_array_envelope() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("array envelope should parse");
     assert_eq!(result.nodes.len(), 2);
@@ -868,7 +908,7 @@ fn test_claude_cli_array_without_result_object_errors() {
         stdout: array,
         code: 0,
     };
-    let err = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None)
+    let err = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None, None)
         .expect_err("should error");
     match err {
         graphify_llm::LlmError::ClaudeCliError(m) => {
@@ -907,6 +947,7 @@ fn test_claude_cli_finish_reason_length_on_max_tokens() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -924,6 +965,7 @@ fn test_claude_cli_raises_on_nonzero_exit() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect_err("should fail on non-zero exit");
 
@@ -945,6 +987,7 @@ fn test_claude_cli_raises_on_garbage_envelope() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect_err("should fail on bad JSON");
 
@@ -974,6 +1017,7 @@ fn test_claude_cli_hollow_response_relabelled_as_length() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
