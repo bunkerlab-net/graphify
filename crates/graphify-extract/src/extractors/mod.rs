@@ -415,7 +415,7 @@ pub use json_lang::extract_json;
 pub use verilog::extract_verilog;
 
 // ── SQL ───────────────────────────────────────────────────────────────────────
-pub use sql::extract_sql;
+pub use sql::{extract_sql, extract_sql_with_content};
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
 pub use markdown::extract_markdown;
