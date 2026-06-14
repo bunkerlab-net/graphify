@@ -432,8 +432,8 @@ pub use mcp::{extract_mcp_config, is_mcp_config_path};
 // ── Blade ─────────────────────────────────────────────────────────────────────
 pub use blade::extract_blade;
 
-// ── .NET (.sln / .csproj / .razor) ────────────────────────────────────────────
-pub use dotnet::{extract_csproj, extract_razor, extract_sln};
+// ── .NET (.sln / .slnx / .csproj / .razor) ─────────────────────────────────────
+pub use dotnet::{extract_csproj, extract_razor, extract_sln, extract_slnx};
 
 // ── Python rationale extraction ───────────────────────────────────────────────
 

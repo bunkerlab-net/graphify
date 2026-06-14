@@ -13,8 +13,8 @@ use graphify_extract::{
     extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
     extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package, extract_lua,
     extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell, extract_razor,
-    extract_ruby, extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte,
-    extract_swift, extract_verilog, extract_zig, file_stem, make_id,
+    extract_ruby, extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql,
+    extract_svelte, extract_swift, extract_verilog, extract_zig, file_stem, make_id,
 };
 
 fn fixtures() -> PathBuf {
@@ -700,6 +700,58 @@ fn sln_project_dependency() {
     let r = extract_sln(&fixtures().join("sample.sln"));
     assert!(r.error.is_none(), "{:?}", r.error);
     assert!(relations(&r).contains("imports"));
+}
+
+// ── .slnx (test_dotnet.py) ──────────────────────────────────────────────────
+
+/// `test_slnx_extracts_projects`
+#[test]
+fn slnx_extracts_projects() {
+    let r = extract_slnx(&fixtures().join("sample.slnx"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let ls: std::collections::HashSet<&str> = labels(&r).into_iter().collect();
+    assert!(ls.contains("WebApi"), "{ls:?}");
+    assert!(ls.contains("Domain"), "{ls:?}");
+    assert!(ls.contains("Tests"), "{ls:?}");
+}
+
+/// `test_slnx_contains_edges`
+#[test]
+fn slnx_contains_edges() {
+    let r = extract_slnx(&fixtures().join("sample.slnx"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let contains: Vec<_> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .collect();
+    assert_eq!(contains.len(), 3);
+}
+
+/// `test_slnx_project_dependency`
+#[test]
+fn slnx_project_dependency() {
+    let r = extract_slnx(&fixtures().join("sample.slnx"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert!(relations(&r).contains("imports"));
+}
+
+/// `test_slnx_invalid_xml`
+#[test]
+fn slnx_invalid_xml() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let f = tmp.path().join("bad.slnx");
+    std::fs::write(&f, "<Solution><Project></Solution>")?;
+    let r = extract_slnx(&f);
+    assert!(r.error.is_some(), "expected XML parse error");
+    Ok(())
+}
+
+/// `test_slnx_missing_file`
+#[test]
+fn slnx_missing_file() {
+    let r = extract_slnx(Path::new("/nonexistent/file.slnx"));
+    assert!(r.error.is_some());
 }
 
 #[test]
