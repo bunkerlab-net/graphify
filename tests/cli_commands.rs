@@ -212,6 +212,35 @@ fn extract_incremental_mode_with_existing_manifest() {
         .stderr(contains("incremental scan"));
 }
 
+/// The persisted manifest keys must be stored relative to the project root so
+/// the file is portable across machines / checkout locations (#777), matching
+/// Python's `_save_manifest(..., root=target)`. The absolute project path must
+/// not leak into the keys.
+#[test]
+fn extract_manifest_keys_are_relative_to_root() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .assert()
+        .success();
+
+    let manifest =
+        fs::read_to_string(dir.path().join("graphify-out").join("manifest.json")).unwrap();
+    // Keys are stored posix-relative to the project root (#777): the relative
+    // key is present and the absolute project path never leaks into the file.
+    assert!(
+        manifest.contains("\"src/main.py\""),
+        "expected relative manifest key 'src/main.py': {manifest}"
+    );
+    let abs = dir.path().to_string_lossy().replace('\\', "/");
+    assert!(
+        !manifest.replace('\\', "/").contains(abs.as_str()),
+        "absolute project path leaked into manifest: {manifest}"
+    );
+}
+
 /// Mirrors `test_no_incremental_without_manifest`: a first extract with no
 /// manifest must run a full scan, never the incremental path. Asserts the
 /// specific incremental-mode phrases are absent (a bare "incremental" would also

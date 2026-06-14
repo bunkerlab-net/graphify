@@ -162,7 +162,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     if global {
         cmd_extract_global_add(&graph_path, as_tag, path);
     }
-    persist_manifest(&detect.files, &out_dir);
+    persist_manifest(&detect.files, &out_dir, path);
     print_token_summary(
         effective_backend.as_deref(),
         sem_input_tokens,
@@ -658,14 +658,25 @@ fn render_html_viz(
 }
 
 /// Persist a manifest so subsequent `extract`/`update` runs can take the
-/// incremental code path. Mirrors `_save_manifest(... kind="both")` at
-/// `__main__.py:2891`.
+/// incremental code path. Mirrors `_save_manifest(..., kind="both", root=target)`
+/// at `__main__.py:4434`.
+///
+/// `root` (the project being extracted) is forwarded so manifest keys are stored
+/// relative to it (#777). This must match the `Some(root)` used by the
+/// incremental *load* path — saving absolute while loading relative would make
+/// every file look changed on the next run.
 fn persist_manifest(
     detect_files: &indexmap::IndexMap<String, Vec<String>>,
     out_dir: &std::path::Path,
+    root: &std::path::Path,
 ) {
     let manifest_path = out_dir.join("manifest.json");
-    if let Err(e) = graphify_detect::save_manifest(detect_files, &manifest_path, "both") {
+    if let Err(e) = graphify_detect::save_manifest_to_path_with_root(
+        detect_files,
+        &manifest_path,
+        "both",
+        Some(root),
+    ) {
         eprintln!("      warning: could not write manifest: {e}");
     }
 }
