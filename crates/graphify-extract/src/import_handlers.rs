@@ -20,7 +20,7 @@ fn read_text_owned(node: Node<'_>, source: &[u8]) -> String {
 }
 
 /// Construct an `Edge` with standard extraction defaults (confidence `"EXTRACTED"`, weight `1.0`).
-fn make_edge(
+pub(crate) fn make_edge(
     source: &str,
     target: &str,
     relation: &str,

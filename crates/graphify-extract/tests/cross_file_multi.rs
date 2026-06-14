@@ -391,3 +391,133 @@ fn semantic_reference_edges_carry_context_and_source() {
         "source_location should be `Lnn`, got {loc:?}"
     );
 }
+
+// ── JS/TS default-import symbol resolution (#6dc23db) ──────────────────────────
+
+use std::path::Path;
+
+use graphify_extract::{file_node_id, file_stem, make_id};
+
+/// Mirror of graphify-py's `_write`: write a file, creating parents.
+fn write_file(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().expect("parent")).expect("create_dir_all");
+    fs::write(path, text).expect("write");
+}
+
+/// `(file_node_id(source_file), make_id(file_stem(target_file), symbol), relation)`
+/// edge present? Mirrors graphify-py `_has_symbol_edge`.
+fn has_symbol_edge(
+    result: &graphify_extract::ExtractOutput,
+    source_file: &str,
+    target_file: &str,
+    symbol: &str,
+    relation: &str,
+) -> bool {
+    let src = file_node_id(Path::new(source_file));
+    let tgt = make_id(&[&file_stem(Path::new(target_file)), symbol]);
+    result.edges.iter().any(|e| {
+        lookup_str(e, "source").as_deref() == Some(src.as_str())
+            && lookup_str(e, "target").as_deref() == Some(tgt.as_str())
+            && lookup_str(e, "relation").as_deref() == Some(relation)
+    })
+}
+
+/// `(make_id(stem(src_file), src_sym), make_id(stem(tgt_file), tgt_sym), relation)`
+/// edge present? Mirrors graphify-py `_has_symbol_to_symbol_edge`.
+fn has_symbol_to_symbol_edge(
+    result: &graphify_extract::ExtractOutput,
+    source_file: &str,
+    source_symbol: &str,
+    target_file: &str,
+    target_symbol: &str,
+    relation: &str,
+) -> bool {
+    let src = make_id(&[&file_stem(Path::new(source_file)), source_symbol]);
+    let tgt = make_id(&[&file_stem(Path::new(target_file)), target_symbol]);
+    result.edges.iter().any(|e| {
+        lookup_str(e, "source").as_deref() == Some(src.as_str())
+            && lookup_str(e, "target").as_deref() == Some(tgt.as_str())
+            && lookup_str(e, "relation").as_deref() == Some(relation)
+    })
+}
+
+#[test]
+fn default_import_resolves_to_default_exported_class() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let target = tmp.path().join("src/lib/foo.ts");
+    write_file(&target, "export default class Foo { id = '' }\n");
+    let importer = tmp.path().join("src/routes/page.ts");
+    write_file(&importer, "import Foo from '../lib/foo'\nnew Foo()\n");
+
+    let result = extract(&[target, importer], Some(tmp.path()));
+    assert!(has_symbol_edge(
+        &result,
+        "src/routes/page.ts",
+        "src/lib/foo.ts",
+        "Foo",
+        "imports"
+    ));
+}
+
+#[test]
+fn default_import_with_renamed_binding_resolves_to_origin() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let target = tmp.path().join("src/lib/foo.ts");
+    write_file(&target, "export default class Foo { id = '' }\n");
+    let importer = tmp.path().join("src/routes/page.ts");
+    write_file(
+        &importer,
+        "import Renamed from '../lib/foo'\nnew Renamed()\n",
+    );
+
+    let result = extract(&[target, importer], Some(tmp.path()));
+    // Edge must target the origin symbol `Foo`, not the local binding `Renamed`.
+    assert!(has_symbol_edge(
+        &result,
+        "src/routes/page.ts",
+        "src/lib/foo.ts",
+        "Foo",
+        "imports"
+    ));
+}
+
+#[test]
+fn export_default_identifier_resolves_default_import() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let target = tmp.path().join("src/lib/foo.ts");
+    write_file(&target, "class Foo { id = '' }\nexport default Foo\n");
+    let importer = tmp.path().join("src/routes/page.ts");
+    write_file(&importer, "import Foo from '../lib/foo'\nnew Foo()\n");
+
+    let result = extract(&[target, importer], Some(tmp.path()));
+    assert!(has_symbol_edge(
+        &result,
+        "src/routes/page.ts",
+        "src/lib/foo.ts",
+        "Foo",
+        "imports"
+    ));
+}
+
+#[test]
+fn default_import_call_resolves_to_default_exported_function() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let target = tmp.path().join("src/lib/foo.ts");
+    write_file(&target, "export default function makeFoo() { return 1 }\n");
+    let importer = tmp.path().join("src/routes/page.ts");
+    write_file(
+        &importer,
+        "import mk from '../lib/foo'\nconst X = () => mk()\n",
+    );
+
+    let result = extract(&[target, importer], Some(tmp.path()));
+    // The call through the renamed default binding resolves to the origin.
+    assert!(has_symbol_to_symbol_edge(
+        &result,
+        "src/routes/page.ts",
+        "X",
+        "src/lib/foo.ts",
+        "makeFoo",
+        "calls"
+    ));
+}

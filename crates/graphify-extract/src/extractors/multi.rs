@@ -31,6 +31,7 @@ use crate::extractors::{
     extract_swift, extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
 };
 use crate::ids::make_id1;
+use crate::import_handlers::make_edge;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
 
 const PARALLEL_THRESHOLD: usize = 20;
@@ -688,6 +689,240 @@ fn resolve_cross_file_java_imports(per_file: &[FileResult], paths: &[PathBuf]) -
     new_edges
 }
 
+/// Result of cross-file JS/TS default-import resolution (#6dc23db).
+struct JsDefaultResolution {
+    /// `imports` edges wiring an importer file node to the origin symbol of a
+    /// default export, even when the local binding is renamed.
+    edges: Vec<Edge>,
+    /// `(caller_file_node_id, local_binding_lowercased) -> origin symbol node id`,
+    /// so a call through a renamed default-import binding (`import mk from
+    /// './foo'; mk()`) resolves to the origin during cross-file call resolution.
+    aliases: HashMap<(String, String), String>,
+}
+
+/// The tree-sitter grammar for a JS/TS file, by extension (vue/others skipped).
+fn js_grammar_for(path: &Path) -> Option<tree_sitter::Language> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ts") => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        Some("tsx") => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+        Some("js" | "jsx" | "mjs" | "cjs") => Some(tree_sitter_javascript::LANGUAGE.into()),
+        _ => None,
+    }
+}
+
+/// UTF-8 slice of a node's source span (empty on invalid UTF-8).
+fn js_node_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
+}
+
+/// Local name of a default export, or `None` for an anonymous default.
+///
+/// Handles `export default class Foo {}` / `export default function foo() {}`
+/// (name on the `declaration` field) and `export default Foo` (identifier on
+/// the `value` field). Mirrors graphify-py `_js_default_export_name`.
+fn js_default_export_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut c = node.walk();
+    if !node.children(&mut c).any(|ch| ch.kind() == "default") {
+        return None;
+    }
+    if let Some(decl) = node.child_by_field_name("declaration") {
+        return decl
+            .child_by_field_name("name")
+            .map(|n| js_node_text(n, source).to_string());
+    }
+    let value = node.child_by_field_name("value")?;
+    (value.kind() == "identifier").then(|| js_node_text(value, source).to_string())
+}
+
+/// Local binding of a default import — the `Foo` in `import Foo from './x'`
+/// (also the leading binding of `import Foo, { Bar } from './x'`). Mirrors
+/// graphify-py `_js_default_import_name`.
+fn js_default_import_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut c = node.walk();
+    let clause = node
+        .children(&mut c)
+        .find(|ch| ch.kind() == "import_clause")?;
+    let mut cc = clause.walk();
+    clause
+        .children(&mut cc)
+        .find(|sub| sub.kind() == "identifier")
+        .map(|id| js_node_text(id, source).to_string())
+}
+
+/// The source-module string literal (`'./x'`) of an import/export statement.
+fn js_import_source(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut c = node.walk();
+    let s = node.children(&mut c).find(|ch| ch.kind() == "string")?;
+    Some(
+        js_node_text(s, source)
+            .trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ' ')
+            .to_string(),
+    )
+}
+
+/// A default import occurrence: `(file index, local binding, source string, line)`.
+type JsDefaultImport = (usize, String, String, u32);
+
+/// Default-export names (by file index) and default imports gathered per file.
+struct JsDefaultFacts {
+    export_name: HashMap<usize, String>,
+    imports: Vec<JsDefaultImport>,
+}
+
+/// Parse each JS/TS file once, collecting its default-export name (by file
+/// index) and its default imports. Files without a JS/TS grammar or that fail to
+/// read/parse are skipped.
+fn collect_js_default_facts(paths: &[PathBuf]) -> JsDefaultFacts {
+    let mut export_name: HashMap<usize, String> = HashMap::new();
+    let mut imports: Vec<JsDefaultImport> = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        let Some(lang) = js_grammar_for(path) else {
+            continue;
+        };
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&lang).is_err() {
+            continue;
+        }
+        let Ok(source) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            match node.kind() {
+                "export_statement" => {
+                    if let Some(name) = js_default_export_name(node, &source) {
+                        export_name.entry(i).or_insert(name);
+                    }
+                }
+                "import_statement" => {
+                    if let Some(local) = js_default_import_name(node, &source)
+                        && let Some(src) = js_import_source(node, &source)
+                    {
+                        let line = u32::try_from(node.start_position().row)
+                            .unwrap_or(0)
+                            .saturating_add(1);
+                        imports.push((i, local, src, line));
+                    }
+                }
+                _ => {}
+            }
+            let mut c = node.walk();
+            stack.extend(node.children(&mut c));
+        }
+    }
+    JsDefaultFacts {
+        export_name,
+        imports,
+    }
+}
+
+/// Resolve JS/TS default imports to the origin symbol of the matching default
+/// export across files (#6dc23db).
+///
+/// graphify-py threads default imports/exports through its
+/// `_collect_js_symbol_resolution_facts` pass; the Rust port resolves JS imports
+/// per-file, so this adds the cross-file default case as a focused resolver
+/// parallel to [`resolve_cross_file_python_imports`] /
+/// [`resolve_cross_file_java_imports`]. Runs after id remapping so it works in
+/// the final node-id space. `all_nodes` is the post-remap node set.
+fn resolve_js_default_imports(
+    all_nodes: &[Node],
+    paths: &[PathBuf],
+    root: &Path,
+) -> JsDefaultResolution {
+    use crate::ids::file_node_id;
+
+    let file_nid_of = |path: &Path| -> String {
+        let rel = relativise_under_root(path, root).unwrap_or_else(|| path.to_path_buf());
+        file_node_id(&rel)
+    };
+
+    // (file_node_id, normalised label) -> node id, so a default-export name
+    // resolves to the concrete symbol node in that file. The label is normalised
+    // the same way the call resolver normalises call labels (strip a trailing
+    // `()` and a leading `.`) so a function export (`makeFoo`, stored as the node
+    // label `makeFoo()`) still matches the bare export name.
+    let mut by_file_label: HashMap<(String, String), String> = HashMap::new();
+    for n in all_nodes {
+        if n.source_file.is_empty() || n.label.is_empty() {
+            continue;
+        }
+        let sf = PathBuf::from(&n.source_file);
+        let file_nid = if sf.is_absolute() {
+            file_nid_of(&sf)
+        } else {
+            file_node_id(&sf)
+        };
+        let label = n.label.trim_end_matches("()").trim_start_matches('.');
+        if label.is_empty() {
+            continue;
+        }
+        by_file_label
+            .entry((file_nid, label.to_string()))
+            .or_insert_with(|| n.id.clone());
+    }
+
+    // Per file: default-export name + default imports.
+    let JsDefaultFacts {
+        export_name,
+        imports,
+    } = collect_js_default_facts(paths);
+
+    // Match each canonicalised path to its index, so a resolved import target
+    // maps back to the file whose default export we recorded.
+    let mut idx_by_path: HashMap<PathBuf, usize> = HashMap::new();
+    for (i, p) in paths.iter().enumerate() {
+        idx_by_path.entry(p.clone()).or_insert(i);
+        if let Ok(c) = p.canonicalize() {
+            idx_by_path.entry(c).or_insert(i);
+        }
+    }
+
+    let mut edges = Vec::new();
+    let mut aliases = HashMap::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    for (imp_idx, local, raw, line) in imports {
+        let importer = &paths[imp_idx];
+        let str_path = importer.to_string_lossy();
+        let (_, resolved) = crate::generic::resolve_js_import_target(&raw, &str_path);
+        let Some(resolved) = resolved else { continue };
+        let tgt_idx = idx_by_path
+            .get(&resolved)
+            .or_else(|| {
+                resolved
+                    .canonicalize()
+                    .ok()
+                    .and_then(|c| idx_by_path.get(&c))
+            })
+            .copied();
+        let Some(tgt_idx) = tgt_idx else { continue };
+        let Some(name) = export_name.get(&tgt_idx) else {
+            continue;
+        };
+        let tgt_file_nid = file_nid_of(&paths[tgt_idx]);
+        let Some(origin) = by_file_label.get(&(tgt_file_nid, name.clone())) else {
+            continue;
+        };
+        let importer_nid = file_nid_of(importer);
+        if seen.insert((importer_nid.clone(), origin.clone())) {
+            edges.push(make_edge(
+                &importer_nid,
+                origin,
+                "imports",
+                Some("import"),
+                &str_path,
+                line,
+            ));
+        }
+        aliases.insert((importer_nid, local.to_lowercase()), origin.clone());
+    }
+
+    JsDefaultResolution { edges, aliases }
+}
+
 /// Relativise `path` against `root`, falling back to canonicalising the path
 /// when a lexical strip fails (e.g. the path is relative, or differs from
 /// `root` only by a symlink such as macOS's `/var` → `/private/var`).
@@ -950,6 +1185,14 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // declaration. Mirrors `_merge_swift_extensions` in graphify-py.
     crate::postprocess::merge_swift_extensions(paths, &mut all_nodes, &mut all_edges);
 
+    // Cross-file JS/TS default-import resolution (#6dc23db). Runs in the final
+    // node-id space (after remap/disambiguation); the `imports` edges feed the
+    // import-evidence index below and the aliases let calls through a renamed
+    // default binding resolve to the origin symbol.
+    let js_default = resolve_js_default_imports(&all_nodes, paths, &root);
+    all_edges.extend(js_default.edges);
+    let js_default_aliases = js_default.aliases;
+
     // Cross-file call resolution via raw_calls
     // Build label → [nid] (skip rationale)
     let mut global_label_to_nids: HashMap<String, Vec<String>> = HashMap::new();
@@ -1019,15 +1262,24 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             continue;
         }
         let callee_key = rc.callee.to_lowercase();
-        let candidates: &[String] = global_label_to_nids
-            .get(&callee_key)
-            .map_or(&[], Vec::as_slice);
+        let caller = &rc.caller_nid;
+        let caller_file_nid = nid_to_file_nid.get(caller);
+        // A renamed default-import binding (`import mk from './foo'; mk()`) aliases
+        // the local name to the origin symbol; prefer that over global label
+        // matching, since the local name has no node of its own (#6dc23db).
+        let alias_tgt =
+            caller_file_nid.and_then(|f| js_default_aliases.get(&(f.clone(), callee_key.clone())));
+        let candidates: Vec<&String> = match alias_tgt {
+            Some(t) => vec![t],
+            None => global_label_to_nids
+                .get(&callee_key)
+                .map_or_else(Vec::new, |v| v.iter().collect()),
+        };
         // Only resolve unambiguous matches
         if candidates.len() != 1 {
             continue;
         }
-        let tgt = &candidates[0];
-        let caller = &rc.caller_nid;
+        let tgt = candidates[0];
         if tgt == caller {
             continue;
         }
@@ -1036,7 +1288,6 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             continue;
         }
 
-        let caller_file_nid = nid_to_file_nid.get(caller);
         let tgt_file_nid = nid_to_file_nid.get(tgt);
         let imported_symbols = caller_file_nid
             .and_then(|f| file_to_symbol_imports.get(f))
