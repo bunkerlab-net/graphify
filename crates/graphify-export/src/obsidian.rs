@@ -253,6 +253,17 @@ fn write_community_note(
         .and_then(|cl| cl.get(&cid))
         .cloned()
         .unwrap_or_else(|| format!("Community {cid}"));
+    // A community's member list can contain ids with no backing node in the graph
+    // (pruned nodes, stale community assignments from a prior run, or merge-artifact
+    // ids). Python's `to_obsidian` skips them to avoid a KeyError; the Rust lookups
+    // are already Option-based so they don't crash, but for byte parity the member
+    // count and Members/bridge lists must exclude dangling ids too (issue #1236).
+    let members: Vec<String> = members
+        .iter()
+        .filter(|m| graph.contains_node(m) && node_filename.contains_key(*m))
+        .cloned()
+        .collect();
+    let members: &[String] = &members;
     let n_members = members.len();
     let coh_value = cohesion.and_then(|c| c.get(&cid).copied());
 
