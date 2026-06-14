@@ -53,6 +53,27 @@ pub fn neutralise_injection_sentinels(text: &str) -> String {
         .into_owned()
 }
 
+/// Return a text-like file's content for the extraction prompt.
+///
+/// Most files are read directly (lossy UTF-8). PDFs are binary, so reading them
+/// as text yields garbage; route them through the detect crate's pypdf-backed
+/// extractor instead (#1110). A scanned PDF with no text layer extracts to an
+/// empty string, which still produces a reference node rather than noise.
+/// Returns `None` only when a non-PDF file cannot be read. Mirrors `_file_to_text`.
+fn file_to_text(path: &Path) -> Option<String> {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+    {
+        return Some(graphify_detect::office::extract_pdf_text(path));
+    }
+    // Lossy read mirrors Python's `read_text(errors="replace")`.
+    std::fs::read(path)
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Wrap one file's content in a labelled, hash-stamped untrusted-data block. The
 /// sha256 lets a reviewer correlate a suspicious node back to the exact bytes
 /// that produced it. Mirrors `_wrap_untrusted`.
@@ -79,15 +100,9 @@ pub fn read_files(paths: &[PathBuf], root: &Path) -> String {
             |_| p.file_name().map_or_else(|| p.clone(), PathBuf::from),
             Path::to_path_buf,
         );
-        let content = match std::fs::read_to_string(p) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!(
-                    "[graphify] failed to read {} for extraction: {e}",
-                    p.display()
-                );
-                continue;
-            }
+        let Some(content) = file_to_text(p) else {
+            eprintln!("[graphify] failed to read {} for extraction", p.display());
+            continue;
         };
         let capped: String = content.chars().take(FILE_CHAR_CAP).collect();
         parts.push(wrap_untrusted(&rel.to_string_lossy(), &capped));

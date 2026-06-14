@@ -30,6 +30,32 @@ fn read_files_formats_with_relative_paths() {
 }
 
 #[test]
+fn read_files_routes_pdf_through_extractor() {
+    // A PDF is binary; reading it as text yields garbage. It must be routed
+    // through the pypdf-backed extractor, so the raw bytes never reach the
+    // prompt (#1110). Invalid PDF bytes extract to empty, but the node-bearing
+    // <untrusted_source> block is still emitted.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pdf = tmp.path().join("paper.pdf");
+    fs::write(&pdf, b"%PDF-1.4 RAWBINARYGARBAGE\x00\xff").expect("write pdf");
+    let out = read_files(std::slice::from_ref(&pdf), tmp.path());
+    assert!(out.contains("<untrusted_source path=\"paper.pdf\" sha256="));
+    assert!(
+        !out.contains("RAWBINARYGARBAGE"),
+        "raw PDF bytes leaked into the prompt: {out}"
+    );
+}
+
+#[test]
+fn read_files_reads_non_pdf_as_text() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let md = tmp.path().join("a.md");
+    fs::write(&md, "# hello world").expect("write md");
+    let out = read_files(std::slice::from_ref(&md), tmp.path());
+    assert!(out.contains("# hello world"));
+}
+
+#[test]
 fn read_files_skips_missing_files() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let out = read_files(
