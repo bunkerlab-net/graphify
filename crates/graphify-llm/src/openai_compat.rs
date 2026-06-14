@@ -308,10 +308,20 @@ pub fn extraction_messages(user_message: &str) -> Vec<Value> {
 /// when `deep` is set.
 #[must_use]
 pub fn extraction_messages_for(user_message: &str, deep: bool) -> Vec<Value> {
+    extraction_messages_with_content(&Value::String(user_message.to_string()), deep)
+}
+
+/// Build the extraction messages array from a prebuilt user `content` value.
+///
+/// The content is a plain string for text-only requests, or a multi-part array
+/// (text + `image_url` parts) for vision requests — see
+/// [`crate::vision::openai_content`].
+#[must_use]
+pub fn extraction_messages_with_content(content: &Value, deep: bool) -> Vec<Value> {
     let system = crate::constants::extraction_system(deep);
     vec![
         json!({"role": "system", "content": system.as_ref()}),
-        json!({"role": "user", "content": user_message}),
+        json!({"role": "user", "content": content}),
     ]
 }
 

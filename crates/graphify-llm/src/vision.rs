@@ -288,9 +288,27 @@ pub fn openai_content(user_message: &str, refs: &[ImageRef]) -> Value {
     Value::Array(content)
 }
 
-// NOTE: Bedrock has no JSON content builder here. The Python `_bedrock_content`
-// returns a list with raw `bytes`, which boto3 serializes; the Rust bedrock
-// backend instead builds typed `aws_sdk_bedrockruntime` `ContentBlock::Image`
-// values from `ImageRef.raw` + `ImageRef::bedrock_format` at the call site (a
-// JSON helper with base64 would never round-trip through the SDK). The text
-// block uses [`with_image_notes`] like the other backends.
+/// Build the Bedrock Converse user `content` value: image blocks (carrying the
+/// bare format token + base64 pixels) followed by the text block.
+///
+/// Python's `_bedrock_content` emits raw `bytes` that boto3 serialises directly.
+/// The Rust bedrock backend keeps the uniform `messages: &[Value]` call
+/// interface, so this emits base64 under an `image` block that
+/// `bedrock::build_messages` decodes into a typed `ContentBlock::Image`
+/// (`ImageSource::Bytes`). Unlike boto3 the base64 round-trips cleanly in Rust.
+/// Only refs whose pixels loaded (`raw.is_some()`) become image blocks; the text
+/// block always uses [`with_image_notes`] so every image is still a node.
+#[must_use]
+pub fn bedrock_content(user_message: &str, refs: &[ImageRef]) -> Value {
+    let mut content: Vec<Value> = refs
+        .iter()
+        .filter(|r| r.raw.is_some())
+        .map(|r| {
+            json!({
+                "image": {"format": r.bedrock_format(), "data_b64": r.b64()},
+            })
+        })
+        .collect();
+    content.push(json!({"text": with_image_notes(user_message, refs, false)}));
+    Value::Array(content)
+}

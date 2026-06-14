@@ -18,9 +18,12 @@ use std::sync::OnceLock;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_bedrockruntime::Client;
 use aws_sdk_bedrockruntime::config::Builder as SdkConfigBuilder;
+use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock, ConversationRole, InferenceConfiguration, Message, StopReason, SystemContentBlock,
+    ContentBlock, ConversationRole, ImageBlock, ImageFormat, ImageSource, InferenceConfiguration,
+    Message, StopReason, SystemContentBlock,
 };
+use base64::Engine;
 use serde_json::json;
 use tokio::runtime::Runtime;
 
@@ -310,9 +313,10 @@ pub fn call_bedrock_with_system(
     })
 }
 
-/// Convert the wire-format messages (`[{role, content: [{text}]}]`) into
-/// SDK `Message` builders. Each content list element becomes a `Text`
-/// content block on the SDK side.
+/// Convert the wire-format messages into SDK `Message` builders. A `{text}`
+/// content element becomes a `Text` block; an `{image: {format, data_b64}}`
+/// element (emitted by [`crate::vision::bedrock_content`] for vision requests)
+/// becomes a typed `Image` block with the base64 pixels decoded into raw bytes.
 fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmError> {
     let mut out: Vec<Message> = Vec::with_capacity(messages.len());
     for msg in messages {
@@ -329,6 +333,10 @@ fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmErr
             for block in content {
                 if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
                     builder = builder.content(ContentBlock::Text(text.to_string()));
+                } else if let Some(image) = block.get("image")
+                    && let Some(img_block) = build_image_block(image)
+                {
+                    builder = builder.content(ContentBlock::Image(img_block));
                 }
             }
         }
@@ -338,6 +346,27 @@ fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmErr
         out.push(built);
     }
     Ok(out)
+}
+
+/// Build a Bedrock `ImageBlock` from a `{format, data_b64}` JSON value.
+///
+/// Returns `None` (the image is silently skipped) when the format or base64
+/// payload is missing or the payload does not decode — the text block still
+/// names the image, so it remains a graph node.
+fn build_image_block(image: &serde_json::Value) -> Option<ImageBlock> {
+    let format = match image.get("format").and_then(|v| v.as_str())? {
+        "jpeg" | "jpg" => ImageFormat::Jpeg,
+        "gif" => ImageFormat::Gif,
+        "webp" => ImageFormat::Webp,
+        _ => ImageFormat::Png,
+    };
+    let b64 = image.get("data_b64").and_then(|v| v.as_str())?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    ImageBlock::builder()
+        .format(format)
+        .source(ImageSource::Bytes(Blob::new(bytes)))
+        .build()
+        .ok()
 }
 
 /// Translate an SDK `ConverseError` into the crate's [`LlmError`].

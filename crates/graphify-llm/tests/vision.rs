@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use base64::Engine;
 use graphify_llm::vision::{
     self, IMAGE_TOKEN_ESTIMATE, ImageRef, MAX_IMAGES_PER_CHUNK, anthropic_content,
-    backend_supports_vision, build_image_refs, is_vision_image, openai_content,
+    backend_supports_vision, bedrock_content, build_image_refs, is_vision_image, openai_content,
     partition_semantic_files, strip_pixels,
 };
 use serial_test::serial;
@@ -197,7 +197,8 @@ fn openai_content_has_data_uri() {
 
 #[test]
 fn bedrock_image_ref_exposes_format_and_bytes() {
-    // Bedrock builds typed SDK content from the ref directly (no JSON helper):
+    // `bedrock_content` emits base64 under an `image` block that
+    // `bedrock::build_messages` decodes into a typed SDK `ContentBlock::Image`:
     // assert the pieces it consumes — bare format token + the raw bytes.
     let tmp = tempfile::tempdir().expect("tempdir");
     let (img, _, _) = make_corpus(tmp.path());
@@ -209,6 +210,36 @@ fn bedrock_image_ref_exposes_format_and_bytes() {
         .decode(refs[0].b64())
         .expect("valid base64");
     assert_eq!(decoded, PNG_BYTES);
+}
+
+#[test]
+fn bedrock_content_has_image_block_and_text() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (img, _, _) = make_corpus(tmp.path());
+    let refs = build_image_refs(std::slice::from_ref(&img), tmp.path(), true);
+    let content = bedrock_content("CORPUS", &refs);
+    let arr = content.as_array().expect("block list");
+    assert_eq!(arr[0]["image"]["format"], "png");
+    assert_eq!(arr[0]["image"]["data_b64"], refs[0].b64());
+    let last = arr.last().expect("text block");
+    assert!(last["text"].as_str().expect("text").contains("CORPUS"));
+}
+
+#[test]
+fn bedrock_content_without_pixels_is_text_only() {
+    // A pixel-free ref (non-vision path) emits no image block — just the text
+    // note, so the image still becomes a node.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (img, _, _) = make_corpus(tmp.path());
+    let stripped = strip_pixels(&build_image_refs(
+        std::slice::from_ref(&img),
+        tmp.path(),
+        true,
+    ));
+    let content = bedrock_content("CORPUS", &stripped);
+    let arr = content.as_array().expect("block list");
+    assert_eq!(arr.len(), 1);
+    assert!(arr[0]["text"].as_str().expect("text").contains("CORPUS"));
 }
 
 #[test]
