@@ -855,6 +855,35 @@ fn extract_ts_tsconfig_array_extends_alias_resolves_existing_ts_file() {
 }
 
 #[test]
+fn extract_ts_tsconfig_subdirectory_baseurl_resolves_existing_ts_file() {
+    // graphify-py #ec04152: `paths` resolve relative to `baseUrl`. With
+    // baseUrl "./src", "@services/*": ["services/*"] must resolve to
+    // <root>/src/services/... rather than <root>/services/..., else every
+    // aliased import edge is silently dropped. Fix in tsconfig.rs.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write_file(
+        &root.join("tsconfig.json"),
+        "{\"compilerOptions\": {\"baseUrl\": \"./src\", \"paths\": {\"@services/*\": [\"services/*\"]}}}",
+    );
+    let target = root.join("src/services/foo/index.ts");
+    write_file(&target, "export class Foo { id = '' }\n");
+    let importer = root.join("src/routes/page.ts");
+    write_file(
+        &importer,
+        "import { Foo } from '@services/foo'\nnew Foo()\n",
+    );
+
+    let result = extract_js(&importer);
+    let targets = import_targets(&result, Some("imports_from"));
+    let target_canon = target.canonicalize().unwrap_or(target);
+    assert!(
+        targets.contains(&make_id1(&target_canon.to_string_lossy())),
+        "subdirectory-baseUrl alias did not resolve to src/services/foo/index.ts: {targets:?}"
+    );
+}
+
+#[test]
 fn extract_js_pure_export_no_from_not_treated_as_reexport() {
     // `export { x }` with no `from` clause is a local re-bind — must NOT
     // emit a re_exports edge.
