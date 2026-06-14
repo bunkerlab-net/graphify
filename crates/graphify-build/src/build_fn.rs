@@ -221,7 +221,8 @@ pub fn build_merge(
         directed,
         dedup,
         root,
-        graphify_security::MAX_GRAPH_FILE_BYTES,
+        // Honour GRAPHIFY_MAX_GRAPH_BYTES so large codebases can raise the cap.
+        graphify_security::max_graph_file_bytes(),
     )
 }
 

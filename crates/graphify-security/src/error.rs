@@ -105,9 +105,12 @@ pub enum SecurityError {
     /// Graph file size exceeds the memory-bomb safety cap.
     ///
     /// The error message mirrors the Python parity wording
-    /// ("graph file <path> is N bytes, exceeds M-byte cap") so callers and
-    /// parity tests can assert on its substrings.
-    #[error("graph file {path} is {size} bytes, exceeds {cap}-byte cap")]
+    /// ("graph file <path> is N bytes, exceeds M-byte cap") and includes the
+    /// `GRAPHIFY_MAX_GRAPH_BYTES` hint so callers can raise the limit.
+    #[error(
+        "graph file {path} is {size} bytes, exceeds {cap}-byte cap\n(set \
+         GRAPHIFY_MAX_GRAPH_BYTES=<bytes> or GRAPHIFY_MAX_GRAPH_BYTES=<N>GB to raise the limit)"
+    )]
     GraphFileTooLarge {
         /// The path to the graph file.
         path: PathBuf,

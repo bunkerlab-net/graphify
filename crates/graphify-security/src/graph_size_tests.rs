@@ -17,3 +17,21 @@ fn format_with_underscores_matches_python() {
     assert_eq!(format_with_underscores(1_000), "1_000");
     assert_eq!(format_with_underscores(536_870_912), "536_870_912");
 }
+
+#[test]
+fn parse_graph_byte_cap_handles_suffixes_and_fallbacks() {
+    // Blank / whitespace → default cap.
+    assert_eq!(parse_graph_byte_cap(""), MAX_GRAPH_FILE_BYTES);
+    assert_eq!(parse_graph_byte_cap("   "), MAX_GRAPH_FILE_BYTES);
+    // Plain bytes.
+    assert_eq!(parse_graph_byte_cap("671088640"), 671_088_640);
+    // MB / GB suffixes, case-insensitive, 1024-based, optional spaces.
+    assert_eq!(parse_graph_byte_cap("640MB"), 640 * 1024 * 1024);
+    assert_eq!(parse_graph_byte_cap("2gb"), 2 * 1024 * 1024 * 1024);
+    assert_eq!(parse_graph_byte_cap("2 GB"), 2 * 1024 * 1024 * 1024);
+    // Zero / negative / garbage → default cap.
+    assert_eq!(parse_graph_byte_cap("0"), MAX_GRAPH_FILE_BYTES);
+    assert_eq!(parse_graph_byte_cap("-5"), MAX_GRAPH_FILE_BYTES);
+    assert_eq!(parse_graph_byte_cap("not-a-number"), MAX_GRAPH_FILE_BYTES);
+    assert_eq!(parse_graph_byte_cap("GB"), MAX_GRAPH_FILE_BYTES);
+}
