@@ -245,7 +245,7 @@ fn obsidian_community_of_only_dangling_members_does_not_crash() -> TestResult {
         })
         .map(|e| fs::read_to_string(e.path()))
         .transpose()?;
-    let ghost = ghost.ok_or("ghost community note exists")?;
+    let ghost = ghost.ok_or("expected ghost community note to exist")?;
     assert!(ghost.contains("**Members:** 0 nodes"));
     Ok(())
 }
