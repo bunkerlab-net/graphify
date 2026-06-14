@@ -360,6 +360,34 @@ fn export_html_no_community_data_at_all_still_succeeds() -> Result<(), Box<dyn s
     Ok(())
 }
 
+// ── export falkordb (cypher.txt, no --push) ─────────────────────────────────
+
+#[test]
+fn export_falkordb_writes_cypher_without_push() {
+    // Without --push, `export falkordb` writes OpenCypher to cypher.txt (the
+    // live redis push is feature-gated and needs a server). #1175.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+
+    cli()
+        .arg("export")
+        .arg("falkordb")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success()
+        .stdout(contains("cypher.txt"));
+
+    let cypher = fs::read_to_string(out.join("cypher.txt")).unwrap();
+    assert!(
+        cypher.contains("MERGE"),
+        "expected MERGE statements: {cypher}"
+    );
+}
+
 // ── path/explain on missing graph ──────────────────────────────────────────
 
 #[test]

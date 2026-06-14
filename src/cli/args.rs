@@ -619,6 +619,23 @@ pub(crate) enum ExportCmd {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Export Cypher statements or push directly to a `FalkorDB` instance.
+    ///
+    /// `FalkorDB` is `OpenCypher`-compatible; without `--push` this writes the same
+    /// `cypher.txt` as the `neo4j` export.
+    Falkordb {
+        #[arg(long)]
+        graph: Option<PathBuf>,
+        /// Push directly to a live `FalkorDB` instance (e.g. `falkordb://localhost:6379`).
+        #[arg(long)]
+        push: Option<String>,
+        /// `FalkorDB` username for `--push` (auth is optional; anonymous by default).
+        #[arg(long)]
+        user: Option<String>,
+        /// `FalkorDB` password for `--push` (or set `FALKORDB_PASSWORD`).
+        #[arg(long)]
+        password: Option<String>,
+    },
 }
 
 /// Install/uninstall subcommand shared by every per-platform command group.
