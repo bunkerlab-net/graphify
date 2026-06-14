@@ -714,9 +714,64 @@ struct MockRunner {
 }
 
 impl ClaudeRunner for MockRunner {
-    fn run(&self, _user_message: &str, _system_prompt: Option<&str>) -> (String, String, i32) {
+    fn run(
+        &self,
+        _user_message: &str,
+        _system_prompt: Option<&str>,
+        _timeout: std::time::Duration,
+    ) -> (String, String, i32) {
         (self.stdout.clone(), String::new(), self.code)
     }
+}
+
+/// Runner that records the `timeout` it was handed, so we can assert
+/// `GRAPHIFY_API_TIMEOUT` is threaded into the claude-cli call (#1112).
+struct TimeoutRecordingRunner {
+    seen: std::sync::Mutex<Option<std::time::Duration>>,
+}
+
+impl ClaudeRunner for TimeoutRecordingRunner {
+    fn run(
+        &self,
+        _user_message: &str,
+        _system_prompt: Option<&str>,
+        timeout: std::time::Duration,
+    ) -> (String, String, i32) {
+        *self.seen.lock().expect("lock") = Some(timeout);
+        // Minimal valid envelope so the caller parses without erroring.
+        ("{\"result\": \"{}\"}".to_string(), String::new(), 0)
+    }
+}
+
+/// `test_claude_cli_extraction_honours_timeout`: the resolved
+/// `GRAPHIFY_API_TIMEOUT` is passed through to the claude-cli runner.
+#[test]
+fn claude_cli_extraction_honours_timeout() {
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_API_TIMEOUT", "30");
+    let runner = TimeoutRecordingRunner {
+        seen: std::sync::Mutex::new(None),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None);
+    assert_eq!(
+        *runner.seen.lock().expect("lock"),
+        Some(std::time::Duration::from_secs(30))
+    );
+}
+
+/// Default (no env var) threads the 10-minute default through.
+#[test]
+fn claude_cli_extraction_default_timeout() {
+    let mut g = EnvGuard::new();
+    g.remove("GRAPHIFY_API_TIMEOUT");
+    let runner = TimeoutRecordingRunner {
+        seen: std::sync::Mutex::new(None),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None);
+    assert_eq!(
+        *runner.seen.lock().expect("lock"),
+        Some(std::time::Duration::from_mins(10))
+    );
 }
 
 /// Mock runner that records whether `--no-session-persistence` would have been sent.

@@ -5,7 +5,10 @@
 //! The `claude` binary is injected via the [`ClaudeRunner`] trait so tests
 //! can substitute a mock without spawning a real process.
 
+use std::time::Duration;
+
 use serde_json::json;
+use wait_timeout::ChildExt;
 
 use crate::{
     EXTRACTION_SYSTEM, LlmBackend, LlmError, LlmResponse, parse_llm_json, response_is_hollow,
@@ -19,16 +22,32 @@ pub trait ClaudeRunner: Send + Sync {
     ///
     /// `system_prompt` carries the extraction system prompt passed via
     /// `--system-prompt` (replacing Claude Code's default coding-agent prompt,
-    /// per #1062); `None` passes no system prompt.
-    fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32);
+    /// per #1062); `None` passes no system prompt. `timeout` bounds the
+    /// subprocess wall-clock (`GRAPHIFY_API_TIMEOUT`, #1112); the process is
+    /// killed and a timeout error returned if it is exceeded.
+    fn run(
+        &self,
+        user_message: &str,
+        system_prompt: Option<&str>,
+        timeout: Duration,
+    ) -> (String, String, i32);
 }
 
 /// Production runner that invokes the real `claude` binary.
 pub struct RealClaudeRunner;
 
 impl ClaudeRunner for RealClaudeRunner {
-    /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, and returns stdout/stderr/exit-code.
-    fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32) {
+    /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, drains
+    /// stdout/stderr on background threads (so a full pipe can't deadlock the
+    /// wait), and bounds the wait by `timeout`. Returns stdout/stderr/exit-code;
+    /// on timeout the child is killed and a non-zero code with a timeout message
+    /// is returned. Mirrors graphify-py's `subprocess.run(..., timeout=…)`.
+    fn run(
+        &self,
+        user_message: &str,
+        system_prompt: Option<&str>,
+        timeout: Duration,
+    ) -> (String, String, i32) {
         let Some(program) = resolve_claude_command() else {
             return (
                 String::new(),
@@ -51,32 +70,59 @@ impl ClaudeRunner for RealClaudeRunner {
             Err(e) => return (String::new(), e.to_string(), 1),
         };
 
-        if let Some(stdin) = child.stdin.take() {
+        // Feed stdin on a thread: a large prompt could otherwise block the
+        // write before `claude` starts reading, deadlocking against our own
+        // reads below. Dropping the writer closes stdin (EOF) when done.
+        if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            let mut w = stdin;
-            if let Err(e) = w.write_all(user_message.as_bytes()) {
-                // Surface a write failure rather than letting `claude` see
-                // an empty prompt; reap the child first so we don't leak it.
+            let msg = user_message.as_bytes().to_vec();
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&msg);
+            });
+        }
+
+        // Drain stdout/stderr concurrently so a full OS pipe buffer can't wedge
+        // the process while we wait.
+        let stdout_handle = child.stdout.take().map(spawn_reader);
+        let stderr_handle = child.stderr.take().map(spawn_reader);
+
+        let status = match child.wait_timeout(timeout) {
+            Ok(Some(status)) => status,
+            Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // Drain the reader threads so they don't leak before returning.
+                drop(stdout_handle.and_then(|h| h.join().ok()));
+                drop(stderr_handle.and_then(|h| h.join().ok()));
                 return (
                     String::new(),
-                    format!("write to claude stdin failed: {e}"),
+                    format!("claude -p timed out after {:.0}s", timeout.as_secs_f64()),
                     1,
                 );
             }
-        }
+            Err(e) => return (String::new(), e.to_string(), 1),
+        };
 
-        match child.wait_with_output() {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-                let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-                let code = out.status.code().unwrap_or(1);
-                (stdout, stderr, code)
-            }
-            Err(e) => (String::new(), e.to_string(), 1),
-        }
+        let stdout = stdout_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let stderr = stderr_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let code = status.code().unwrap_or(1);
+        (stdout, stderr, code)
     }
+}
+
+/// Spawn a thread that reads a child pipe to EOF as a lossy UTF-8 `String`.
+fn spawn_reader<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        String::from_utf8_lossy(&buf).into_owned()
+    })
 }
 
 /// Claude CLI backend.
@@ -296,7 +342,11 @@ pub fn call_claude_cli_inner(
     _max_tokens: u32,
     system_prompt: Option<&str>,
 ) -> Result<LlmResponse, LlmError> {
-    let (stdout, stderr, code) = runner.run(user_message, system_prompt);
+    let (stdout, stderr, code) = runner.run(
+        user_message,
+        system_prompt,
+        crate::openai_compat::api_timeout(),
+    );
 
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
@@ -394,7 +444,8 @@ pub fn call_claude_cli_plain(user_message: &str, _max_tokens: u32) -> Result<Str
         return Err(LlmError::ClaudeCliMissing);
     }
     let runner = RealClaudeRunner;
-    let (stdout, stderr, code) = runner.run(user_message, None);
+    let (stdout, stderr, code) =
+        runner.run(user_message, None, crate::openai_compat::api_timeout());
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
         return Err(LlmError::ClaudeCliError(format!(
