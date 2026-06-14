@@ -23,6 +23,7 @@
 pub mod canvas;
 pub mod cypher;
 mod error;
+pub mod falkordb;
 pub mod graphml;
 pub mod html;
 pub mod json;
@@ -34,6 +35,7 @@ mod util;
 pub use canvas::to_canvas;
 pub use cypher::{cypher_escape, cypher_escape_identifier, cypher_label, to_cypher};
 pub use error::ExportError;
+pub use falkordb::{FalkorConn, parse_falkordb_uri};
 pub use graphml::to_graphml;
 pub use html::to_html;
 pub use json::{attach_hyperedges, backup_if_protected, prune_dangling_edges, to_json};

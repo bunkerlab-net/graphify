@@ -17,12 +17,20 @@ htmlescape = { workspace = true }
 indexmap = { workspace = true }
 neo4rs = "0.8"
 rayon = { workspace = true }
+redis = { version = "0.32", optional = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
 sha1 = "0.11"
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
+url = { workspace = true }
+
+[features]
+# Live FalkorDB push (`graphify export falkordb --push`) via the redis client.
+# Off by default so the redis transport is not compiled unless requested,
+# mirroring graphify-py's optional `falkordb` extra.
+falkordb = ["dep:redis"]
 
 [dev-dependencies]
 serial_test = { workspace = true }
