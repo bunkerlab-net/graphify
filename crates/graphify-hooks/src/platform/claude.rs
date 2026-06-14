@@ -7,12 +7,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 use super::common::{
-    CLAUDE_MD_MARKER, CLAUDE_MD_SECTION, READ_SETTINGS_HOOK_MATCHER, SETTINGS_HOOK_MATCHER,
-    claude_config_dir, dirs_home, read_json_or_empty, read_settings_hook, remove_graphify_section,
-    remove_skill, replace_or_append_section, settings_hook, write_json,
+    CLAUDE_MD_MARKER, CLAUDE_MD_SECTION, claude_config_dir, dirs_home, read_json_or_empty,
+    register_pretooluse_hooks, remove_graphify_section, remove_pretooluse_hooks, remove_skill,
+    replace_or_append_section, write_json,
 };
 use crate::HooksError;
 
@@ -67,24 +65,6 @@ fn claude_user_skill_dst() -> PathBuf {
         .join("skills")
         .join("graphify")
         .join("SKILL.md")
-}
-
-/// True when a `PreToolUse` entry's nested `hooks[].command` mentions graphify.
-///
-/// Inspecting the command strings (not the whole serialized entry via
-/// `to_string()`) avoids a stray match on an unrelated field that merely
-/// contains the substring "graphify", mirroring the precise matching the
-/// install path uses.
-fn hook_targets_graphify(hook: &Value) -> bool {
-    hook.get("hooks")
-        .and_then(Value::as_array)
-        .is_some_and(|steps| {
-            steps.iter().any(|step| {
-                step.get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|c| c.contains("graphify"))
-            })
-        })
 }
 
 /// Remove the graphify skill tree (`SKILL.md` + version stamp), the graphify
@@ -152,32 +132,7 @@ pub fn claude_uninstall(project_dir: &Path) -> Result<String, HooksError> {
 pub fn install_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
     let settings_path = project_dir.join(".claude").join("settings.json");
     let mut settings = read_json_or_empty(&settings_path);
-
-    let hooks = settings
-        .as_object_mut()
-        .and_then(|o| {
-            o.entry("hooks")
-                .or_insert_with(|| Value::Object(serde_json::Map::new()))
-                .as_object_mut()
-        })
-        .ok_or_else(|| HooksError::Json("hooks is not an object".to_string()))?;
-
-    let pre_tool = hooks
-        .entry("PreToolUse")
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if let Value::Array(arr) = pre_tool {
-        arr.retain(|h| {
-            let matcher = h.get("matcher").and_then(Value::as_str).unwrap_or("");
-            let is_stale_matcher = matcher == "Glob|Grep"
-                || matcher == SETTINGS_HOOK_MATCHER
-                || matcher == READ_SETTINGS_HOOK_MATCHER;
-            !(is_stale_matcher && hook_targets_graphify(h))
-        });
-        // Two hooks: the Bash search nudge and the Read/Glob nudge (#1114).
-        arr.push(settings_hook());
-        arr.push(read_settings_hook());
-    }
-
+    register_pretooluse_hooks(&mut settings)?;
     write_json(&settings_path, &settings)?;
     Ok(
         "  .claude/settings.json  ->  PreToolUse hooks registered (Bash search + Read/Glob)"
@@ -196,21 +151,7 @@ pub fn uninstall_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
         return Ok(String::new());
     }
     let mut settings = read_json_or_empty(&settings_path);
-    let pre_tool = settings
-        .pointer_mut("/hooks/PreToolUse")
-        .and_then(Value::as_array_mut);
-    let Some(arr) = pre_tool else {
-        return Ok(String::new());
-    };
-    let before = arr.len();
-    arr.retain(|h| {
-        let matcher = h.get("matcher").and_then(Value::as_str).unwrap_or("");
-        let is_stale = matcher == "Glob|Grep"
-            || matcher == SETTINGS_HOOK_MATCHER
-            || matcher == READ_SETTINGS_HOOK_MATCHER;
-        !(is_stale && hook_targets_graphify(h))
-    });
-    if arr.len() == before {
+    if !remove_pretooluse_hooks(&mut settings) {
         return Ok(String::new());
     }
     write_json(&settings_path, &settings)?;

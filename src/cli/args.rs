@@ -388,6 +388,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
+    // `CodeBuddy` is the product's own camel-case spelling; clap renders this
+    // doc comment as user-facing `--help` text, so backticks (which clippy's
+    // `doc_markdown` would otherwise demand) must not appear here.
+    #[allow(clippy::doc_markdown)]
+    /// Install or uninstall graphify integration for CodeBuddy.
+    Codebuddy {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
     /// Install or uninstall graphify integration for Gemini.
     Gemini {
         #[command(subcommand)]

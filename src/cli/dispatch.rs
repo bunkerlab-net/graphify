@@ -70,6 +70,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         // reaches the agent via AGENTS.md / skill instead.
         Command::HookCheck => Ok(()),
         Command::Claude { cmd: c } => cli::install::cmd_platform("claude", &c),
+        Command::Codebuddy { cmd: c } => cli::install::cmd_platform("codebuddy", &c),
         Command::Gemini { cmd: c } => cli::install::cmd_platform("gemini", &c),
         Command::Cursor { cmd: c } => cli::install::cmd_platform("cursor", &c),
         Command::Vscode { cmd: c } => cli::install::cmd_platform("vscode", &c),

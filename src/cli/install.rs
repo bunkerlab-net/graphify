@@ -8,12 +8,12 @@
 use anyhow::Result;
 use graphify_hooks::platform::{
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
-    claude_uninstall, copilot_install, copilot_uninstall, cursor_install, cursor_uninstall,
-    devin_install, devin_project_install, devin_project_uninstall, devin_uninstall, gemini_install,
-    gemini_uninstall, install_kilo_skill_and_command, install_platform_skill,
-    install_platform_skill_project, kilo_install, kilo_uninstall, kiro_install, kiro_uninstall,
-    pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project, vscode_install,
-    vscode_uninstall,
+    claude_uninstall, codebuddy_install, codebuddy_uninstall, copilot_install, copilot_uninstall,
+    cursor_install, cursor_uninstall, devin_install, devin_project_install,
+    devin_project_uninstall, devin_uninstall, gemini_install, gemini_uninstall,
+    install_kilo_skill_and_command, install_platform_skill, install_platform_skill_project,
+    kilo_install, kilo_uninstall, kiro_install, kiro_uninstall, pi_install, pi_uninstall,
+    uninstall_all, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
@@ -113,6 +113,12 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         (p, PlatformCmd::Uninstall { project: true }) => uninstall_platform_skill_project(p, &cwd)?,
         ("claude", PlatformCmd::Install { .. }) => claude_install(&cwd)?,
         ("claude", PlatformCmd::Uninstall { .. }) => claude_uninstall(&cwd)?,
+        // `CodeBuddy` writes CODEBUDDY.md + a .codebuddy/settings.json hook and
+        // copies the skill, like `claude install` (#1136). graphify-py's
+        // `codebuddy` CLI dispatch ignores `--project`, so a `--project` flag
+        // falls through to the generic project-skill branch above.
+        ("codebuddy", PlatformCmd::Install { .. }) => codebuddy_install(&cwd)?,
+        ("codebuddy", PlatformCmd::Uninstall { .. }) => codebuddy_uninstall(&cwd)?,
         ("gemini", PlatformCmd::Install { .. }) => gemini_install(&cwd)?,
         ("gemini", PlatformCmd::Uninstall { .. }) => gemini_uninstall(&cwd)?,
         ("vscode", PlatformCmd::Install { .. }) => vscode_install(&cwd)?,

@@ -21,14 +21,16 @@ use crate::HooksError;
 pub fn uninstall_all(project_dir: &Path, purge: bool) -> Result<String, HooksError> {
     use crate::platform::{
         agents::agents_uninstall, antigravity::antigravity_uninstall, claude::claude_uninstall,
-        codex::uninstall_codex_hook, cursor::cursor_uninstall, gemini::gemini_uninstall,
-        kiro::kiro_uninstall, opencode::uninstall_opencode_plugin, vscode::vscode_uninstall,
+        codebuddy::codebuddy_uninstall, codex::uninstall_codex_hook, cursor::cursor_uninstall,
+        gemini::gemini_uninstall, kiro::kiro_uninstall, opencode::uninstall_opencode_plugin,
+        vscode::vscode_uninstall,
     };
 
     let mut msgs = vec!["Uninstalling graphify from all detected platforms...\n".to_string()];
 
     let steps: Vec<Result<String, HooksError>> = vec![
         claude_uninstall(project_dir),
+        codebuddy_uninstall(project_dir),
         gemini_uninstall(project_dir),
         vscode_uninstall(project_dir),
         cursor_uninstall(project_dir),

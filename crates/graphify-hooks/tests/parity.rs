@@ -337,11 +337,12 @@ use graphify_hooks::platform::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, CLAUDE_MD_MARKER, CLAUDE_MD_SECTION, CURSOR_RULE,
     GEMINI_MD_SECTION, KIRO_STEERING, OPENCODE_PLUGIN_JS, VSCODE_INSTRUCTIONS_SECTION,
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
-    claude_uninstall, cursor_install, cursor_uninstall, gemini_install, gemini_uninstall,
-    install_claude_hook, install_codex_hook, install_gemini_hook, install_opencode_plugin,
-    install_platform_skill, install_platform_skill_project, kiro_install, kiro_uninstall,
-    replace_or_append_section, uninstall_claude_hook, uninstall_codex_hook, uninstall_gemini_hook,
-    uninstall_opencode_plugin, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
+    claude_uninstall, codebuddy_install, codebuddy_uninstall, cursor_install, cursor_uninstall,
+    gemini_install, gemini_uninstall, install_claude_hook, install_codex_hook, install_gemini_hook,
+    install_opencode_plugin, install_platform_skill, install_platform_skill_project, kiro_install,
+    kiro_uninstall, replace_or_append_section, uninstall_claude_hook, uninstall_codex_hook,
+    uninstall_gemini_hook, uninstall_opencode_plugin, uninstall_platform_skill_project,
+    vscode_install, vscode_uninstall,
 };
 
 // ---------------------------------------------------------------------------
@@ -586,6 +587,287 @@ fn test_uninstall_removes_settings_hook() {
             h.get("matcher").and_then(|v| v.as_str()) == Some("Bash")
                 && h.to_string().contains("graphify")
         }));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// codebuddy_install / codebuddy_uninstall (test_codebuddy.py)
+// ---------------------------------------------------------------------------
+
+/// Run `codebuddy_uninstall` with `HOME` overridden to `skill_home` so the
+/// user-scope skill-tree removal stays inside the temp dir instead of touching
+/// the real home. `CodeBuddy` keys off `Path.home()` only (no `CLAUDE_CONFIG_DIR`).
+fn codebuddy_uninstall_to(project_dir: &Path, skill_home: &Path) -> String {
+    // SAFETY: test-only env override; `#[serial(home_env)]` serialises access.
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var("HOME", skill_home);
+    }
+    let r = codebuddy_uninstall(project_dir).expect("test invariant");
+    // SAFETY: test-only cleanup.
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    r
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_install_user_creates_skill_file() {
+    // `graphify install --platform codebuddy` copies the skill to
+    // ~/.codebuddy/skills/graphify/SKILL.md.
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "codebuddy");
+    assert!(
+        dir.path()
+            .join(".codebuddy/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_skill_file_contains_frontmatter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "codebuddy");
+    let content = dir
+        .path()
+        .join(".codebuddy/skills/graphify/SKILL.md")
+        .read_to_string_unwrap();
+    assert!(content.contains("name: graphify"));
+    assert!(content.contains("description:"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_skill_file_references_graphify_query() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "codebuddy");
+    let content = dir
+        .path()
+        .join(".codebuddy/skills/graphify/SKILL.md")
+        .read_to_string_unwrap();
+    assert!(content.contains("graphify query") || content.contains("/graphify query"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_install_user_registers_codebuddy_md() {
+    // The user-scope install also registers the skill in ~/.codebuddy/CODEBUDDY.md.
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "codebuddy");
+    let md = dir.path().join(".codebuddy/CODEBUDDY.md");
+    assert!(md.exists());
+    assert!(md.read_to_string_unwrap().contains("graphify"));
+}
+
+#[test]
+fn test_codebuddy_install_project_writes_codebuddy_md() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let md = dir.path().join("CODEBUDDY.md");
+    assert!(md.exists());
+    let content = md.read_to_string_unwrap();
+    assert!(content.contains(CLAUDE_MD_MARKER));
+    assert!(content.contains("graphify-out/"));
+}
+
+#[test]
+fn test_codebuddy_install_project_writes_skill() {
+    // Project-scope `graphify codebuddy install` lays the skill under
+    // <project>/.codebuddy/skills/graphify/SKILL.md.
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    assert!(
+        dir.path()
+            .join(".codebuddy/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+fn test_codebuddy_install_project_writes_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let settings_path = dir.path().join(".codebuddy").join("settings.json");
+    assert!(settings_path.exists());
+    let settings: serde_json::Value =
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+    let hooks = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("array field");
+    assert!(hooks.iter().any(|h| h.to_string().contains("graphify")));
+}
+
+#[test]
+fn test_codebuddy_install_hook_has_bash_matcher() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let settings_path = dir.path().join(".codebuddy").join("settings.json");
+    let settings: serde_json::Value =
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+    let hooks = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("array field");
+    assert!(hooks.iter().any(|h| {
+        h.get("matcher").and_then(|v| v.as_str()) == Some("Bash")
+            && h.to_string().contains("graphify")
+    }));
+}
+
+#[test]
+fn test_codebuddy_install_hook_has_read_glob_matcher() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let settings_path = dir.path().join(".codebuddy").join("settings.json");
+    let settings: serde_json::Value =
+        serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+    let hooks = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("array field");
+    assert!(hooks.iter().any(|h| {
+        h.get("matcher").and_then(|v| v.as_str()) == Some("Read|Glob")
+            && h.to_string().contains("graphify")
+    }));
+}
+
+#[test]
+fn test_codebuddy_install_idempotent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let md = dir.path().join("CODEBUDDY.md");
+    assert_eq!(
+        md.read_to_string_unwrap().matches(CLAUDE_MD_MARKER).count(),
+        1
+    );
+}
+
+#[test]
+fn test_codebuddy_install_upgrades_stale_section() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let md = dir.path().join("CODEBUDDY.md");
+    fs::write(
+        &md,
+        "old content\n\n## graphify\nThis is old instructions\n",
+    )
+    .expect("write fixture");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let content = md.read_to_string_unwrap();
+    assert!(content.contains(CLAUDE_MD_MARKER));
+    assert!(content.contains("old content"));
+    assert!(!content.contains("This is old instructions"));
+    assert!(content.contains("graphify-out/"));
+    assert_eq!(content.matches(CLAUDE_MD_MARKER).count(), 1);
+}
+
+#[test]
+fn test_codebuddy_install_merges_existing_codebuddy_md() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let md = dir.path().join("CODEBUDDY.md");
+    fs::write(&md, "# My project rules\n").expect("write fixture");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let content = md.read_to_string_unwrap();
+    assert!(content.contains("# My project rules"));
+    assert!(content.contains(CLAUDE_MD_MARKER));
+    assert!(content.contains("graphify-out/"));
+}
+
+#[test]
+fn test_codebuddy_install_prints_no_change_on_second_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    let msg = codebuddy_install(dir.path()).expect("test invariant");
+    assert!(msg.contains("no change"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_uninstall_removes_section() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    codebuddy_uninstall_to(dir.path(), home.path());
+    // CODEBUDDY.md was created from scratch and contained only the graphify
+    // section, so removing it deletes the file.
+    assert!(!dir.path().join("CODEBUDDY.md").exists());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_uninstall_removes_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    codebuddy_install(dir.path()).expect("test invariant");
+    codebuddy_uninstall_to(dir.path(), home.path());
+    let settings_path = dir.path().join(".codebuddy").join("settings.json");
+    if settings_path.exists() {
+        let settings: serde_json::Value =
+            serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+        let hooks = settings["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("array field");
+        assert!(!hooks.iter().any(|h| h.to_string().contains("graphify")));
+    }
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_uninstall_noop_if_not_installed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    // Must not raise when CODEBUDDY.md doesn't exist.
+    let msg = codebuddy_uninstall_to(dir.path(), home.path());
+    assert!(msg.contains("No CODEBUDDY.md") || msg.contains("nothing to do"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_uninstall_noop_if_no_section() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    let md = dir.path().join("CODEBUDDY.md");
+    fs::write(&md, "# Some other project\n").expect("write fixture");
+    codebuddy_uninstall_to(dir.path(), home.path());
+    assert!(md.read_to_string_unwrap().contains("# Some other project"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_uninstall_preserves_other_content() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    let md = dir.path().join("CODEBUDDY.md");
+    fs::write(&md, "# My project rules\n").expect("write fixture");
+    codebuddy_install(dir.path()).expect("test invariant");
+    codebuddy_uninstall_to(dir.path(), home.path());
+    let content = md.read_to_string_unwrap();
+    assert!(!content.contains(CLAUDE_MD_MARKER));
+    assert!(content.contains("# My project rules"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_codebuddy_installation_roundtrip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    let md = dir.path().join("CODEBUDDY.md");
+    fs::write(&md, "# My project\n").expect("write fixture");
+    codebuddy_install(dir.path()).expect("test invariant");
+    codebuddy_uninstall_to(dir.path(), home.path());
+    assert!(md.exists());
+    let content = md.read_to_string_unwrap();
+    assert!(!content.contains(CLAUDE_MD_MARKER));
+    assert!(content.contains("# My project"));
+    let settings_path = dir.path().join(".codebuddy").join("settings.json");
+    if settings_path.exists() {
+        let settings: serde_json::Value =
+            serde_json::from_str(&settings_path.read_to_string_unwrap()).expect("test invariant");
+        let hooks = settings["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("array field");
+        assert!(!hooks.iter().any(|h| h.to_string().contains("graphify")));
     }
 }
 
