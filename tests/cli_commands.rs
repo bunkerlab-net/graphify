@@ -198,6 +198,22 @@ fn extract_cargo_flag_merges_crate_nodes() {
 }
 
 #[test]
+fn extract_with_image_file_in_corpus_does_not_break_ast_run() {
+    // Raster images join the corpus (#1110); the AST phase has no image
+    // extractor and skips them, so an AST-only run (no backend) still succeeds.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    fs::write(dir.path().join("diagram.png"), b"\x89PNG\r\n\x1a\nFAKE").unwrap();
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    assert!(dir.path().join("graphify-out").join("graph.json").exists());
+}
+
+#[test]
 fn extract_postgres_without_feature_errors() {
     // The default binary build has no `postgres` feature, so `--postgres` must
     // fail loudly rather than silently ignore the flag.

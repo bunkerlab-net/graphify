@@ -364,7 +364,13 @@ fn collect_extract_files(
     let mut by_kind: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (kind, paths) in &detect.files {
         by_kind.insert(kind.as_str(), paths.len());
-        if kind == "code" || kind == "document" {
+        // Raster images join the corpus so they reach the semantic phase, where
+        // a vision backend renders them as pixels and a non-vision backend emits
+        // a text-reference node (#1110). The AST phase has no extractor for image
+        // extensions, so it skips them (empty result) — they contribute nodes
+        // only via the LLM. Mirrors graphify-py's `semantic_files = doc + paper +
+        // image`.
+        if kind == "code" || kind == "document" || kind == "image" {
             for p in paths {
                 files.push(path.join(p));
             }
