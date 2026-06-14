@@ -89,10 +89,36 @@ pub fn install(path: &Path) -> Result<String, HooksError> {
 
     let hdir = user_hooks_dir(&hooks_dir(&root)?);
 
-    let commit_msg = install_hook(&hdir, "post-commit", HOOK_SCRIPT, HOOK_MARKER)?;
-    let checkout_msg = install_hook(&hdir, "post-checkout", CHECKOUT_SCRIPT, CHECKOUT_MARKER)?;
+    // Substitute the `__PINNED_PYTHON__` placeholder. The Python install pins
+    // `sys.executable` here so the hook works without the launcher on PATH; the
+    // Rust binary is not a Python interpreter, so there is nothing to pin —
+    // the empty string makes the hook skip the pinned probe and fall through to
+    // its runtime detection (`.graphify_python`, launcher shebang, python3).
+    let pinned = pinned_python();
+    let hook = HOOK_SCRIPT.replace("__PINNED_PYTHON__", &pinned);
+    let checkout = CHECKOUT_SCRIPT.replace("__PINNED_PYTHON__", &pinned);
+
+    let commit_msg = install_hook(&hdir, "post-commit", &hook, HOOK_MARKER)?;
+    let checkout_msg = install_hook(&hdir, "post-checkout", &checkout, CHECKOUT_MARKER)?;
 
     Ok(format!(
         "post-commit: {commit_msg}\npost-checkout: {checkout_msg}"
     ))
+}
+
+/// The interpreter path embedded into the hook's pinned probe.
+///
+/// The Rust binary has no `sys.executable` to pin (it is not a Python
+/// interpreter), so this is the empty string and the hook relies on its
+/// runtime detection chain. Routed through the same allowlist the hook applies
+/// so a future real pin degrades safely.
+fn pinned_python() -> String {
+    let candidate = String::new();
+    if candidate
+        .chars()
+        .any(|c| !c.is_ascii_alphanumeric() && !"/_.@:\\-".contains(c))
+    {
+        return String::new();
+    }
+    candidate
 }

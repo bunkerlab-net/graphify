@@ -2108,3 +2108,110 @@ impl ReadToString for PathBuf {
         fs::read_to_string(self).expect("read fixture")
     }
 }
+
+// ---------------------------------------------------------------------------
+// #1161 / #1127 / #1173: cross-platform detached launch, pinned interpreter,
+// .graphify_root recovery, loud fallback
+// ---------------------------------------------------------------------------
+
+/// Both hook scripts must not rely on `nohup` / `setsid` / `disown` — Git for
+/// Windows' bundled shell ships none of them (#1161).
+#[test]
+fn hooks_do_not_use_nohup() {
+    for (name, script) in [
+        ("post-commit", HOOK_SCRIPT),
+        ("post-checkout", CHECKOUT_SCRIPT),
+    ] {
+        assert!(!script.contains("nohup"), "{name} still references nohup");
+        assert!(!script.contains("setsid"), "{name} still references setsid");
+        assert!(!script.contains("disown"), "{name} still uses disown");
+    }
+}
+
+/// The replacement detaches via Python: `start_new_session` on POSIX and
+/// `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows (#1161).
+#[test]
+fn hooks_use_cross_platform_detach() {
+    for (name, script) in [
+        ("post-commit", HOOK_SCRIPT),
+        ("post-checkout", CHECKOUT_SCRIPT),
+    ] {
+        assert!(script.contains("subprocess.Popen"), "{name} missing Popen");
+        assert!(
+            script.contains("start_new_session=True"),
+            "{name} missing POSIX detach"
+        );
+        assert!(
+            script.contains("0x00000008"),
+            "{name} missing DETACHED_PROCESS flag"
+        );
+        assert!(
+            script.contains("0x00000200"),
+            "{name} missing CREATE_NEW_PROCESS_GROUP flag"
+        );
+    }
+}
+
+/// Both rebuild bodies read `graphify-out/.graphify_root` and pass the
+/// recovered root to `_rebuild_code`, so a scoped build is not silently
+/// expanded to the full repo (#1173).
+#[test]
+fn rebuild_bodies_read_graphify_root() {
+    for (name, script) in [
+        ("post-commit", HOOK_SCRIPT),
+        ("post-checkout", CHECKOUT_SCRIPT),
+    ] {
+        assert!(
+            script.contains("graphify-out/.graphify_root"),
+            "{name} ignores .graphify_root"
+        );
+        assert!(
+            script.contains("_rebuild_code(_root"),
+            "{name} does not pass recovered root"
+        );
+        assert!(
+            script.contains("read_text(encoding='utf-8')"),
+            "{name} root read is not single-quoted (shell-quote-safe)"
+        );
+    }
+}
+
+/// The interpreter detection has a loud fallback instead of a bare silent exit.
+#[test]
+fn python_detect_has_loud_fallback() {
+    assert!(PYTHON_DETECT.contains("could not locate"));
+}
+
+/// The pinned probe and `.graphify_python` probe are present.
+#[test]
+fn python_detect_has_pinned_and_file_probes() {
+    assert!(PYTHON_DETECT.contains("_PINNED="));
+    assert!(PYTHON_DETECT.contains("graphify-out/.graphify_python"));
+}
+
+/// End-to-end: the installed hooks substitute the `__PINNED_PYTHON__`
+/// placeholder and contain the cross-platform detach (#1161, #1127).
+#[test]
+#[serial]
+fn installed_hooks_substitute_placeholder_and_detach() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    install(&repo).expect("install");
+    for name in ["post-commit", "post-checkout"] {
+        let hook = repo.join(".git").join("hooks").join(name);
+        let text = fs::read_to_string(&hook).expect("read hook");
+        assert!(
+            !text.contains("__PINNED_PYTHON__"),
+            "{name} placeholder not substituted"
+        );
+        assert!(
+            text.contains("_PINNED=''"),
+            "{name} pinned probe missing (empty pin)"
+        );
+        assert!(
+            text.contains("start_new_session=True"),
+            "{name} not detached"
+        );
+        assert!(!text.contains("nohup"), "{name} still references nohup");
+    }
+}
