@@ -78,9 +78,13 @@ pub(crate) fn rebuild_code_inner(
 
     relativize_source_files(&mut result, &project_root);
     std::fs::create_dir_all(&out).map_err(WatchError::Io)?;
+    // Write the user-supplied path, not the resolved absolute form, so a
+    // committed `graphify-out/.graphify_root` ports across clones and CI (#777).
+    // For `graphify update` (watch_path == "."), this stores "." and the next
+    // run resolves it against the caller's CWD.
     std::fs::write(
         out.join(".graphify_root"),
-        watch_root.to_string_lossy().as_bytes(),
+        watch_path.to_string_lossy().as_bytes(),
     )
     .map_err(WatchError::Io)?;
 
@@ -144,6 +148,7 @@ pub(crate) fn rebuild_code_inner(
         report_content: &report_content,
         detected: &detected,
         out: &out,
+        project_root: &project_root,
     })?;
 
     Ok(true)

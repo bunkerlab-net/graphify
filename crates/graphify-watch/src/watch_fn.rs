@@ -128,12 +128,20 @@ pub fn watch(watch_path: &Path, debounce: f64) -> Result<(), WatchError> {
                 if !WATCHED_EXTENSIONS.contains(&ext) {
                     return false;
                 }
-                if p.components()
+                // Filter on the path relative to the watch root so the root's own
+                // components (a dotted parent dir, or a parent literally named
+                // graphify-out) don't spuriously match the dotfile / out-dir
+                // filters. Falls back to the full path when it is not under the
+                // root (mirrors Python's relative_to / ValueError fallback).
+                let filter_path = p.strip_prefix(&watch_root).unwrap_or(p.as_path());
+                if filter_path
+                    .components()
                     .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')))
                 {
                     return false;
                 }
-                if p.components()
+                if filter_path
+                    .components()
                     .any(|c| c.as_os_str() == out_dir_name.as_str())
                 {
                     return false;

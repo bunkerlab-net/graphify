@@ -298,6 +298,13 @@ pub(crate) fn merge_with_existing_graph(
         }
     }
 
+    // On a full re-extraction `new_ast_ids` is the complete current AST set, so
+    // any AST-marked node missing from it is stale and must be dropped even if
+    // its source file survives (a symbol removed from a surviving file, #1116).
+    // In incremental mode an AST node from an unchanged file is legitimately
+    // absent, so this only fires on a full rebuild. Marker-less nodes (semantic,
+    // or pre-upgrade graphs) lack `_origin` and are never dropped here.
+    let full_rebuild = !has_changed_paths;
     let preserved_nodes: Vec<Value> = existing
         .get("nodes")
         .and_then(Value::as_array)
@@ -306,6 +313,9 @@ pub(crate) fn merge_with_existing_graph(
                 .filter(|n| {
                     let id = n.get("id").and_then(Value::as_str).unwrap_or("");
                     if new_ast_ids.contains(id) {
+                        return false;
+                    }
+                    if full_rebuild && n.get("_origin").and_then(Value::as_str) == Some("ast") {
                         return false;
                     }
                     if !evict_sources.is_empty() {
@@ -665,6 +675,8 @@ pub(crate) struct CommitArgs<'a> {
     pub detected: &'a DetectResult,
     /// Output directory where all artefacts are written.
     pub out: &'a Path,
+    /// Project root used to relativise manifest keys (#777).
+    pub project_root: &'a Path,
 }
 
 /// Atomically commit the rebuild outputs: `graph.json`, `GRAPH_REPORT.md`,
@@ -699,7 +711,14 @@ pub(crate) fn commit_rebuild_outputs(args: &CommitArgs<'_>) -> Result<(), WatchE
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    if let Err(e) = graphify_detect::save_manifest(&files_indexed, &manifest_path, "ast") {
+    // Relativise manifest keys against the project root so a committed
+    // graphify-out/ ports across clones (#777).
+    if let Err(e) = graphify_detect::save_manifest_to_path_with_root(
+        &files_indexed,
+        &manifest_path,
+        "ast",
+        Some(args.project_root),
+    ) {
         println!("[graphify watch] warning: could not write manifest: {e}");
     }
     Ok(())
@@ -773,6 +792,8 @@ pub(crate) struct FinaliseArgs<'a> {
     pub detected: &'a DetectResult,
     /// Output directory where all artefacts are written.
     pub out: &'a std::path::Path,
+    /// Project root used to relativise manifest keys (#777).
+    pub project_root: &'a std::path::Path,
 }
 
 /// Finalise the rebuild: commit (or skip), prune `needs_update`, render the HTML
@@ -798,6 +819,7 @@ pub(crate) fn finalise_rebuild(args: &FinaliseArgs<'_>) -> Result<(), WatchError
             labels_file: args.labels_file,
             detected: args.detected,
             out: args.out,
+            project_root: args.project_root,
         })?;
     }
     let flag = args.out.join("needs_update");
