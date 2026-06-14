@@ -42,6 +42,7 @@ fn make_req<'a>(base_url: &'a str, backend_name: &'a str) -> OpenAiRequest<'a> {
         reasoning_effort: None,
         max_completion_tokens: 256,
         disable_thinking: false,
+        custom_extra_body: None,
         ollama_options: None,
         backend_name,
         timeout: Duration::from_secs(5),
@@ -236,6 +237,91 @@ fn call_openai_compat_with_ollama_options() {
     });
     let resp = call_openai_compat(&req).expect("test invariant");
     assert_eq!(resp.finish_reason, "stop");
+}
+
+// ── custom-provider extra_body passthrough (#7477b46) ─────────────────────
+
+#[test]
+fn call_openai_compat_uses_explicit_extra_body() {
+    // A custom provider's extra_body is forwarded verbatim — lets self-hosted
+    // Qwen3 on vLLM pass `chat_template_kwargs.enable_thinking=false`.
+    let _g = AllowPrivate::new();
+    let mut server = mockito::Server::new();
+    let body = json!({
+        "choices": [{"message": {"content": "{\"nodes\":[],\"edges\":[]}"}, "finish_reason": "stop"}],
+        "usage": {}
+    });
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::PartialJsonString(
+            "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":false}}}".into(),
+        ))
+        .with_status(200)
+        .with_body(body.to_string())
+        .create();
+
+    let url = server.url();
+    let eb = json!({"chat_template_kwargs": {"enable_thinking": false}});
+    let mut req = make_req(&url, "kitor-vllm");
+    req.custom_extra_body = Some(&eb);
+    let _ = call_openai_compat(&req).expect("test invariant");
+}
+
+#[test]
+fn call_openai_compat_extra_body_wins_over_moonshot_default() {
+    // disable_thinking would inject `thinking: disabled`, but an explicit
+    // custom extra_body must override it.
+    let _g = AllowPrivate::new();
+    let mut server = mockito::Server::new();
+    let body = json!({
+        "choices": [{"message": {"content": "{\"nodes\":[],\"edges\":[]}"}, "finish_reason": "stop"}],
+        "usage": {}
+    });
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::PartialJsonString(
+            "{\"extra_body\":{\"thinking\":{\"type\":\"enabled\"}}}".into(),
+        ))
+        .with_status(200)
+        .with_body(body.to_string())
+        .create();
+
+    let url = server.url();
+    let eb = json!({"thinking": {"type": "enabled"}});
+    let mut req = make_req(&url, "kimi");
+    req.disable_thinking = true;
+    req.custom_extra_body = Some(&eb);
+    let _ = call_openai_compat(&req).expect("test invariant");
+}
+
+#[test]
+fn call_openai_compat_explicit_extra_body_skips_ollama_auto_derive() {
+    // An explicit extra_body means "I own this request shape" — Ollama's
+    // num_ctx auto-derive must step aside, not clobber it.
+    let _g = AllowPrivate::new();
+    let mut server = mockito::Server::new();
+    let body = json!({
+        "choices": [{"message": {"content": "{\"nodes\":[],\"edges\":[]}"}, "finish_reason": "stop"}],
+        "usage": {}
+    });
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::PartialJsonString(
+            "{\"extra_body\":{\"options\":{\"num_ctx\":4096}}}".into(),
+        ))
+        .with_status(200)
+        .with_body(body.to_string())
+        .create();
+
+    let url = server.url();
+    let eb = json!({"options": {"num_ctx": 4096}});
+    let mut req = make_req(&url, "ollama");
+    req.ollama_options = Some(OllamaOptions {
+        num_ctx: 65536,
+        keep_alive: "30m".to_string(),
+    });
+    req.custom_extra_body = Some(&eb);
+    let _ = call_openai_compat(&req).expect("test invariant");
 }
 
 // ── reasoning_effort forwarded ─────────────────────────────────────────────

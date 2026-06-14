@@ -85,6 +85,33 @@ fn custom_provider_max_completion_tokens_parsed_and_defaulted() {
 }
 
 #[test]
+fn custom_provider_extra_body_parsed_and_defaulted() {
+    // A provider may set `extra_body` (forwarded verbatim to the OpenAI-compat
+    // request, #7477b46); when omitted or explicitly null it stays `None`.
+    let tmp = tempdir().expect("tempdir");
+    let global = tmp.path().join("providers.json");
+    std::fs::write(
+        &global,
+        r#"{
+            "vllm": {"base_url": "http://x/v1", "default_model": "m", "env_key": "K",
+                     "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}},
+            "nulled": {"base_url": "http://y/v1", "default_model": "m", "env_key": "K", "extra_body": null},
+            "plain": {"base_url": "http://z/v1", "default_model": "m", "env_key": "K"}
+        }"#,
+    )
+    .expect("write providers.json");
+
+    let loaded = load_custom_providers_from(&tmp.path().join("local.json"), &global);
+    assert_eq!(
+        loaded["vllm"].extra_body,
+        Some(serde_json::json!({"chat_template_kwargs": {"enable_thinking": false}}))
+    );
+    // A JSON null is treated as absent (matches Python's `cfg.get`).
+    assert_eq!(loaded["nulled"].extra_body, None);
+    assert_eq!(loaded["plain"].extra_body, None);
+}
+
+#[test]
 fn custom_provider_pricing_defaults_to_zero() {
     let tmp = tempdir().expect("tempdir");
     let global = tmp.path().join("providers.json");
@@ -265,6 +292,7 @@ fn detect_backend_custom_provider_after_builtins() {
             },
             temperature: 0.0,
             max_completion_tokens: 8192,
+            extra_body: None,
         },
     );
 

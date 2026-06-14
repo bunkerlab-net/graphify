@@ -189,6 +189,7 @@ fn extract_custom(
         reasoning_effort: None,
         max_completion_tokens: max_out,
         disable_thinking: false,
+        custom_extra_body: provider.extra_body.as_ref(),
         ollama_options: None,
         backend_name: &provider.name,
         timeout: openai_compat::api_timeout(),

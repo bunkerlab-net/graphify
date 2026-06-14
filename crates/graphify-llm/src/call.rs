@@ -146,6 +146,7 @@ pub fn call_llm_with_model(
             temperature: Some(0.0),
             reasoning_effort: None,
             disable_thinking: true,
+            extra_body: None,
             max_tokens: max_tokens_u32,
         }),
         "gemini" => gemini::call_gemini_plain(&key, mdl, prompt, max_tokens_u32),
@@ -180,6 +181,7 @@ fn call_custom_plain(
         temperature: Some(provider.temperature),
         reasoning_effort: None,
         disable_thinking: false,
+        extra_body: provider.extra_body.as_ref(),
         max_tokens,
     })
 }

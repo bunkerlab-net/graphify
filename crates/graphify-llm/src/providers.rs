@@ -31,6 +31,12 @@ pub struct CustomProvider {
     /// `GRAPHIFY_MAX_OUTPUT_TOKENS` override. Mirrors Python's
     /// `cfg.get("max_completion_tokens", 8192)` on the OpenAI-compatible path.
     pub max_completion_tokens: u32,
+    /// Optional `OpenAI` `extra_body` passthrough (#7477b46). When set, it owns
+    /// the request shape: a self-hosted Qwen3 on vLLM can pass
+    /// `{"chat_template_kwargs": {"enable_thinking": false}}` to route around the
+    /// moonshot-only `thinking: disabled` default and the Ollama `num_ctx`
+    /// auto-derive. `None` (missing or `null`) keeps the built-in defaults.
+    pub extra_body: Option<Value>,
 }
 
 /// Fallback output-token budget when a provider omits `max_completion_tokens`,
@@ -246,6 +252,9 @@ pub fn load_custom_providers_from(local: &Path, global: &Path) -> IndexMap<Strin
                         .get("max_completion_tokens")
                         .and_then(max_completion_tokens_from)
                         .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS),
+                    // A JSON `null` is treated as absent (matches Python's
+                    // `cfg.get("extra_body")` returning `None` for both).
+                    extra_body: obj.get("extra_body").filter(|v| !v.is_null()).cloned(),
                 },
             );
         }

@@ -31,6 +31,10 @@ pub struct OpenAiRequest<'a> {
     pub max_completion_tokens: u32,
     /// If `true`, inject Kimi's `thinking: disabled` extra body.
     pub disable_thinking: bool,
+    /// Custom-provider `extra_body` passthrough (#7477b46). When `Some`, it owns
+    /// the request's `extra_body` and overrides both [`Self::disable_thinking`]
+    /// and [`Self::ollama_options`] — the provider has chosen its request shape.
+    pub custom_extra_body: Option<&'a Value>,
     /// Ollama-specific options: `num_ctx`, `keep_alive`.
     pub ollama_options: Option<OllamaOptions>,
     /// Backend name for diagnostic messages.
@@ -192,6 +196,13 @@ fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
     }
     if let Some(re) = req.reasoning_effort {
         body["reasoning_effort"] = json!(re);
+    }
+    // A custom provider's explicit extra_body owns the request shape and wins
+    // over both the moonshot `thinking: disabled` default and the Ollama
+    // num_ctx auto-derive (#7477b46).
+    if let Some(custom) = req.custom_extra_body {
+        body["extra_body"] = custom.clone();
+        return body;
     }
     // Build `extra_body` incrementally so disable_thinking and ollama
     // options can coexist (assigning each one separately would overwrite

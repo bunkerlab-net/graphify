@@ -106,6 +106,7 @@ pub fn call_kimi(
         max_completion_tokens: max_tokens,
         // Kimi-k2.6 is a reasoning model — disable thinking.
         disable_thinking: true,
+        custom_extra_body: None,
         ollama_options: None,
         backend_name: "kimi",
         timeout: api_timeout(),
@@ -128,6 +129,9 @@ pub(crate) struct PlainOpenAiRequest<'a> {
     pub temperature: Option<f64>,
     pub reasoning_effort: Option<&'a str>,
     pub disable_thinking: bool,
+    /// Custom-provider `extra_body` passthrough (#7477b46); when `Some` it owns
+    /// the request's `extra_body`, overriding [`Self::disable_thinking`].
+    pub extra_body: Option<&'a serde_json::Value>,
     pub max_tokens: u32,
 }
 
@@ -154,7 +158,11 @@ pub(crate) fn call_plain_openai_compat(req: &PlainOpenAiRequest<'_>) -> Result<S
     if let Some(re) = req.reasoning_effort {
         body["reasoning_effort"] = json!(re);
     }
-    if req.disable_thinking {
+    // A custom provider's explicit extra_body owns the request shape and wins
+    // over the moonshot `thinking: disabled` default (#7477b46).
+    if let Some(custom) = req.extra_body {
+        body["extra_body"] = custom.clone();
+    } else if req.disable_thinking {
         body["extra_body"] = json!({"thinking": {"type": "disabled"}});
     }
 
