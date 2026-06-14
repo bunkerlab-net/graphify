@@ -1822,6 +1822,7 @@ version = "0.8.30"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
+ "base64",
  "graphify-security",
  "hex",
  "indexmap",

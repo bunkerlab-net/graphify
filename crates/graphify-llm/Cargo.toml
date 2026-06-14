@@ -21,6 +21,7 @@ aws-sdk-bedrockruntime = { version = "1", default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
+base64 = "0.22"
 graphify-security = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true }

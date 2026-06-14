@@ -55,6 +55,7 @@ mod response;
 pub mod retry;
 pub mod tokenizer;
 pub mod tokens;
+pub mod vision;
 
 pub use backends::{
     BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars, detect_backend,
@@ -87,3 +88,7 @@ pub use retry::{
     extract_with_adaptive_retry, looks_like_context_exceeded, looks_like_context_exceeded_dyn,
 };
 pub use tokens::{estimate_cost, estimate_file_tokens, pack_chunks_by_tokens};
+pub use vision::{
+    ImageRef, anthropic_content, backend_supports_vision, build_image_refs, image_notes,
+    is_vision_image, openai_content, partition_semantic_files, strip_pixels, with_image_notes,
+};
