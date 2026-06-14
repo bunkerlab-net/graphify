@@ -119,11 +119,11 @@ void checkDependencies(BuildContext context) {
         .is_some()
     );
 
-    // Mixin
+    // Mixin: a `with` clause emits `mixes_in`, not `implements`.
     assert!(
         edge(edges, |e| e.source == user_bloc.id
             && e.target == "mymixin"
-            && e.relation == "implements")
+            && e.relation == "mixes_in")
         .is_some()
     );
 

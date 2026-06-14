@@ -211,3 +211,24 @@ fn cross_file_import_edges_stay_connected() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn ast_nodes_are_stamped_with_origin() -> TestResult {
+    // #1118: every AST-extracted node carries `_origin = "ast"` so the watch
+    // rebuild can distinguish AST nodes from semantic/LLM nodes.
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    let f = root.join("mod.py");
+    write(&f, "def run():\n    pass\n")?;
+
+    let result = extract(&[f], Some(&root));
+    assert!(!result.nodes.is_empty(), "expected at least one node");
+    for n in &result.nodes {
+        assert_eq!(
+            n.get("_origin").and_then(Value::as_str),
+            Some("ast"),
+            "every AST node must be stamped _origin=ast"
+        );
+    }
+    Ok(())
+}

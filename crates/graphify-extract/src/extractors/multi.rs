@@ -1093,18 +1093,25 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             None
         }
     };
-    let nodes_out: Vec<indexmap::IndexMap<String, Value>> = if all_nodes.len() >= PARALLEL_THRESHOLD
-    {
-        all_nodes
-            .into_par_iter()
-            .filter_map(|n| serde_json::to_value(n).ok().and_then(to_indexmap))
-            .collect()
-    } else {
-        all_nodes
-            .into_iter()
-            .filter_map(|n| serde_json::to_value(n).ok().and_then(to_indexmap))
-            .collect()
-    };
+    let mut nodes_out: Vec<indexmap::IndexMap<String, Value>> =
+        if all_nodes.len() >= PARALLEL_THRESHOLD {
+            all_nodes
+                .into_par_iter()
+                .filter_map(|n| serde_json::to_value(n).ok().and_then(to_indexmap))
+                .collect()
+        } else {
+            all_nodes
+                .into_iter()
+                .filter_map(|n| serde_json::to_value(n).ok().and_then(to_indexmap))
+                .collect()
+        };
+    // Tag AST provenance so the incremental watch rebuild can distinguish
+    // AST-extracted nodes from semantic/LLM nodes. On a full re-extraction the
+    // watcher drops any AST-marked node missing from the fresh output even when
+    // its source file still exists (#1116/#1118).
+    for n in &mut nodes_out {
+        n.insert("_origin".to_string(), Value::String("ast".to_string()));
+    }
     let edges_out: Vec<indexmap::IndexMap<String, Value>> = if all_edges.len() >= PARALLEL_THRESHOLD
     {
         all_edges
