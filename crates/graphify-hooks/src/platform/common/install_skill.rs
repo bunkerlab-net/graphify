@@ -135,7 +135,9 @@ fn skill_for(platform: &str, project: bool) -> Result<(&'static str, &'static st
             };
             (skill, ".claude/skills/graphify/SKILL.md")
         }
-        "codex" => (SKILL_CODEX_MD, ".agents/skills/graphify/SKILL.md"),
+        // Codex installs to `.codex/skills/...` (#1160): the hook already wrote
+        // to `.codex/`, so the skill destination was previously inconsistent.
+        "codex" => (SKILL_CODEX_MD, ".codex/skills/graphify/SKILL.md"),
         // `CodeBuddy` rides claude's skill bundle (#1136). The user-scope
         // CODEBUDDY.md registration is written by `install_platform_skill`.
         "codebuddy" => (SKILL_MD, ".codebuddy/skills/graphify/SKILL.md"),

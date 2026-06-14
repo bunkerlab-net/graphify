@@ -5,6 +5,8 @@
 //! `antigravity`, `codex`, `opencode`, `aider`, `claw`, `droid`, `trae`,
 //! `trae-cn`, `hermes`).
 
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use graphify_hooks::platform::{
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
@@ -18,12 +20,46 @@ use graphify_hooks::platform::{
 
 use crate::cli::args::PlatformCmd;
 
+/// Print the amber-brain banner shown at the top of `graphify install`.
+///
+/// TTY-only (suppressed in CI logs and pipes) and best-effort — it never fails
+/// the install. Mirrors graphify-py's `_print_banner`. Unlike Python it does
+/// not toggle the Windows console mode via the OS API: that would pull in a
+/// `winapi` dependency for a purely cosmetic banner, and modern Windows
+/// terminals render ANSI by default. The banner is suppressed entirely when
+/// stdout is not a terminal, so non-interactive runs are unaffected.
+fn print_banner() {
+    const AMBER: &str = "\x1b[38;5;214m";
+    const DARK: &str = "\x1b[38;5;130m";
+    const RESET: &str = "\x1b[0m";
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let version = env!("CARGO_PKG_VERSION");
+    println!(
+        "{AMBER}
+  ╭──◉──╮     ╭──◉──╮
+ ╱  ◉   ◉ ╲ ╱ ◉   ◉  ╲
+│   ◉─◉─◉  ◉  ◉─◉─◉   │
+│    ◉   ◉ │ ◉   ◉    │
+│   ◉─◉─◉  ◉  ◉─◉─◉   │
+ ╲  ◉   ◉ ╱ ╲ ◉   ◉  ╱
+  ╰──◉──╯     ╰──◉──╯
+           ◉
+
+  █▀▀ █▀█ ▄▀█ █▀█ █ █ █ █▀▀ █▄█
+  █▄█ █▀▄ █▀█ █▀▀ █▀█ █ █▀   █{DARK}  {version}{RESET}
+"
+    );
+}
+
 /// Install the graphify skill for the given platform.
 ///
 /// When `project` is `true`, installs into `./.{platform}/skills/...`
 /// under the current working directory instead of the user home
 /// directory. Mirrors the Python `--project` flag (#931).
 pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
+    print_banner();
     // Antigravity's project install lays down the full always-on layer
     // (skill + rules + workflow), not just the skill — matching graphify-py's
     // `_project_install("antigravity")`. The generic skill-only installer would

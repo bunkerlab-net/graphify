@@ -903,9 +903,11 @@ fn test_install_default_claude() {
 #[test]
 #[serial(home_env)]
 fn test_install_codex() {
+    // Codex installs the skill to `.codex/skills/...` (#1160), matching where
+    // its hook writes.
     let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "codex");
-    assert!(dir.path().join(".agents/skills/graphify/SKILL.md").exists());
+    assert!(dir.path().join(".codex/skills/graphify/SKILL.md").exists());
 }
 
 #[test]
