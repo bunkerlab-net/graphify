@@ -207,6 +207,9 @@ fn consider_tiebreak_pair(
     if short_label_blocked(norm_a, &norm_b, score) {
         return;
     }
+    if is_prefix_extension(norm_a, &norm_b) {
+        return;
+    }
     let c1 = communities.get(id_a).copied();
     let c2 = communities.get(id_b).copied();
     if c1.is_some() && c2.is_some() && c1 == c2 && norm_a.len().min(norm_b.len()) >= 12 {
@@ -246,15 +249,38 @@ fn node_id(node: &Value) -> &str {
     node.get("id").and_then(Value::as_str).unwrap_or("")
 }
 
+/// True when one normalised label is a strict prefix of the other
+/// (`getActiveSession` / `getActiveSessions`). Such pairs are almost never
+/// duplicates and must be blocked regardless of Jaro-Winkler score (#1201).
+fn is_prefix_extension(a: &str, b: &str) -> bool {
+    let (lo, hi) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    hi.starts_with(lo) && hi != lo
+}
+
+/// True for AST-extracted code symbols.
+///
+/// Code-node identity is the node ID (which already encodes the fully qualified
+/// module/class/symbol path). The label is only a display name — a bare
+/// `.draw()` method name, or a function name shared by two parallel backends —
+/// so label-based merging conflates distinct symbols (#1205). Genuine duplicates
+/// (the same symbol re-extracted) share an ID and are already collapsed by the
+/// exact-ID pre-dedup, so code never needs label-based merging.
+fn is_code(node: &Value) -> bool {
+    node.get("file_type").and_then(Value::as_str) == Some("code")
+}
+
 // ── pass 1: exact normalisation ───────────────────────────────────────────────
 
 /// Groups nodes with identical normalised labels within the same source file and unions them in the returned `UnionFind`.
-fn pass1_exact(
-    unique_nodes: &[&Value],
-) -> Result<(UnionFind, IndexMap<String, Vec<usize>>), DedupError> {
+fn pass1_exact(unique_nodes: &[&Value]) -> Result<UnionFind, DedupError> {
     // Map norm(label) -> indices into unique_nodes.
     let mut norm_to_idx: IndexMap<String, Vec<usize>> = IndexMap::new();
     for (i, node) in unique_nodes.iter().enumerate() {
+        // Code symbols are keyed by ID, never by label — skip them entirely so
+        // distinct same-named symbols are never merged by string similarity (#1205).
+        if is_code(node) {
+            continue;
+        }
         let key = norm(node_label(node));
         if !key.is_empty() {
             norm_to_idx.entry(key).or_default().push(i);
@@ -277,7 +303,12 @@ fn pass1_exact(
                 .to_string();
             by_file.entry(sf).or_default().push(unique_nodes[idx]);
         }
-        for file_group in by_file.values() {
+        for (sf, file_group) in &by_file {
+            // No source_file — cannot prove same symbol; skip to avoid collapsing
+            // distinct nodes that happen to share a label (#1178).
+            if sf.is_empty() {
+                continue;
+            }
             if file_group.len() > 1 {
                 let winner = pick_winner(file_group)?;
                 let winner_id = node_id(winner);
@@ -288,7 +319,7 @@ fn pass1_exact(
         }
     }
 
-    Ok((uf, norm_to_idx))
+    Ok(uf)
 }
 
 // ── pass 2: fuzzy matching ────────────────────────────────────────────────────
@@ -297,12 +328,18 @@ fn pass1_exact(
 fn pass2_fuzzy(
     unique_nodes: &[&Value],
     uf: &mut UnionFind,
-    norm_to_idx: &IndexMap<String, Vec<usize>>,
     communities: &IndexMap<String, i64>,
 ) -> Result<(), DedupError> {
     let mut seen_norms: indexmap::IndexSet<String> = indexmap::IndexSet::new();
     let mut candidates: Vec<&Value> = Vec::new();
     for node in unique_nodes {
+        // Exclude code symbols from fuzzy matching: two functions with similar
+        // long names in different files (parallel backends, sibling classes)
+        // must not be fuzzy-merged, and a code<->concept fuzzy match must not
+        // transitively union two distinct code symbols via a concept (#1205).
+        if is_code(node) {
+            continue;
+        }
         let label = node_label(node);
         let key = norm(label);
         if !key.is_empty() && seen_norms.insert(key) && entropy(label) >= ENTROPY_THRESHOLD {
@@ -352,6 +389,12 @@ fn pass2_fuzzy(
         if short_label_blocked(&norm_a, &norm_b, score) {
             continue;
         }
+        // Prefix-extension pairs (getActiveSession / getActiveSessions,
+        // parseConfig / parseConfigFile) are almost never duplicates — one is a
+        // strict suffix-extension of the other. Block regardless of JW score (#1201).
+        if is_prefix_extension(&norm_a, &norm_b) {
+            continue;
+        }
 
         let c1 = communities.get(id_a).copied();
         let c2 = communities.get(id_b).copied();
@@ -381,19 +424,12 @@ fn pass2_fuzzy(
                     continue;
                 }
             }
-            // Gather all nodes matching either norm key for winner selection.
-            let empty: Vec<usize> = Vec::new();
-            let idxs_a = norm_to_idx.get(&norm_a).unwrap_or(&empty);
-            let idxs_b = norm_to_idx.get(&norm_b).unwrap_or(&empty);
-            let mut all_group: Vec<&Value> = idxs_a
-                .iter()
-                .chain(idxs_b.iter())
-                .map(|&i| unique_nodes[i])
-                .collect();
-            if all_group.is_empty() {
-                all_group = vec![node_a, node_b];
-            }
-            let winner = pick_winner(&all_group)?;
+            // Pick the winner from the verified pair only. Selecting it from the
+            // union of both normalized-label groups pulls never-compared nodes
+            // (same label, different source_file) into the merge, bypassing the
+            // #1046/#1178 guards (#1247).
+            let pair = [node_a, node_b];
+            let winner = pick_winner(&pair)?;
             let winner_id = node_id(winner);
             uf.union(winner_id, id_a);
             uf.union(winner_id, id_b);
@@ -450,10 +486,10 @@ pub fn run(
     }
 
     // Pass 1: exact normalisation.
-    let (mut uf, norm_to_idx) = pass1_exact(&unique_nodes)?;
+    let mut uf = pass1_exact(&unique_nodes)?;
 
     // Pass 2: MinHash/LSH + Jaro-Winkler.
-    pass2_fuzzy(&unique_nodes, &mut uf, &norm_to_idx, communities)?;
+    pass2_fuzzy(&unique_nodes, &mut uf, communities)?;
 
     // Pass 3: LLM tiebreaker (opt-in).
     if let Some(backend) = dedup_llm_backend {
