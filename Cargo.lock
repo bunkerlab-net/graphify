@@ -1932,12 +1932,15 @@ dependencies = [
 name = "graphify-serve"
 version = "0.8.30"
 dependencies = [
+ "chrono",
  "graphify-analyze",
  "graphify-build",
  "graphify-prs",
  "graphify-security",
  "indexmap",
+ "regex",
  "serde_json",
+ "serial_test",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

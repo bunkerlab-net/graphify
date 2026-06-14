@@ -11,6 +11,8 @@
 mod error;
 /// Pure graph-query helpers: scoring, BFS/DFS traversal, subgraph rendering.
 pub mod graph;
+/// Append-only JSONL query logging (`~/.cache/graphify-queries.log`).
+pub mod querylog;
 mod serve_fn;
 /// MCP stdio JSON-RPC server transport and message dispatcher.
 pub mod server;
@@ -20,5 +22,6 @@ pub mod tools;
 
 pub use error::ServeError;
 pub use graph::query_terms;
+pub use querylog::{QueryLog, log_query, nodes_from_result};
 pub use serve_fn::serve;
 pub use state::ReloadState;
