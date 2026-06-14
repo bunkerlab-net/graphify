@@ -1619,6 +1619,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "thiserror 2.0.18",
+ "unicode-normalization",
  "zip 8.6.0",
 ]
 
