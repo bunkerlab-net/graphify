@@ -172,6 +172,10 @@ tracing-subscriber = { workspace = true }
 # optional `falkordb` extra. Without it, `--push` errors and the cypher.txt
 # path still works.
 falkordb = ["graphify-export/falkordb"]
+# Forwarded to graphify-extract: compiles live PostgreSQL introspection for
+# `graphify extract <PATH> --postgres <DSN>`. Off by default — mirrors
+# graphify-py's optional `postgres` extra. Without it, `--postgres` errors.
+postgres = ["graphify-extract/postgres"]
 
 [dev-dependencies]
 assert_cmd = "2"

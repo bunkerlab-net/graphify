@@ -252,6 +252,12 @@ pub(crate) enum Command {
         /// Run LLM-driven dedup tiebreak after clustering.
         #[arg(long = "dedup-llm")]
         dedup_llm: bool,
+        /// Also extract crate -> crate dependency edges from `Cargo.toml`.
+        #[arg(long)]
+        cargo: bool,
+        /// Also extract schema from a live Postgres database at this DSN.
+        #[arg(long, value_name = "DSN")]
+        postgres: Option<String>,
     },
 
     /// Export graph to various formats.

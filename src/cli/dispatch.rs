@@ -258,6 +258,8 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         exclude_hubs,
         exclude,
         dedup_llm,
+        cargo,
+        postgres,
     } = cmd
     else {
         unreachable!("dispatch_extract invoked with wrong variant")
@@ -286,6 +288,10 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         global: cli::extract::GlobalOptions {
             global,
             as_tag: as_tag.as_deref(),
+        },
+        introspect: cli::extract::IntrospectOptions {
+            cargo,
+            postgres: postgres.as_deref(),
         },
     })
 }
