@@ -16,6 +16,7 @@
 //! - **`tsconfig.rs`** — TypeScript `tsconfig.json` alias resolution.
 
 mod builtins;
+pub mod cargo_introspect;
 pub mod error;
 mod forward_refs;
 pub mod generic;
@@ -31,6 +32,7 @@ pub mod workspace;
 // Language-specific extractors
 mod extractors;
 
+pub use cargo_introspect::{CargoIntrospectError, CargoIntrospection, introspect_cargo};
 pub use error::ExtractError;
 pub use extractors::extract;
 pub use extractors::mcp::MCP_CONFIG_FILENAMES;
