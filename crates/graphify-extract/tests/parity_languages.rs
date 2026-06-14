@@ -1348,3 +1348,70 @@ fn dm_parent_relative_include_resolves_to_parent_dir() {
         "a `../` include of an existing file must resolve (non-external imports_from): {import_edges:?}"
     );
 }
+
+// ── Python package-form submodule imports (#1146) ────────────────────────────
+
+/// #1146: `from pkg import submod` where `pkg` is a package (`__init__.py`) and
+/// `submod` is a submodule file on disk should emit a file-level
+/// `imports_from`/`submodule_import` edge to the submodule, so package-form
+/// imports do not leave the submodule as a disconnected island. Covers both the
+/// relative (`from .pkg import …`) and absolute (`from pkg import …`) forms.
+#[test]
+fn python_package_form_import_resolves_submodule() -> Result<(), Box<dyn std::error::Error>> {
+    use graphify_extract::{extract_python, make_id1};
+
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path();
+    // Lay out a package with two submodules and a sibling importer.
+    let pkg = root.join("pkg");
+    std::fs::create_dir_all(&pkg)?;
+    std::fs::write(pkg.join("__init__.py"), "")?;
+    std::fs::write(pkg.join("models.py"), "class Widget:\n    pass\n")?;
+    std::fs::create_dir_all(pkg.join("services"))?;
+    std::fs::write(pkg.join("services").join("__init__.py"), "")?;
+
+    // Importer lives inside the package and uses both absolute and relative forms.
+    let importer = pkg.join("app.py");
+    std::fs::write(
+        &importer,
+        "from pkg import models\nfrom . import services\nfrom pkg import missing\n",
+    )?;
+
+    let result = extract_python(&importer);
+    let importer_nid = make_id1(&importer.to_string_lossy());
+
+    let submodule_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.relation == "imports_from" && e.context.as_deref() == Some("submodule_import")
+        })
+        .collect();
+
+    // Absolute `from pkg import models` resolves to pkg/models.py.
+    let models_nid = make_id1(&pkg.join("models.py").to_string_lossy());
+    assert!(
+        submodule_edges
+            .iter()
+            .any(|e| e.source == importer_nid && e.target == models_nid),
+        "expected submodule_import edge to pkg/models.py: {submodule_edges:?}"
+    );
+
+    // Relative `from . import services` resolves to pkg/services/__init__.py.
+    let services_nid = make_id1(&pkg.join("services").join("__init__.py").to_string_lossy());
+    assert!(
+        submodule_edges
+            .iter()
+            .any(|e| e.source == importer_nid && e.target == services_nid),
+        "expected submodule_import edge to pkg/services/__init__.py: {submodule_edges:?}"
+    );
+
+    // `from pkg import missing` has no file on disk → no submodule edge for it,
+    // only the ordinary module-level imports_from edge.
+    assert_eq!(
+        submodule_edges.len(),
+        2,
+        "only resolvable submodules should produce edges: {submodule_edges:?}"
+    );
+    Ok(())
+}

@@ -114,7 +114,121 @@ pub fn import_python(
             str_path,
             line,
         ));
+
+        // #1146: `from pkg import submod` — when the module resolves to a
+        // package on disk and an imported name is itself a submodule file,
+        // emit a file-level `imports_from`/`submodule_import` edge to that
+        // submodule so package-form imports don't leave the submodule as a
+        // disconnected island.
+        if let Some(pkg_dir) = resolve_python_package_dir(&raw, str_path) {
+            for imported_name in python_imported_names(source, node) {
+                let sub_py = pkg_dir.join(format!("{imported_name}.py"));
+                let sub_pkg = pkg_dir.join(&imported_name).join("__init__.py");
+                let submodule = if sub_py.is_file() {
+                    Some(sub_py)
+                } else if sub_pkg.is_file() {
+                    Some(sub_pkg)
+                } else {
+                    None
+                };
+                if let Some(submodule) = submodule {
+                    edges.push(make_edge(
+                        file_nid,
+                        &make_id1(&submodule.to_string_lossy()),
+                        "imports_from",
+                        Some("submodule_import"),
+                        str_path,
+                        line,
+                    ));
+                }
+            }
+        }
     }
+}
+
+/// How many ancestor directories to probe when locating a package root for an
+/// absolute `from pkg import …` (#1146). The Rust per-file extractor has no
+/// project-root parameter, so it discovers the root by walking up from the
+/// importing file — mirroring the `require()` resolver. Six levels covers
+/// realistic source layouts without scanning unbounded ancestry.
+const PYTHON_PKG_PROBE_LEVELS: usize = 6;
+
+/// Resolve a Python `from <module> import …` module name to the package
+/// directory on disk (the directory containing its `__init__.py`), or `None`
+/// when the module is not a package — i.e. it resolves to a plain `.py` file or
+/// cannot be found.
+///
+/// Mirrors the package branch of `_resolve_python_module_path`. Relative
+/// imports resolve against the importing file's directory; absolute imports
+/// walk up from it to discover the project root.
+fn resolve_python_package_dir(raw: &str, str_path: &str) -> Option<std::path::PathBuf> {
+    let file_dir = Path::new(str_path).parent().unwrap_or(Path::new("."));
+    if raw.starts_with('.') {
+        let dots = raw.len() - raw.trim_start_matches('.').len();
+        let module_name = raw.trim_start_matches('.');
+        let mut base = file_dir.to_path_buf();
+        for _ in 0..(dots - 1) {
+            base = base.parent().unwrap_or(Path::new(".")).to_path_buf();
+        }
+        let candidate = if module_name.is_empty() {
+            base
+        } else {
+            base.join(module_name.replace('.', "/"))
+        };
+        return package_dir_if_init(&candidate);
+    }
+    // Absolute import: probe upward for an ancestor that hosts the package.
+    let rel = raw.replace('.', "/");
+    let mut probe = file_dir.to_path_buf();
+    for _ in 0..PYTHON_PKG_PROBE_LEVELS {
+        if let Some(dir) = package_dir_if_init(&probe.join(&rel)) {
+            return Some(dir);
+        }
+        match probe.parent() {
+            Some(p) if p != probe => probe = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    None
+}
+
+/// Return `candidate` when it is a directory containing an `__init__.py`.
+fn package_dir_if_init(candidate: &Path) -> Option<std::path::PathBuf> {
+    if candidate.is_dir() && candidate.join("__init__.py").is_file() {
+        Some(candidate.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// Collect the imported leaf names from a Python `import_from_statement`,
+/// mirroring `_python_imported_names`. Returns the full dotted name for plain
+/// specifiers and the original (non-alias) name for `x as y` specifiers — the
+/// alias is irrelevant to on-disk submodule resolution.
+fn python_imported_names(source: &[u8], node: Node<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut past_import = false;
+    let mut cur = node.walk();
+    if !cur.goto_first_child() {
+        return names;
+    }
+    loop {
+        let child = cur.node();
+        match child.kind() {
+            "import" => past_import = true,
+            "dotted_name" if past_import => names.push(read_text_owned(child, source)),
+            "aliased_import" if past_import => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    names.push(read_text_owned(name_node, source));
+                }
+            }
+            _ => {}
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+    names
 }
 
 // ── JavaScript / TypeScript ───────────────────────────────────────────────────
