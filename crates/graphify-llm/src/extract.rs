@@ -125,11 +125,17 @@ pub fn extract_files_direct_mode(
             claude::call_claude_with_system(&key, mdl, &msgs, max_out, system.as_ref())
         }
         "claude-cli" => {
-            // Path-based image handling (Read tool + `--add-dir`) is wired
-            // separately; here images become text-reference nodes.
-            let msg = vision::with_image_notes(&user_msg, &image_refs, false);
+            // claude-cli reads images by path: `call_claude_cli_with_runner_system`
+            // appends the Read-the-path notes and allowlists each image directory
+            // via `--add-dir`.
             let runner = claude_cli::RealClaudeRunner;
-            claude_cli::call_claude_cli_with_runner_system(&runner, &msg, max_out, system.as_ref())
+            claude_cli::call_claude_cli_with_runner_system(
+                &runner,
+                &user_msg,
+                max_out,
+                system.as_ref(),
+                &image_refs,
+            )
         }
         "bedrock" => {
             let region = bedrock::resolve_region();

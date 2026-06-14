@@ -5,6 +5,7 @@
 //! The `claude` binary is injected via the [`ClaudeRunner`] trait so tests
 //! can substitute a mock without spawning a real process.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -32,6 +33,7 @@ pub trait ClaudeRunner: Send + Sync {
         user_message: &str,
         system_prompt: Option<&str>,
         model: Option<&str>,
+        add_dirs: &[PathBuf],
         timeout: Duration,
     ) -> (String, String, i32);
 }
@@ -50,6 +52,7 @@ impl ClaudeRunner for RealClaudeRunner {
         user_message: &str,
         system_prompt: Option<&str>,
         model: Option<&str>,
+        add_dirs: &[PathBuf],
         timeout: Duration,
     ) -> (String, String, i32) {
         let Some(program) = resolve_claude_command() else {
@@ -66,7 +69,7 @@ impl ClaudeRunner for RealClaudeRunner {
             .map(str::to_string)
             .filter(|m| !m.trim().is_empty())
             .or_else(claude_cli_model_override);
-        let args = build_claude_cli_args(system_prompt, model.as_deref());
+        let args = build_claude_cli_args(system_prompt, model.as_deref(), add_dirs);
         let mut cmd = std::process::Command::new(&program);
         cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped())
@@ -304,13 +307,23 @@ fn claude_cli_model_override() -> Option<String> {
 /// markdown/prose coding-agent prompt (the root cause of the hollow-response
 /// loop, #1062). Appends `--model` only when `model` is `Some` and non-empty.
 #[must_use]
-pub fn build_claude_cli_args(system_prompt: Option<&str>, model: Option<&str>) -> Vec<String> {
+pub fn build_claude_cli_args(
+    system_prompt: Option<&str>,
+    model: Option<&str>,
+    add_dirs: &[PathBuf],
+) -> Vec<String> {
     let mut args = vec![
         "-p".to_string(),
         "--output-format".to_string(),
         "json".to_string(),
         "--no-session-persistence".to_string(),
     ];
+    // Allowlist each image directory so the Read tool can open the files
+    // (#1110). The dirs are pre-deduplicated by the caller.
+    for dir in add_dirs {
+        args.push("--add-dir".to_string());
+        args.push(dir.to_string_lossy().into_owned());
+    }
     if let Some(system) = system_prompt {
         args.push("--system-prompt".to_string());
         args.push(system.to_string());
@@ -334,11 +347,16 @@ pub fn call_claude_cli_with_runner(
     user_message: &str,
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
-    call_claude_cli_with_runner_system(runner, user_message, max_tokens, EXTRACTION_SYSTEM)
+    call_claude_cli_with_runner_system(runner, user_message, max_tokens, EXTRACTION_SYSTEM, &[])
 }
 
 /// Call the Claude CLI with the given runner and an explicit system prompt
 /// (e.g. the deep-mode variant).
+///
+/// `images` carries raster-image refs (#1110): claude-cli reads images by path
+/// rather than inline base64, so the prompt is appended with the Read-the-path
+/// notes (`with_paths = true`) and each containing directory is allowlisted via
+/// `--add-dir` so the Read tool can open it. Pass `&[]` when there are no images.
 ///
 /// # Errors
 /// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
@@ -348,11 +366,29 @@ pub fn call_claude_cli_with_runner_system(
     user_message: &str,
     max_tokens: u32,
     system: &str,
+    images: &[crate::vision::ImageRef],
 ) -> Result<LlmResponse, LlmError> {
     if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
-    call_claude_cli_inner(runner, user_message, max_tokens, Some(system), None)
+    let message = crate::vision::with_image_notes(user_message, images, true);
+    let add_dirs = image_parent_dirs(images);
+    cli_inner_with_dirs(runner, &message, max_tokens, Some(system), None, &add_dirs)
+}
+
+/// Deduplicated parent directories of the image paths, preserving first-seen
+/// order (mirrors graphify-py's `seen_dirs` allowlist build).
+fn image_parent_dirs(images: &[crate::vision::ImageRef]) -> Vec<PathBuf> {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for img in images {
+        if let Some(parent) = img.path.parent() {
+            let dir = parent.to_path_buf();
+            if !seen.contains(&dir) {
+                seen.push(dir);
+            }
+        }
+    }
+    seen
 }
 
 /// Inner CLI call (extraction path — injects `system_prompt` when `Some`).
@@ -366,14 +402,31 @@ pub fn call_claude_cli_with_runner_system(
 pub fn call_claude_cli_inner(
     runner: &dyn ClaudeRunner,
     user_message: &str,
+    max_tokens: u32,
+    system_prompt: Option<&str>,
+    model: Option<&str>,
+) -> Result<LlmResponse, LlmError> {
+    cli_inner_with_dirs(runner, user_message, max_tokens, system_prompt, model, &[])
+}
+
+/// Inner CLI call with image directories allowlisted via `--add-dir` (#1110).
+/// `call_claude_cli_inner` is the `add_dirs = &[]` case.
+///
+/// # Errors
+/// Returns [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
+fn cli_inner_with_dirs(
+    runner: &dyn ClaudeRunner,
+    user_message: &str,
     _max_tokens: u32,
     system_prompt: Option<&str>,
     model: Option<&str>,
+    add_dirs: &[PathBuf],
 ) -> Result<LlmResponse, LlmError> {
     let (stdout, stderr, code) = runner.run(
         user_message,
         system_prompt,
         model,
+        add_dirs,
         crate::openai_compat::api_timeout(),
     );
 
@@ -484,6 +537,7 @@ pub fn call_claude_cli_plain_with_model(
         user_message,
         None,
         model,
+        &[],
         crate::openai_compat::api_timeout(),
     );
     if code != 0 {

@@ -361,7 +361,7 @@ fn test_claude_cli_uses_system_prompt_not_append() {
     // The hollow-response root cause was --append-system-prompt layering
     // graphify's prompt on Claude Code's default; the fix switches to
     // --system-prompt (replace).
-    let args = build_claude_cli_args(Some("SYSTEM"), None);
+    let args = build_claude_cli_args(Some("SYSTEM"), None, &[]);
     assert!(
         args.iter().any(|a| a == "--system-prompt"),
         "--system-prompt missing from argv: {args:?}"
@@ -375,7 +375,7 @@ fn test_claude_cli_uses_system_prompt_not_append() {
 #[test]
 fn test_claude_cli_model_arg_added_when_present() {
     // GRAPHIFY_CLAUDE_CLI_MODEL must be forwarded to `claude -p --model`.
-    let args = build_claude_cli_args(Some("SYSTEM"), Some("haiku"));
+    let args = build_claude_cli_args(Some("SYSTEM"), Some("haiku"), &[]);
     let idx = args
         .iter()
         .position(|a| a == "--model")
@@ -386,15 +386,44 @@ fn test_claude_cli_model_arg_added_when_present() {
 #[test]
 fn test_claude_cli_no_model_arg_when_absent() {
     // Default behaviour: no --model so claude-cli's own default kicks in.
-    let args = build_claude_cli_args(Some("SYSTEM"), None);
+    let args = build_claude_cli_args(Some("SYSTEM"), None, &[]);
     assert!(!args.iter().any(|a| a == "--model"));
 }
 
 #[test]
 fn test_claude_cli_blank_model_is_ignored() {
     // A blank/whitespace override (env var set to "") must not add --model.
-    let args = build_claude_cli_args(Some("SYSTEM"), Some("   "));
+    let args = build_claude_cli_args(Some("SYSTEM"), Some("   "), &[]);
     assert!(!args.iter().any(|a| a == "--model"));
+}
+
+#[test]
+fn test_claude_cli_add_dir_for_each_image_dir() {
+    // Each image directory is allowlisted via `--add-dir` so the Read tool can
+    // open the files (#1110), and the flags precede `--system-prompt` (matching
+    // graphify-py's arg order).
+    let dirs = [
+        std::path::PathBuf::from("/imgs/a"),
+        std::path::PathBuf::from("/imgs/b"),
+    ];
+    let args = build_claude_cli_args(Some("SYSTEM"), None, &dirs);
+    let add_dir_positions: Vec<usize> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| *a == "--add-dir")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(add_dir_positions.len(), 2, "argv: {args:?}");
+    assert_eq!(args[add_dir_positions[0] + 1], "/imgs/a");
+    assert_eq!(args[add_dir_positions[1] + 1], "/imgs/b");
+    let sys = args
+        .iter()
+        .position(|a| a == "--system-prompt")
+        .expect("--system-prompt present");
+    assert!(
+        add_dir_positions.iter().all(|&p| p < sys),
+        "--add-dir flags must precede --system-prompt: {args:?}"
+    );
 }
 
 #[test]
@@ -757,6 +786,7 @@ impl ClaudeRunner for MockRunner {
         _user_message: &str,
         _system_prompt: Option<&str>,
         _model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
         _timeout: std::time::Duration,
     ) -> (String, String, i32) {
         (self.stdout.clone(), String::new(), self.code)
@@ -775,6 +805,7 @@ impl ClaudeRunner for TimeoutRecordingRunner {
         _user_message: &str,
         _system_prompt: Option<&str>,
         _model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
         timeout: std::time::Duration,
     ) -> (String, String, i32) {
         *self.seen.lock().expect("lock") = Some(timeout);
@@ -795,6 +826,7 @@ impl ClaudeRunner for ModelRecordingRunner {
         _user_message: &str,
         _system_prompt: Option<&str>,
         model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
         _timeout: std::time::Duration,
     ) -> (String, String, i32) {
         *self.seen.lock().expect("lock") = model.map(str::to_string);

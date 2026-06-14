@@ -12,7 +12,7 @@ use base64::Engine;
 use graphify_llm::vision::{
     self, IMAGE_TOKEN_ESTIMATE, ImageRef, MAX_IMAGES_PER_CHUNK, anthropic_content,
     backend_supports_vision, bedrock_content, build_image_refs, is_vision_image, openai_content,
-    partition_semantic_files, strip_pixels,
+    partition_semantic_files, strip_pixels, with_image_notes,
 };
 use serial_test::serial;
 
@@ -262,6 +262,20 @@ fn builders_fall_back_to_string_without_pixels() {
         oc.as_str().expect("string").contains("sub/diagram.png")
             || oc.as_str().expect("string").contains("sub\\diagram.png")
     );
+}
+
+#[test]
+fn with_paths_notes_ask_for_read_tool_and_list_path() {
+    // claude-cli path mode: the notes instruct the model to Read each image and
+    // list its absolute path (so it pairs with the `--add-dir` allowlist).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (img, _, _) = make_corpus(tmp.path());
+    let refs = build_image_refs(std::slice::from_ref(&img), tmp.path(), false);
+    let noted = with_image_notes("CORPUS", &refs, true);
+    assert!(noted.contains("CORPUS"));
+    assert!(noted.contains("Read tool"));
+    assert!(noted.contains("path:"));
+    assert!(noted.contains("diagram.png"));
 }
 
 #[test]
