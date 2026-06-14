@@ -1065,6 +1065,15 @@ fn test_extraction_system_non_deep_is_base_prompt() {
     assert!(!sys.contains("DEEP_MODE"));
 }
 
+/// #cce2673: the extraction prompt states edge direction (source = actor) so
+/// the model stops emitting reversed `calls` edges.
+#[test]
+fn test_extraction_system_states_edge_direction_rule() {
+    let sys = graphify_llm::EXTRACTION_SYSTEM;
+    assert!(sys.contains("Edge direction rule — source is always the ACTOR"));
+    assert!(sys.contains("the function/method BEING CALLED. Never reverse this."));
+}
+
 #[test]
 fn test_extraction_system_deep_appends_suffix() {
     let sys = graphify_llm::extraction_system(true);
