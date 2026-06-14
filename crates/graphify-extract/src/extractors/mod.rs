@@ -22,6 +22,7 @@ pub mod powershell;
 pub mod rust_lang;
 pub mod sql;
 pub mod svelte;
+pub mod terraform;
 pub mod verilog;
 pub mod zig;
 
@@ -403,6 +404,9 @@ pub use bash::extract_bash;
 
 // ── Apex ──────────────────────────────────────────────────────────────────────
 pub use apex::extract_apex;
+
+// ── Terraform / HCL ─────────────────────────────────────────────────────────────
+pub use terraform::extract_terraform;
 
 // ── JSON ──────────────────────────────────────────────────────────────────────
 pub use json_lang::extract_json;

@@ -44,7 +44,8 @@ pub use extractors::{
     extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
     extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
     extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte,
-    extract_swift, extract_verilog, extract_zig, is_mcp_config_path, resolve_cpp_path,
+    extract_swift, extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
+    resolve_cpp_path,
 };
 pub use ids::{file_node_id, file_stem, make_id, make_id1};
 pub use types::{Edge, ExtractOutput, FileResult, Node, RawCall};

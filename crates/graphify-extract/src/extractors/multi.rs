@@ -28,7 +28,7 @@ use crate::extractors::{
     extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
     extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
     extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte,
-    extract_swift, extract_verilog, extract_zig, is_mcp_config_path,
+    extract_swift, extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
@@ -100,6 +100,7 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "sln" => Some(extract_sln),
         "slnx" => Some(extract_slnx),
         "cls" | "trigger" => Some(extract_apex),
+        "tf" | "tfvars" | "hcl" => Some(extract_terraform),
         "csproj" | "fsproj" | "vbproj" => Some(extract_csproj),
         "razor" | "cshtml" => Some(extract_razor),
         _ => None,
