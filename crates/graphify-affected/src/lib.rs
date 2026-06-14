@@ -62,6 +62,15 @@ pub enum AffectedError {
     Build(String),
 }
 
+/// Lowercased label with the callable decoration (trailing `()`) removed.
+fn bare_name(label: &str) -> String {
+    let lower = label.to_lowercase();
+    match lower.strip_suffix("()") {
+        Some(stripped) => stripped.to_string(),
+        None => lower,
+    }
+}
+
 /// Resolve a free-form query string to a node ID using a fuzzy fallback
 /// chain. Returns `None` when the query is ambiguous or has no match.
 ///
@@ -69,9 +78,11 @@ pub enum AffectedError {
 /// 1. Exact node-ID match.
 /// 2. Exact label match (case-insensitive). Skipped when there is more
 ///    than one matching node.
-/// 3. Exact `source_file` match (case-insensitive). Skipped when more
+/// 3. Bare-name match: undecorated query against undecorated label
+///    (strips a trailing `()`). Skipped when more than one matches.
+/// 4. Exact `source_file` match (case-insensitive). Skipped when more
 ///    than one matches.
-/// 4. Single substring (case-insensitive) match on label.
+/// 5. Single substring (case-insensitive) match on label.
 #[must_use]
 pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
     if graph.node_data(query).is_some() {
@@ -90,6 +101,22 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
         .collect();
     if exact_label_matches.len() == 1 {
         return exact_label_matches.into_iter().next();
+    }
+
+    // Callable labels are decorated ("name()"), so a bare "name" query falls
+    // through exact matching and then ties with any "name*" sibling in the
+    // contains pass. Match on the undecorated name before giving up.
+    let query_bare = bare_name(&q);
+    let bare_name_matches: Vec<String> = graph
+        .nodes()
+        .filter(|(_, data)| {
+            let label = data.get("label").and_then(Value::as_str).unwrap_or("");
+            bare_name(label) == query_bare
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    if bare_name_matches.len() == 1 {
+        return bare_name_matches.into_iter().next();
     }
 
     let exact_source_matches: Vec<String> = graph
@@ -218,12 +245,11 @@ pub fn load_graph(path: &Path) -> Result<Graph, AffectedError> {
     {
         obj.insert("edges".to_string(), links);
     }
-    let directed = data
-        .as_object()
-        .and_then(|o| o.get("directed"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    build_from_json(data, directed, None).map_err(|e| AffectedError::Build(e.to_string()))
+    // Force directed so the stored caller->callee direction survives the
+    // round-trip (#1174). A graph persisted with `directed: false` would
+    // otherwise build as undirected and the reverse-BFS traversal would be
+    // direction-blind, missing true callers and reporting callees as affected.
+    build_from_json(data, true, None).map_err(|e| AffectedError::Build(e.to_string()))
 }
 
 /// Build the `node_id → Vec<(source_id, relation)>` incoming-edge index.

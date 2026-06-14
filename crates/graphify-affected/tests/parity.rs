@@ -156,6 +156,127 @@ fn affected_format_handles_missing_query() {
     assert!(report.contains("No unique node match for DoesNotExist"));
 }
 
+// Mirrors: test_affected_cli_forces_directed_on_undirected_graph
+#[test]
+fn affected_forces_directed_on_undirected_graph() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("graph.json");
+    let payload = json!({
+        "directed": false,
+        "multigraph": false,
+        "graph": {},
+        "nodes": [
+            {"id": "A", "label": "caller_fn", "source_file": "a.py", "source_location": "L1"},
+            {"id": "B", "label": "callee_fn", "source_file": "b.py", "source_location": "L2"},
+        ],
+        "links": [
+            {"source": "A", "target": "B", "relation": "calls",
+             "context": "call", "confidence": "EXTRACTED"},
+        ],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    // A (the caller) is affected by a change to B (the callee).
+    let report = format_affected(&graph, "B", &["calls"], 2);
+    assert!(report.contains("caller_fn"), "report: {report}");
+    assert!(report.contains("calls"), "report: {report}");
+    assert!(
+        !report.contains("No affected nodes found."),
+        "report: {report}"
+    );
+}
+
+// Mirrors: test_affected_cli_loads_edges_keyed_graph
+#[test]
+fn affected_loads_edges_keyed_graph() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("graph.json");
+    let payload = json!({
+        "directed": true,
+        "multigraph": false,
+        "graph": {},
+        "nodes": [
+            {"id": "target", "label": "Foo", "source_file": "pkg/foo.py", "source_location": "L1"},
+            {"id": "caller", "label": "X()", "source_file": "app.py", "source_location": "L4"},
+        ],
+        // graphify `extract` output uses an "edges" key, not networkx's "links".
+        "edges": [
+            {"source": "caller", "target": "target", "relation": "calls",
+             "context": "call", "confidence": "EXTRACTED"},
+        ],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    let report = format_affected(&graph, "Foo", DEFAULT_AFFECTED_RELATIONS, 2);
+    assert!(
+        report.contains("Affected nodes for Foo"),
+        "report: {report}"
+    );
+    assert!(report.contains("X()"), "report: {report}");
+    assert!(report.contains("calls"), "report: {report}");
+}
+
+// Mirrors: test_resolve_seed_bare_name_matches_callable_label
+#[test]
+fn resolve_seed_bare_name_matches_callable_label() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true,
+        "nodes": [
+            {"id": "a", "label": "classifyProperty()", "source_file": "pkg/entity.py"},
+            {"id": "b", "label": "classifyPropertySafe()", "source_file": "app/context.py"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(
+        resolve_seed(&graph, "classifyProperty"),
+        Some("a".to_owned())
+    );
+    assert_eq!(
+        resolve_seed(&graph, "classifyPropertySafe"),
+        Some("b".to_owned())
+    );
+}
+
+// Mirrors: test_resolve_seed_decorated_query_matches_bare_label
+#[test]
+fn resolve_seed_decorated_query_matches_bare_label() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true,
+        "nodes": [
+            {"id": "a", "label": "Foo", "source_file": "pkg/foo.py"},
+            {"id": "b", "label": "FooBar", "source_file": "pkg/foobar.py"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(resolve_seed(&graph, "Foo()"), Some("a".to_owned()));
+}
+
+// Mirrors: test_resolve_seed_bare_name_tie_still_returns_none
+#[test]
+fn resolve_seed_bare_name_tie_still_returns_none() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true,
+        "nodes": [
+            {"id": "a", "label": "dup()", "source_file": "pkg/one.py"},
+            {"id": "b", "label": "dup()", "source_file": "pkg/two.py"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(resolve_seed(&graph, "dup"), None);
+}
+
 #[test]
 fn affected_hit_struct_carries_expected_fields() {
     let hit = AffectedHit {
