@@ -64,6 +64,7 @@ impl ClaudeRunner for RealClaudeRunner {
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        apply_no_window(&mut cmd);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -113,6 +114,20 @@ impl ClaudeRunner for RealClaudeRunner {
         (stdout, stderr, code)
     }
 }
+
+/// Suppress the console window the npm `claude.cmd` shim would otherwise pop
+/// per spawn on Windows (#96585ba). `CREATE_NO_WINDOW` keeps the children
+/// invisible during labeling/extraction runs; a no-op on other platforms.
+#[cfg(windows)]
+fn apply_no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+/// No-op on non-Windows platforms (no detached-console concept).
+#[cfg(not(windows))]
+fn apply_no_window(_cmd: &mut std::process::Command) {}
 
 /// Spawn a thread that reads a child pipe to EOF as a lossy UTF-8 `String`.
 fn spawn_reader<R: std::io::Read + Send + 'static>(
