@@ -16,6 +16,15 @@ pub(crate) enum ExtractMode {
     Deep,
 }
 
+/// MCP transport for the `serve` command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeTransport {
+    /// Line-delimited JSON-RPC over stdio (the default, per-developer transport).
+    Stdio,
+    /// Streamable HTTP (MCP spec 2025-03-26); requires the `http` build feature.
+    Http,
+}
+
 /// Root CLI struct parsed from `argv` by clap.
 #[derive(Debug, Parser)]
 #[command(
@@ -348,10 +357,34 @@ pub(crate) enum Command {
         graph: Option<PathBuf>,
     },
 
-    /// MCP stdio server.
+    /// MCP server (stdio by default, or Streamable HTTP).
     Serve {
         #[arg(long)]
         graph: Option<PathBuf>,
+        /// Transport to serve on.
+        #[arg(long, value_enum, default_value_t = ServeTransport::Stdio)]
+        transport: ServeTransport,
+        /// HTTP bind host (http transport).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// HTTP bind port (http transport).
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Require this key on the HTTP transport (env: `GRAPHIFY_API_KEY`).
+        #[arg(long = "api-key", env = "GRAPHIFY_API_KEY")]
+        api_key: Option<String>,
+        /// HTTP mount path (http transport).
+        #[arg(long, default_value = "/mcp")]
+        path: String,
+        /// Return plain JSON responses instead of SSE streams (http transport).
+        #[arg(long = "json-response")]
+        json_response: bool,
+        /// Run without per-session state (load-balanced / CI deployments).
+        #[arg(long)]
+        stateless: bool,
+        /// Reap stateful sessions idle this many seconds (0 disables).
+        #[arg(long = "session-timeout", default_value_t = 3600.0)]
+        session_timeout: f64,
     },
 
     /// Reverse-traversal impact analysis (`graphify affected <query>`).

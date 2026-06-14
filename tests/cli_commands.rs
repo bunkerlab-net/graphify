@@ -214,6 +214,21 @@ fn extract_with_image_file_in_corpus_does_not_break_ast_run() {
 }
 
 #[test]
+fn serve_http_without_feature_errors() {
+    // The default binary build has no `http` feature, so `serve --transport http`
+    // must fail loudly rather than silently fall back to stdio (#1143).
+    let dir = tempfile::tempdir().unwrap();
+    cli_no_backend()
+        .current_dir(dir.path())
+        .arg("serve")
+        .arg("--transport")
+        .arg("http")
+        .assert()
+        .failure()
+        .stderr(contains("http").and(contains("feature")));
+}
+
+#[test]
 fn extract_postgres_without_feature_errors() {
     // The default binary build has no `postgres` feature, so `--postgres` must
     // fail loudly rather than silently ignore the flag.

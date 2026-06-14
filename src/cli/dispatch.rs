@@ -53,7 +53,27 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
             cli::merge_chunks::cmd_merge_semantic(cached.as_deref(), new.as_deref(), &out)
         }
         cmd @ Command::Prs { .. } => dispatch_prs(cmd),
-        Command::Serve { graph } => cli::serve::cmd_serve(graph.as_deref()),
+        Command::Serve {
+            graph,
+            transport,
+            host,
+            port,
+            api_key,
+            path,
+            json_response,
+            stateless,
+            session_timeout,
+        } => cli::serve::cmd_serve(cli::serve::ServeOptions {
+            graph: graph.as_deref(),
+            transport,
+            host,
+            port,
+            api_key,
+            path,
+            json_response,
+            stateless,
+            session_timeout,
+        }),
         Command::Affected {
             query,
             relations,

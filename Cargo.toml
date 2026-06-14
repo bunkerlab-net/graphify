@@ -176,6 +176,10 @@ falkordb = ["graphify-export/falkordb"]
 # `graphify extract <PATH> --postgres <DSN>`. Off by default — mirrors
 # graphify-py's optional `postgres` extra. Without it, `--postgres` errors.
 postgres = ["graphify-extract/postgres"]
+# Forwarded to graphify-serve: compiles the Streamable HTTP MCP transport for
+# `graphify serve --transport http`. Off by default — mirrors graphify-py's
+# optional `mcp` extra. Without it, `--transport http` errors.
+http = ["graphify-serve/http"]
 
 [dev-dependencies]
 assert_cmd = "2"

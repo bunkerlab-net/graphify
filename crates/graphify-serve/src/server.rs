@@ -456,32 +456,7 @@ where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    use crate::graph::{communities_from_graph, load_graph};
-
-    let mut graph = load_graph(graph_path)?;
-    let mut communities = communities_from_graph(&graph);
-
-    let meta = std::fs::metadata(graph_path);
-    let (init_mtime, init_size) = meta.map_or((0, 0), |m| {
-        let mtime = m
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| {
-                // Use checked arithmetic so a post-2554 mtime (~`u64::MAX`
-                // ns since the epoch) saturates instead of wrapping.
-                d.as_secs()
-                    .checked_mul(1_000_000_000)
-                    .and_then(|s| s.checked_add(u64::from(d.subsec_nanos())))
-                    .unwrap_or(u64::MAX)
-            });
-        (mtime, m.len())
-    });
-    let mut reload_state = ReloadState {
-        mtime_ns: init_mtime,
-        size: init_size,
-    };
-    let mut idf_cache: HashMap<String, f64> = HashMap::new();
+    let mut state = McpServerState::load(graph_path)?;
 
     let buf_reader = BufReader::new(reader);
     let mut lines = buf_reader.lines();
@@ -496,14 +471,7 @@ where
             Ok(v) => v,
             Err(_) => continue, // Ignore malformed lines.
         };
-        if let Some(response) = dispatch(
-            &msg,
-            &mut graph,
-            &mut communities,
-            &mut reload_state,
-            &mut idf_cache,
-            graph_path,
-        ) {
+        if let Some(response) = state.handle(&msg, graph_path) {
             let mut out = serde_json::to_string(&response).unwrap_or_default();
             out.push('\n');
             if writer.write_all(out.as_bytes()).await.is_err() {
@@ -512,4 +480,70 @@ where
         }
     }
     Ok(())
+}
+
+/// In-memory MCP server state shared across messages: the loaded graph, its
+/// derived communities, the hot-reload bookkeeping, and the IDF cache.
+///
+/// Both the stdio transport ([`run_server`]) and the Streamable HTTP transport
+/// drive it through [`McpServerState::handle`], so the two transports share one
+/// dispatch path and one reload contract.
+pub(crate) struct McpServerState {
+    graph: Graph,
+    communities: IndexMap<i64, Vec<String>>,
+    reload_state: ReloadState,
+    idf_cache: HashMap<String, f64>,
+}
+
+impl McpServerState {
+    /// Load the graph at `graph_path` and derive the initial server state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServeError`] if the graph file cannot be loaded.
+    pub(crate) fn load(graph_path: &str) -> Result<Self, ServeError> {
+        use crate::graph::{communities_from_graph, load_graph};
+
+        let graph = load_graph(graph_path)?;
+        let communities = communities_from_graph(&graph);
+
+        let meta = std::fs::metadata(graph_path);
+        let (init_mtime, init_size) = meta.map_or((0, 0), |m| {
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| {
+                    // Use checked arithmetic so a post-2554 mtime (~`u64::MAX`
+                    // ns since the epoch) saturates instead of wrapping.
+                    d.as_secs()
+                        .checked_mul(1_000_000_000)
+                        .and_then(|s| s.checked_add(u64::from(d.subsec_nanos())))
+                        .unwrap_or(u64::MAX)
+                });
+            (mtime, m.len())
+        });
+        Ok(Self {
+            graph,
+            communities,
+            reload_state: ReloadState {
+                mtime_ns: init_mtime,
+                size: init_size,
+            },
+            idf_cache: HashMap::new(),
+        })
+    }
+
+    /// Route one JSON-RPC message. Returns `Some(response)` for requests and
+    /// `None` for notifications (which receive no reply).
+    pub(crate) fn handle(&mut self, msg: &Value, graph_path: &str) -> Option<Value> {
+        dispatch(
+            msg,
+            &mut self.graph,
+            &mut self.communities,
+            &mut self.reload_state,
+            &mut self.idf_cache,
+            graph_path,
+        )
+    }
 }
