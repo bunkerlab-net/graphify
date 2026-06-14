@@ -10,7 +10,11 @@ use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 fn cli() -> Command {
-    Command::cargo_bin("graphify").expect("cargo-bin graphify")
+    let mut cmd = Command::cargo_bin("graphify").expect("cargo-bin graphify");
+    // Keep query/path/explain runs from appending to the developer's real
+    // ~/.cache/graphify-queries.log during tests (#1128 query logging).
+    cmd.env("GRAPHIFY_QUERY_LOG_DISABLE", "1");
+    cmd
 }
 
 fn write_graph_json(path: &Path) {

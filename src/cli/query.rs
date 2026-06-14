@@ -31,6 +31,7 @@ pub(crate) fn cmd_query(
         Some(context)
     };
     let mut idf_cache = std::collections::HashMap::new();
+    let t0 = std::time::Instant::now();
     let result = graphify_serve::graph::query_graph_text(
         &g,
         question,
@@ -40,6 +41,20 @@ pub(crate) fn cmd_query(
         context_filters,
         &mut idf_cache,
     );
+    let mut extra = indexmap::IndexMap::new();
+    extra.insert("mode".to_string(), serde_json::json!(mode));
+    extra.insert("depth".to_string(), serde_json::json!(2));
+    extra.insert("token_budget".to_string(), serde_json::json!(budget));
+    graphify_serve::log_query(&graphify_serve::QueryLog {
+        kind: "query",
+        question,
+        corpus: &path.to_string_lossy(),
+        result: Some(&result),
+        #[allow(clippy::cast_precision_loss)] // millis fit f64 exactly here
+        duration_ms: Some(t0.elapsed().as_secs_f64() * 1000.0),
+        extra,
+        ..graphify_serve::QueryLog::default()
+    });
     println!("{result}");
     Ok(())
 }
@@ -140,6 +155,13 @@ pub(crate) fn cmd_path(from: &str, to: &str, graph: Option<&std::path::Path>) ->
         }
     }
     println!("Shortest path ({hops} hops):\n  {}", segments.join(" "));
+    graphify_serve::log_query(&graphify_serve::QueryLog {
+        kind: "path",
+        question: &format!("{from} -> {to}"),
+        corpus: &path.to_string_lossy(),
+        nodes_returned: Some(i64::try_from(hops).unwrap_or(i64::MAX)),
+        ..graphify_serve::QueryLog::default()
+    });
     Ok(())
 }
 
@@ -201,42 +223,51 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
     for nb in graphify_serve::graph::predecessors(&g, node_id) {
         connections.push(("in", nb));
     }
-    if connections.is_empty() {
-        return Ok(());
-    }
-
-    // Sort by neighbor degree, highest first.
-    connections.sort_by(|a, b| {
-        graphify_serve::graph::node_degree(&g, &b.1)
-            .cmp(&graphify_serve::graph::node_degree(&g, &a.1))
-    });
-
-    println!("\nConnections ({}):", connections.len());
     let total = connections.len();
-    for (direction, nb) in connections.iter().take(20) {
-        let edata = if *direction == "out" {
-            g.edge_data(node_id, nb)
-        } else {
-            g.edge_data(nb, node_id)
-        };
-        let rel = edata
-            .and_then(|d| d.get("relation"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let conf = edata
-            .and_then(|d| d.get("confidence"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let arrow = if *direction == "out" { "-->" } else { "<--" };
-        let nb_label = g
-            .node_data(nb)
-            .and_then(|n| n.get("label"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(nb.as_str());
-        println!("  {arrow} {nb_label} [{rel}] [{conf}]");
+
+    // Only print the Connections section when there are any (matching Python's
+    // `if connections:` guard); the query log is still written for empty nodes.
+    if !connections.is_empty() {
+        // Sort by neighbor degree, highest first.
+        connections.sort_by(|a, b| {
+            graphify_serve::graph::node_degree(&g, &b.1)
+                .cmp(&graphify_serve::graph::node_degree(&g, &a.1))
+        });
+
+        println!("\nConnections ({total}):");
+        for (direction, nb) in connections.iter().take(20) {
+            let edata = if *direction == "out" {
+                g.edge_data(node_id, nb)
+            } else {
+                g.edge_data(nb, node_id)
+            };
+            let rel = edata
+                .and_then(|d| d.get("relation"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let conf = edata
+                .and_then(|d| d.get("confidence"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let arrow = if *direction == "out" { "-->" } else { "<--" };
+            let nb_label = g
+                .node_data(nb)
+                .and_then(|n| n.get("label"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(nb.as_str());
+            println!("  {arrow} {nb_label} [{rel}] [{conf}]");
+        }
+        if total > 20 {
+            println!("  ... and {} more", total - 20);
+        }
     }
-    if total > 20 {
-        println!("  ... and {} more", total - 20);
-    }
+
+    graphify_serve::log_query(&graphify_serve::QueryLog {
+        kind: "explain",
+        question: node,
+        corpus: &path.to_string_lossy(),
+        nodes_returned: Some(i64::try_from(total).unwrap_or(i64::MAX)),
+        ..graphify_serve::QueryLog::default()
+    });
     Ok(())
 }
