@@ -213,6 +213,10 @@ fn extract_with_image_file_in_corpus_does_not_break_ast_run() {
     assert!(dir.path().join("graphify-out").join("graph.json").exists());
 }
 
+// Only meaningful when the `http` feature is absent: with it compiled in (e.g.
+// the CI `--all-features` coverage run) `serve --transport http` takes the real
+// transport path, so this negative assertion is gated off.
+#[cfg(not(feature = "http"))]
 #[test]
 fn serve_http_without_feature_errors() {
     // The default binary build has no `http` feature, so `serve --transport http`
@@ -228,6 +232,10 @@ fn serve_http_without_feature_errors() {
         .stderr(contains("http").and(contains("feature")));
 }
 
+// Only meaningful when the `postgres` feature is absent: with it compiled in
+// (e.g. the CI `--all-features` coverage run) `--postgres` tries to connect to a
+// real database, so this negative assertion is gated off.
+#[cfg(not(feature = "postgres"))]
 #[test]
 fn extract_postgres_without_feature_errors() {
     // The default binary build has no `postgres` feature, so `--postgres` must

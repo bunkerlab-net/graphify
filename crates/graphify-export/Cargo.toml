@@ -33,6 +33,9 @@ url = { workspace = true }
 falkordb = ["dep:redis"]
 
 [dev-dependencies]
+# Used only by the `net_*` FalkorDB integration tests to read back graph state
+# (`GRAPH.QUERY`) after a push.
+redis = "0.32"
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
