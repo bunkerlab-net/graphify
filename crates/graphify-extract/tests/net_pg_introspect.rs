@@ -45,17 +45,30 @@ fn net_postgres_introspects_live_schema() {
     let res = introspect_postgres(&dsn).expect("introspect live database");
 
     let labels: HashSet<&str> = res.nodes.iter().map(|n| n.label.as_str()).collect();
+    let node_id = |needle: &str| -> String {
+        res.nodes
+            .iter()
+            .find(|n| n.label.contains(needle))
+            .map_or_else(
+                || panic!("table {needle} missing from introspection: {labels:?}"),
+                |n| n.id.clone(),
+            )
+    };
+    let users_id = node_id("net_pg_users");
+    let orders_id = node_id("net_pg_orders");
+
+    // Assert the *specific* seeded relationship rather than any `references`
+    // edge, so an unrelated foreign key elsewhere in the catalog cannot mask a
+    // regression in this one.
     assert!(
-        labels.iter().any(|l| l.contains("net_pg_users")),
-        "users table missing from introspection: {labels:?}"
-    );
-    assert!(
-        labels.iter().any(|l| l.contains("net_pg_orders")),
-        "orders table missing from introspection: {labels:?}"
-    );
-    assert!(
-        res.edges.iter().any(|e| e.relation == "references"),
-        "expected a foreign-key `references` edge from the live schema"
+        res.edges.iter().any(|e| {
+            e.relation == "references" && e.source == orders_id && e.target == users_id
+        }),
+        "expected a `references` edge net_pg_orders -> net_pg_users; edges: {:?}",
+        res.edges
+            .iter()
+            .map(|e| (e.source.as_str(), e.relation.as_str(), e.target.as_str()))
+            .collect::<Vec<_>>()
     );
 
     let _ = setup
