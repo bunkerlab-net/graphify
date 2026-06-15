@@ -63,7 +63,7 @@ jobs:
       - name: Install Binstall
         env:
           BINSTALL_VERSION: v1.20.0 # https://github.com/cargo-bins/cargo-binstall/releases/latest
-          BINSTALL_SHA: c2e963fbab3bdd8653b59c28d349bf85740cf4998e5e398d250dcd2884cd667d
+          BINSTALL_SHA: d3a93702160e0ec03e2a4e996855db1f01adee801fb84a43add24e0877ef8eae
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           commit_sha=$(curl -fsSL --proto '=https' --tlsv1.2 \
@@ -174,7 +174,7 @@ jobs:
       - name: Install Binstall
         env:
           BINSTALL_VERSION: v1.20.0 # https://github.com/cargo-bins/cargo-binstall/releases/latest
-          BINSTALL_SHA: c2e963fbab3bdd8653b59c28d349bf85740cf4998e5e398d250dcd2884cd667d
+          BINSTALL_SHA: d3a93702160e0ec03e2a4e996855db1f01adee801fb84a43add24e0877ef8eae
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           commit_sha=$(curl -fsSL --proto '=https' --tlsv1.2 \

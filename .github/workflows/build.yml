@@ -49,6 +49,12 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-cargo-build-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-build-${{ steps.rustc.outputs.fingerprint }}
 
+      # `--all-features` enables the `postgres` feature, which pulls `native-tls`.
+      # No extra OpenSSL setup step is needed: the GitHub-hosted ubuntu runners
+      # ship libssl-dev + pkg-config preinstalled — `lint.yml`'s
+      # `clippy --all-features` and `test.yml`'s `llvm-cov --all-features`
+      # already compile native-tls on these same runners — and macOS native-tls
+      # uses the Security framework. There is no Windows runner in this matrix.
       - run: cargo build --release --all-features
 
       - id: artifact-name
