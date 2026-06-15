@@ -40,7 +40,7 @@ pub(super) use fs::{
     claude_config_dir, dirs_home, install_skill, read_json_or_empty, remove_graphify_section,
     remove_skill, write_json,
 };
-pub(super) use hooks_json::{gemini_hook, read_settings_hook, settings_hook};
+pub(super) use hooks_json::{gemini_hook, register_pretooluse_hooks, remove_pretooluse_hooks};
 pub(super) use skills::{
     COMMAND_KILO_MD, SKILL_COPILOT_MD, SKILL_KIRO_MD, SKILL_MD, SKILL_PI_MD, SKILL_VSCODE_MD,
 };

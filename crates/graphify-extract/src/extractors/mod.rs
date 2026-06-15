@@ -2,6 +2,7 @@
 //!
 //! Each function mirrors a Python `extract_<lang>` function from `extract.py`.
 
+pub mod apex;
 pub mod bash;
 pub mod blade;
 pub mod dart;
@@ -21,6 +22,7 @@ pub mod powershell;
 pub mod rust_lang;
 pub mod sql;
 pub mod svelte;
+pub mod terraform;
 pub mod verilog;
 pub mod zig;
 
@@ -400,6 +402,12 @@ pub use objc::extract_objc;
 // ── Bash ──────────────────────────────────────────────────────────────────────
 pub use bash::extract_bash;
 
+// ── Apex ──────────────────────────────────────────────────────────────────────
+pub use apex::extract_apex;
+
+// ── Terraform / HCL ─────────────────────────────────────────────────────────────
+pub use terraform::extract_terraform;
+
 // ── JSON ──────────────────────────────────────────────────────────────────────
 pub use json_lang::extract_json;
 
@@ -407,7 +415,7 @@ pub use json_lang::extract_json;
 pub use verilog::extract_verilog;
 
 // ── SQL ───────────────────────────────────────────────────────────────────────
-pub use sql::extract_sql;
+pub use sql::{extract_sql, extract_sql_with_content};
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
 pub use markdown::extract_markdown;
@@ -432,8 +440,8 @@ pub use mcp::{extract_mcp_config, is_mcp_config_path};
 // ── Blade ─────────────────────────────────────────────────────────────────────
 pub use blade::extract_blade;
 
-// ── .NET (.sln / .csproj / .razor) ────────────────────────────────────────────
-pub use dotnet::{extract_csproj, extract_razor, extract_sln};
+// ── .NET (.sln / .slnx / .csproj / .razor) ─────────────────────────────────────
+pub use dotnet::{extract_csproj, extract_razor, extract_sln, extract_slnx};
 
 // ── Python rationale extraction ───────────────────────────────────────────────
 

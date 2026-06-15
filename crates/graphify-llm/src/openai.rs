@@ -88,6 +88,7 @@ pub fn call_openai(
         reasoning_effort: None,
         max_completion_tokens: max_tokens,
         disable_thinking: false,
+        custom_extra_body: None,
         ollama_options: None,
         backend_name: "openai",
         timeout: api_timeout(),
@@ -115,6 +116,7 @@ pub fn call_openai_plain(
         temperature: Some(0.0),
         reasoning_effort: None,
         disable_thinking: false,
+        extra_body: None,
         max_tokens,
     })
 }

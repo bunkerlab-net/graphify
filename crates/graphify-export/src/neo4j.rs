@@ -157,6 +157,59 @@ pub fn build_edge_rows(graph: &Graph) -> Vec<EdgeRow> {
         .collect()
 }
 
+// ── Shared MERGE/SET cypher builders (pure, testable, reused by FalkorDB) ─────
+
+/// Build the `MERGE (n:Label {id: …}) SET …` statement for one node row.
+///
+/// Property keys are wrapped via [`cypher_escape_identifier`] and values via
+/// [`cypher_escape`] so a hostile property key/value cannot break out of the SET
+/// clause. The label is already a safe identifier from [`build_node_rows`].
+/// `OpenCypher`-compatible, so `FalkorDB` reuses this verbatim.
+#[must_use]
+pub fn merge_node_cypher(row: &NodeRow) -> String {
+    let mut set_parts: Vec<String> = vec![format!("n.id = '{}'", cypher_escape(&row.id))];
+    for (k, v) in &row.props {
+        set_parts.push(format!(
+            "n.{} = '{}'",
+            cypher_escape_identifier(k),
+            cypher_escape(v)
+        ));
+    }
+    if let Some(cid) = row.community {
+        set_parts.push(format!("n.community = {cid}"));
+    }
+    format!(
+        "MERGE (n:{label} {{id: '{id}'}}) SET {set_clause}",
+        label = row.label,
+        id = cypher_escape(&row.id),
+        set_clause = set_parts.join(", "),
+    )
+}
+
+/// Build the `MATCH … MERGE (a)-[r:REL]->(b) SET …` statement for one edge row.
+#[must_use]
+pub fn merge_edge_cypher(row: &EdgeRow) -> String {
+    let mut set_parts: Vec<String> = vec![];
+    for (k, v) in &row.props {
+        set_parts.push(format!(
+            "r.{} = '{}'",
+            cypher_escape_identifier(k),
+            cypher_escape(v)
+        ));
+    }
+    let set_clause = if set_parts.is_empty() {
+        String::new()
+    } else {
+        format!(" SET {}", set_parts.join(", "))
+    };
+    format!(
+        "MATCH (a {{id: '{src}'}}), (b {{id: '{tgt}'}}) MERGE (a)-[r:{rel}]->(b){set_clause}",
+        src = cypher_escape(&row.src),
+        tgt = cypher_escape(&row.tgt),
+        rel = row.rel_type,
+    )
+}
+
 // ── Neo4j push ────────────────────────────────────────────────────────────────
 
 /// Push a graph to a running Neo4j instance via the Bolt protocol.
@@ -208,27 +261,7 @@ async fn push_nodes(db: &Neo4jGraph, rows: &[NodeRow]) -> Result<usize, Neo4jErr
     let mut written = 0usize;
     for chunk in rows.chunks(BATCH_SIZE) {
         for row in chunk {
-            // Build a Cypher SET clause from props + community. Identifier
-            // names are wrapped via `cypher_escape_identifier` so a hostile
-            // property key cannot break out of the SET clause.
-            let mut set_parts: Vec<String> = vec![format!("n.id = '{}'", cypher_escape(&row.id))];
-            for (k, v) in &row.props {
-                set_parts.push(format!(
-                    "n.{} = '{}'",
-                    cypher_escape_identifier(k),
-                    cypher_escape(v)
-                ));
-            }
-            if let Some(cid) = row.community {
-                set_parts.push(format!("n.community = {cid}"));
-            }
-            let set_clause = set_parts.join(", ");
-            let cypher = format!(
-                "MERGE (n:{label} {{id: '{id}'}}) SET {set_clause}",
-                label = row.label,
-                id = cypher_escape(&row.id),
-            );
-            db.run(query(&cypher)).await?;
+            db.run(query(&merge_node_cypher(row))).await?;
             written += 1;
         }
     }
@@ -240,26 +273,7 @@ async fn push_edges(db: &Neo4jGraph, rows: &[EdgeRow]) -> Result<usize, Neo4jErr
     let mut written = 0usize;
     for chunk in rows.chunks(BATCH_SIZE) {
         for row in chunk {
-            let mut set_parts: Vec<String> = vec![];
-            for (k, v) in &row.props {
-                set_parts.push(format!(
-                    "r.{} = '{}'",
-                    cypher_escape_identifier(k),
-                    cypher_escape(v)
-                ));
-            }
-            let set_clause = if set_parts.is_empty() {
-                String::new()
-            } else {
-                format!(" SET {}", set_parts.join(", "))
-            };
-            let cypher = format!(
-                "MATCH (a {{id: '{src}'}}), (b {{id: '{tgt}'}}) MERGE (a)-[r:{rel}]->(b){set_clause}",
-                src = cypher_escape(&row.src),
-                tgt = cypher_escape(&row.tgt),
-                rel = row.rel_type,
-            );
-            db.run(query(&cypher)).await?;
+            db.run(query(&merge_edge_cypher(row))).await?;
             written += 1;
         }
     }

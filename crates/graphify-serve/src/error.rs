@@ -9,6 +9,10 @@ pub enum ServeError {
     #[error("error: Graph path must be a .json file, got: {0}")]
     InvalidPath(String),
 
+    /// The HTTP mount path is invalid (must be non-empty and start with `/`).
+    #[error("error: HTTP path must start with '/', got: {0:?}")]
+    InvalidHttpPath(String),
+
     /// Graph file was not found on disk.
     #[error("error: {0}")]
     NotFound(String),

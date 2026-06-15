@@ -8,13 +8,13 @@
 use std::path::{Path, PathBuf};
 
 use graphify_extract::{
-    FileResult, extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp,
+    FileResult, extract_apex, extract_astro, extract_blade, extract_c, extract_cpp, extract_csharp,
     extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf, extract_dmi,
     extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
     extract_julia, extract_kotlin, extract_lazarus_form, extract_lazarus_package, extract_lua,
     extract_markdown, extract_objc, extract_pascal, extract_php, extract_powershell, extract_razor,
-    extract_ruby, extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte,
-    extract_swift, extract_verilog, extract_zig, file_stem, make_id,
+    extract_ruby, extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql,
+    extract_svelte, extract_swift, extract_verilog, extract_zig, file_stem, make_id,
 };
 
 fn fixtures() -> PathBuf {
@@ -702,6 +702,229 @@ fn sln_project_dependency() {
     assert!(relations(&r).contains("imports"));
 }
 
+// ── .slnx (test_dotnet.py) ──────────────────────────────────────────────────
+
+/// `test_slnx_extracts_projects`
+#[test]
+fn slnx_extracts_projects() {
+    let r = extract_slnx(&fixtures().join("sample.slnx"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let ls: std::collections::HashSet<&str> = labels(&r).into_iter().collect();
+    assert!(ls.contains("WebApi"), "{ls:?}");
+    assert!(ls.contains("Domain"), "{ls:?}");
+    assert!(ls.contains("Tests"), "{ls:?}");
+}
+
+/// `test_slnx_contains_edges`
+#[test]
+fn slnx_contains_edges() {
+    let r = extract_slnx(&fixtures().join("sample.slnx"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let contains: Vec<_> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .collect();
+    assert_eq!(contains.len(), 3);
+}
+
+/// `test_slnx_project_dependency`
+#[test]
+fn slnx_project_dependency() {
+    let r = extract_slnx(&fixtures().join("sample.slnx"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert!(relations(&r).contains("imports"));
+}
+
+/// `test_slnx_invalid_xml`
+#[test]
+fn slnx_invalid_xml() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let f = tmp.path().join("bad.slnx");
+    std::fs::write(&f, "<Solution><Project></Solution>")?;
+    let r = extract_slnx(&f);
+    assert!(r.error.is_some(), "expected XML parse error");
+    Ok(())
+}
+
+/// `test_slnx_missing_file`
+#[test]
+fn slnx_missing_file() {
+    let r = extract_slnx(Path::new("/nonexistent/file.slnx"));
+    assert!(r.error.is_some());
+}
+
+// ── Salesforce Apex (.cls / .trigger) — test_languages.py ────────────────────
+
+/// `test_apex_class_extraction`
+#[test]
+fn apex_class_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"AccountService"));
+}
+
+/// `test_apex_enum_extraction`
+#[test]
+fn apex_enum_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"AccountStatus"));
+}
+
+/// `test_apex_interface_extraction`
+#[test]
+fn apex_interface_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"Notifiable"));
+}
+
+/// `test_apex_method_extraction`
+#[test]
+fn apex_method_extraction() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    let ls = labels(&r);
+    for m in [
+        "getAccounts",
+        "updateAccountsAsync",
+        "createAccounts",
+        "deleteOldAccounts",
+    ] {
+        assert!(
+            ls.iter().any(|l| l.contains(m)),
+            "missing method {m}: {ls:?}"
+        );
+    }
+}
+
+/// `test_apex_contains_and_method_relations`
+#[test]
+fn apex_contains_and_method_relations() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    let rels = relations(&r);
+    assert!(rels.contains("contains"));
+    assert!(rels.contains("method"));
+}
+
+/// `test_apex_soql_uses_edge`
+#[test]
+fn apex_soql_uses_edge() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(relations(&r).contains("uses"));
+    assert!(labels(&r).contains(&"Account"));
+}
+
+/// `test_apex_dml_uses_edge`
+#[test]
+fn apex_dml_uses_edge() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    let dml: Vec<&str> = r
+        .nodes
+        .iter()
+        .map(|n| n.label.as_str())
+        .filter(|l| matches!(*l, "insert" | "update" | "delete" | "upsert"))
+        .collect();
+    assert!(!dml.is_empty(), "expected DML nodes: {dml:?}");
+}
+
+/// `test_apex_file_node_present`
+#[test]
+fn apex_file_node_present() {
+    let r = extract_apex(&fixtures().join("sample.cls"));
+    assert!(labels(&r).contains(&"sample.cls"));
+}
+
+/// `test_apex_trigger_extraction`
+#[test]
+fn apex_trigger_extraction() {
+    let r = extract_apex(&fixtures().join("sample.trigger"));
+    let ls = labels(&r);
+    assert!(ls.contains(&"sample.trigger"), "{ls:?}");
+    assert!(ls.contains(&"AccountTrigger"), "{ls:?}");
+}
+
+/// `test_apex_trigger_uses_sobject`
+#[test]
+fn apex_trigger_uses_sobject() {
+    let r = extract_apex(&fixtures().join("sample.trigger"));
+    assert!(relations(&r).contains("uses"));
+    assert!(labels(&r).contains(&"Account"));
+}
+
+/// Inline annotations (annotation + declaration on the same line) must not
+/// drop the declaration. This is a DIVERGENCE from graphify-py's `extract_apex`,
+/// which `continue`s on every `@`-line and so loses inline-annotated classes and
+/// methods despite the declaration regexes carrying an annotation prefix.
+#[test]
+fn apex_inline_annotation_keeps_declaration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("Inline.cls");
+    std::fs::write(
+        &src,
+        "@IsTest public class Inline {\n    @AuraEnabled public static String foo() { return null; }\n}\n",
+    )
+    .expect("write cls");
+    let r = extract_apex(&src);
+    let ls = labels(&r);
+    assert!(
+        ls.contains(&"Inline"),
+        "inline-annotated class was dropped: {ls:?}"
+    );
+    assert!(
+        ls.iter().any(|l| l.contains("foo")),
+        "inline-annotated method was dropped: {ls:?}"
+    );
+}
+
+/// Own-line annotations must keep working after the inline-annotation fix: the
+/// pending annotation has to carry to the declaration on the next line so the
+/// `@AuraEnabled`/`@InvocableMethod` `contains` edge is still emitted.
+#[test]
+fn apex_own_line_annotation_still_carries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("OwnLine.cls");
+    std::fs::write(
+        &src,
+        "public class OwnLine {\n    @AuraEnabled\n    public static String bar() { return null; }\n}\n",
+    )
+    .expect("write cls");
+    let r = extract_apex(&src);
+    assert!(
+        labels(&r).iter().any(|l| l.contains("bar")),
+        "own-line-annotated method was dropped: {:?}",
+        labels(&r)
+    );
+    assert!(
+        relations(&r).contains("contains"),
+        "carried @AuraEnabled did not produce a contains edge"
+    );
+}
+
+/// `test_apex_missing_file_returns_empty`
+#[test]
+fn apex_missing_file_returns_empty() {
+    let r = extract_apex(Path::new("nonexistent.cls"));
+    assert!(r.nodes.is_empty());
+    assert!(r.edges.is_empty());
+}
+
+/// `test_apex_no_dangling_edges`
+#[test]
+fn apex_no_dangling_edges() {
+    for fixture in ["sample.cls", "sample.trigger"] {
+        let r = extract_apex(&fixtures().join(fixture));
+        let ids: std::collections::HashSet<&str> = r.nodes.iter().map(|n| n.id.as_str()).collect();
+        for e in &r.edges {
+            assert!(
+                ids.contains(e.source.as_str()),
+                "dangling source in {fixture}: {e:?}"
+            );
+            assert!(
+                ids.contains(e.target.as_str()),
+                "dangling target in {fixture}: {e:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn csproj_packages() {
     let r = extract_csproj(&fixtures().join("sample.csproj"));
@@ -1347,4 +1570,71 @@ fn dm_parent_relative_include_resolves_to_parent_dir() {
             .any(|e| e.relation == "imports_from" && !e.external),
         "a `../` include of an existing file must resolve (non-external imports_from): {import_edges:?}"
     );
+}
+
+// ── Python package-form submodule imports (#1146) ────────────────────────────
+
+/// #1146: `from pkg import submod` where `pkg` is a package (`__init__.py`) and
+/// `submod` is a submodule file on disk should emit a file-level
+/// `imports_from`/`submodule_import` edge to the submodule, so package-form
+/// imports do not leave the submodule as a disconnected island. Covers both the
+/// relative (`from .pkg import …`) and absolute (`from pkg import …`) forms.
+#[test]
+fn python_package_form_import_resolves_submodule() -> Result<(), Box<dyn std::error::Error>> {
+    use graphify_extract::{extract_python, make_id1};
+
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path();
+    // Lay out a package with two submodules and a sibling importer.
+    let pkg = root.join("pkg");
+    std::fs::create_dir_all(&pkg)?;
+    std::fs::write(pkg.join("__init__.py"), "")?;
+    std::fs::write(pkg.join("models.py"), "class Widget:\n    pass\n")?;
+    std::fs::create_dir_all(pkg.join("services"))?;
+    std::fs::write(pkg.join("services").join("__init__.py"), "")?;
+
+    // Importer lives inside the package and uses both absolute and relative forms.
+    let importer = pkg.join("app.py");
+    std::fs::write(
+        &importer,
+        "from pkg import models\nfrom . import services\nfrom pkg import missing\n",
+    )?;
+
+    let result = extract_python(&importer);
+    let importer_nid = make_id1(&importer.to_string_lossy());
+
+    let submodule_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.relation == "imports_from" && e.context.as_deref() == Some("submodule_import")
+        })
+        .collect();
+
+    // Absolute `from pkg import models` resolves to pkg/models.py.
+    let models_nid = make_id1(&pkg.join("models.py").to_string_lossy());
+    assert!(
+        submodule_edges
+            .iter()
+            .any(|e| e.source == importer_nid && e.target == models_nid),
+        "expected submodule_import edge to pkg/models.py: {submodule_edges:?}"
+    );
+
+    // Relative `from . import services` resolves to pkg/services/__init__.py.
+    let services_nid = make_id1(&pkg.join("services").join("__init__.py").to_string_lossy());
+    assert!(
+        submodule_edges
+            .iter()
+            .any(|e| e.source == importer_nid && e.target == services_nid),
+        "expected submodule_import edge to pkg/services/__init__.py: {submodule_edges:?}"
+    );
+
+    // `from pkg import missing` has no file on disk → no submodule edge for it,
+    // only the ordinary module-level imports_from edge.
+    assert_eq!(
+        submodule_edges.len(),
+        2,
+        "only resolvable submodules should produce edges: {submodule_edges:?}"
+    );
+    Ok(())
 }

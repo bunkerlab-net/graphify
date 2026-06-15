@@ -43,7 +43,7 @@ license = "Apache-2.0"
 publish = false
 repository = "https://github.com/bunkerlab-net/graphify"
 rust-version = "1.95"
-version = "0.8.30"
+version = "0.8.39"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -165,6 +165,21 @@ indexmap = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing-subscriber = { workspace = true }
+
+[features]
+# Forwarded to graphify-export: compiles the redis-backed FalkorDB live push
+# (`graphify export falkordb --push`). Off by default — mirrors graphify-py's
+# optional `falkordb` extra. Without it, `--push` errors and the cypher.txt
+# path still works.
+falkordb = ["graphify-export/falkordb"]
+# Forwarded to graphify-extract: compiles live PostgreSQL introspection for
+# `graphify extract <PATH> --postgres <DSN>`. Off by default — mirrors
+# graphify-py's optional `postgres` extra. Without it, `--postgres` errors.
+postgres = ["graphify-extract/postgres"]
+# Forwarded to graphify-serve: compiles the Streamable HTTP MCP transport for
+# `graphify serve --transport http`. Off by default — mirrors graphify-py's
+# optional `mcp` extra. Without it, `--transport http` errors.
+http = ["graphify-serve/http"]
 
 [dev-dependencies]
 assert_cmd = "2"

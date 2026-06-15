@@ -357,3 +357,100 @@ fn test_identical_labels_in_different_files_not_merged() {
         "identical labels in different files must not be merged"
     );
 }
+
+// ── #1201 / #1247: prefix-extension guard + verified-pair winner ────────────
+
+#[test]
+fn prefix_extension_symbols_not_merged() {
+    // Strict prefix-extension pairs score very high JW but are distinct symbols.
+    let pairs = [
+        ("getActiveSession", "getActiveSessions"),
+        ("parseConfig", "parseConfigFile"),
+        ("load", "loadAll"),
+        ("handleRequest", "handleRequestTimeout"),
+    ];
+    for (a, b) in pairs {
+        let nodes = vec![
+            json!({"id": format!("{a}_id"), "label": a, "type": "CODE", "source_file": "api.py"}),
+            json!({"id": format!("{b}_id"), "label": b, "type": "CODE", "source_file": "api.py"}),
+        ];
+        let edges = vec![json!({
+            "source": format!("{a}_id"), "target": format!("{b}_id"),
+            "relation": "calls", "confidence": 1.0, "weight": 1.0,
+        })];
+        let mut communities: IndexMap<String, i64> = IndexMap::new();
+        communities.insert(format!("{a}_id"), 0);
+        communities.insert(format!("{b}_id"), 0);
+        let (out_nodes, _) =
+            deduplicate_entities(&nodes, &edges, &communities, None).expect("dedup");
+        let labels: std::collections::HashSet<&str> = out_nodes
+            .iter()
+            .filter_map(|n| n["label"].as_str())
+            .collect();
+        assert!(
+            labels.contains(a) && labels.contains(b),
+            "#1201 regression: '{a}' and '{b}' were merged"
+        );
+    }
+}
+
+#[test]
+fn pass2_winner_union_does_not_pull_in_uncompared_same_label_nodes() {
+    // A ("Session Manager", auth.md) and B ("Session Manager", billing.md) are
+    // kept distinct by the cross-file guards. When the A-C fuzzy match fires,
+    // the winner must come from the verified pair only — B must not be absorbed.
+    let nodes = vec![
+        json!({"id": "session_manager_auth", "label": "Session Manager", "source_file": "auth.md"}),
+        json!({"id": "sm", "label": "Session Manager", "source_file": "billing.md"}),
+        json!({"id": "session_managr_notes", "label": "Session Managr", "source_file": "notes.md"}),
+    ];
+    let communities: IndexMap<String, i64> = IndexMap::new();
+    let (result_nodes, _) = deduplicate_entities(&nodes, &[], &communities, None).expect("dedup");
+    let ids: std::collections::HashSet<&str> = result_nodes
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains("sm"),
+        "uncompared cross-file node 'sm' was absorbed via pass-2 winner-union"
+    );
+    assert_eq!(result_nodes.len(), 2);
+}
+
+#[test]
+fn prefix_guard_does_not_block_same_length_typos() {
+    // Same-length pairs (graphextractor / graphextractar) are not strict prefix
+    // extensions, so the guard must not fire.
+    let a = norm("GraphExtractor");
+    let b = norm("GraphExtractar");
+    let (lo, hi) = if a.len() <= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    assert!(
+        !(hi.starts_with(lo.as_str()) && hi != lo),
+        "prefix guard fires on same-length pair ({a:?}, {b:?})"
+    );
+}
+
+#[test]
+fn prefix_guard_fires_for_extension_pairs() {
+    for (a_raw, b_raw) in [
+        ("getActiveSession", "getActiveSessions"),
+        ("parseConfig", "parseConfigFile"),
+        ("load", "loadAll"),
+    ] {
+        let a = norm(a_raw);
+        let b = norm(b_raw);
+        let (lo, hi) = if a.len() <= b.len() {
+            (&a, &b)
+        } else {
+            (&b, &a)
+        };
+        assert!(
+            hi.starts_with(lo.as_str()) && hi != lo,
+            "prefix guard should fire for ({a:?}, {b:?})"
+        );
+    }
+}

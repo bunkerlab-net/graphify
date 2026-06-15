@@ -72,3 +72,40 @@ fn sensitive_secret_handler_txt() {
 fn sensitive_token_config_yaml() {
     assert!(is_sensitive(Path::new("token_config.yaml")));
 }
+
+// ── Generic keywords must be load-bearing (#436 / #718): a topic slug is not
+// a secret store, but a keyword that ends the stem (or a short name) is. ──
+
+#[test]
+fn sensitive_does_not_flag_token_economics_note() {
+    assert!(!is_sensitive(Path::new("token-economics-of-recall.md")));
+}
+
+#[test]
+fn sensitive_does_not_flag_password_policy_discussion() {
+    assert!(!is_sensitive(Path::new("password-policy-discussion.md")));
+}
+
+#[test]
+fn sensitive_flags_keyword_at_end_of_long_name() {
+    // Keyword as the final word names the file's contents — still a secret store.
+    assert!(is_sensitive(Path::new("github-personal-access-token.txt")));
+}
+
+#[test]
+fn sensitive_flags_my_private_key_txt() {
+    // Multi-word keyword at end of stem: the end-of-stem check runs before word
+    // counting, so splitting `private_key` on `_` cannot un-flag it.
+    assert!(is_sensitive(Path::new("my_private_key.txt")));
+}
+
+#[test]
+fn sensitive_flags_dotfile_token() {
+    // Leading dot stripped before stem extraction; `.token` keeps its keyword.
+    assert!(is_sensitive(Path::new(".token")));
+}
+
+#[test]
+fn sensitive_flags_plural_tokens_txt() {
+    assert!(is_sensitive(Path::new("tokens.txt")));
+}

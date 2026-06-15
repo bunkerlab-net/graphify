@@ -172,3 +172,80 @@ fn obsidian_handles_empty_communities() -> TestResult {
     assert_eq!(count, graph.node_count() + 1);
     Ok(())
 }
+
+// ── dangling community members (#1236) ──────────────────────────────────────
+
+#[test]
+fn obsidian_skips_dangling_community_members() -> TestResult {
+    // A community member with no backing node must be skipped, not crash the
+    // export or inflate the member count / Members list.
+    let graph = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n0", "label": "Alpha", "file_type": "code", "source_file": "a.py"},
+                {"id": "n1", "label": "Beta", "file_type": "code", "source_file": "b.py"},
+            ],
+            "edges": [
+                {"source": "n0", "target": "n1", "relation": "calls", "confidence": "EXTRACTED"}
+            ]
+        }),
+        false,
+        None,
+    )?;
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    // 'agents_doc' is a synthesized member id with no backing node.
+    communities.insert(
+        0,
+        vec!["n0".to_string(), "n1".to_string(), "agents_doc".to_string()],
+    );
+
+    let tmp = tempdir()?;
+    let n = to_obsidian(&graph, &communities, tmp.path(), None, None)?;
+    assert!(n > 0);
+
+    let comm_notes: Vec<_> = fs::read_dir(tmp.path())?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("_COMMUNITY_"))
+        .collect();
+    assert_eq!(comm_notes.len(), 1);
+    let body = fs::read_to_string(comm_notes[0].path())?;
+
+    // Real members appear; the dangling id does not; count reflects only real ones.
+    assert!(body.contains("[[Alpha]]"));
+    assert!(body.contains("[[Beta]]"));
+    assert!(!body.contains("agents_doc"));
+    assert!(body.contains("**Members:** 2 nodes"));
+    Ok(())
+}
+
+#[test]
+fn obsidian_community_of_only_dangling_members_does_not_crash() -> TestResult {
+    let graph = build_from_json(
+        json!({
+            "nodes": [{"id": "n0", "label": "Alpha", "file_type": "code", "source_file": "a.py"}],
+            "edges": []
+        }),
+        false,
+        None,
+    )?;
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(0, vec!["n0".to_string()]);
+    communities.insert(1, vec!["ghost_a".to_string(), "ghost_b".to_string()]);
+
+    let tmp = tempdir()?;
+    let n = to_obsidian(&graph, &communities, tmp.path(), None, None)?;
+    assert!(n > 0);
+
+    // The all-dangling community note still exists with a zero member count.
+    let ghost = fs::read_dir(tmp.path())?
+        .filter_map(Result::ok)
+        .find(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with("_COMMUNITY_") && name.contains("Community 1")
+        })
+        .map(|e| fs::read_to_string(e.path()))
+        .transpose()?;
+    let ghost = ghost.ok_or("expected ghost community note to exist")?;
+    assert!(ghost.contains("**Members:** 0 nodes"));
+    Ok(())
+}

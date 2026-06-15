@@ -293,3 +293,138 @@ fn rebuild_code_prunes_deleted_file_nodes() {
         "surviving file's nodes should remain (sources: {after_sources:?})"
     );
 }
+
+// ── #777: .graphify_root stores the user-supplied path (portable) ───────────
+
+#[test]
+fn graphify_root_preserves_user_supplied_absolute_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("mkdir");
+    fs::write(corpus.join("lib.py"), "def f(): pass\n").expect("write");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(&corpus, None, opts).expect("rebuild"));
+
+    let saved = fs::read_to_string(corpus.join("graphify-out").join(".graphify_root"))
+        .expect("read .graphify_root");
+    // The user-supplied (un-canonicalised) path is preserved verbatim.
+    assert_eq!(saved, corpus.to_string_lossy());
+}
+
+#[test]
+#[serial_test::serial]
+fn graphify_root_preserves_relative_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("mkdir");
+    fs::write(corpus.join("lib.py"), "def f(): pass\n").expect("write");
+
+    // nextest runs each test in its own process, so changing the CWD here is
+    // isolated; restore it afterwards for the `cargo test` (shared-process) case.
+    let prev = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&corpus).expect("chdir corpus");
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    let result = rebuild_code(Path::new("."), None, opts);
+    std::env::set_current_dir(prev).expect("restore cwd");
+    assert!(result.expect("rebuild"));
+
+    let saved = fs::read_to_string(corpus.join("graphify-out").join(".graphify_root"))
+        .expect("read .graphify_root");
+    assert_eq!(saved, ".", ".graphify_root must preserve the relative path");
+}
+
+// ── #1116: full rebuild prunes stale AST symbols from surviving files ────────
+
+#[test]
+fn full_rebuild_prunes_stale_ast_node_from_surviving_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("mkdir");
+    fs::write(corpus.join("a.py"), "def keep(): pass\n").expect("write");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(&corpus, None, opts).expect("initial rebuild"));
+
+    // Inject a stale AST-stamped ghost (source survives but symbol is gone) and
+    // a marker-less semantic node on the same surviving file.
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let mut data: serde_json::Value =
+        serde_json::from_slice(&fs::read(&graph_path).expect("read")).expect("parse");
+    let nodes = data["nodes"].as_array_mut().expect("nodes");
+    nodes.push(serde_json::json!({
+        "id": "a_ghostsym", "label": "GhostSym", "_origin": "ast",
+        "file_type": "function", "source_file": "a.py",
+    }));
+    nodes.push(serde_json::json!({
+        "id": "a_authconcept", "label": "AuthConcept",
+        "file_type": "concept", "source_file": "a.py",
+    }));
+    fs::write(&graph_path, serde_json::to_string(&data).expect("ser")).expect("write");
+
+    let opts = RebuildOptions {
+        force: true,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(&corpus, None, opts).expect("full rebuild"));
+
+    let after = node_field_set(&graph_path, "label");
+    assert!(!after.contains("GhostSym"), "stale AST node must be pruned");
+    assert!(after.contains("AuthConcept"), "semantic node must be kept");
+    assert!(after.contains("keep()"), "surviving symbol must be kept");
+}
+
+#[test]
+fn full_rebuild_keeps_marker_less_stale_node_one_cycle() {
+    // #1118 backward-compat: a node with no `_origin` marker (pre-upgrade graph)
+    // is NOT pruned on the first full rebuild — a deliberate one-cycle lag.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).expect("mkdir");
+    fs::write(corpus.join("a.py"), "def keep(): pass\n").expect("write");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(&corpus, None, opts).expect("initial rebuild"));
+
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let mut data: serde_json::Value =
+        serde_json::from_slice(&fs::read(&graph_path).expect("read")).expect("parse");
+    data["nodes"]
+        .as_array_mut()
+        .expect("nodes")
+        .push(serde_json::json!({
+            "id": "a_ghostml", "label": "GhostML",
+            "file_type": "function", "source_file": "a.py",
+        }));
+    fs::write(&graph_path, serde_json::to_string(&data).expect("ser")).expect("write");
+
+    let opts = RebuildOptions {
+        force: true,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(&corpus, None, opts).expect("full rebuild"));
+
+    let after = node_field_set(&graph_path, "label");
+    assert!(
+        after.contains("GhostML"),
+        "marker-less stale node survives one cycle (no _origin marker)"
+    );
+}

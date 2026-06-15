@@ -21,13 +21,115 @@ static DEP_KEYS: std::sync::LazyLock<HashSet<&'static str>> = std::sync::LazyLoc
     .collect()
 });
 
+/// Config/manifest JSON filenames the structural extractor understands. Anything
+/// else (eval fixtures, datasets, `GeoJSON`, API dumps) is *data* and must NOT be
+/// AST-walked into per-key nodes — that floods the graph with orphan key-nodes
+/// and near-duplicate communities (#1224). Matched case-insensitively against
+/// the bare filename.
+static CONFIG_JSON_NAMES: std::sync::LazyLock<HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "package.json",
+            "tsconfig.json",
+            "jsconfig.json",
+            "composer.json",
+            "deno.json",
+            "deno.jsonc",
+            "bower.json",
+            "manifest.json",
+            "app.json",
+            "now.json",
+            "vercel.json",
+            "angular.json",
+            "nest-cli.json",
+            "biome.json",
+            "biome.jsonc",
+            "renovate.json",
+            ".babelrc",
+            ".babelrc.json",
+            ".eslintrc.json",
+            ".prettierrc.json",
+            ".prettierrc",
+            "babel.config.json",
+        ]
+        .into_iter()
+        .collect()
+    });
+
+/// Top-level keys that prove a JSON object is a config/manifest the extractor
+/// can draw *cross-file* edges from (deps, extends chains, schema refs).
+static CONFIG_JSON_KEYS: std::sync::LazyLock<HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "dependencies",
+            "devDependencies",
+            "peerDependencies",
+            "optionalDependencies",
+            "bundleDependencies",
+            "bundledDependencies",
+            "extends",
+            "$ref",
+            "$schema",
+            "compilerOptions",
+        ]
+        .into_iter()
+        .collect()
+    });
+
+/// Compound config filename suffixes (e.g. `api.tsconfig.json`,
+/// `foo.eslintrc.json`) recognised in addition to exact [`CONFIG_JSON_NAMES`].
+const CONFIG_JSON_SUFFIXES: &[&str] = &[
+    ".eslintrc.json",
+    ".prettierrc.json",
+    ".babelrc.json",
+    "tsconfig.json",
+    "jsconfig.json",
+];
+
+/// `true` when a `.json` file is a recognised config/manifest worth
+/// AST-extracting. Matches by filename first (cheap), then falls back to a
+/// top-level key probe so arbitrarily-named config files are still picked up.
+/// Returns `false` for data JSON so it is skipped by the structural pass
+/// (#1224). Mirrors `_is_config_json`.
+fn is_config_json(obj_node: tree_sitter::Node<'_>, path: &Path, source: &[u8]) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if CONFIG_JSON_NAMES.contains(name.as_str()) {
+        return true;
+    }
+    if CONFIG_JSON_SUFFIXES.iter().any(|s| name.ends_with(s)) {
+        return true;
+    }
+    // Top-level key probe: scan the root object's immediate keys (no deep walk).
+    let mut cur = obj_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let child = cur.node();
+            if child.kind() == "pair"
+                && let Some(key) = key_text(child, source)
+                && CONFIG_JSON_KEYS.contains(key)
+            {
+                return true;
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    false
+}
+
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
-/// Extract top-level keys, nested structure, and dependency edges from a `.json` file.
+/// Extract top-level keys, nested structure, and dependency edges from a
+/// config/manifest `.json` file; data-shaped JSON is skipped (#1224).
 #[must_use]
+#[allow(clippy::too_many_lines)] // linear extractor: bounded read, parse, config gate, and walk setup, each with its own early-return arm; splitting fragments the flow
 pub fn extract_json(path: &Path) -> FileResult {
     // Bounded read (1 MiB + 1 to detect oversized)
     let source = match std::fs::File::open(path) {
@@ -117,6 +219,19 @@ pub fn extract_json(path: &Path) -> FileResult {
     };
 
     if doc.kind() == "object" {
+        // Only AST-extract recognised config/manifest JSON. Data JSON (eval
+        // fixtures, datasets, GeoJSON, API dumps) is skipped so it doesn't
+        // explode into orphan key-nodes (#1224); it's left to the LLM semantic
+        // pass. The file node is discarded too, matching graphify-py's empty
+        // `{"nodes": [], "edges": [], "skipped": ...}` return.
+        if !is_config_json(doc, path, &source) {
+            return FileResult {
+                nodes: vec![],
+                edges: vec![],
+                raw_calls: vec![],
+                error: None,
+            };
+        }
         let mut pair_count = [0usize];
         let mut walk_ctx = JsonWalkCtx {
             str_path: &str_path,
@@ -128,6 +243,14 @@ pub fn extract_json(path: &Path) -> FileResult {
             seen_ids: &mut seen_ids,
         };
         walk_json_object(&mut walk_ctx, doc, &source, &file_nid, None, 0);
+    } else {
+        // A top-level array or scalar is data JSON, never a config/manifest.
+        return FileResult {
+            nodes: vec![],
+            edges: vec![],
+            raw_calls: vec![],
+            error: None,
+        };
     }
 
     FileResult {

@@ -94,9 +94,21 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
         }
     }
 
-    // Read compilerOptions.paths
-    if let Some(paths) = data
-        .get("compilerOptions")
+    // tsconfig `paths` resolve relative to `baseUrl` (itself relative to the
+    // tsconfig's directory), not the tsconfig directory directly. Honouring
+    // baseUrl is required for the common monorepo / NestJS layout where baseUrl
+    // points at a subdirectory (e.g. baseUrl "./src" with "@services/*":
+    // ["services/*"] must resolve to <dir>/src/services). Defaults to "." so
+    // configs without baseUrl keep the TS 4.1+ behaviour (#ec04152).
+    let compiler_options = data.get("compilerOptions");
+    let base_url = compiler_options
+        .and_then(|o| o.get("baseUrl"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(".");
+    let paths_base = base_dir.join(base_url);
+
+    if let Some(paths) = compiler_options
         .and_then(|o| o.get("paths"))
         .and_then(serde_json::Value::as_object)
     {
@@ -114,12 +126,45 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
             let target_base = first.trim_end_matches("/*");
             aliases.insert(
                 alias_prefix.to_string(),
-                base_dir.join(target_base).to_string_lossy().into_owned(),
+                normpath(&paths_base.join(target_base))
+                    .to_string_lossy()
+                    .into_owned(),
             );
         }
     }
 
     aliases
+}
+
+/// Lexically normalise a path (collapse `.`, resolve `..` where possible),
+/// mirroring Python's `os.path.normpath`. Used so a `baseUrl` like `./src`
+/// does not leave a `.` component in the resolved alias target.
+fn normpath(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Pop only a real (Normal) trailing component. At the root of an
+                // absolute path `..` is a no-op — `os.path.normpath` never lets
+                // an absolute path climb above its root, and a bare `out.pop()`
+                // here would strip the root and turn `/a/../..` into a stray
+                // `..`, corrupting alias resolution. For a relative path with
+                // nothing poppable, accumulate the `..`.
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else if !out.is_absolute() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
 }
 
 /// Walk up from `start_dir` to find `tsconfig.json` and return its path

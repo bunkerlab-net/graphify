@@ -72,6 +72,8 @@ fn clear_backend_envs(g: &mut EnvGuard) {
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "DEEPSEEK_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
         "OLLAMA_BASE_URL",
         "AWS_PROFILE",
         "AWS_REGION",
@@ -359,7 +361,7 @@ fn test_claude_cli_uses_system_prompt_not_append() {
     // The hollow-response root cause was --append-system-prompt layering
     // graphify's prompt on Claude Code's default; the fix switches to
     // --system-prompt (replace).
-    let args = build_claude_cli_args(Some("SYSTEM"), None);
+    let args = build_claude_cli_args(Some("SYSTEM"), None, &[]);
     assert!(
         args.iter().any(|a| a == "--system-prompt"),
         "--system-prompt missing from argv: {args:?}"
@@ -373,7 +375,7 @@ fn test_claude_cli_uses_system_prompt_not_append() {
 #[test]
 fn test_claude_cli_model_arg_added_when_present() {
     // GRAPHIFY_CLAUDE_CLI_MODEL must be forwarded to `claude -p --model`.
-    let args = build_claude_cli_args(Some("SYSTEM"), Some("haiku"));
+    let args = build_claude_cli_args(Some("SYSTEM"), Some("haiku"), &[]);
     let idx = args
         .iter()
         .position(|a| a == "--model")
@@ -384,15 +386,44 @@ fn test_claude_cli_model_arg_added_when_present() {
 #[test]
 fn test_claude_cli_no_model_arg_when_absent() {
     // Default behaviour: no --model so claude-cli's own default kicks in.
-    let args = build_claude_cli_args(Some("SYSTEM"), None);
+    let args = build_claude_cli_args(Some("SYSTEM"), None, &[]);
     assert!(!args.iter().any(|a| a == "--model"));
 }
 
 #[test]
 fn test_claude_cli_blank_model_is_ignored() {
     // A blank/whitespace override (env var set to "") must not add --model.
-    let args = build_claude_cli_args(Some("SYSTEM"), Some("   "));
+    let args = build_claude_cli_args(Some("SYSTEM"), Some("   "), &[]);
     assert!(!args.iter().any(|a| a == "--model"));
+}
+
+#[test]
+fn test_claude_cli_add_dir_for_each_image_dir() {
+    // Each image directory is allowlisted via `--add-dir` so the Read tool can
+    // open the files (#1110), and the flags precede `--system-prompt` (matching
+    // graphify-py's arg order).
+    let dirs = [
+        std::path::PathBuf::from("/imgs/a"),
+        std::path::PathBuf::from("/imgs/b"),
+    ];
+    let args = build_claude_cli_args(Some("SYSTEM"), None, &dirs);
+    let add_dir_positions: Vec<usize> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| *a == "--add-dir")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(add_dir_positions.len(), 2, "argv: {args:?}");
+    assert_eq!(args[add_dir_positions[0] + 1], "/imgs/a");
+    assert_eq!(args[add_dir_positions[1] + 1], "/imgs/b");
+    let sys = args
+        .iter()
+        .position(|a| a == "--system-prompt")
+        .expect("--system-prompt present");
+    assert!(
+        add_dir_positions.iter().all(|&p| p < sys),
+        "--add-dir flags must precede --system-prompt: {args:?}"
+    );
 }
 
 #[test]
@@ -454,6 +485,42 @@ fn test_estimate_cost_nonzero_for_paid_backend() {
 fn test_estimate_cost_unknown_backend_returns_zero() {
     let cost = estimate_cost("nonexistent-backend", 1_000_000, 1_000_000);
     assert_eq!(cost, 0.0_f64);
+}
+
+#[test]
+fn test_estimate_cost_azure_no_keyerror() {
+    // azure pricing: $2.50/M input, $10.00/M output (gpt-4o).
+    let cost = estimate_cost("azure", 1_000_000, 500_000);
+    assert!((cost - (2.50_f64 + 5.00_f64)).abs() < 1e-9, "got {cost}");
+}
+
+// ── Azure backend detection (#azure) ──────────────────────────────────────
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_returns_azure_when_both_vars_set() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AZURE_OPENAI_API_KEY", "azure-key");
+    g.set(
+        "AZURE_OPENAI_ENDPOINT",
+        "https://my-resource.openai.azure.com/",
+    );
+
+    assert_eq!(detect_backend().as_deref(), Some("azure"));
+    assert_eq!(graphify_llm::get_backend_api_key("azure"), "azure-key");
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn test_detect_backend_azure_requires_endpoint_not_just_key() {
+    let mut g = EnvGuard::new();
+    clear_backend_envs(&mut g);
+    g.set("AZURE_OPENAI_API_KEY", "azure-key");
+    g.remove("AZURE_OPENAI_ENDPOINT");
+
+    // A bare key without an endpoint must NOT auto-select azure.
+    assert_ne!(detect_backend().as_deref(), Some("azure"));
 }
 
 // ---------------------------------------------------------------------------
@@ -714,9 +781,104 @@ struct MockRunner {
 }
 
 impl ClaudeRunner for MockRunner {
-    fn run(&self, _user_message: &str, _system_prompt: Option<&str>) -> (String, String, i32) {
+    fn run(
+        &self,
+        _user_message: &str,
+        _system_prompt: Option<&str>,
+        _model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
+        _timeout: std::time::Duration,
+    ) -> (String, String, i32) {
         (self.stdout.clone(), String::new(), self.code)
     }
+}
+
+/// Runner that records the `timeout` it was handed, so we can assert
+/// `GRAPHIFY_API_TIMEOUT` is threaded into the claude-cli call (#1112).
+struct TimeoutRecordingRunner {
+    seen: std::sync::Mutex<Option<std::time::Duration>>,
+}
+
+impl ClaudeRunner for TimeoutRecordingRunner {
+    fn run(
+        &self,
+        _user_message: &str,
+        _system_prompt: Option<&str>,
+        _model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
+        timeout: std::time::Duration,
+    ) -> (String, String, i32) {
+        *self.seen.lock().expect("lock") = Some(timeout);
+        // Minimal valid envelope so the caller parses without erroring.
+        ("{\"result\": \"{}\"}".to_string(), String::new(), 0)
+    }
+}
+
+/// Runner that records the `model` it was handed, so we can assert an explicit
+/// model override reaches the claude-cli runner (#b304331).
+struct ModelRecordingRunner {
+    seen: std::sync::Mutex<Option<String>>,
+}
+
+impl ClaudeRunner for ModelRecordingRunner {
+    fn run(
+        &self,
+        _user_message: &str,
+        _system_prompt: Option<&str>,
+        model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
+        _timeout: std::time::Duration,
+    ) -> (String, String, i32) {
+        *self.seen.lock().expect("lock") = model.map(str::to_string);
+        ("{\"result\": \"{}\"}".to_string(), String::new(), 0)
+    }
+}
+
+/// `call_claude_cli_inner` threads an explicit `--model` override into the runner.
+#[test]
+fn claude_cli_inner_threads_model_override() {
+    let runner = ModelRecordingRunner {
+        seen: std::sync::Mutex::new(None),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        None,
+        Some("haiku"),
+    );
+    assert_eq!(runner.seen.lock().expect("lock").as_deref(), Some("haiku"));
+}
+
+/// `test_claude_cli_extraction_honours_timeout`: the resolved
+/// `GRAPHIFY_API_TIMEOUT` is passed through to the claude-cli runner.
+#[test]
+fn claude_cli_extraction_honours_timeout() {
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_API_TIMEOUT", "30");
+    let runner = TimeoutRecordingRunner {
+        seen: std::sync::Mutex::new(None),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None, None);
+    assert_eq!(
+        *runner.seen.lock().expect("lock"),
+        Some(std::time::Duration::from_secs(30))
+    );
+}
+
+/// Default (no env var) threads the 10-minute default through.
+#[test]
+fn claude_cli_extraction_default_timeout() {
+    let mut g = EnvGuard::new();
+    g.remove("GRAPHIFY_API_TIMEOUT");
+    let runner = TimeoutRecordingRunner {
+        seen: std::sync::Mutex::new(None),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None, None);
+    assert_eq!(
+        *runner.seen.lock().expect("lock"),
+        Some(std::time::Duration::from_mins(10))
+    );
 }
 
 /// Mock runner that records whether `--no-session-persistence` would have been sent.
@@ -739,6 +901,7 @@ fn test_claude_cli_returns_parsed_nodes_and_edges() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -760,6 +923,7 @@ fn test_claude_cli_token_accounting_includes_cache() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -772,6 +936,56 @@ fn test_claude_cli_token_accounting_includes_cache() {
     assert_eq!(result.output_tokens, 11);
     assert_eq!(result.model, "claude-opus-4-7[1m]");
     assert_eq!(result.finish_reason, "stop");
+}
+
+/// CLI >= 2.1 emits a JSON ARRAY of streamed events terminated by a
+/// `{"type":"result"}` object; it must parse identically to the legacy single
+/// envelope (#edfe581).
+#[test]
+fn test_claude_cli_handles_json_array_envelope() {
+    let inner = extraction_result_json();
+    let result_obj: serde_json::Value =
+        serde_json::from_str(&cli_envelope(&inner, "end_turn", 6, 11)).expect("result obj");
+    let array = json!([
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {}},
+        {"type": "rate_limit_event"},
+        result_obj,
+    ])
+    .to_string();
+    let runner = MockRunner {
+        stdout: array,
+        code: 0,
+    };
+    let result = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "dummy",
+        8192,
+        Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
+    )
+    .expect("array envelope should parse");
+    assert_eq!(result.nodes.len(), 2);
+    assert_eq!(result.edges.len(), 1);
+    assert_eq!(result.input_tokens, 6 + 17837 + 30800);
+}
+
+/// A JSON array with no result object and a non-object tail is a hard error.
+#[test]
+fn test_claude_cli_array_without_result_object_errors() {
+    let array = json!([{"type": "system"}, "not-an-object-tail"]).to_string();
+    let runner = MockRunner {
+        stdout: array,
+        code: 0,
+    };
+    let err = graphify_llm::claude_cli::call_claude_cli_inner(&runner, "dummy", 8192, None, None)
+        .expect_err("should error");
+    match err {
+        graphify_llm::LlmError::ClaudeCliError(m) => {
+            assert!(m.contains("no result object"), "unexpected message: {m}");
+        }
+        other => panic!("expected ClaudeCliError, got {other:?}"),
+    }
 }
 
 #[test]
@@ -803,6 +1017,7 @@ fn test_claude_cli_finish_reason_length_on_max_tokens() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -820,6 +1035,7 @@ fn test_claude_cli_raises_on_nonzero_exit() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect_err("should fail on non-zero exit");
 
@@ -841,6 +1057,7 @@ fn test_claude_cli_raises_on_garbage_envelope() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect_err("should fail on bad JSON");
 
@@ -870,6 +1087,7 @@ fn test_claude_cli_hollow_response_relabelled_as_length() {
         "dummy",
         8192,
         Some(graphify_llm::EXTRACTION_SYSTEM),
+        None,
     )
     .expect("should succeed");
 
@@ -959,6 +1177,15 @@ fn test_extraction_system_non_deep_is_base_prompt() {
     let sys = graphify_llm::extraction_system(false);
     assert_eq!(sys.as_ref(), graphify_llm::EXTRACTION_SYSTEM);
     assert!(!sys.contains("DEEP_MODE"));
+}
+
+/// #cce2673: the extraction prompt states edge direction (source = actor) so
+/// the model stops emitting reversed `calls` edges.
+#[test]
+fn test_extraction_system_states_edge_direction_rule() {
+    let sys = graphify_llm::EXTRACTION_SYSTEM;
+    assert!(sys.contains("Edge direction rule — source is always the ACTOR"));
+    assert!(sys.contains("the function/method BEING CALLED. Never reverse this."));
 }
 
 #[test]

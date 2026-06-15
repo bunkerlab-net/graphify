@@ -21,17 +21,22 @@ aws-sdk-bedrockruntime = { version = "1", default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
+base64 = "0.22"
+graphify-detect = { workspace = true }
 graphify-security = { workspace = true }
+hex = { workspace = true }
 indexmap = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tiktoken-rs = "0.12"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 ureq = { workspace = true, features = ["json"] }
 url = { workspace = true }
+wait-timeout = "0.2"
 
 [dev-dependencies]
 mockito = { workspace = true }

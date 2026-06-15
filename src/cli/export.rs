@@ -52,6 +52,12 @@ pub(crate) fn cmd_export(cmd: ExportCmd) -> Result<()> {
             user,
             password,
         } => export_neo4j(graph, push, &user, password),
+        ExportCmd::Falkordb {
+            graph,
+            push,
+            user,
+            password,
+        } => export_falkordb(graph, push, user.as_deref(), password),
     }
 }
 
@@ -337,6 +343,68 @@ fn export_neo4j(
     )?;
     println!("pushed {n_nodes} nodes, {n_rels} relationships to {uri}");
     Ok(())
+}
+
+/// `export falkordb` — write `cypher.txt` (`OpenCypher`, no `--push`) or push the
+/// graph directly to a live `FalkorDB` instance via the `GRAPH.QUERY` command.
+///
+/// The live push needs the `falkordb` cargo feature (which pulls the `redis`
+/// client); a build without it falls back to a clear error on `--push` while
+/// the `cypher.txt` path still works. Mirrors Python's `export falkordb`.
+fn export_falkordb(
+    graph: Option<std::path::PathBuf>,
+    push: Option<String>,
+    user: Option<&str>,
+    password: Option<String>,
+) -> Result<()> {
+    let path = graph.unwrap_or_else(default_graph_path);
+    eprintln!("loading {} ...", path.display());
+    let g = load_graph(&path)?;
+    let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
+
+    let Some(uri) = push else {
+        let out = out_dir.join("cypher.txt");
+        graphify_export::to_cypher(&g, &out)?;
+        println!(
+            "cypher.txt written - FalkorDB is OpenCypher-compatible; import with: \
+             redis-cli -x GRAPH.QUERY graphify < {}",
+            out.display()
+        );
+        return Ok(());
+    };
+
+    #[cfg(feature = "falkordb")]
+    {
+        let analysis =
+            load_analysis_with_community_fallback(&out_dir.join(".graphify_analysis.json"), &g);
+        let resolved_password = password.or_else(|| std::env::var("FALKORDB_PASSWORD").ok());
+        eprintln!(
+            "pushing {} nodes / {} edges to {uri} ...",
+            g.node_count(),
+            g.edge_count()
+        );
+        let (n_nodes, n_edges) = graphify_export::falkordb::push_to_falkordb(
+            &uri,
+            user,
+            resolved_password.as_deref(),
+            &g,
+            &analysis.communities,
+            "graphify",
+        )?;
+        println!("Pushed to FalkorDB: {n_nodes} nodes, {n_edges} edges");
+        Ok(())
+    }
+    #[cfg(not(feature = "falkordb"))]
+    {
+        // Consume the (otherwise unused) owned values on the no-feature build so
+        // they aren't flagged as needlessly passed by value.
+        drop((uri, password));
+        let _ = user;
+        anyhow::bail!(
+            "FalkorDB live push requires a build with the `falkordb` feature \
+             (`cargo build --features falkordb`). Omit --push to write cypher.txt instead."
+        )
+    }
 }
 
 /// Parsed contents of `.graphify_analysis.json` consumed by exports.

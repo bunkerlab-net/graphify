@@ -244,3 +244,94 @@ fn anchored_multi_segment_pattern() {
         "x/src/inbox/b.py must NOT be ignored by /src/inbox/"
     );
 }
+
+// ── #1235: per-scan memoization (is_ignored_with_cache) ─────────────────────
+
+#[test]
+fn is_ignored_cache_matches_uncached_results() {
+    // A shared cache must not change is_ignored results, including negation.
+    use graphify_detect::{IgnoreEvalCache, is_ignored_with_cache};
+
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("build").join("sub")).expect("mkdir build");
+    std::fs::create_dir_all(root.join("logs")).expect("mkdir logs");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+    let paths = [
+        root.join("build"),
+        root.join("build").join("out.o"),
+        root.join("build").join("sub"),
+        root.join("build").join("sub").join("deep.o"),
+        root.join("logs"),
+        root.join("logs").join("drop.log"),
+        root.join("logs").join("keep.log"),
+        root.join("src").join("main.py"),
+    ];
+    for p in &paths {
+        if p.extension().is_some() {
+            std::fs::write(p, "x").expect("write");
+        }
+    }
+    std::fs::write(
+        root.join(".graphifyignore"),
+        "build/\n*.log\n!logs/keep.log\n",
+    )
+    .expect("write ignore");
+    let patterns = load_graphifyignore(root);
+
+    let mut cache: IgnoreEvalCache = IgnoreEvalCache::new();
+    for p in &paths {
+        let uncached = is_ignored(p, root, &patterns);
+        let cached = is_ignored_with_cache(p, root, &patterns, &mut cache);
+        assert_eq!(
+            cached, uncached,
+            "cached result for {p:?} differs from uncached"
+        );
+    }
+
+    // Sanity: the negation actually fired so a non-trivial case is exercised.
+    assert!(!is_ignored(
+        &root.join("logs").join("keep.log"),
+        root,
+        &patterns
+    ));
+    assert!(is_ignored(
+        &root.join("logs").join("drop.log"),
+        root,
+        &patterns
+    ));
+}
+
+#[test]
+fn is_ignored_cache_evaluates_each_dir_once() {
+    // Siblings under the same subtree share the cached ancestor result, so each
+    // unique path (files + ancestor dirs) is evaluated exactly once.
+    use graphify_detect::{IgnoreEvalCache, is_ignored_with_cache};
+    use std::path::PathBuf;
+
+    let root = PathBuf::from("/repo");
+    let patterns = vec![(root.clone(), "*.tmp".to_string())];
+    let files = [
+        root.join("a").join("b").join("f1.py"),
+        root.join("a").join("b").join("f2.py"),
+        root.join("a").join("b").join("f3.py"),
+        root.join("a").join("c").join("f4.py"),
+        root.join("a").join("c").join("f5.py"),
+    ];
+
+    let mut cache: IgnoreEvalCache = IgnoreEvalCache::new();
+    for f in &files {
+        let _ = is_ignored_with_cache(f, &root, &patterns, &mut cache);
+    }
+
+    // Shared ancestors are present and stored once each; the cache holds one
+    // entry per unique evaluated path (ancestors + the five files).
+    assert!(cache.contains_key(&root.join("a")));
+    assert!(cache.contains_key(&root.join("a").join("b")));
+    assert!(cache.contains_key(&root.join("a").join("c")));
+    for f in &files {
+        assert!(cache.contains_key(f));
+    }
+    // ancestors: a, a/b, a/c (3) + 5 files = 8 unique entries, no duplicates.
+    assert_eq!(cache.len(), 8);
+}

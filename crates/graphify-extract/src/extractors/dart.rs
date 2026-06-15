@@ -566,7 +566,9 @@ impl DartExtractor {
                 let mc = strip_generic(mixin);
                 let nid = make_id1(mc);
                 self.add_node(&nid, mc, "code", NodeSrc::Global);
-                self.add_edge(&class_nid, &nid, "implements", None);
+                // A `with` clause is a mixin application, not an interface
+                // implementation — emit `mixes_in`, consistent with PHP/Scala.
+                self.add_edge(&class_nid, &nid, "mixes_in", None);
             }
             for interface in &interfaces_list {
                 let ic = strip_generic(interface);

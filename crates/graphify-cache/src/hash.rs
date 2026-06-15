@@ -9,20 +9,58 @@ use crate::error::CacheError;
 use crate::paths::{normalize_path, posix_string};
 use crate::stat_index::{StatEntry, ensure_stat_index, lock_index};
 
+/// True if `line` (excluding its trailing `\n`) is a frontmatter delimiter:
+/// exactly three dashes, optional trailing spaces/tabs, and an optional
+/// single trailing `\r`. Mirrors the regex `^---[ \t]*\r?$` (#1259).
+fn is_delim_line(line: &[u8]) -> bool {
+    let Some(rest) = line.strip_prefix(b"---") else {
+        return false;
+    };
+    // Allow a single trailing carriage return (CRLF line endings).
+    let rest = rest.strip_suffix(b"\r").unwrap_or(rest);
+    rest.iter().all(|&b| b == b' ' || b == b'\t')
+}
+
 /// Strip YAML frontmatter from Markdown content, returning only the body.
 ///
-/// Mirrors Python's `_body_content` semantically, but operates on raw bytes
-/// so non-UTF-8 content in the Markdown body is preserved verbatim instead
-/// of being passed through `decode(errors="replace")` like Python does.
-/// Files without frontmatter are returned unchanged.
+/// A frontmatter delimiter is a *whole* line of exactly three dashes (with
+/// optional trailing whitespace). Substring checks like `startswith("---")`
+/// also match `----` thematic breaks and `--- text` prose, silently dropping
+/// everything above them from the hash (#1259). The opener must be the first
+/// line; the body begins right after the closing `---` (byte-identical with
+/// the historical slice for well-formed frontmatter so cache hashes do not
+/// churn).
+///
+/// Operates on raw bytes so non-UTF-8 content in the Markdown body is
+/// preserved verbatim instead of being passed through
+/// `decode(errors="replace")` like Python does. Files without a well-formed
+/// frontmatter block are returned unchanged.
 #[must_use]
 pub fn body_content(content: &[u8]) -> Vec<u8> {
-    const OPEN: &[u8] = b"---";
-    const CLOSE: &[u8] = b"\n---";
-    if let Some(after_open) = content.strip_prefix(OPEN)
-        && let Some(end) = after_open.windows(CLOSE.len()).position(|w| w == CLOSE)
-    {
-        return after_open[end + CLOSE.len()..].to_vec();
+    let first_end = content
+        .iter()
+        .position(|&b| b == b'\n')
+        .unwrap_or(content.len());
+    if !is_delim_line(&content[..first_end]) {
+        return content.to_vec();
+    }
+    // Opener with no following line can have no closer.
+    if first_end >= content.len() {
+        return content.to_vec();
+    }
+    let mut pos = first_end + 1;
+    while pos < content.len() {
+        let rel = content[pos..].iter().position(|&b| b == b'\n');
+        let line_end = rel.map_or(content.len(), |i| pos + i);
+        if is_delim_line(&content[pos..line_end]) {
+            // Slice right after the closing `---` (keeps any trailing
+            // whitespace on the closer line, matching the Python slice).
+            return content[pos + 3..].to_vec();
+        }
+        match rel {
+            Some(_) => pos = line_end + 1,
+            None => break,
+        }
     }
     content.to_vec()
 }

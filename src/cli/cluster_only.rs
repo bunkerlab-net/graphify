@@ -12,6 +12,8 @@ pub(crate) struct LabelOptions<'a> {
     pub no_label: bool,
     /// Backend override for naming; `None` auto-detects from API keys.
     pub backend: Option<&'a str>,
+    /// Model override for naming; `None` uses the backend default (`--model`).
+    pub model: Option<&'a str>,
     /// `graphify label` always (re)names even when a labels file exists.
     pub force_relabel: bool,
 }
@@ -178,6 +180,7 @@ pub(crate) fn cmd_cluster_only(
             &node_labels,
             &gods,
             opts.backend,
+            opts.model,
             false, // quiet
         );
         labels

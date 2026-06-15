@@ -7,6 +7,7 @@
 pub mod agents;
 pub mod antigravity;
 pub mod claude;
+pub mod codebuddy;
 pub mod codex;
 pub mod common;
 pub mod copilot;
@@ -24,6 +25,9 @@ pub mod vscode;
 pub use agents::{agents_install, agents_uninstall};
 pub use antigravity::{antigravity_install, antigravity_uninstall};
 pub use claude::{claude_install, claude_uninstall, install_claude_hook, uninstall_claude_hook};
+pub use codebuddy::{
+    codebuddy_install, codebuddy_uninstall, install_codebuddy_hook, uninstall_codebuddy_hook,
+};
 pub use codex::{install_codex_hook, uninstall_codex_hook};
 pub use common::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, ANTIGRAVITY_WORKFLOW, CLAUDE_MD_MARKER,

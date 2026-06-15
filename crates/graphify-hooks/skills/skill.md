@@ -29,6 +29,8 @@ inline `python -c "..."` plumbing, no subagent dispatch from the host.
 /graphify <path> --graphml                            # export graph.graphml (Gephi, yEd)
 /graphify <path> --neo4j                              # generate graphify-out/cypher.txt for Neo4j
 /graphify <path> --neo4j-push bolt://localhost:7687   # push directly to Neo4j
+/graphify <path> --falkordb                           # generate graphify-out/cypher.txt for FalkorDB
+/graphify <path> --falkordb-push falkordb://localhost:6379   # push directly to FalkorDB (needs the `falkordb` build feature)
 /graphify <path> --mcp                                # start MCP stdio server for agent access
 /graphify <path> --watch                              # watch folder, auto-rebuild on code changes (no LLM needed)
 /graphify <path> --wiki                               # build agent-crawlable wiki (index.md + per-community article)
@@ -201,6 +203,8 @@ graphify export graphml      # if --graphml
 graphify export wiki         # if --wiki
 graphify export neo4j        # if --neo4j (writes cypher.txt)
 graphify export neo4j --push bolt://localhost:7687 --user neo4j --password PASSWORD  # if --neo4j-push
+graphify export falkordb     # if --falkordb (writes cypher.txt)
+graphify export falkordb --push falkordb://localhost:6379  # if --falkordb-push (needs the `falkordb` feature)
 graphify export obsidian [--dir ~/vaults/my-project]  # only if --obsidian
 graphify serve graphify-out/graph.json   # if --mcp (stdio MCP server)
 ```

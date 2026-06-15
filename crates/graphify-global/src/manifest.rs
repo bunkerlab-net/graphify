@@ -1,8 +1,9 @@
 //! Global-graph manifest: the source of truth for which repos are in the
 //! global graph and when they were last added.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -46,12 +47,42 @@ impl Default for Manifest {
 
 /// Read the manifest from `path`, returning a default empty manifest on
 /// any read or parse failure.
+///
+/// On a parse (or read) failure of an existing file the corrupt file is
+/// renamed to `<path>.corrupt.<unix_ts>` and a warning is printed to stderr
+/// before the default is returned. This avoids silently wiping every tracked
+/// repo on the next write, which a bare "swallow the error and start fresh"
+/// would do — the manifest is rewritten in full on every add/remove.
 pub(crate) fn load_manifest(path: &Path) -> Manifest {
-    if path.exists()
-        && let Ok(text) = std::fs::read_to_string(path)
-        && let Ok(m) = serde_json::from_str(&text)
+    if !path.exists() {
+        return Manifest::default();
+    }
+    match std::fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| serde_json::from_str::<Manifest>(&text).map_err(|e| e.to_string()))
     {
-        return m;
+        Ok(manifest) => return manifest,
+        Err(exc) => {
+            // Back the bad file up and surface the error so the user can
+            // recover or report it, rather than losing every tracked repo.
+            let ts = Utc::now().timestamp();
+            let mut backup_os = path.as_os_str().to_owned();
+            backup_os.push(format!(".corrupt.{ts}"));
+            let backup = PathBuf::from(backup_os);
+            match std::fs::rename(path, &backup) {
+                Ok(()) => eprintln!(
+                    "[graphify global] manifest at {} failed to parse ({exc}); moved to {} \
+                     and starting fresh. Restore from the backup if this was unexpected.",
+                    path.display(),
+                    backup.display()
+                ),
+                Err(rename_exc) => eprintln!(
+                    "[graphify global] manifest at {} failed to parse ({exc}) and could not be \
+                     backed up ({rename_exc}). Starting fresh.",
+                    path.display()
+                ),
+            }
+        }
     }
     Manifest::default()
 }

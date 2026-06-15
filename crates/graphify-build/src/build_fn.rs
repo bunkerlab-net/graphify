@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::dedup_label::deduplicate_by_label;
 use crate::error::BuildError;
 use crate::graph::{Graph, GraphKind};
-use crate::ingest::{add_edges, add_nodes, canonicalise_nodes};
+use crate::ingest::{add_edges, add_nodes, canonicalise_nodes, merge_ghost_duplicates};
 use crate::normalize::norm_source_file;
 
 static PERF_LOG: LazyLock<bool> = LazyLock::new(|| std::env::var("GRAPHIFY_PERF_LOG").is_ok());
@@ -103,8 +103,11 @@ pub fn build_from_json(
             t.elapsed().as_secs_f64()
         );
     }
+    // Collapse LLM ghost-duplicate nodes onto their AST canonical twins before
+    // wiring edges, so edges referencing a ghost re-point to the canonical node.
+    let ghost_remap = merge_ghost_duplicates(&mut graph);
     let t = std::time::Instant::now();
-    add_edges(&mut graph, &extraction, root_str.as_deref());
+    add_edges(&mut graph, &extraction, root_str.as_deref(), &ghost_remap);
     if perf {
         eprintln!(
             "[perf]   build_from_json/add_edges: {:.2}s",
@@ -218,7 +221,8 @@ pub fn build_merge(
         directed,
         dedup,
         root,
-        graphify_security::MAX_GRAPH_FILE_BYTES,
+        // Honour GRAPHIFY_MAX_GRAPH_BYTES so large codebases can raise the cap.
+        graphify_security::max_graph_file_bytes(),
     )
 }
 

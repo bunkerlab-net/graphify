@@ -855,6 +855,60 @@ fn extract_ts_tsconfig_array_extends_alias_resolves_existing_ts_file() {
 }
 
 #[test]
+fn extract_ts_tsconfig_subdirectory_baseurl_resolves_existing_ts_file() {
+    // graphify-py #ec04152: `paths` resolve relative to `baseUrl`. With
+    // baseUrl "./src", "@services/*": ["services/*"] must resolve to
+    // <root>/src/services/... rather than <root>/services/..., else every
+    // aliased import edge is silently dropped. Fix in tsconfig.rs.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write_file(
+        &root.join("tsconfig.json"),
+        "{\"compilerOptions\": {\"baseUrl\": \"./src\", \"paths\": {\"@services/*\": [\"services/*\"]}}}",
+    );
+    let target = root.join("src/services/foo/index.ts");
+    write_file(&target, "export class Foo { id = '' }\n");
+    let importer = root.join("src/routes/page.ts");
+    write_file(
+        &importer,
+        "import { Foo } from '@services/foo'\nnew Foo()\n",
+    );
+
+    let result = extract_js(&importer);
+    let targets = import_targets(&result, Some("imports_from"));
+    let target_canon = target.canonicalize().unwrap_or(target);
+    assert!(
+        targets.contains(&make_id1(&target_canon.to_string_lossy())),
+        "subdirectory-baseUrl alias did not resolve to src/services/foo/index.ts: {targets:?}"
+    );
+}
+
+#[test]
+fn tsconfig_alias_excess_parent_dirs_clamp_at_root() {
+    // A `paths` target with more `..` segments than the tsconfig is deep must
+    // clamp at the filesystem root (os.path.normpath semantics) rather than
+    // leaving a stray `..`, which would break alias resolution downstream.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::write(
+        root.join("tsconfig.json"),
+        "{\"compilerOptions\": {\"baseUrl\": \".\", \"paths\": {\"@top/*\": \
+         [\"../../../../../../../../../../../../../../../../../../../../../../../../src/*\"]}}}",
+    )
+    .expect("write tsconfig");
+    let aliases = graphify_extract::tsconfig::load_tsconfig_aliases(root);
+    let target = aliases.get("@top").expect("@top alias present");
+    assert!(
+        !target.contains(".."),
+        "excess `..` left a stray parent component: {target}"
+    );
+    assert!(
+        target.ends_with("src"),
+        "clamped alias should still end at the `src` target: {target}"
+    );
+}
+
+#[test]
 fn extract_js_pure_export_no_from_not_treated_as_reexport() {
     // `export { x }` with no `from` clause is a local re-bind — must NOT
     // emit a re_exports edge.
@@ -1183,6 +1237,66 @@ fn extract_json_no_self_loops() {
     for edge in &result.edges {
         assert_ne!(edge.source, edge.target, "Self-loop: {edge:?}");
     }
+}
+
+/// `test_extract_json_data_file_skipped`: a data-shaped `.json` (eval fixture /
+/// dataset) must NOT emit per-key nodes (#1224).
+#[test]
+fn extract_json_data_file_skipped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("cases.json");
+    std::fs::write(
+        &data,
+        r#"{"generation": {"target": "gpt-4", "cases_file": "c.json", "num_cases": 12},
+            "prompt_inputs_spec": {"a": 1, "b": 2},
+            "suite": [{"name": "x"}, {"name": "y"}]}"#,
+    )
+    .expect("write fixture");
+    let result = extract_json(&data);
+    assert!(result.nodes.is_empty(), "nodes: {:?}", result.nodes);
+    assert!(result.edges.is_empty(), "edges: {:?}", result.edges);
+}
+
+/// `test_extract_json_top_level_array_skipped`: a JSON file whose root is an
+/// array is data, never a config/manifest.
+#[test]
+fn extract_json_top_level_array_skipped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("records.json");
+    std::fs::write(&data, r#"[{"id": 1}, {"id": 2}]"#).expect("write fixture");
+    let result = extract_json(&data);
+    assert!(result.nodes.is_empty());
+    assert!(result.edges.is_empty());
+}
+
+/// `test_extract_json_config_by_filename_still_extracted`: `tsconfig.json` must
+/// still be AST-extracted even without telltale keys.
+#[test]
+fn extract_json_config_by_filename_still_extracted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg = tmp.path().join("tsconfig.json");
+    std::fs::write(&cfg, r#"{"compilerOptions": {"strict": true}}"#).expect("write fixture");
+    let result = extract_json(&cfg);
+    assert!(!result.nodes.is_empty(), "config json should be extracted");
+}
+
+/// `test_extract_json_config_by_key_probe`: an arbitrarily-named JSON with
+/// config keys (`dependencies`) is still extracted.
+#[test]
+fn extract_json_config_by_key_probe() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg = tmp.path().join("weird-name.json");
+    std::fs::write(&cfg, r#"{"dependencies": {"lodash": "^4"}}"#).expect("write fixture");
+    let result = extract_json(&cfg);
+    let import_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports")
+        .collect();
+    assert!(
+        import_edges.iter().any(|e| e.target.contains("lodash")),
+        "expected lodash import edge: {import_edges:?}"
+    );
 }
 
 // ── Astro extractor ───────────────────────────────────────────────────────────

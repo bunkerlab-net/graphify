@@ -156,6 +156,104 @@ fn extract_mode_invalid_value_exits_2() {
 }
 
 #[test]
+fn extract_cargo_flag_merges_crate_nodes() {
+    // `--cargo` introspects Cargo.toml manifests and merges `crate:<name>`
+    // nodes + `crate_depends_on` edges into the graph (#1271).
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"foo\", \"bar\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("foo")).unwrap();
+    fs::write(
+        dir.path().join("foo").join("Cargo.toml"),
+        "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n\n[dependencies]\nbar = { path = \"../bar\" }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("bar")).unwrap();
+    fs::write(
+        dir.path().join("bar").join("Cargo.toml"),
+        "[package]\nname = \"bar\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--cargo")
+        .arg("--no-cluster")
+        .assert()
+        .success()
+        .stderr(contains("Cargo:"));
+
+    let raw = fs::read_to_string(
+        dir.path()
+            .join("graphify-out")
+            .join("stage_02_extract.json"),
+    )
+    .unwrap();
+    assert!(raw.contains("crate:foo"), "crate node not merged: {raw}");
+    assert!(raw.contains("crate_depends_on"), "crate edge not merged");
+}
+
+#[test]
+fn extract_with_image_file_in_corpus_does_not_break_ast_run() {
+    // Raster images join the corpus (#1110); the AST phase has no image
+    // extractor and skips them, so an AST-only run (no backend) still succeeds.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    fs::write(dir.path().join("diagram.png"), b"\x89PNG\r\n\x1a\nFAKE").unwrap();
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    assert!(dir.path().join("graphify-out").join("graph.json").exists());
+}
+
+// Only meaningful when the `http` feature is absent: with it compiled in (e.g.
+// the CI `--all-features` coverage run) `serve --transport http` takes the real
+// transport path, so this negative assertion is gated off.
+#[cfg(not(feature = "http"))]
+#[test]
+fn serve_http_without_feature_errors() {
+    // The default binary build has no `http` feature, so `serve --transport http`
+    // must fail loudly rather than silently fall back to stdio (#1143).
+    let dir = tempfile::tempdir().unwrap();
+    cli_no_backend()
+        .current_dir(dir.path())
+        .arg("serve")
+        .arg("--transport")
+        .arg("http")
+        .assert()
+        .failure()
+        .stderr(contains("http").and(contains("feature")));
+}
+
+// Only meaningful when the `postgres` feature is absent: with it compiled in
+// (e.g. the CI `--all-features` coverage run) `--postgres` tries to connect to a
+// real database, so this negative assertion is gated off.
+#[cfg(not(feature = "postgres"))]
+#[test]
+fn extract_postgres_without_feature_errors() {
+    // The default binary build has no `postgres` feature, so `--postgres` must
+    // fail loudly rather than silently ignore the flag.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--postgres")
+        .arg("postgresql://localhost/db")
+        .arg("--no-cluster")
+        .assert()
+        .failure()
+        .stderr(contains("postgres").and(contains("feature")));
+}
+
+#[test]
 fn extract_with_custom_out_dir() {
     let dir = tempfile::tempdir().unwrap();
     write_python_project(dir.path());
@@ -210,6 +308,35 @@ fn extract_incremental_mode_with_existing_manifest() {
         .assert()
         .success()
         .stderr(contains("incremental scan"));
+}
+
+/// The persisted manifest keys must be stored relative to the project root so
+/// the file is portable across machines / checkout locations (#777), matching
+/// Python's `_save_manifest(..., root=target)`. The absolute project path must
+/// not leak into the keys.
+#[test]
+fn extract_manifest_keys_are_relative_to_root() {
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .assert()
+        .success();
+
+    let manifest =
+        fs::read_to_string(dir.path().join("graphify-out").join("manifest.json")).unwrap();
+    // Keys are stored posix-relative to the project root (#777): the relative
+    // key is present and the absolute project path never leaks into the file.
+    assert!(
+        manifest.contains("\"src/main.py\""),
+        "expected relative manifest key 'src/main.py': {manifest}"
+    );
+    let abs = dir.path().to_string_lossy().replace('\\', "/");
+    assert!(
+        !manifest.replace('\\', "/").contains(abs.as_str()),
+        "absolute project path leaked into manifest: {manifest}"
+    );
 }
 
 /// Mirrors `test_no_incremental_without_manifest`: a first extract with no
@@ -702,6 +829,43 @@ fn label_no_backend_keeps_placeholders() {
     cli_no_backend()
         .arg("label")
         .arg(dir.path())
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let labels = fs::read_to_string(
+        dir.path()
+            .join("graphify-out")
+            .join(".graphify_labels.json"),
+    )
+    .unwrap();
+    assert!(
+        labels.contains("Community"),
+        "expected placeholder labels: {labels}"
+    );
+}
+
+#[test]
+fn label_accepts_model_flag() {
+    // `label --model` parses and threads through to the labeling path (#b304331).
+    // With no backend key the run still degrades to placeholders, proving the
+    // flag is accepted end-to-end without error.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+
+    cli_no_backend()
+        .arg("label")
+        .arg(dir.path())
+        .arg("--backend")
+        .arg("gemini")
+        .arg("--model")
+        .arg("gemini-3.1-flash-lite")
         .arg("--no-viz")
         .assert()
         .success();

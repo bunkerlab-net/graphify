@@ -31,6 +31,17 @@ pub(crate) struct GlobalOptions<'a> {
     pub as_tag: Option<&'a str>,
 }
 
+/// Opt-in structural introspection that augments the graph with nodes/edges
+/// derived outside the file walk (Cargo manifests, a live `PostgreSQL` schema).
+pub(crate) struct IntrospectOptions<'a> {
+    /// `--cargo`: add `crate:<name>` nodes + `crate_depends_on` edges from
+    /// `Cargo.toml`.
+    pub cargo: bool,
+    /// `--postgres DSN`: add schema nodes/edges from a live database (requires
+    /// the binary's `postgres` feature).
+    pub postgres: Option<&'a str>,
+}
+
 /// Aggregated arguments for [`cmd_extract`].
 pub(crate) struct ExtractOptions<'a> {
     pub path: &'a std::path::Path,
@@ -40,6 +51,7 @@ pub(crate) struct ExtractOptions<'a> {
     pub llm: LlmOptions<'a>,
     pub cluster: ClusterOptions,
     pub global: GlobalOptions<'a>,
+    pub introspect: IntrospectOptions<'a>,
 }
 
 /// Run the headless full extraction pipeline (AST + optional LLM semantic enrichment).
@@ -61,6 +73,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         llm,
         cluster,
         global,
+        introspect,
     } = opts;
     let LlmOptions {
         backend,
@@ -92,21 +105,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         .map(str::to_string)
         .or_else(graphify_llm::detect_backend);
 
-    // Deep-mode banner. graphify-py prints "deep mode enabled" unconditionally and
-    // then hard-exits when no backend is configured (`__main__.py:3026`, `:3058`).
-    // The Rust pipeline instead degrades to an AST-only run when no LLM key is
-    // present, so report which path will actually execute rather than implying
-    // semantic enrichment that won't happen.
-    if deep_mode {
-        if effective_backend.is_some() {
-            eprintln!("[graphify extract] deep mode enabled: richer semantic extraction");
-        } else {
-            eprintln!(
-                "[graphify extract] deep mode requested but no LLM backend configured; \
-                 running AST-only extraction"
-            );
-        }
-    }
+    report_deep_mode(deep_mode, effective_backend.is_some());
 
     let start = std::time::Instant::now();
     let out_dir = out.map_or_else(
@@ -126,10 +125,15 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         max_concurrency,
     };
     let SemanticOutcome {
-        extraction_json,
+        mut extraction_json,
         sem_input_tokens,
         sem_output_tokens,
     } = run_semantic_phase(path, &files, &extraction, &cfg)?;
+
+    // Merge opt-in structural introspection (Cargo manifests / live PostgreSQL)
+    // into the AST+semantic node/edge set before the graph is built. Order
+    // mirrors graphify-py: ast + semantic + postgres + cargo.
+    run_introspect_phase(&mut extraction_json, path, &introspect)?;
 
     std::fs::create_dir_all(&out_dir)?;
     write_scan_breadcrumb(path, &out_dir);
@@ -162,7 +166,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     if global {
         cmd_extract_global_add(&graph_path, as_tag, path);
     }
-    persist_manifest(&detect.files, &out_dir);
+    persist_manifest(&detect.files, &out_dir, path);
     print_token_summary(
         effective_backend.as_deref(),
         sem_input_tokens,
@@ -171,6 +175,107 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
 
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
     Ok(())
+}
+
+/// Report which extraction path `--mode deep` will actually take.
+///
+/// graphify-py prints "deep mode enabled" unconditionally and then hard-exits
+/// when no backend is configured (`__main__.py:3026`, `:3058`). The Rust
+/// pipeline instead degrades to an AST-only run when no LLM key is present, so
+/// it reports the path that will actually execute rather than implying semantic
+/// enrichment that won't happen.
+fn report_deep_mode(deep_mode: bool, has_backend: bool) {
+    if !deep_mode {
+        return;
+    }
+    if has_backend {
+        eprintln!("[graphify extract] deep mode enabled: richer semantic extraction");
+    } else {
+        eprintln!(
+            "[graphify extract] deep mode requested but no LLM backend configured; \
+             running AST-only extraction"
+        );
+    }
+}
+
+/// Merge opt-in structural introspection into `extraction_json` before the
+/// graph is built. Mirrors graphify-py's `--postgres` / `--cargo` handling:
+/// `PostgreSQL` nodes/edges are appended first, then Cargo, so they sort after
+/// the AST+semantic set during dedup. A failure of either source aborts the run
+/// (non-zero exit), matching the Python `sys.exit(1)`.
+///
+/// Divergence: graphify-py allows `--postgres DSN` with no scan path; the Rust
+/// `extract` command keeps `<PATH>` required, so introspection augments a path
+/// scan. To introspect a database in isolation, point the path at an empty
+/// directory.
+fn run_introspect_phase(
+    extraction_json: &mut serde_json::Value,
+    path: &std::path::Path,
+    opts: &IntrospectOptions<'_>,
+) -> Result<()> {
+    if let Some(dsn) = opts.postgres {
+        run_postgres_introspect(extraction_json, dsn)?;
+    }
+    if opts.cargo {
+        eprintln!("[graphify extract] introspecting Cargo workspace...");
+        let result = graphify_extract::introspect_cargo(path)
+            .map_err(|e| anyhow::anyhow!("Cargo introspection failed: {e}"))?;
+        let (n, m) = (result.nodes.len(), result.edges.len());
+        append_introspection(extraction_json, result.nodes, result.edges);
+        eprintln!("[graphify extract] Cargo: {n} nodes, {m} edges");
+    }
+    Ok(())
+}
+
+/// Append introspection `nodes`/`edges` onto the `extraction_json` arrays.
+fn append_introspection(
+    extraction_json: &mut serde_json::Value,
+    nodes: Vec<serde_json::Value>,
+    edges: Vec<serde_json::Value>,
+) {
+    if let Some(arr) = extraction_json
+        .get_mut("nodes")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        arr.extend(nodes);
+    }
+    if let Some(arr) = extraction_json
+        .get_mut("edges")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        arr.extend(edges);
+    }
+}
+
+/// Introspect a live `PostgreSQL` schema and merge its nodes/edges. Compiled only
+/// when the `postgres` feature is enabled (it pulls in the postgres/TLS stack).
+#[cfg(feature = "postgres")]
+fn run_postgres_introspect(extraction_json: &mut serde_json::Value, dsn: &str) -> Result<()> {
+    eprintln!("[graphify extract] introspecting PostgreSQL schema...");
+    let result = graphify_extract::pg_introspect::introspect_postgres(dsn)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (n, m) = (result.nodes.len(), result.edges.len());
+    let nodes = serde_json::to_value(&result.nodes)?
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let edges = serde_json::to_value(&result.edges)?
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    append_introspection(extraction_json, nodes, edges);
+    eprintln!("[graphify extract] PostgreSQL: {n} nodes, {m} edges");
+    Ok(())
+}
+
+/// Stub for builds without the `postgres` feature: `--postgres` fails loudly
+/// rather than silently ignoring the flag.
+#[cfg(not(feature = "postgres"))]
+fn run_postgres_introspect(_extraction_json: &mut serde_json::Value, _dsn: &str) -> Result<()> {
+    anyhow::bail!(
+        "--postgres requires graphify built with the `postgres` feature \
+         (e.g. `cargo install graphify --features postgres`)"
+    )
 }
 
 /// Detect phase: incremental scan when a manifest is present, otherwise a full scan.
@@ -259,7 +364,13 @@ fn collect_extract_files(
     let mut by_kind: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (kind, paths) in &detect.files {
         by_kind.insert(kind.as_str(), paths.len());
-        if kind == "code" || kind == "document" {
+        // Raster images join the corpus so they reach the semantic phase, where
+        // a vision backend renders them as pixels and a non-vision backend emits
+        // a text-reference node (#1110). The AST phase has no extractor for image
+        // extensions, so it skips them (empty result) — they contribute nodes
+        // only via the LLM. Mirrors graphify-py's `semantic_files = doc + paper +
+        // image`.
+        if kind == "code" || kind == "document" || kind == "image" {
             for p in paths {
                 files.push(path.join(p));
             }
@@ -658,14 +769,25 @@ fn render_html_viz(
 }
 
 /// Persist a manifest so subsequent `extract`/`update` runs can take the
-/// incremental code path. Mirrors `_save_manifest(... kind="both")` at
-/// `__main__.py:2891`.
+/// incremental code path. Mirrors `_save_manifest(..., kind="both", root=target)`
+/// at `__main__.py:4434`.
+///
+/// `root` (the project being extracted) is forwarded so manifest keys are stored
+/// relative to it (#777). This must match the `Some(root)` used by the
+/// incremental *load* path — saving absolute while loading relative would make
+/// every file look changed on the next run.
 fn persist_manifest(
     detect_files: &indexmap::IndexMap<String, Vec<String>>,
     out_dir: &std::path::Path,
+    root: &std::path::Path,
 ) {
     let manifest_path = out_dir.join("manifest.json");
-    if let Err(e) = graphify_detect::save_manifest(detect_files, &manifest_path, "both") {
+    if let Err(e) = graphify_detect::save_manifest_to_path_with_root(
+        detect_files,
+        &manifest_path,
+        "both",
+        Some(root),
+    ) {
         eprintln!("      warning: could not write manifest: {e}");
     }
 }

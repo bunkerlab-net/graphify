@@ -80,7 +80,6 @@ fn obj_name<'a>(n: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a str> {
 
 /// Extract tables, views, functions, and relationships from `.sql` files via tree-sitter.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn extract_sql(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {
         Ok(b) => b,
@@ -93,7 +92,22 @@ pub fn extract_sql(path: &Path) -> FileResult {
             };
         }
     };
+    extract_sql_from_source(path, &source)
+}
 
+/// Like [`extract_sql`] but parses in-memory `content` while still attributing
+/// nodes/edges to `path`. Used by `--postgres` introspection, which reconstructs
+/// DDL in memory and attributes it to a virtual `postgresql://host/db` path.
+/// Mirrors the `content=` parameter of graphify-py's `extract_sql`.
+#[must_use]
+pub fn extract_sql_with_content(path: &Path, content: &[u8]) -> FileResult {
+    extract_sql_from_source(path, content)
+}
+
+/// Shared body of [`extract_sql`] / [`extract_sql_with_content`]: parse `source`
+/// and build the graph, attributing every node/edge to `path`.
+#[allow(clippy::too_many_lines)]
+fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
     let mut parser = tree_sitter::Parser::new();
     if parser
         .set_language(&tree_sitter_sequel::LANGUAGE.into())
@@ -106,7 +120,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
             error: Some("failed to set sql language".to_string()),
         };
     }
-    let Some(tree) = parser.parse(&source, None) else {
+    let Some(tree) = parser.parse(source, None) else {
         return FileResult {
             nodes: vec![],
             edges: vec![],
@@ -157,7 +171,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
                 let mut sc = stmt.walk();
                 if sc.goto_first_child() {
                     loop {
-                        walk_sql(&mut walk_ctx, sc.node(), &source);
+                        walk_sql(&mut walk_ctx, sc.node(), source);
                         if !sc.goto_next_sibling() {
                             break;
                         }
@@ -167,7 +181,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
                 stmt.kind(),
                 "fb_proc_or_trigger" | "set_term" | "declare_external_function"
             ) {
-                walk_sql(&mut walk_ctx, stmt, &source);
+                walk_sql(&mut walk_ctx, stmt, source);
             }
             if !cur.goto_next_sibling() {
                 break;
@@ -176,7 +190,7 @@ pub fn extract_sql(path: &Path) -> FileResult {
     }
 
     // Global regex fallback for REFERENCES not captured by the tree
-    let src_text = String::from_utf8_lossy(&source).into_owned();
+    let src_text = String::from_utf8_lossy(source).into_owned();
     let emitted: HashSet<(String, String)> = edges
         .iter()
         .filter(|e| e.relation == "references")

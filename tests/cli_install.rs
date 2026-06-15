@@ -161,3 +161,75 @@ fn hook_check_runs_silently() {
         .assert()
         .success();
 }
+
+#[test]
+fn codebuddy_uninstall_runs() {
+    uninstall_runs("codebuddy");
+}
+
+#[test]
+fn codebuddy_install_writes_artifacts() {
+    // `graphify codebuddy install` writes CODEBUDDY.md + the .codebuddy hook
+    // under cwd and the skill under the project's .codebuddy tree (#1136).
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("codebuddy")
+        .arg("install")
+        .assert()
+        .success();
+    assert!(project.path().join("CODEBUDDY.md").exists());
+    assert!(project.path().join(".codebuddy/settings.json").exists());
+    assert!(
+        project
+            .path()
+            .join(".codebuddy/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+fn uninstall_all_removes_codebuddy_artifacts() {
+    // `graphify codebuddy install` then `graphify uninstall` must clean up
+    // CODEBUDDY.md and the .codebuddy/settings.json hook (#1136).
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("codebuddy")
+        .arg("install")
+        .assert()
+        .success();
+    assert!(project.path().join("CODEBUDDY.md").exists());
+
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("uninstall")
+        .assert()
+        .success();
+    assert!(!project.path().join("CODEBUDDY.md").exists());
+
+    // The graphify hook entries are stripped; removing them empties the
+    // PreToolUse array so no "graphify" reference remains in the raw settings.
+    let settings_path = project.path().join(".codebuddy/settings.json");
+    if settings_path.exists() {
+        let raw = std::fs::read_to_string(&settings_path).unwrap();
+        assert!(!raw.contains("graphify"));
+    }
+}
+
+#[test]
+fn codebuddy_listed_in_help() {
+    cli()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("codebuddy"));
+}

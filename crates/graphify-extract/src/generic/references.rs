@@ -80,8 +80,39 @@ const PYTHON_TYPE_CONTAINERS: &[&str] = &[
     "Ellipsis",
 ];
 
+/// Scalar builtins and `unittest.mock` names that appear as type annotations but
+/// carry no useful semantic meaning as graph nodes (#1147). Suppressed at the
+/// annotation walker level so they are never created as nodes or emitted as
+/// edges. Mirrors `_PYTHON_ANNOTATION_NOISE` in `extract.py`.
+const PYTHON_ANNOTATION_NOISE: &[&str] = &[
+    // scalar builtins
+    "str",
+    "int",
+    "float",
+    "bool",
+    "bytes",
+    "bytearray",
+    "complex",
+    "object",
+    "True",
+    "False",
+    // unittest.mock
+    "MagicMock",
+    "Mock",
+    "AsyncMock",
+    "NonCallableMock",
+    "NonCallableMagicMock",
+    "PropertyMock",
+    "patch",
+    "sentinel",
+];
+
 fn is_python_container(name: &str) -> bool {
     PYTHON_TYPE_CONTAINERS.contains(&name)
+}
+
+fn is_python_annotation_noise(name: &str) -> bool {
+    PYTHON_ANNOTATION_NOISE.contains(&name)
 }
 
 /// Walk a Python type annotation tree and append `(name, role)` pairs.
@@ -113,7 +144,7 @@ pub(super) fn python_collect_type_refs(
     }
     if t == "identifier" {
         let name = read_text_owned(node, source);
-        if !name.is_empty() && !is_python_container(&name) {
+        if !name.is_empty() && !is_python_container(&name) && !is_python_annotation_noise(&name) {
             let role = if generic {
                 RefRole::Generic
             } else {
@@ -126,7 +157,7 @@ pub(super) fn python_collect_type_refs(
     if t == "attribute" {
         let text = read_text_owned(node, source);
         let tail = text.rsplit('.').next().unwrap_or(&text);
-        if !tail.is_empty() && !is_python_container(tail) {
+        if !tail.is_empty() && !is_python_container(tail) && !is_python_annotation_noise(tail) {
             let role = if generic {
                 RefRole::Generic
             } else {
@@ -143,7 +174,10 @@ pub(super) fn python_collect_type_refs(
                 let child = cur.node();
                 if child.kind() == "identifier" {
                     let container = read_text_owned(child, source);
-                    if !container.is_empty() && !is_python_container(&container) {
+                    if !container.is_empty()
+                        && !is_python_container(&container)
+                        && !is_python_annotation_noise(&container)
+                    {
                         let role = if generic {
                             RefRole::Generic
                         } else {

@@ -36,6 +36,7 @@ pub use error::SecurityError;
 pub use fetch::{MAX_FETCH_BYTES, MAX_TEXT_BYTES, safe_fetch, safe_fetch_text};
 pub use graph_size::{
     MAX_GRAPH_FILE_BYTES, check_graph_file_size_cap, check_graph_file_size_cap_with,
+    max_graph_file_bytes,
 };
 pub use label::sanitize_label;
 pub use metadata::{

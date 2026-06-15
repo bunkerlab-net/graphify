@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use hex;
 use sha2::{Digest as _, Sha256};
+use unicode_normalization::UnicodeNormalization as _;
 
 use crate::error::DetectError;
 
@@ -691,9 +692,17 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
 
     // Stable name derived from the resolved absolute path (mirrors Python).
     // Normalize separators to `/` so a manifest written on Windows and
-    // read on Unix (or vice versa) produces the same sidecar name.
+    // read on Unix (or vice versa) produces the same sidecar name. NFC-normalize
+    // the path too: on macOS (HFS+/APFS) directory listing returns filenames in
+    // NFD while directly-constructed paths are NFC, so the same source file would
+    // otherwise hash to different sidecars across runs — making `--update`
+    // re-extract every Office file (#1226).
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let normalized = resolved.to_string_lossy().replace('\\', "/");
+    let normalized: String = resolved
+        .to_string_lossy()
+        .replace('\\', "/")
+        .nfc()
+        .collect();
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let digest = hex::encode(hasher.finalize());
@@ -704,6 +713,25 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
         .and_then(|s| s.to_str())
         .unwrap_or("document");
     let out_path = out_dir.join(format!("{stem}_{name_hash}.md"));
+
+    // The sidecar name is derived from the source *path*, not its content, so a
+    // modified source maps to the same sidecar. Skip rewriting only when the
+    // existing sidecar is at least as new as the source: an unchanged source
+    // never churns its sidecar's mtime (#1226), but a modified source is
+    // regenerated so extraction sees the new content. graphify-py
+    // (`detect.py:_convert_office_file`) skips on existence alone, leaving a
+    // changed Office file's sidecar stale — fixed here. If either mtime can't be
+    // read, fall back to the existence-based skip.
+    if out_path.exists() {
+        let source_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+        let sidecar_mtime = std::fs::metadata(&out_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        let stale = matches!((source_mtime, sidecar_mtime), (Some(src), Some(side)) if src > side);
+        if !stale {
+            return Ok(Some(out_path));
+        }
+    }
 
     let content = format!(
         "<!-- converted from {} -->\n\n{text}",

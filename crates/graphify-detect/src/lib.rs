@@ -25,15 +25,16 @@ pub mod walk;
 pub use error::DetectError;
 pub use extensions::{CODE_EXTENSIONS, FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
 pub use ignore::{
-    could_contain_included_path, find_vcs_root, is_ignored, is_included, load_graphifyignore,
-    load_graphifyinclude, parse_gitignore_line,
+    IgnoreEvalCache, could_contain_included_path, find_vcs_root, is_ignored, is_ignored_with_cache,
+    is_included, load_graphifyignore, load_graphifyinclude, parse_gitignore_line,
 };
 pub use incremental::{
     IncrementalDetectResult, Manifest, detect_incremental, load_manifest, save_manifest,
 };
 pub use manifest::{
     MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, load_manifest_from_path,
-    md5_file, save_manifest_to_path,
+    load_manifest_from_path_with_root, md5_file, save_manifest_to_path,
+    save_manifest_to_path_with_root,
 };
 pub use sensitive::{SKIP_DIRS, SKIP_FILES, is_noise_dir, is_sensitive};
 pub use shebang::{env_command_args, shebang_interpreter};

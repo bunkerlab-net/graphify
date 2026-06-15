@@ -16,12 +16,14 @@
 //! - **`tsconfig.rs`** — TypeScript `tsconfig.json` alias resolution.
 
 mod builtins;
+pub mod cargo_introspect;
 pub mod error;
 mod forward_refs;
 pub mod generic;
 pub mod ids;
 pub mod import_handlers;
 pub mod lang_configs;
+pub mod pg_introspect;
 pub mod postprocess;
 pub mod symbol_resolution;
 pub mod tsconfig;
@@ -31,18 +33,24 @@ pub mod workspace;
 // Language-specific extractors
 mod extractors;
 
+pub use cargo_introspect::{CargoIntrospectError, CargoIntrospection, introspect_cargo};
 pub use error::ExtractError;
 pub use extractors::extract;
 pub use extractors::mcp::MCP_CONFIG_FILENAMES;
 pub use extractors::{
-    extract_astro, extract_bash, extract_blade, extract_c, extract_cpp, extract_csharp,
-    extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf, extract_dmi,
-    extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy, extract_java,
-    extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
+    extract_apex, extract_astro, extract_bash, extract_blade, extract_c, extract_cpp,
+    extract_csharp, extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf,
+    extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy,
+    extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
     extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
     extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
-    extract_rust, extract_scala, extract_sln, extract_sql, extract_svelte, extract_swift,
-    extract_verilog, extract_zig, is_mcp_config_path, resolve_cpp_path,
+    extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_sql_with_content,
+    extract_svelte, extract_swift, extract_terraform, extract_verilog, extract_zig,
+    is_mcp_config_path, resolve_cpp_path,
 };
 pub use ids::{file_node_id, file_stem, make_id, make_id1};
+pub use pg_introspect::{
+    PgCatalog, PgForeignKey, PgIntrospectError, PgRoutine, PgTable, PgView, build_ddl,
+    introspect_catalog, sanitize_connection_error,
+};
 pub use types::{Edge, ExtractOutput, FileResult, Node, RawCall};

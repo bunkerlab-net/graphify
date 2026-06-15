@@ -126,6 +126,41 @@ pub(crate) fn file_mtime(path: &Path) -> Option<f64> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Return `key` as a forward-slash path relative to `root` (#777).
+///
+/// Keys outside `root` (out-of-tree symlinked sources, external include paths)
+/// and already-relative keys pass through unchanged. Only `root` is resolved —
+/// the key itself is relativized symbolically so an in-root symlink is stored
+/// under its own name (resolving it would point the stored entry at the symlink
+/// target, which then misses on reload and re-extracts every run).
+fn to_relative_for_storage(key: &str, root: &Path) -> String {
+    let p = Path::new(key);
+    if !p.is_absolute() {
+        return key.to_string();
+    }
+    let Ok(root_resolved) = root.canonicalize() else {
+        return key.to_string();
+    };
+    // `strip_prefix` on the unresolved key mirrors Python's relpath + `..`
+    // guard: under-root keys become relative, escaped-root keys stay absolute.
+    match p.strip_prefix(&root_resolved) {
+        Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+        Err(_) => key.to_string(),
+    }
+}
+
+/// Inverse of [`to_relative_for_storage`]: re-anchor a stored `key` against
+/// `root`. Already-absolute keys (legacy manifests, out-of-root entries) pass
+/// through unchanged.
+fn to_absolute_from_storage(key: &str, root: &Path) -> String {
+    let p = Path::new(key);
+    if p.is_absolute() {
+        return key.to_string();
+    }
+    let root_resolved = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    root_resolved.join(p).to_string_lossy().into_owned()
+}
+
 /// Load the manifest from disk.
 ///
 /// Returns an empty map on any error (missing file, parse failure, etc.).
@@ -136,6 +171,21 @@ pub(crate) fn file_mtime(path: &Path) -> Option<f64> {
 /// manifests (matching Python). Returns `Err` only on severe I/O problems.
 pub fn load_manifest_from_path(
     manifest_path: &Path,
+) -> Result<IndexMap<String, ManifestEntry>, DetectError> {
+    load_manifest_from_path_with_root(manifest_path, None)
+}
+
+/// Like [`load_manifest_from_path`] but, when `root` is `Some`, re-anchors
+/// stored relative keys to absolute form so callers see absolute paths
+/// regardless of on-disk format (#777). Legacy absolute-keyed manifests pass
+/// through unchanged.
+///
+/// # Errors
+///
+/// See [`load_manifest_from_path`].
+pub fn load_manifest_from_path_with_root(
+    manifest_path: &Path,
+    root: Option<&Path>,
 ) -> Result<IndexMap<String, ManifestEntry>, DetectError> {
     let Ok(text) = std::fs::read_to_string(manifest_path) else {
         return Ok(IndexMap::new());
@@ -148,7 +198,11 @@ pub fn load_manifest_from_path(
     let mut map: IndexMap<String, ManifestEntry> = IndexMap::new();
     for (k, v) in obj {
         if let Some(entry) = normalise_entry(v) {
-            map.insert(k.clone(), entry);
+            let key = match root {
+                Some(r) => to_absolute_from_storage(k, r),
+                None => k.clone(),
+            };
+            map.insert(key, entry);
         }
     }
     Ok(map)
@@ -172,7 +226,25 @@ pub fn save_manifest_to_path(
     manifest_path: &Path,
     kind: &str,
 ) -> Result<(), DetectError> {
-    let existing = load_manifest_from_path(manifest_path)?;
+    save_manifest_to_path_with_root(files, manifest_path, kind, None)
+}
+
+/// Like [`save_manifest_to_path`] but, when `root` is `Some`, relativizes keys
+/// against it before write (forward-slash, posix-style) so the on-disk manifest
+/// is portable across machines and checkout locations (#777). Out-of-root
+/// entries are written as absolute so they still round-trip on the saving
+/// machine. When `root` is `None` the legacy absolute-keyed format is preserved.
+///
+/// # Errors
+///
+/// Returns `DetectError::Io` on write failure.
+pub fn save_manifest_to_path_with_root(
+    files: &IndexMap<String, Vec<String>>,
+    manifest_path: &Path,
+    kind: &str,
+    root: Option<&Path>,
+) -> Result<(), DetectError> {
+    let existing = load_manifest_from_path_with_root(manifest_path, root)?;
 
     // Seed from existing; prune entries for deleted files.
     let mut manifest: IndexMap<String, ManifestEntry> = IndexMap::new();
@@ -244,6 +316,17 @@ pub fn save_manifest_to_path(
         manifest.insert(f, entry);
     }
 
+    // Persist in portable form when a root is given (#777): forward-slash
+    // relative keys; out-of-root keys keep their absolute form.
+    let manifest: IndexMap<String, ManifestEntry> = if let Some(r) = root {
+        manifest
+            .into_iter()
+            .map(|(k, v)| (to_relative_for_storage(&k, r), v))
+            .collect()
+    } else {
+        manifest
+    };
+
     if let Some(parent) = manifest_path.parent() {
         std::fs::create_dir_all(parent).map_err(DetectError::Io)?;
     }
@@ -272,7 +355,10 @@ pub fn detect_incremental_with_manifest(
     extra_excludes: Option<&[String]>,
 ) -> Result<IncrementalResult, DetectError> {
     let full = crate::walk::detect(root, follow_symlinks, extra_excludes);
-    let manifest = load_manifest_from_path(manifest_path)?;
+    // Load with `root` so a manifest written with relative keys (post-#777) is
+    // re-anchored to the absolute form the rest of this function compares
+    // against. Legacy absolute-keyed manifests pass through unchanged.
+    let manifest = load_manifest_from_path_with_root(manifest_path, Some(root))?;
 
     let all_current: Vec<String> = full.files.values().flatten().cloned().collect();
 

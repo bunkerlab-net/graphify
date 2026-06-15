@@ -7,8 +7,9 @@ use crate::HooksError;
 
 use super::fs::{claude_config_dir, dirs_home, install_skill};
 use super::skills::{
-    SKILL_AIDER_MD, SKILL_CLAW_MD, SKILL_CODEX_MD, SKILL_COPILOT_MD, SKILL_DROID_MD, SKILL_KIRO_MD,
-    SKILL_MD, SKILL_OPENCODE_MD, SKILL_PI_MD, SKILL_REGISTRATION, SKILL_TRAE_MD, SKILL_WINDOWS_MD,
+    CODEBUDDY_REGISTRATION, SKILL_AIDER_MD, SKILL_CLAW_MD, SKILL_CODEX_MD, SKILL_COPILOT_MD,
+    SKILL_DROID_MD, SKILL_KIRO_MD, SKILL_MD, SKILL_OPENCODE_MD, SKILL_PI_MD, SKILL_REGISTRATION,
+    SKILL_TRAE_MD, SKILL_WINDOWS_MD,
 };
 
 /// Install a skill-only platform integration.
@@ -76,6 +77,40 @@ pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
         }
     }
 
+    // `CodeBuddy` registers the skill in its own user-scope context file
+    // (`~/.codebuddy/CODEBUDDY.md`), mirroring graphify-py's `install("codebuddy")`.
+    if platform == "codebuddy" {
+        let codebuddy_md = dirs_home().join(".codebuddy").join("CODEBUDDY.md");
+        if codebuddy_md.exists() {
+            let content = fs::read_to_string(&codebuddy_md)?;
+            if content.contains("graphify") {
+                msgs.push("  CODEBUDDY.md     ->  already registered (no change)".to_string());
+            } else {
+                let new = format!("{}{}", content.trim_end(), CODEBUDDY_REGISTRATION);
+                if let Some(parent) = codebuddy_md.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&codebuddy_md, new.as_bytes())?;
+                msgs.push(format!(
+                    "  CODEBUDDY.md     ->  skill registered in {}",
+                    codebuddy_md.display()
+                ));
+            }
+        } else {
+            if let Some(parent) = codebuddy_md.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(
+                &codebuddy_md,
+                CODEBUDDY_REGISTRATION.trim_start().as_bytes(),
+            )?;
+            msgs.push(format!(
+                "  CODEBUDDY.md     ->  created at {}",
+                codebuddy_md.display()
+            ));
+        }
+    }
+
     msgs.push(String::new());
     msgs.push("Done. Open your AI coding assistant and type:".to_string());
     msgs.push(String::new());
@@ -100,7 +135,12 @@ fn skill_for(platform: &str, project: bool) -> Result<(&'static str, &'static st
             };
             (skill, ".claude/skills/graphify/SKILL.md")
         }
-        "codex" => (SKILL_CODEX_MD, ".agents/skills/graphify/SKILL.md"),
+        // Codex installs to `.codex/skills/...` (#1160): the hook already wrote
+        // to `.codex/`, so the skill destination was previously inconsistent.
+        "codex" => (SKILL_CODEX_MD, ".codex/skills/graphify/SKILL.md"),
+        // `CodeBuddy` rides claude's skill bundle (#1136). The user-scope
+        // CODEBUDDY.md registration is written by `install_platform_skill`.
+        "codebuddy" => (SKILL_MD, ".codebuddy/skills/graphify/SKILL.md"),
         "amp" => (SKILL_MD, ".amp/skills/graphify/SKILL.md"),
         "opencode" if project => (SKILL_OPENCODE_MD, ".opencode/skills/graphify/SKILL.md"),
         "opencode" => (

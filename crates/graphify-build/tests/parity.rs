@@ -775,3 +775,47 @@ fn build_drops_inferred_calls_when_one_side_has_unknown_extension() {
     let g = build_from_json(ext, true, None).expect("build");
     assert_eq!(g.edge_count(), 0);
 }
+
+// ── #1145 (extended #1271): LLM ghost-duplicate merge into AST canonical ────
+
+#[test]
+fn ghost_duplicate_merged_into_ast_node() {
+    // AST node uses a parent-qualified id and is stamped `_origin=ast`; the LLM
+    // emits a bare-stem id with the same (basename, label). The ghost must be
+    // removed and the edge that referenced it re-pointed at the AST node.
+    let extraction = json!({
+        "nodes": [
+            {"id": "mod_get_pairs", "label": "get_pairs", "source_file": "src/bpe.py",
+             "source_location": "L5", "_origin": "ast", "file_type": "code"},
+            {"id": "get_pairs", "label": "get_pairs", "source_file": "src/bpe.py",
+             "source_location": "L5", "file_type": "code"},
+            {"id": "caller", "label": "caller", "source_file": "src/app.py", "_origin": "ast"},
+        ],
+        "edges": [
+            {"source": "caller", "target": "get_pairs", "relation": "calls"},
+        ],
+    });
+    let g = build_from_json(extraction, true, None).expect("build");
+    assert!(g.contains_node("mod_get_pairs"), "AST canonical node kept");
+    assert!(!g.contains_node("get_pairs"), "LLM ghost removed");
+    assert!(
+        g.edge_data("caller", "mod_get_pairs").is_some(),
+        "edge re-pointed to the canonical node"
+    );
+}
+
+#[test]
+fn ghost_merge_keeps_distinct_symbols_in_different_files() {
+    // Same label, different source files → distinct symbols, never merged.
+    let extraction = json!({
+        "nodes": [
+            {"id": "a_render", "label": "render", "source_file": "a.py", "_origin": "ast"},
+            {"id": "b_render", "label": "render", "source_file": "b.py", "_origin": "ast"},
+        ],
+        "edges": [],
+    });
+    let g = build_from_json(extraction, true, None).expect("build");
+    assert!(g.contains_node("a_render"));
+    assert!(g.contains_node("b_render"));
+    assert_eq!(g.node_count(), 2);
+}

@@ -18,13 +18,16 @@ use std::sync::OnceLock;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_bedrockruntime::Client;
 use aws_sdk_bedrockruntime::config::Builder as SdkConfigBuilder;
+use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock, ConversationRole, InferenceConfiguration, Message, StopReason, SystemContentBlock,
+    ContentBlock, ConversationRole, ImageBlock, ImageFormat, ImageSource, InferenceConfiguration,
+    Message, StopReason, SystemContentBlock,
 };
+use base64::Engine;
 use serde_json::json;
 use tokio::runtime::Runtime;
 
-use crate::openai_compat::resolve_max_tokens;
+use crate::openai_compat::{resolve_max_tokens, resolve_temperature};
 use crate::{
     EXTRACTION_SYSTEM, LlmBackend, LlmError, LlmResponse, parse_llm_json, response_is_hollow,
 };
@@ -226,9 +229,14 @@ pub fn call_bedrock_with_system(
     let sdk_messages = build_messages(messages)?;
     let system = SystemContentBlock::Text(system_prompt.to_string());
 
+    // Honour GRAPHIFY_LLM_TEMPERATURE / reasoning-model omission (#1191). The
+    // Converse API treats temperature as optional; omit it when resolved to None.
+    #[allow(clippy::cast_possible_truncation)]
+    // temperature is a small bounded value; f64 -> f32 loss is immaterial
+    let temperature = resolve_temperature(Some(0.0), model).map(|t| t as f32);
     let inference = InferenceConfiguration::builder()
         .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))
-        .temperature(0.0)
+        .set_temperature(temperature)
         .build();
 
     let output = runtime().block_on(async {
@@ -305,9 +313,10 @@ pub fn call_bedrock_with_system(
     })
 }
 
-/// Convert the wire-format messages (`[{role, content: [{text}]}]`) into
-/// SDK `Message` builders. Each content list element becomes a `Text`
-/// content block on the SDK side.
+/// Convert the wire-format messages into SDK `Message` builders. A `{text}`
+/// content element becomes a `Text` block; an `{image: {format, data_b64}}`
+/// element (emitted by [`crate::vision::bedrock_content`] for vision requests)
+/// becomes a typed `Image` block with the base64 pixels decoded into raw bytes.
 fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmError> {
     let mut out: Vec<Message> = Vec::with_capacity(messages.len());
     for msg in messages {
@@ -324,6 +333,10 @@ fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmErr
             for block in content {
                 if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
                     builder = builder.content(ContentBlock::Text(text.to_string()));
+                } else if let Some(image) = block.get("image")
+                    && let Some(img_block) = build_image_block(image)
+                {
+                    builder = builder.content(ContentBlock::Image(img_block));
                 }
             }
         }
@@ -333,6 +346,27 @@ fn build_messages(messages: &[serde_json::Value]) -> Result<Vec<Message>, LlmErr
         out.push(built);
     }
     Ok(out)
+}
+
+/// Build a Bedrock `ImageBlock` from a `{format, data_b64}` JSON value.
+///
+/// Returns `None` (the image is silently skipped) when the format or base64
+/// payload is missing or the payload does not decode — the text block still
+/// names the image, so it remains a graph node.
+fn build_image_block(image: &serde_json::Value) -> Option<ImageBlock> {
+    let format = match image.get("format").and_then(|v| v.as_str())? {
+        "jpeg" | "jpg" => ImageFormat::Jpeg,
+        "gif" => ImageFormat::Gif,
+        "webp" => ImageFormat::Webp,
+        _ => ImageFormat::Png,
+    };
+    let b64 = image.get("data_b64").and_then(|v| v.as_str())?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    ImageBlock::builder()
+        .format(format)
+        .source(ImageSource::Bytes(Blob::new(bytes)))
+        .build()
+        .ok()
 }
 
 /// Translate an SDK `ConverseError` into the crate's [`LlmError`].
@@ -388,9 +422,13 @@ pub fn call_bedrock_plain(
             .map_err(|e| LlmError::Parse(format!("bedrock message build failed: {e}")))?,
     ];
 
+    // Honour GRAPHIFY_LLM_TEMPERATURE / reasoning-model omission (#1191).
+    #[allow(clippy::cast_possible_truncation)]
+    // temperature is a small bounded value; f64 -> f32 loss is immaterial
+    let temperature = resolve_temperature(Some(0.0), model).map(|t| t as f32);
     let inference = InferenceConfiguration::builder()
         .max_tokens(i32::try_from(max_tokens).unwrap_or(i32::MAX))
-        .temperature(0.0)
+        .set_temperature(temperature)
         .build();
 
     let output = runtime().block_on(async {

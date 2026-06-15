@@ -16,6 +16,15 @@ pub(crate) enum ExtractMode {
     Deep,
 }
 
+/// MCP transport for the `serve` command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeTransport {
+    /// Line-delimited JSON-RPC over stdio (the default, per-developer transport).
+    Stdio,
+    /// Streamable HTTP (MCP spec 2025-03-26); requires the `http` build feature.
+    Http,
+}
+
 /// Root CLI struct parsed from `argv` by clap.
 #[derive(Debug, Parser)]
 #[command(
@@ -114,6 +123,9 @@ pub(crate) enum Command {
         /// Backend to use for community naming (default: auto-detect).
         #[arg(long)]
         backend: Option<String>,
+        /// Model to use for community naming (default: backend default).
+        #[arg(long)]
+        model: Option<String>,
     },
 
     /// (Re)name communities with the configured LLM backend, regenerate report.
@@ -135,6 +147,9 @@ pub(crate) enum Command {
         /// Backend to use (default: auto-detect from API keys).
         #[arg(long)]
         backend: Option<String>,
+        /// Model to use for community naming (default: backend default).
+        #[arg(long)]
+        model: Option<String>,
     },
 
     /// Manage custom LLM providers (`graphify provider <add|list|show|remove>`).
@@ -246,6 +261,12 @@ pub(crate) enum Command {
         /// Run LLM-driven dedup tiebreak after clustering.
         #[arg(long = "dedup-llm")]
         dedup_llm: bool,
+        /// Also extract crate -> crate dependency edges from `Cargo.toml`.
+        #[arg(long)]
+        cargo: bool,
+        /// Also extract schema from a live Postgres database at this DSN.
+        #[arg(long, value_name = "DSN")]
+        postgres: Option<String>,
     },
 
     /// Export graph to various formats.
@@ -336,10 +357,34 @@ pub(crate) enum Command {
         graph: Option<PathBuf>,
     },
 
-    /// MCP stdio server.
+    /// MCP server (stdio by default, or Streamable HTTP).
     Serve {
         #[arg(long)]
         graph: Option<PathBuf>,
+        /// Transport to serve on.
+        #[arg(long, value_enum, default_value_t = ServeTransport::Stdio)]
+        transport: ServeTransport,
+        /// HTTP bind host (http transport).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// HTTP bind port (http transport).
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Require this key on the HTTP transport (env: `GRAPHIFY_API_KEY`).
+        #[arg(long = "api-key", env = "GRAPHIFY_API_KEY")]
+        api_key: Option<String>,
+        /// HTTP mount path (http transport).
+        #[arg(long, default_value = "/mcp")]
+        path: String,
+        /// Return plain JSON responses instead of SSE streams (http transport).
+        #[arg(long = "json-response")]
+        json_response: bool,
+        /// Run without per-session state (load-balanced / CI deployments).
+        #[arg(long)]
+        stateless: bool,
+        /// Reap stateful sessions idle this many seconds (0 disables).
+        #[arg(long = "session-timeout", default_value_t = 3600.0)]
+        session_timeout: f64,
     },
 
     /// Reverse-traversal impact analysis (`graphify affected <query>`).
@@ -379,6 +424,15 @@ pub(crate) enum Command {
     // Platform-specific install/uninstall (delegate to graphify-hooks).
     /// Install or uninstall graphify integration for Claude.
     Claude {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
+    // `CodeBuddy` is the product's own camel-case spelling; clap renders this
+    // doc comment as user-facing `--help` text, so backticks (which clippy's
+    // `doc_markdown` would otherwise demand) must not appear here.
+    #[allow(clippy::doc_markdown)]
+    /// Install or uninstall graphify integration for CodeBuddy.
+    Codebuddy {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },
@@ -610,6 +664,23 @@ pub(crate) enum ExportCmd {
         #[arg(long, default_value = "neo4j")]
         user: String,
         /// Neo4j password for `--push` (or set `NEO4J_PASSWORD`).
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// Export Cypher statements or push directly to a `FalkorDB` instance.
+    ///
+    /// `FalkorDB` is `OpenCypher`-compatible; without `--push` this writes the same
+    /// `cypher.txt` as the `neo4j` export.
+    Falkordb {
+        #[arg(long)]
+        graph: Option<PathBuf>,
+        /// Push directly to a live `FalkorDB` instance (e.g. `falkordb://localhost:6379`).
+        #[arg(long)]
+        push: Option<String>,
+        /// `FalkorDB` username for `--push` (auth is optional; anonymous by default).
+        #[arg(long)]
+        user: Option<String>,
+        /// `FalkorDB` password for `--push` (or set `FALKORDB_PASSWORD`).
         #[arg(long)]
         password: Option<String>,
     },

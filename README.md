@@ -60,13 +60,19 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   cannot OOM a scan.
 - **Local-first** — `graph.json` lives next to your code; no daemon, no cloud, no account.
 - **Optional LLM-driven semantic extraction** through OpenAI, Claude (Anthropic), Gemini, DeepSeek, Kimi (Moonshot),
-  Ollama, Bedrock, or any OpenAI-compatible **custom provider** registered with `graphify provider add`. The
-  `--backend` identifiers are `openai`, `claude`, `gemini`, `deepseek`, `kimi`, `ollama`, and `bedrock`.
+  Ollama, Bedrock, Azure OpenAI, or any OpenAI-compatible **custom provider** registered with `graphify provider add`.
+  The `--backend` identifiers are `openai`, `claude`, `gemini`, `deepseek`, `kimi`, `ollama`, `bedrock`, and `azure`.
+  Vision-capable backends read raster images (PNG/JPG/GIF/WebP) as pixels, so a diagram or screenshot becomes a graph
+  node; non-vision backends record it as a text-reference node instead.
+- **Structural introspection** — `graphify extract --cargo` adds `crate -> crate` dependency edges from `Cargo.toml`
+  manifests; `--postgres <DSN>` adds a live PostgreSQL schema (requires the `postgres` build feature).
 - **LLM community naming** — `graphify label` (or `cluster-only`) auto-names graph communities with the configured
   backend; degrades to `Community N` placeholders when no backend is available.
-- **AI-assistant integration** — drop-in installers for Claude Code, Codex, Amp, Cursor, Gemini CLI, GitHub Copilot,
-  VS Code, OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Kilo Code, Pi, Devin CLI, Google Antigravity, and more.
-- **MCP server** for any MCP-capable assistant (`graphify serve`).
+- **AI-assistant integration** — drop-in installers for Claude Code, CodeBuddy, Codex, Amp, Cursor, Gemini CLI,
+  GitHub Copilot, VS Code, OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Kilo Code, Pi, Devin CLI,
+  Google Antigravity, and more.
+- **MCP server** for any MCP-capable assistant (`graphify serve`) — stdio by default, or Streamable HTTP
+  (`--transport http`, requires the `http` build feature) so one shared process can host the graph for a team.
 - **Git hooks + merge driver** so two branches editing the same `graph.json` produce a union-merged result.
 - **Cross-repo global graph** — aggregate every project you care about into one `~/.graphify/global-graph.json`.
 - **Deterministic outputs** — same inputs on the same machine produce byte-identical JSON.
@@ -139,7 +145,7 @@ graphify/
 │   ├── graphify-cluster/      # community detection (Leiden, Louvain fallback)
 │   ├── graphify-analyze/      # god-nodes, cohesion, communities
 │   ├── graphify-report/       # GRAPH_REPORT.md generator
-│   ├── graphify-export/       # HTML / SVG / GraphML / Obsidian / Cypher / Neo4j
+│   ├── graphify-export/       # HTML / SVG / GraphML / Obsidian / Cypher / Neo4j / FalkorDB
 │   ├── graphify-html/         # interactive D3 viz + Mermaid call-flow HTML
 │   ├── graphify-wiki/         # per-cluster wiki articles
 │   ├── graphify-serve/        # MCP stdio server

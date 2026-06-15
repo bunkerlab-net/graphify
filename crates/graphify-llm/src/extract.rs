@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
 use crate::read::read_files;
 use crate::{LlmError, LlmResponse};
-use crate::{bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat};
+use crate::{
+    azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
+    vision,
+};
 
 /// Extract semantic nodes/edges from a list of files using the given backend.
 ///
@@ -99,7 +102,13 @@ pub fn extract_files_direct_mode(
     }
 
     let mdl = model.filter(|s| !s.is_empty()).unwrap_or(cfg.default_model);
-    let user_msg = read_files(files, root);
+    // Vision: separate raster images from text-like files (#1110). Text goes
+    // through `read_files`; images become structured refs the backend renders as
+    // pixels (vision backends) or a text-reference node (everything else), so a
+    // diagram/screenshot becomes a graph node instead of garbage text. Mirrors
+    // graphify-py `extract_files_direct`.
+    let image_refs = collect_image_refs(files, backend, root);
+    let user_msg = read_files(&vision::partition_semantic_files(files).0, root);
     // `resolve_max_tokens` applies the `GRAPHIFY_MAX_OUTPUT_TOKENS` env var
     // override uniformly across every backend (parity fix from
     // graphify-py 06a9b72 — env var was previously silently ignored on the
@@ -111,45 +120,92 @@ pub fn extract_files_direct_mode(
 
     match backend {
         "claude" => {
-            let msgs = vec![serde_json::json!({"role": "user", "content": user_msg})];
+            let content = vision::anthropic_content(&user_msg, &image_refs);
+            let msgs = vec![serde_json::json!({"role": "user", "content": content})];
             claude::call_claude_with_system(&key, mdl, &msgs, max_out, system.as_ref())
         }
         "claude-cli" => {
+            // claude-cli reads images by path: `call_claude_cli_with_runner_system`
+            // appends the Read-the-path notes and allowlists each image directory
+            // via `--add-dir`.
             let runner = claude_cli::RealClaudeRunner;
             claude_cli::call_claude_cli_with_runner_system(
                 &runner,
                 &user_msg,
                 max_out,
                 system.as_ref(),
+                &image_refs,
             )
         }
         "bedrock" => {
             let region = bedrock::resolve_region();
-            let msgs = vec![serde_json::json!({"role": "user", "content": [{"text": user_msg}]})];
+            let content = vision::bedrock_content(&user_msg, &image_refs);
+            let msgs = vec![serde_json::json!({"role": "user", "content": content})];
             bedrock::call_bedrock_with_system(mdl, &region, &msgs, max_out, system.as_ref())
         }
         "kimi" => {
-            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
+            let msgs = openai_compat_vision_messages(&user_msg, &image_refs, deep_mode);
             kimi::call_kimi(&key, mdl, &msgs, max_out)
         }
         "gemini" => {
-            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
+            let msgs = openai_compat_vision_messages(&user_msg, &image_refs, deep_mode);
             gemini::call_gemini(&key, mdl, &msgs, max_out)
         }
         "openai" => {
-            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
+            let msgs = openai_compat_vision_messages(&user_msg, &image_refs, deep_mode);
             openai::call_openai(&key, mdl, &msgs, max_out)
         }
         "deepseek" => {
-            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
+            let msgs = openai_compat_vision_messages(&user_msg, &image_refs, deep_mode);
             deepseek::call_deepseek(&key, mdl, &msgs, max_out)
         }
         "ollama" => {
-            let msgs = openai_compat::extraction_messages_for(&user_msg, deep_mode);
+            let msgs = openai_compat_vision_messages(&user_msg, &image_refs, deep_mode);
             ollama::call_ollama(&key, &ollama_base_url, mdl, &msgs, max_out, &user_msg)
+        }
+        "azure" => {
+            // Azure resolves its deployment from the environment when the caller
+            // did not pass an explicit `--model` (mirrors the env-derived
+            // `default_model` in Python's BACKENDS["azure"]).
+            let azure_mdl = model
+                .filter(|s| !s.is_empty())
+                .map_or_else(azure::resolve_model, str::to_string);
+            let endpoint = azure::resolve_endpoint()?;
+            let msgs = openai_compat_vision_messages(&user_msg, &image_refs, deep_mode);
+            azure::call_azure(&key, &endpoint, &azure_mdl, &msgs, max_out)
         }
         _ => unreachable!("backend_config already validated backend name"),
     }
+}
+
+/// Build vision-aware image refs for `backend`: pixels are loaded only for
+/// inline (base64) vision backends; path-based and non-vision backends get
+/// pixel-free refs (a text reference node). Mirrors graphify-py's
+/// `read_bytes = vision and backend not in _PATH_IMAGE_BACKENDS` gate.
+fn collect_image_refs(files: &[PathBuf], backend: &str, root: &Path) -> Vec<vision::ImageRef> {
+    let (_, image_files) = vision::partition_semantic_files(files);
+    if image_files.is_empty() {
+        return Vec::new();
+    }
+    let supports_vision = vision::backend_supports_vision(backend);
+    let read_bytes = supports_vision && !vision::PATH_IMAGE_BACKENDS.contains(&backend);
+    let refs = vision::build_image_refs(&image_files, root, read_bytes);
+    if supports_vision {
+        refs
+    } else {
+        vision::strip_pixels(&refs)
+    }
+}
+
+/// Build the OpenAI-compatible extraction messages with a vision-aware user
+/// content part list (text + `image_url` parts when pixels are present).
+fn openai_compat_vision_messages(
+    user_msg: &str,
+    image_refs: &[vision::ImageRef],
+    deep_mode: bool,
+) -> Vec<serde_json::Value> {
+    let content = vision::openai_content(user_msg, image_refs);
+    openai_compat::extraction_messages_with_content(&content, deep_mode)
 }
 
 /// Extract via a custom OpenAI-compatible provider (#1084). Honors an explicit
@@ -175,7 +231,10 @@ fn extract_custom(
     let mdl = model
         .filter(|s| !s.is_empty())
         .unwrap_or(&provider.default_model);
-    let user_msg = read_files(files, root);
+    // Custom providers carry no vision flag, so images become text-reference
+    // nodes (pixel-free refs), matching graphify-py's non-vision path.
+    let image_refs = collect_image_refs(files, &provider.name, root);
+    let user_msg = read_files(&vision::partition_semantic_files(files).0, root);
     // Honour the provider's configured `max_completion_tokens` (default 8192),
     // then apply the `GRAPHIFY_MAX_OUTPUT_TOKENS` override — mirroring Python's
     // `_resolve_max_tokens(cfg.get("max_completion_tokens", 8192))` (llm.py:720).
@@ -184,11 +243,12 @@ fn extract_custom(
         base_url: &provider.base_url,
         api_key: &key,
         model: mdl,
-        messages: openai_compat::extraction_messages_for(&user_msg, deep_mode),
+        messages: openai_compat_vision_messages(&user_msg, &image_refs, deep_mode),
         temperature: Some(provider.temperature),
         reasoning_effort: None,
         max_completion_tokens: max_out,
         disable_thinking: false,
+        custom_extra_body: provider.extra_body.as_ref(),
         ollama_options: None,
         backend_name: &provider.name,
         timeout: openai_compat::api_timeout(),

@@ -11,6 +11,11 @@
 mod error;
 /// Pure graph-query helpers: scoring, BFS/DFS traversal, subgraph rendering.
 pub mod graph;
+/// Streamable HTTP transport (MCP spec 2025-03-26); requires the `http` feature.
+#[cfg(feature = "http")]
+pub mod http;
+/// Append-only JSONL query logging (`~/.cache/graphify-queries.log`).
+pub mod querylog;
 mod serve_fn;
 /// MCP stdio JSON-RPC server transport and message dispatcher.
 pub mod server;
@@ -20,5 +25,8 @@ pub mod tools;
 
 pub use error::ServeError;
 pub use graph::query_terms;
+#[cfg(feature = "http")]
+pub use http::{HttpOptions, build_app, serve_http};
+pub use querylog::{QueryLog, log_query, nodes_from_result};
 pub use serve_fn::serve;
 pub use state::ReloadState;

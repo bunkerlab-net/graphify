@@ -5,18 +5,53 @@
 //! `antigravity`, `codex`, `opencode`, `aider`, `claw`, `droid`, `trae`,
 //! `trae-cn`, `hermes`).
 
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use graphify_hooks::platform::{
     agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
-    claude_uninstall, copilot_install, copilot_uninstall, cursor_install, cursor_uninstall,
-    devin_install, devin_project_install, devin_project_uninstall, devin_uninstall, gemini_install,
-    gemini_uninstall, install_kilo_skill_and_command, install_platform_skill,
-    install_platform_skill_project, kilo_install, kilo_uninstall, kiro_install, kiro_uninstall,
-    pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project, vscode_install,
-    vscode_uninstall,
+    claude_uninstall, codebuddy_install, codebuddy_uninstall, copilot_install, copilot_uninstall,
+    cursor_install, cursor_uninstall, devin_install, devin_project_install,
+    devin_project_uninstall, devin_uninstall, gemini_install, gemini_uninstall,
+    install_kilo_skill_and_command, install_platform_skill, install_platform_skill_project,
+    kilo_install, kilo_uninstall, kiro_install, kiro_uninstall, pi_install, pi_uninstall,
+    uninstall_all, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
+
+/// Print the amber-brain banner shown at the top of `graphify install`.
+///
+/// TTY-only (suppressed in CI logs and pipes) and best-effort — it never fails
+/// the install. Mirrors graphify-py's `_print_banner`. Unlike Python it does
+/// not toggle the Windows console mode via the OS API: that would pull in a
+/// `winapi` dependency for a purely cosmetic banner, and modern Windows
+/// terminals render ANSI by default. The banner is suppressed entirely when
+/// stdout is not a terminal, so non-interactive runs are unaffected.
+fn print_banner() {
+    const AMBER: &str = "\x1b[38;5;214m";
+    const DARK: &str = "\x1b[38;5;130m";
+    const RESET: &str = "\x1b[0m";
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let version = env!("CARGO_PKG_VERSION");
+    println!(
+        "{AMBER}
+  ╭──◉──╮     ╭──◉──╮
+ ╱  ◉   ◉ ╲ ╱ ◉   ◉  ╲
+│   ◉─◉─◉  ◉  ◉─◉─◉   │
+│    ◉   ◉ │ ◉   ◉    │
+│   ◉─◉─◉  ◉  ◉─◉─◉   │
+ ╲  ◉   ◉ ╱ ╲ ◉   ◉  ╱
+  ╰──◉──╯     ╰──◉──╯
+           ◉
+
+  █▀▀ █▀█ ▄▀█ █▀█ █ █ █ █▀▀ █▄█
+  █▄█ █▀▄ █▀█ █▀▀ █▀█ █ █▀   █{DARK}  {version}{RESET}
+"
+    );
+}
 
 /// Install the graphify skill for the given platform.
 ///
@@ -24,6 +59,7 @@ use crate::cli::args::PlatformCmd;
 /// under the current working directory instead of the user home
 /// directory. Mirrors the Python `--project` flag (#931).
 pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
+    print_banner();
     // Antigravity's project install lays down the full always-on layer
     // (skill + rules + workflow), not just the skill — matching graphify-py's
     // `_project_install("antigravity")`. The generic skill-only installer would
@@ -109,6 +145,15 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("antigravity", PlatformCmd::Uninstall { project: true }) => {
             antigravity_uninstall(&cwd, true)?
         }
+        // `CodeBuddy` writes CODEBUDDY.md + a .codebuddy/settings.json hook and
+        // copies the skill, like `claude install` (#1136). graphify-py's
+        // `codebuddy` CLI dispatch ignores `--project` (`codebuddy_install()` /
+        // `codebuddy_uninstall()` at `__main__.py:2374-2377`), so BOTH the plain
+        // and `--project` forms run the full CodeBuddy setup. Matched before the
+        // generic `--project` branch below so the flag can't divert it to a
+        // skill-only project install.
+        ("codebuddy", PlatformCmd::Install { .. }) => codebuddy_install(&cwd)?,
+        ("codebuddy", PlatformCmd::Uninstall { .. }) => codebuddy_uninstall(&cwd)?,
         (p, PlatformCmd::Install { project: true }) => install_platform_skill_project(p, &cwd)?,
         (p, PlatformCmd::Uninstall { project: true }) => uninstall_platform_skill_project(p, &cwd)?,
         ("claude", PlatformCmd::Install { .. }) => claude_install(&cwd)?,

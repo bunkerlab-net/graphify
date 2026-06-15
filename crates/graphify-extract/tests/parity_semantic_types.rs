@@ -13,12 +13,12 @@ use std::path::{Path, PathBuf};
 
 use graphify_extract::{
     extract_c, extract_cpp, extract_fortran, extract_go, extract_js, extract_julia, extract_kotlin,
-    extract_markdown, extract_objc, extract_php, extract_powershell, extract_rust, extract_scala,
-    extract_swift,
+    extract_markdown, extract_objc, extract_php, extract_powershell, extract_python, extract_rust,
+    extract_scala, extract_swift, extract_verilog,
 };
 
 mod common;
-use common::{has_edge, labels, relations};
+use common::{edge_labels, has_edge, labels, relations};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -719,4 +719,169 @@ fn markdown_tilde_fenced_heading_not_parsed() -> Result<(), Box<dyn std::error::
         "tilde-fenced heading wrongly parsed: {labs:?}"
     );
     Ok(())
+}
+
+// ── Python annotation noise (#1147) ────────────────────────────────────────────
+
+/// #1147: scalar builtins (`str`/`int`/`bool`/...) and `unittest.mock` names
+/// appearing in type annotations carry no semantic meaning as graph nodes, so
+/// they are suppressed at the annotation walker level — never created as nodes
+/// nor emitted as `references` edges. Real custom types in the same annotations
+/// still resolve normally.
+#[test]
+fn python_annotation_noise_is_suppressed() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let src = r"
+class Widget:
+    pass
+
+def build(count: int, name: str, ok: bool, w: Widget) -> Widget:
+    return w
+
+def fake(mock: MagicMock, real: Widget) -> None:
+    return None
+";
+    let f = tmp.path().join("noise.py");
+    std::fs::write(&f, src)?;
+    let r = extract_python(&f);
+
+    // The real custom type still resolves as a parameter_type reference.
+    assert!(
+        has_edge(&r, "references", Some("parameter_type"), "build", "Widget"),
+        "real custom type `Widget` should still emit a parameter_type edge"
+    );
+
+    // No reference edge should target a scalar builtin or mock name.
+    let refs = edge_labels(&r, "references", None);
+    for noise in ["int", "str", "bool", "MagicMock", "None"] {
+        assert!(
+            !refs.iter().any(|(_, t)| t == noise),
+            "annotation noise `{noise}` should not appear as a references target: {refs:?}"
+        );
+    }
+
+    // And no node should be created for the scalar builtins / mocks.
+    let labs = labels(&r);
+    for noise in ["int", "str", "bool", "MagicMock"] {
+        assert!(
+            !labs.iter().any(|l| l == noise),
+            "annotation noise `{noise}` should not be created as a node: {labs:?}"
+        );
+    }
+    Ok(())
+}
+
+// ── SystemVerilog class-level extraction (test_languages.py) ─────────────────
+
+fn sv() -> graphify_extract::FileResult {
+    extract_verilog(&fixtures().join("sample.sv"))
+}
+
+/// `test_systemverilog_no_error`
+#[test]
+fn systemverilog_no_error() {
+    assert!(sv().error.is_none());
+}
+
+/// `test_systemverilog_splits_inherits_and_implements`
+#[test]
+fn systemverilog_splits_inherits_and_implements() {
+    let r = sv();
+    assert!(has_edge(
+        &r,
+        "inherits",
+        None,
+        "DataProcessor",
+        "BaseProcessor"
+    ));
+    assert!(has_edge(
+        &r,
+        "implements",
+        None,
+        "DataProcessor",
+        "Processor"
+    ));
+}
+
+/// `test_systemverilog_field_parameter_return_and_generic_contexts`
+#[test]
+fn systemverilog_field_parameter_return_and_generic_contexts() {
+    let r = sv();
+    assert!(has_edge(
+        &r,
+        "references",
+        Some("field"),
+        "DataProcessor",
+        "Result"
+    ));
+    assert!(has_edge(
+        &r,
+        "references",
+        Some("generic_arg"),
+        "DataProcessor",
+        "Payload"
+    ));
+    assert!(has_edge(
+        &r,
+        "references",
+        Some("parameter_type"),
+        "build",
+        "Payload"
+    ));
+    assert!(has_edge(
+        &r,
+        "references",
+        Some("return_type"),
+        "build",
+        "Result"
+    ));
+    assert!(has_edge(
+        &r,
+        "references",
+        Some("generic_arg"),
+        "build",
+        "Payload"
+    ));
+}
+
+/// `test_systemverilog_does_not_emit_type_parameter_refs`
+#[test]
+fn systemverilog_does_not_emit_type_parameter_refs() {
+    let r = sv();
+    assert!(!has_edge(&r, "references", Some("field"), "Result", "T"));
+}
+
+/// `test_systemverilog_preserves_existing_module_extraction`
+#[test]
+fn systemverilog_preserves_existing_module_extraction() {
+    let r = sv();
+    let labs: std::collections::HashSet<String> = labels(&r).into_iter().collect();
+    for expected in ["top", "leaf", "add()", "tick"] {
+        assert!(
+            labs.contains(expected),
+            "missing label {expected}: {labs:?}"
+        );
+    }
+    let rels = relations(&r);
+    assert!(rels.contains("imports_from"));
+    assert!(rels.contains("instantiates"));
+}
+
+/// `test_systemverilog_missing_file_returns_empty`
+#[test]
+fn systemverilog_missing_file_returns_empty() {
+    let r = extract_verilog(Path::new("nonexistent.sv"));
+    assert!(r.nodes.is_empty());
+    assert!(r.edges.is_empty());
+}
+
+/// `test_systemverilog_no_dangling_edges`
+#[test]
+fn systemverilog_no_dangling_edges() {
+    let r = sv();
+    let ids: std::collections::HashSet<&str> = r.nodes.iter().map(|n| n.id.as_str()).collect();
+    for e in &r.edges {
+        assert!(ids.contains(e.source.as_str()), "dangling source: {e:?}");
+        assert!(ids.contains(e.target.as_str()), "dangling target: {e:?}");
+    }
 }

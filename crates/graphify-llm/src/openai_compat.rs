@@ -31,6 +31,10 @@ pub struct OpenAiRequest<'a> {
     pub max_completion_tokens: u32,
     /// If `true`, inject Kimi's `thinking: disabled` extra body.
     pub disable_thinking: bool,
+    /// Custom-provider `extra_body` passthrough (#7477b46). When `Some`, it owns
+    /// the request's `extra_body` and overrides both [`Self::disable_thinking`]
+    /// and [`Self::ollama_options`] — the provider has chosen its request shape.
+    pub custom_extra_body: Option<&'a Value>,
     /// Ollama-specific options: `num_ctx`, `keep_alive`.
     pub ollama_options: Option<OllamaOptions>,
     /// Backend name for diagnostic messages.
@@ -135,17 +139,70 @@ pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmErr
 }
 
 /// Build the OpenAI-compatible chat-completions JSON body from the request bundle.
+/// Model-name fragments for `OpenAI`-compatible "reasoning" models that reject
+/// an explicit temperature (the API returns HTTP 400 for any value, including
+/// 0). Covers the o1/o3/o4 series and the gpt-5 family (#1191). Matched
+/// case-insensitively against the resolved model id, ignoring a provider prefix
+/// some gateways prepend (e.g. `openai/o3-mini`).
+#[must_use]
+pub fn model_requires_default_temperature(model: &str) -> bool {
+    let m = model.to_lowercase();
+    let base = m.rsplit('/').next().unwrap_or(m.as_str());
+    if base.starts_with("gpt-5") {
+        return true;
+    }
+    ["o1", "o3", "o4"]
+        .iter()
+        .any(|fam| base == *fam || base.starts_with(&format!("{fam}-")))
+}
+
+/// Resolve the temperature to send, honouring `GRAPHIFY_LLM_TEMPERATURE`
+/// (#1191). Precedence:
+/// 1. `GRAPHIFY_LLM_TEMPERATURE`, if set: a number is used verbatim; the literal
+///    `none`/`omit`/`default` (case-insensitive) omits the parameter (`None`).
+/// 2. Otherwise reasoning models (o1/o3/o4/gpt-5) get `None` — the API rejects
+///    any explicit temperature.
+/// 3. Otherwise the backend default.
+///
+/// Returns `None` when the temperature field should be omitted entirely.
+#[must_use]
+pub fn resolve_temperature(default: Option<f64>, model: &str) -> Option<f64> {
+    let raw = std::env::var("GRAPHIFY_LLM_TEMPERATURE").unwrap_or_default();
+    let raw = raw.trim();
+    if !raw.is_empty() {
+        let lower = raw.to_lowercase();
+        if lower == "none" || lower == "omit" || lower == "default" {
+            return None;
+        }
+        if let Ok(v) = raw.parse::<f64>() {
+            return Some(v);
+        }
+        // Unparseable override falls through to the model/default logic.
+    }
+    if model_requires_default_temperature(model) {
+        return None;
+    }
+    default
+}
+
 fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
     let mut body = json!({
         "model": req.model,
         "messages": req.messages,
         "max_completion_tokens": req.max_completion_tokens,
     });
-    if let Some(t) = req.temperature {
+    if let Some(t) = resolve_temperature(req.temperature, req.model) {
         body["temperature"] = json!(t);
     }
     if let Some(re) = req.reasoning_effort {
         body["reasoning_effort"] = json!(re);
+    }
+    // A custom provider's explicit extra_body owns the request shape and wins
+    // over both the moonshot `thinking: disabled` default and the Ollama
+    // num_ctx auto-derive (#7477b46).
+    if let Some(custom) = req.custom_extra_body {
+        body["extra_body"] = custom.clone();
+        return body;
     }
     // Build `extra_body` incrementally so disable_thinking and ollama
     // options can coexist (assigning each one separately would overwrite
@@ -251,10 +308,20 @@ pub fn extraction_messages(user_message: &str) -> Vec<Value> {
 /// when `deep` is set.
 #[must_use]
 pub fn extraction_messages_for(user_message: &str, deep: bool) -> Vec<Value> {
+    extraction_messages_with_content(&Value::String(user_message.to_string()), deep)
+}
+
+/// Build the extraction messages array from a prebuilt user `content` value.
+///
+/// The content is a plain string for text-only requests, or a multi-part array
+/// (text + `image_url` parts) for vision requests — see
+/// [`crate::vision::openai_content`].
+#[must_use]
+pub fn extraction_messages_with_content(content: &Value, deep: bool) -> Vec<Value> {
     let system = crate::constants::extraction_system(deep);
     vec![
         json!({"role": "system", "content": system.as_ref()}),
-        json!({"role": "user", "content": user_message}),
+        json!({"role": "user", "content": content}),
     ]
 }
 

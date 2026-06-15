@@ -1479,6 +1479,51 @@ fn god_nodes_excludes_json_noise() {
     assert!(labels.contains(&"AuthService"));
 }
 
+/// Regression: builtin / mock / stdlib annotation labels are excluded from
+/// god-node ranking even on pre-existing graphs (#1147).
+#[test]
+fn god_nodes_excludes_builtin_noise() {
+    let mut g = Graph::new(GraphKind::Graph);
+    add_node(
+        &mut g,
+        "real",
+        &[("label", "AuthService"), ("source_file", "src/auth.py")],
+    );
+    // High-degree builtin / mock annotation nodes that must not rank.
+    add_node(
+        &mut g,
+        "noise_str",
+        &[("label", "str"), ("source_file", "src/a.py")],
+    );
+    add_node(
+        &mut g,
+        "noise_mock",
+        &[("label", "MagicMock"), ("source_file", "src/b.py")],
+    );
+    for i in 0..8_u32 {
+        let peer = format!("peer{i}");
+        add_node(
+            &mut g,
+            &peer,
+            &[
+                ("label", &format!("Peer{i}") as &str),
+                ("source_file", &format!("src/peer{i}.py") as &str),
+            ],
+        );
+        add_edge(&mut g, "noise_str", &peer, &[]);
+        add_edge(&mut g, "noise_mock", &peer, &[]);
+        add_edge(&mut g, "real", &peer, &[]);
+    }
+    let result = god_nodes(&g, 10);
+    let labels: Vec<&str> = result
+        .iter()
+        .map(|r| r["label"].as_str().expect("string field"))
+        .collect();
+    assert!(!labels.contains(&"str"));
+    assert!(!labels.contains(&"MagicMock"));
+    assert!(labels.contains(&"AuthService"));
+}
+
 /// `test_god_nodes_filter_is_case_insensitive`
 #[test]
 fn god_nodes_filter_is_case_insensitive() {

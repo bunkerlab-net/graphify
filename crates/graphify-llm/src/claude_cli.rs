@@ -5,7 +5,11 @@
 //! The `claude` binary is injected via the [`ClaudeRunner`] trait so tests
 //! can substitute a mock without spawning a real process.
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 use serde_json::json;
+use wait_timeout::ChildExt;
 
 use crate::{
     EXTRACTION_SYSTEM, LlmBackend, LlmError, LlmResponse, parse_llm_json, response_is_hollow,
@@ -19,16 +23,38 @@ pub trait ClaudeRunner: Send + Sync {
     ///
     /// `system_prompt` carries the extraction system prompt passed via
     /// `--system-prompt` (replacing Claude Code's default coding-agent prompt,
-    /// per #1062); `None` passes no system prompt.
-    fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32);
+    /// per #1062); `None` passes no system prompt. `model` overrides the CLI's
+    /// default model via `--model` when `Some` (#b304331); `None` falls back to
+    /// the `GRAPHIFY_CLAUDE_CLI_MODEL` env override. `timeout` bounds the
+    /// subprocess wall-clock (`GRAPHIFY_API_TIMEOUT`, #1112); the process is
+    /// killed and a timeout error returned if it is exceeded.
+    fn run(
+        &self,
+        user_message: &str,
+        system_prompt: Option<&str>,
+        model: Option<&str>,
+        add_dirs: &[PathBuf],
+        timeout: Duration,
+    ) -> (String, String, i32);
 }
 
 /// Production runner that invokes the real `claude` binary.
 pub struct RealClaudeRunner;
 
 impl ClaudeRunner for RealClaudeRunner {
-    /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, and returns stdout/stderr/exit-code.
-    fn run(&self, user_message: &str, system_prompt: Option<&str>) -> (String, String, i32) {
+    /// Spawns the `claude -p` subprocess, writes `user_message` to stdin, drains
+    /// stdout/stderr on background threads (so a full pipe can't deadlock the
+    /// wait), and bounds the wait by `timeout`. Returns stdout/stderr/exit-code;
+    /// on timeout the child is killed and a non-zero code with a timeout message
+    /// is returned. Mirrors graphify-py's `subprocess.run(..., timeout=…)`.
+    fn run(
+        &self,
+        user_message: &str,
+        system_prompt: Option<&str>,
+        model: Option<&str>,
+        add_dirs: &[PathBuf],
+        timeout: Duration,
+    ) -> (String, String, i32) {
         let Some(program) = resolve_claude_command() else {
             return (
                 String::new(),
@@ -38,45 +64,101 @@ impl ClaudeRunner for RealClaudeRunner {
                 1,
             );
         };
-        let model = claude_cli_model_override();
-        let args = build_claude_cli_args(system_prompt, model.as_deref());
+        // Explicit per-call override wins; otherwise fall back to the env knob.
+        let model = model
+            .map(str::to_string)
+            .filter(|m| !m.trim().is_empty())
+            .or_else(claude_cli_model_override);
+        let args = build_claude_cli_args(system_prompt, model.as_deref(), add_dirs);
         let mut cmd = std::process::Command::new(&program);
         cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        apply_no_window(&mut cmd);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return (String::new(), e.to_string(), 1),
         };
 
-        if let Some(stdin) = child.stdin.take() {
+        // Feed stdin on a thread: a large prompt could otherwise block the
+        // write before `claude` starts reading, deadlocking against our own
+        // reads below. Dropping the writer closes stdin (EOF) when done.
+        if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            let mut w = stdin;
-            if let Err(e) = w.write_all(user_message.as_bytes()) {
-                // Surface a write failure rather than letting `claude` see
-                // an empty prompt; reap the child first so we don't leak it.
+            let msg = user_message.as_bytes().to_vec();
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&msg);
+            });
+        }
+
+        // Drain stdout/stderr concurrently so a full OS pipe buffer can't wedge
+        // the process while we wait.
+        let stdout_handle = child.stdout.take().map(spawn_reader);
+        let stderr_handle = child.stderr.take().map(spawn_reader);
+
+        let status = match child.wait_timeout(timeout) {
+            Ok(Some(status)) => status,
+            Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // Drain the reader threads so they don't leak before returning.
+                drop(stdout_handle.and_then(|h| h.join().ok()));
+                drop(stderr_handle.and_then(|h| h.join().ok()));
                 return (
                     String::new(),
-                    format!("write to claude stdin failed: {e}"),
+                    format!("claude -p timed out after {:.0}s", timeout.as_secs_f64()),
                     1,
                 );
             }
-        }
-
-        match child.wait_with_output() {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-                let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-                let code = out.status.code().unwrap_or(1);
-                (stdout, stderr, code)
+            Err(e) => {
+                // OS-level wait failure: reap the child and drain the reader
+                // threads before returning, mirroring the timeout branch above
+                // so a failed wait never leaks the subprocess or its pipe
+                // readers.
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(stdout_handle.and_then(|h| h.join().ok()));
+                drop(stderr_handle.and_then(|h| h.join().ok()));
+                return (String::new(), e.to_string(), 1);
             }
-            Err(e) => (String::new(), e.to_string(), 1),
-        }
+        };
+
+        let stdout = stdout_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let stderr = stderr_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let code = status.code().unwrap_or(1);
+        (stdout, stderr, code)
     }
+}
+
+/// Suppress the console window the npm `claude.cmd` shim would otherwise pop
+/// per spawn on Windows (#96585ba). `CREATE_NO_WINDOW` keeps the children
+/// invisible during labeling/extraction runs; a no-op on other platforms.
+#[cfg(windows)]
+fn apply_no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+/// No-op on non-Windows platforms (no detached-console concept).
+#[cfg(not(windows))]
+fn apply_no_window(_cmd: &mut std::process::Command) {}
+
+/// Spawn a thread that reads a child pipe to EOF as a lossy UTF-8 `String`.
+fn spawn_reader<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        String::from_utf8_lossy(&buf).into_owned()
+    })
 }
 
 /// Claude CLI backend.
@@ -235,13 +317,23 @@ fn claude_cli_model_override() -> Option<String> {
 /// markdown/prose coding-agent prompt (the root cause of the hollow-response
 /// loop, #1062). Appends `--model` only when `model` is `Some` and non-empty.
 #[must_use]
-pub fn build_claude_cli_args(system_prompt: Option<&str>, model: Option<&str>) -> Vec<String> {
+pub fn build_claude_cli_args(
+    system_prompt: Option<&str>,
+    model: Option<&str>,
+    add_dirs: &[PathBuf],
+) -> Vec<String> {
     let mut args = vec![
         "-p".to_string(),
         "--output-format".to_string(),
         "json".to_string(),
         "--no-session-persistence".to_string(),
     ];
+    // Allowlist each image directory so the Read tool can open the files
+    // (#1110). The dirs are pre-deduplicated by the caller.
+    for dir in add_dirs {
+        args.push("--add-dir".to_string());
+        args.push(dir.to_string_lossy().into_owned());
+    }
     if let Some(system) = system_prompt {
         args.push("--system-prompt".to_string());
         args.push(system.to_string());
@@ -265,11 +357,16 @@ pub fn call_claude_cli_with_runner(
     user_message: &str,
     max_tokens: u32,
 ) -> Result<LlmResponse, LlmError> {
-    call_claude_cli_with_runner_system(runner, user_message, max_tokens, EXTRACTION_SYSTEM)
+    call_claude_cli_with_runner_system(runner, user_message, max_tokens, EXTRACTION_SYSTEM, &[])
 }
 
 /// Call the Claude CLI with the given runner and an explicit system prompt
 /// (e.g. the deep-mode variant).
+///
+/// `images` carries raster-image refs (#1110): claude-cli reads images by path
+/// rather than inline base64, so the prompt is appended with the Read-the-path
+/// notes (`with_paths = true`) and each containing directory is allowlisted via
+/// `--add-dir` so the Read tool can open it. Pass `&[]` when there are no images.
 ///
 /// # Errors
 /// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
@@ -279,24 +376,69 @@ pub fn call_claude_cli_with_runner_system(
     user_message: &str,
     max_tokens: u32,
     system: &str,
+    images: &[crate::vision::ImageRef],
 ) -> Result<LlmResponse, LlmError> {
     if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
-    call_claude_cli_inner(runner, user_message, max_tokens, Some(system))
+    let message = crate::vision::with_image_notes(user_message, images, true);
+    let add_dirs = image_parent_dirs(images);
+    cli_inner_with_dirs(runner, &message, max_tokens, Some(system), None, &add_dirs)
+}
+
+/// Deduplicated parent directories of the image paths, preserving first-seen
+/// order (mirrors graphify-py's `seen_dirs` allowlist build).
+fn image_parent_dirs(images: &[crate::vision::ImageRef]) -> Vec<PathBuf> {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for img in images {
+        if let Some(parent) = img.path.parent() {
+            let dir = parent.to_path_buf();
+            if !seen.contains(&dir) {
+                seen.push(dir);
+            }
+        }
+    }
+    seen
 }
 
 /// Inner CLI call (extraction path — injects `system_prompt` when `Some`).
+///
+/// `model` overrides the CLI's default model via `--model` when `Some`; the
+/// extraction path passes `None` and relies on the `GRAPHIFY_CLAUDE_CLI_MODEL`
+/// env override resolved inside the runner.
 ///
 /// # Errors
 /// Returns [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
 pub fn call_claude_cli_inner(
     runner: &dyn ClaudeRunner,
     user_message: &str,
+    max_tokens: u32,
+    system_prompt: Option<&str>,
+    model: Option<&str>,
+) -> Result<LlmResponse, LlmError> {
+    cli_inner_with_dirs(runner, user_message, max_tokens, system_prompt, model, &[])
+}
+
+/// Inner CLI call with image directories allowlisted via `--add-dir` (#1110).
+/// `call_claude_cli_inner` is the `add_dirs = &[]` case.
+///
+/// # Errors
+/// Returns [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
+fn cli_inner_with_dirs(
+    runner: &dyn ClaudeRunner,
+    user_message: &str,
     _max_tokens: u32,
     system_prompt: Option<&str>,
+    model: Option<&str>,
+    add_dirs: &[PathBuf],
 ) -> Result<LlmResponse, LlmError> {
-    let (stdout, stderr, code) = runner.run(user_message, system_prompt);
+    let (stdout, stderr, code) = runner.run(
+        user_message,
+        system_prompt,
+        model,
+        add_dirs,
+        crate::openai_compat::api_timeout(),
+    );
 
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
@@ -305,13 +447,7 @@ pub fn call_claude_cli_inner(
         )));
     }
 
-    let envelope: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
-        LlmError::ClaudeCliError(format!(
-            "claude -p produced unparseable JSON envelope: {e}; \
-             first 500 chars of stdout: {:?}",
-            stdout.chars().take(500).collect::<String>()
-        ))
-    })?;
+    let envelope = claude_cli_envelope(&stdout)?;
 
     let raw_content = envelope
         .get("result")
@@ -389,24 +525,77 @@ pub fn call_claude_cli_inner(
 /// # Errors
 /// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
 /// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
-pub fn call_claude_cli_plain(user_message: &str, _max_tokens: u32) -> Result<String, LlmError> {
+pub fn call_claude_cli_plain(user_message: &str, max_tokens: u32) -> Result<String, LlmError> {
+    call_claude_cli_plain_with_model(user_message, max_tokens, None)
+}
+
+/// [`call_claude_cli_plain`] with an optional `--model` override (#b304331).
+///
+/// # Errors
+/// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
+/// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
+pub fn call_claude_cli_plain_with_model(
+    user_message: &str,
+    _max_tokens: u32,
+    model: Option<&str>,
+) -> Result<String, LlmError> {
     if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
     }
     let runner = RealClaudeRunner;
-    let (stdout, stderr, code) = runner.run(user_message, None);
+    let (stdout, stderr, code) = runner.run(
+        user_message,
+        None,
+        model,
+        &[],
+        crate::openai_compat::api_timeout(),
+    );
     if code != 0 {
         let snippet = stderr.trim().chars().take(500).collect::<String>();
         return Err(LlmError::ClaudeCliError(format!(
             "claude -p exited {code}: {snippet}"
         )));
     }
-    let envelope: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
-        LlmError::ClaudeCliError(format!("claude -p produced unparseable JSON envelope: {e}"))
-    })?;
+    let envelope = claude_cli_envelope(&stdout)?;
     Ok(envelope
         .get("result")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string())
+}
+
+/// Parse the JSON from `claude -p --output-format json`, normalizing both
+/// envelope shapes (#edfe581). Older CLIs returned a single envelope object;
+/// CLI >= ~2.1 emits a JSON ARRAY of streamed event objects (system init,
+/// assistant turns, optional rate-limit event, and a terminal
+/// `{"type":"result"}`). Returns the result dict either way.
+fn claude_cli_envelope(stdout: &str) -> Result<serde_json::Value, LlmError> {
+    let snippet = || stdout.chars().take(500).collect::<String>();
+    let parsed: serde_json::Value = serde_json::from_str(stdout).map_err(|e| {
+        LlmError::ClaudeCliError(format!(
+            "claude -p produced unparseable JSON envelope: {e}; \
+             first 500 chars of stdout: {:?}",
+            snippet()
+        ))
+    })?;
+    let Some(events) = parsed.as_array() else {
+        return Ok(parsed);
+    };
+    // Prefer the terminal {"type":"result"} event; fall back to the last
+    // object in the stream.
+    if let Some(result) = events
+        .iter()
+        .rev()
+        .find(|e| e.get("type").and_then(serde_json::Value::as_str) == Some("result"))
+    {
+        return Ok(result.clone());
+    }
+    if let Some(last) = events.last().filter(|e| e.is_object()) {
+        return Ok(last.clone());
+    }
+    Err(LlmError::ClaudeCliError(format!(
+        "claude -p returned a JSON array with no result object; \
+         first 500 chars of stdout: {:?}",
+        snippet()
+    )))
 }

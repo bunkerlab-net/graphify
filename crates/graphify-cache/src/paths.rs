@@ -1,9 +1,22 @@
 //! Path conventions for the cache.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use crate::error::CacheError;
+
+/// Version that namespaces the AST cache. AST entries are the output of
+/// graphify's own extractor code, so they are only valid for the version
+/// that wrote them; bumping the package invalidates them. The semantic cache
+/// is deliberately *not* versioned (re-extraction costs LLM calls).
+pub const EXTRACTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// AST version directories already swept this process — cleanup runs once per
+/// `(base, version)` to avoid re-listing the directory on every cached file.
+static CLEANED_AST_DIRS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Output directory name; defaults to `"graphify-out"` and respects the
 /// `GRAPHIFY_OUT` environment variable override.
@@ -35,15 +48,75 @@ pub(crate) fn stat_index_file(root: &Path) -> PathBuf {
     out_base(root).join("cache").join("stat-index.json")
 }
 
-/// Return `graphify-out/cache/{kind}/`, creating it if it does not exist.
+/// Return the cache directory for `kind`, creating it if it does not exist.
+///
+/// AST entries live under a per-version subdirectory
+/// (`graphify-out/cache/ast/v{version}/`) because they depend on extractor
+/// code, not just file contents; semantic entries live unversioned in
+/// `graphify-out/cache/semantic/`.
 ///
 /// # Errors
 ///
 /// Returns [`CacheError::Io`] if the directory could not be created.
 pub fn cache_dir(root: &Path, kind: &str) -> Result<PathBuf, CacheError> {
-    let d = out_base(root).join("cache").join(kind);
+    cache_dir_versioned(root, kind, EXTRACTOR_VERSION)
+}
+
+/// Like [`cache_dir`] but with the AST namespace version supplied explicitly.
+/// Used both by [`cache_dir`] (passing [`EXTRACTOR_VERSION`]) and by tests
+/// that need to simulate an upgrade.
+///
+/// # Errors
+///
+/// Returns [`CacheError::Io`] if the directory could not be created.
+pub fn cache_dir_versioned(root: &Path, kind: &str, version: &str) -> Result<PathBuf, CacheError> {
+    let mut d = out_base(root).join("cache").join(kind);
+    if kind == "ast" {
+        d = d.join(format!("v{version}"));
+        if let Some(parent) = d.parent() {
+            cleanup_stale_ast_entries(parent, &d);
+        }
+    }
     fs::create_dir_all(&d)?;
     Ok(d)
+}
+
+/// Remove AST cache entries left behind by other graphify versions.
+///
+/// Sweeps sibling `v*/` directories and unversioned `*.json` entries (the
+/// pre-versioning layout) under `cache/ast/`. Runs at most once per version
+/// directory per process. Best-effort: filesystem failures are ignored and
+/// stragglers are retried on the next run.
+fn cleanup_stale_ast_entries(ast_base: &Path, current_dir: &Path) {
+    let key = current_dir.to_string_lossy().into_owned();
+    {
+        let mut guard = CLEANED_AST_DIRS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !guard.insert(key) {
+            return;
+        }
+    }
+    let Ok(entries) = fs::read_dir(ast_base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child == *current_dir {
+            continue;
+        }
+        if child.is_dir() {
+            if child
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('v'))
+            {
+                let _ = fs::remove_dir_all(&child);
+            }
+        } else if child.extension().and_then(|e| e.to_str()) == Some("json") {
+            let _ = fs::remove_file(&child);
+        }
+    }
 }
 
 /// Normalise a path for cache-key consistency.

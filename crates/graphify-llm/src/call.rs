@@ -6,27 +6,50 @@
 
 use crate::LlmError;
 use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
-use crate::{bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat};
+use crate::{
+    azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
+};
 
 /// Send a plain-text `prompt` to the named `backend` and return the text reply.
 ///
-/// Mirrors Python `_call_llm` at `llm.py:948`. Unlike [`crate::extract_files_direct`],
+/// Mirrors Python `_call_llm` at `llm.py:1719`. Unlike [`crate::extract_files_direct`],
 /// this skips the extraction system prompt and JSON parsing — the caller receives
-/// the raw model output as a `String`.
+/// the raw model output as a `String`. Uses the backend's default model; callers
+/// that need to override the model use [`call_llm_with_model`].
 ///
 /// # Errors
 /// - [`LlmError::UnknownBackend`] for unregistered backend names.
 /// - [`LlmError::NoApiKey`] when no key is configured (except `bedrock`/`claude-cli`).
 /// - Backend-specific HTTP / parse errors.
 pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String, LlmError> {
+    call_llm_with_model(prompt, backend, max_tokens, None)
+}
+
+/// [`call_llm`] with an optional model override.
+///
+/// When `model` is `Some(non_empty)`, it replaces the backend's default model
+/// (`mdl = model or _default_model_for_backend(backend)` in Python). Used by
+/// community labeling's `--model` flag (#b304331).
+///
+/// # Errors
+/// Same as [`call_llm`].
+pub fn call_llm_with_model(
+    prompt: &str,
+    backend: &str,
+    max_tokens: usize,
+    model: Option<&str>,
+) -> Result<String, LlmError> {
     let max_tokens_u32 = u32::try_from(max_tokens).unwrap_or(u32::MAX);
+    // Treat a blank `--model ""` as "no override", matching Python's
+    // `model or default` (an empty string is falsy there).
+    let model = model.map(str::trim).filter(|m| !m.is_empty());
 
     // Custom (non-built-in) provider: route through the OpenAI-compatible client
     // using the provider's base_url / model / env_key (#1084).
     if !crate::providers::is_builtin_backend(backend)
         && let Some(provider) = crate::providers::load_custom_providers().get(backend)
     {
-        return call_custom_plain(provider, prompt, max_tokens_u32);
+        return call_custom_plain(provider, prompt, max_tokens_u32, model);
     }
 
     let cfg = backend_config(backend).ok_or_else(|| {
@@ -75,7 +98,7 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
         )));
     }
 
-    let mdl = cfg.default_model;
+    let mdl = model.unwrap_or(cfg.default_model);
 
     match backend {
         "claude" => {
@@ -112,7 +135,7 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
                 .unwrap_or("")
                 .to_string())
         }
-        "claude-cli" => claude_cli::call_claude_cli_plain(prompt, max_tokens_u32),
+        "claude-cli" => claude_cli::call_claude_cli_plain_with_model(prompt, max_tokens_u32, model),
         "bedrock" => {
             let region = bedrock::resolve_region();
             bedrock::call_bedrock_plain(mdl, &region, prompt, max_tokens_u32)
@@ -125,21 +148,32 @@ pub fn call_llm(prompt: &str, backend: &str, max_tokens: usize) -> Result<String
             temperature: Some(0.0),
             reasoning_effort: None,
             disable_thinking: true,
+            extra_body: None,
             max_tokens: max_tokens_u32,
         }),
         "gemini" => gemini::call_gemini_plain(&key, mdl, prompt, max_tokens_u32),
         "openai" => openai::call_openai_plain(&key, mdl, prompt, max_tokens_u32),
         "deepseek" => deepseek::call_deepseek_plain(&key, mdl, prompt, max_tokens_u32),
         "ollama" => ollama::call_ollama_plain(&key, &ollama_base_url, mdl, prompt, max_tokens_u32),
+        "azure" => {
+            // Resolve the deployment from the environment when no override is
+            // given, then require AZURE_OPENAI_ENDPOINT.
+            let azure_mdl = model.map_or_else(azure::resolve_model, str::to_string);
+            let endpoint = azure::resolve_endpoint()?;
+            azure::call_azure_plain(&key, &endpoint, &azure_mdl, prompt, max_tokens_u32)
+        }
         _ => unreachable!("backend_config already validated backend name"),
     }
 }
 
 /// Plain-text call against a custom OpenAI-compatible provider (#1084).
+///
+/// `model` overrides the provider's `default_model` when `Some` (#b304331).
 fn call_custom_plain(
     provider: &crate::providers::CustomProvider,
     prompt: &str,
     max_tokens: u32,
+    model: Option<&str>,
 ) -> Result<String, LlmError> {
     let key = std::env::var(&provider.env_key).unwrap_or_default();
     if key.is_empty() {
@@ -151,11 +185,12 @@ fn call_custom_plain(
     kimi::call_plain_openai_compat(&kimi::PlainOpenAiRequest {
         base_url: &provider.base_url,
         api_key: &key,
-        model: &provider.default_model,
+        model: model.unwrap_or(&provider.default_model),
         prompt,
         temperature: Some(provider.temperature),
         reasoning_effort: None,
         disable_thinking: false,
+        extra_body: provider.extra_body.as_ref(),
         max_tokens,
     })
 }

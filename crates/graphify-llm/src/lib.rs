@@ -17,6 +17,7 @@
 //! | `kimi` | Moonshot AI (Kimi K2) | `MOONSHOT_API_KEY` |
 //! | `deepseek` | `DeepSeek` Chat Completions | `DEEPSEEK_API_KEY` |
 //! | `ollama` | Local Ollama server | `OLLAMA_BASE_URL` (optional) |
+//! | `azure` | Azure `OpenAI` Service | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` |
 //! | `bedrock` | AWS Bedrock Converse API (`aws-sdk-bedrockruntime`) | Any AWS credential provider: env vars, profile, SSO, IMDS, ECS, web identity |
 //!
 //! Use [`router`] to obtain a boxed [`LlmBackend`] by name, or call backend
@@ -30,6 +31,7 @@
 //! - [`call_llm`] — send a plain-text prompt and receive a raw string reply.
 //! - [`pack_chunks_by_tokens`] — group files into token-budget–sized chunks before extraction.
 
+pub mod azure;
 pub mod backends;
 pub mod bedrock;
 pub mod call;
@@ -53,12 +55,13 @@ mod response;
 pub mod retry;
 pub mod tokenizer;
 pub mod tokens;
+pub mod vision;
 
 pub use backends::{
     BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars, detect_backend,
     detect_backend_with, format_backend_env_keys, get_backend_api_key, router,
 };
-pub use call::call_llm;
+pub use call::{call_llm, call_llm_with_model};
 pub use constants::{
     DEEP_EXTRACTION_SUFFIX, EXTRACTION_SYSTEM, FILE_CHAR_CAP, LLM_JSON_MAX_BYTES,
     PER_FILE_OVERHEAD_CHARS, extraction_system,
@@ -66,8 +69,9 @@ pub use constants::{
 pub use error::LlmError;
 pub use extract::{extract_files_direct, extract_files_direct_mode};
 pub use labeling::{
-    generate_community_labels, generate_community_labels_with, label_communities,
-    label_communities_with, placeholder_community_labels,
+    LABEL_BATCH_SIZE, LABEL_MAX_COMMUNITIES, LabelOptions, generate_community_labels,
+    generate_community_labels_with, label_communities, label_communities_with,
+    placeholder_community_labels,
 };
 pub use parallel::{
     ChunkDoneCb, CorpusConfig, extract_corpus_parallel, extract_corpus_parallel_with_total,
@@ -78,9 +82,13 @@ pub use providers::{
     CustomProvider, custom_providers_path, is_builtin_backend, load_custom_providers,
     load_custom_providers_from, provider_base_url_ok,
 };
-pub use read::read_files;
+pub use read::{neutralise_injection_sentinels, read_files, wrap_untrusted};
 pub use response::{LlmBackend, LlmResponse};
 pub use retry::{
     extract_with_adaptive_retry, looks_like_context_exceeded, looks_like_context_exceeded_dyn,
 };
 pub use tokens::{estimate_cost, estimate_file_tokens, pack_chunks_by_tokens};
+pub use vision::{
+    ImageRef, anthropic_content, backend_supports_vision, build_image_refs, image_notes,
+    is_vision_image, openai_content, partition_semantic_files, strip_pixels, with_image_notes,
+};

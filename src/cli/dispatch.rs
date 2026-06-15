@@ -53,7 +53,27 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
             cli::merge_chunks::cmd_merge_semantic(cached.as_deref(), new.as_deref(), &out)
         }
         cmd @ Command::Prs { .. } => dispatch_prs(cmd),
-        Command::Serve { graph } => cli::serve::cmd_serve(graph.as_deref()),
+        Command::Serve {
+            graph,
+            transport,
+            host,
+            port,
+            api_key,
+            path,
+            json_response,
+            stateless,
+            session_timeout,
+        } => cli::serve::cmd_serve(cli::serve::ServeOptions {
+            graph: graph.as_deref(),
+            transport,
+            host,
+            port,
+            api_key,
+            path,
+            json_response,
+            stateless,
+            session_timeout,
+        }),
         Command::Affected {
             query,
             relations,
@@ -70,6 +90,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         // reaches the agent via AGENTS.md / skill instead.
         Command::HookCheck => Ok(()),
         Command::Claude { cmd: c } => cli::install::cmd_platform("claude", &c),
+        Command::Codebuddy { cmd: c } => cli::install::cmd_platform("codebuddy", &c),
         Command::Gemini { cmd: c } => cli::install::cmd_platform("gemini", &c),
         Command::Cursor { cmd: c } => cli::install::cmd_platform("cursor", &c),
         Command::Vscode { cmd: c } => cli::install::cmd_platform("vscode", &c),
@@ -124,6 +145,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         min_community_size,
         no_label,
         backend,
+        model,
         force,
     ) = match cmd {
         Command::ClusterOnly {
@@ -135,6 +157,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             no_label,
             backend,
+            model,
         } => (
             path,
             no_viz,
@@ -144,6 +167,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             no_label,
             backend,
+            model,
             false,
         ),
         Command::Label {
@@ -154,6 +178,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             exclude_hubs,
             min_community_size,
             backend,
+            model,
         } => (
             path,
             no_viz,
@@ -163,6 +188,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             false,
             backend,
+            model,
             true,
         ),
         _ => unreachable!("dispatch_cluster_only invoked with wrong variant"),
@@ -177,6 +203,7 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         cli::cluster_only::LabelOptions {
             no_label,
             backend: backend.as_deref(),
+            model: model.as_deref(),
             force_relabel: force,
         },
     )
@@ -251,6 +278,8 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         exclude_hubs,
         exclude,
         dedup_llm,
+        cargo,
+        postgres,
     } = cmd
     else {
         unreachable!("dispatch_extract invoked with wrong variant")
@@ -279,6 +308,10 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         global: cli::extract::GlobalOptions {
             global,
             as_tag: as_tag.as_deref(),
+        },
+        introspect: cli::extract::IntrospectOptions {
+            cargo,
+            postgres: postgres.as_deref(),
         },
     })
 }

@@ -47,3 +47,14 @@ pub(in crate::platform) const SKILL_REGISTRATION: &str = "\n# graphify\n\
 - any input to knowledge graph. Trigger: `/graphify`\n\
 When the user types `/graphify`, invoke the Skill tool \
 with `skill: \"graphify\"` before doing anything else.\n";
+
+/// Skill registration text appended to `~/.codebuddy/CODEBUDDY.md` (#1136).
+///
+/// Identical to [`SKILL_REGISTRATION`] but points at `CodeBuddy`'s user-scope
+/// skill path, matching graphify-py's
+/// `_skill_registration("~/.codebuddy/skills/graphify/SKILL.md")`.
+pub(in crate::platform) const CODEBUDDY_REGISTRATION: &str = "\n# graphify\n\
+- **graphify** (`~/.codebuddy/skills/graphify/SKILL.md`) \
+- any input to knowledge graph. Trigger: `/graphify`\n\
+When the user types `/graphify`, invoke the Skill tool \
+with `skill: \"graphify\"` before doing anything else.\n";

@@ -10,7 +10,11 @@ use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 fn cli() -> Command {
-    Command::cargo_bin("graphify").expect("cargo-bin graphify")
+    let mut cmd = Command::cargo_bin("graphify").expect("cargo-bin graphify");
+    // Keep query/path/explain runs from appending to the developer's real
+    // ~/.cache/graphify-queries.log during tests (#1128 query logging).
+    cmd.env("GRAPHIFY_QUERY_LOG_DISABLE", "1");
+    cmd
 }
 
 fn write_graph_json(path: &Path) {
@@ -354,6 +358,34 @@ fn export_html_no_community_data_at_all_still_succeeds() -> Result<(), Box<dyn s
         .assert()
         .success();
     Ok(())
+}
+
+// ── export falkordb (cypher.txt, no --push) ─────────────────────────────────
+
+#[test]
+fn export_falkordb_writes_cypher_without_push() {
+    // Without --push, `export falkordb` writes OpenCypher to cypher.txt (the
+    // live redis push is feature-gated and needs a server). #1175.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+
+    cli()
+        .arg("export")
+        .arg("falkordb")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success()
+        .stdout(contains("cypher.txt"));
+
+    let cypher = fs::read_to_string(out.join("cypher.txt")).unwrap();
+    assert!(
+        cypher.contains("MERGE"),
+        "expected MERGE statements: {cypher}"
+    );
 }
 
 // ── path/explain on missing graph ──────────────────────────────────────────
