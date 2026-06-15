@@ -71,6 +71,12 @@ fn net_postgres_introspects_live_schema() {
             .collect::<Vec<_>>()
     );
 
-    let _ = setup
-        .batch_execute("DROP TABLE IF EXISTS net_pg_orders; DROP TABLE IF EXISTS net_pg_users;");
+    // Best-effort cleanup: log rather than swallow a teardown failure, but do
+    // not fail an already-passing test on a connection hiccup — the next run's
+    // seed drops these tables first anyway.
+    if let Err(e) = setup
+        .batch_execute("DROP TABLE IF EXISTS net_pg_orders; DROP TABLE IF EXISTS net_pg_users;")
+    {
+        eprintln!("warning: failed to drop test schema: {e}");
+    }
 }
