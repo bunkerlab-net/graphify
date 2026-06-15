@@ -292,10 +292,17 @@ fn pg_query_catalog(client: &mut postgres::Client) -> Result<PgCatalog, PgIntros
 
     let foreign_keys = q(
         client,
+        // Cast the aggregated `column_name`s to `text`: they are
+        // `information_schema.sql_identifier` (a domain over `name`), and
+        // `ARRAY_AGG` over a domain yields an array whose element type the
+        // postgres client cannot map onto `Vec<String>` (it deserializes only
+        // text/varchar/name arrays). The per-element `::text` cast makes the
+        // result a plain `text[]`. Without it, introspecting any database that
+        // has a foreign key fails at runtime with "error deserializing column".
         "SELECT tc.constraint_name, kcu1.table_schema, kcu1.table_name, \
-         ARRAY_AGG(kcu1.column_name ORDER BY kcu1.ordinal_position) AS columns, \
+         ARRAY_AGG(kcu1.column_name::text ORDER BY kcu1.ordinal_position) AS columns, \
          kcu2.table_schema AS foreign_table_schema, kcu2.table_name AS foreign_table_name, \
-         ARRAY_AGG(kcu2.column_name ORDER BY kcu2.ordinal_position) AS foreign_columns \
+         ARRAY_AGG(kcu2.column_name::text ORDER BY kcu2.ordinal_position) AS foreign_columns \
          FROM information_schema.table_constraints AS tc \
          JOIN information_schema.referential_constraints AS rc \
            ON tc.constraint_name = rc.constraint_name AND tc.table_schema = rc.constraint_schema \
