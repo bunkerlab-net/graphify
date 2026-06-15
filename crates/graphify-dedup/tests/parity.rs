@@ -371,12 +371,12 @@ fn prefix_extension_symbols_not_merged() {
     ];
     for (a, b) in pairs {
         let nodes = vec![
-            json!({"id": format!("{a}_id"), "label": a, "type": "CODE", "src_file": "api.py"}),
-            json!({"id": format!("{b}_id"), "label": b, "type": "CODE", "src_file": "api.py"}),
+            json!({"id": format!("{a}_id"), "label": a, "type": "CODE", "source_file": "api.py"}),
+            json!({"id": format!("{b}_id"), "label": b, "type": "CODE", "source_file": "api.py"}),
         ];
         let edges = vec![json!({
-            "src": format!("{a}_id"), "tgt": format!("{b}_id"),
-            "relation": "calls", "c": 1.0, "weight": 1.0,
+            "source": format!("{a}_id"), "target": format!("{b}_id"),
+            "relation": "calls", "confidence": 1.0, "weight": 1.0,
         })];
         let mut communities: IndexMap<String, i64> = IndexMap::new();
         communities.insert(format!("{a}_id"), 0);

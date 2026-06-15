@@ -104,6 +104,21 @@ pub fn push_to_falkordb(
 ) -> Result<(usize, usize), FalkorDbError> {
     use crate::neo4j::{build_edge_rows, build_node_rows, merge_edge_cypher, merge_node_cypher};
 
+    // `parse_falkordb_uri` swallows a parse failure and defaults to
+    // localhost:6379 (mirroring Python's lenient `urlparse`, fine for the
+    // offline cypher.txt path). In push mode that silent fallback could write a
+    // graph to the wrong database, so fail fast here before any connection: the
+    // strict `url` parser rejects a malformed URI that `urlparse` would have
+    // limped past.
+    let normalized = if uri.contains("://") {
+        uri.to_string()
+    } else {
+        format!("redis://{uri}")
+    };
+    if url::Url::parse(&normalized).is_err() {
+        return Err(FalkorDbError::InvalidUri(uri.to_string()));
+    }
+
     let conn = parse_falkordb_uri(uri, user, password);
     let info = redis::ConnectionInfo {
         addr: redis::ConnectionAddr::Tcp(conn.host, conn.port),
@@ -142,6 +157,11 @@ pub fn push_to_falkordb(
 #[cfg(feature = "falkordb")]
 #[derive(Debug, thiserror::Error)]
 pub enum FalkorDbError {
+    /// The connection URI could not be parsed; refused before connecting so a
+    /// push never silently lands on the default localhost database.
+    #[error("falkordb: could not parse connection URI {0:?}")]
+    InvalidUri(String),
+
     /// A `redis` client / `GRAPH.QUERY` error.
     #[error("falkordb/redis error: {0}")]
     Redis(#[from] redis::RedisError),

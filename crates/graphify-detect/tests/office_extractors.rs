@@ -369,3 +369,47 @@ fn convert_office_file_does_not_rewrite_existing_sidecar() {
         "existing sidecar must not be rewritten"
     );
 }
+
+#[test]
+fn convert_office_file_regenerates_when_source_is_newer() {
+    // When the source Office file is modified after the sidecar was written, the
+    // stale sidecar must be regenerated so extraction sees the new content. This
+    // is a divergence from graphify-py, which skips on sidecar existence alone.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out_dir = tmp.path().join("converted");
+    let src = tmp.path().join("doc.docx");
+    build_minimal_docx(&src, "version one");
+
+    let sidecar = convert_office_file(&src, &out_dir)
+        .expect("convert")
+        .expect("sidecar");
+    // Overwrite the sidecar with a sentinel that a regeneration must clobber.
+    fs::write(&sidecar, "SENTINEL").expect("write sentinel");
+    let sidecar_mtime = fs::metadata(&sidecar)
+        .expect("meta")
+        .modified()
+        .expect("mtime");
+
+    // Rewrite the source until its mtime is strictly newer than the sidecar.
+    // Looping on a short sleep tolerates coarse filesystem mtime resolution
+    // without a fixed long delay (on ns-resolution filesystems the first
+    // iteration already wins).
+    loop {
+        build_minimal_docx(&src, "version two");
+        let src_mtime = fs::metadata(&src).expect("meta").modified().expect("mtime");
+        if src_mtime > sidecar_mtime {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    let regenerated = convert_office_file(&src, &out_dir)
+        .expect("convert")
+        .expect("sidecar");
+    assert_eq!(regenerated, sidecar);
+    assert_ne!(
+        fs::read_to_string(&regenerated).expect("read"),
+        "SENTINEL",
+        "a newer source must trigger sidecar regeneration"
+    );
+}

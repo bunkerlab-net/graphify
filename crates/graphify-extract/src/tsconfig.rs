@@ -146,7 +146,15 @@ fn normpath(p: &Path) -> PathBuf {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
+                // Pop only a real (Normal) trailing component. At the root of an
+                // absolute path `..` is a no-op — `os.path.normpath` never lets
+                // an absolute path climb above its root, and a bare `out.pop()`
+                // here would strip the root and turn `/a/../..` into a stray
+                // `..`, corrupting alias resolution. For a relative path with
+                // nothing poppable, accumulate the `..`.
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else if !out.is_absolute() {
                     out.push("..");
                 }
             }

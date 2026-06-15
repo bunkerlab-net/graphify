@@ -53,6 +53,21 @@ async fn body_string(resp: axum::response::Response) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+#[test]
+fn build_app_rejects_path_without_leading_slash() {
+    // `opts.path` is a CLI flag; a value that doesn't start with `/` would panic
+    // axum's router. `build_app` must reject it with a clean error instead.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gp = write_graph(dir.path());
+    let mut o = opts(true, None);
+    o.path = "mcp".to_string();
+    let err = build_app(&gp, &o).expect_err("path without leading slash must error");
+    assert!(
+        matches!(err, graphify_serve::ServeError::InvalidHttpPath(_)),
+        "expected InvalidHttpPath, got {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn tools_list_returns_json_in_json_mode() {
     let dir = tempfile::tempdir().expect("tempdir");

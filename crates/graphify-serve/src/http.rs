@@ -109,8 +109,20 @@ pub async fn serve_http(graph_path: &str, opts: HttpOptions) -> Result<(), Serve
         );
     }
 
-    let addr = format!("{}:{}", opts.host, opts.port);
-    let listener = tokio::net::TcpListener::bind(&addr)
+    // An IPv6 literal host (e.g. `::1` or `::`) must be bracketed before the
+    // `:port` suffix or the address parser splits on the wrong colon. An empty
+    // host means "all interfaces" — bind `0.0.0.0` to match the warning above.
+    let host = if opts.host.is_empty() {
+        "0.0.0.0"
+    } else {
+        opts.host.as_str()
+    };
+    let addr = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{}", opts.port)
+    } else {
+        format!("{host}:{}", opts.port)
+    };
+    let listener = tokio::net::TcpListener::bind(addr.as_str())
         .await
         .map_err(|e| ServeError::Io(format!("could not bind {addr}: {e}")))?;
     axum::serve(listener, app)
@@ -129,6 +141,12 @@ pub async fn serve_http(graph_path: &str, opts: HttpOptions) -> Result<(), Serve
 ///
 /// Returns [`ServeError`] if the graph at `graph_path` cannot be loaded.
 pub fn build_app(graph_path: &str, opts: &HttpOptions) -> Result<Router, ServeError> {
+    // axum's `Router::route` panics on a path that doesn't start with `/`.
+    // `opts.path` comes from a CLI flag, so validate it here and surface a
+    // clean error rather than letting a bad value abort the process.
+    if !opts.path.starts_with('/') {
+        return Err(ServeError::InvalidHttpPath(opts.path.clone()));
+    }
     let api_key = opts
         .api_key
         .as_deref()

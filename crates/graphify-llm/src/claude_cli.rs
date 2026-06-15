@@ -112,7 +112,17 @@ impl ClaudeRunner for RealClaudeRunner {
                     1,
                 );
             }
-            Err(e) => return (String::new(), e.to_string(), 1),
+            Err(e) => {
+                // OS-level wait failure: reap the child and drain the reader
+                // threads before returning, mirroring the timeout branch above
+                // so a failed wait never leaks the subprocess or its pipe
+                // readers.
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(stdout_handle.and_then(|h| h.join().ok()));
+                drop(stderr_handle.and_then(|h| h.join().ok()));
+                return (String::new(), e.to_string(), 1);
+            }
         };
 
         let stdout = stdout_handle

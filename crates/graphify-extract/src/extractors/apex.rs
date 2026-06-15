@@ -62,6 +62,11 @@ static APEX_METHOD_RE: LazyLock<Regex> = LazyLock::new(|| {
 static APEX_ANNOTATION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)@(\w+)").expect("apex annotation regex"));
 
+#[allow(clippy::expect_used)] // composed-from-literal pattern
+static APEX_ANNOT_ONLY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?i)^{AP_ANNOT}$")).expect("apex annotation-only regex")
+});
+
 #[allow(clippy::expect_used)] // literal pattern
 static APEX_SOQL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\[\s*SELECT\b[^\]]+FROM\s+(\w+)").expect("apex soql regex"));
@@ -201,7 +206,20 @@ pub fn extract_apex(path: &Path) -> FileResult {
             for cap in APEX_ANNOTATION_RE.captures_iter(stripped) {
                 pending_annotations.push(cap[1].to_lowercase());
             }
-            continue;
+            // An annotation-only line carries its annotations to the next line
+            // (the declaration they decorate), so skip the rest of the loop to
+            // preserve `pending_annotations` past the fall-through clear below.
+            // When a declaration shares the line (inline annotation, e.g.
+            // `@AuraEnabled public static String foo()`), fall through so the
+            // declaration regexes — which all carry the `AP_ANNOT` prefix
+            // precisely to match inline annotations — can still match it.
+            //
+            // DIVERGENCE from graphify-py (`extract.py` `extract_apex`), which
+            // unconditionally `continue`s here and so silently drops every
+            // inline-annotated declaration.
+            if APEX_ANNOT_ONLY_RE.is_match(stripped) {
+                continue;
+            }
         }
 
         if let Some(tm) = APEX_TRIGGER_RE.captures(stripped) {

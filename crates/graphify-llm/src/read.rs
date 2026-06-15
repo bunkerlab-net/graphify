@@ -81,7 +81,34 @@ fn file_to_text(path: &Path) -> Option<String> {
 pub fn wrap_untrusted(rel: &str, content: &str) -> String {
     let sha = hex::encode(Sha256::digest(content.as_bytes()));
     let safe = neutralise_injection_sentinels(content);
-    format!("<untrusted_source path=\"{rel}\" sha256=\"{sha}\">\n{safe}\n</untrusted_source>")
+    // `rel` is a corpus filename and therefore attacker-controlled: a name
+    // containing `"`, `<`, `>`, `&`, or a newline could otherwise close the
+    // `path="..."` attribute (or the tag itself) and smuggle text into the
+    // prompt as if it were trusted instruction. graphify-py interpolates `rel`
+    // raw (`llm.py` `_wrap_untrusted`); we escape it for the attribute here.
+    let safe_rel = xml_attr_escape(rel);
+    format!("<untrusted_source path=\"{safe_rel}\" sha256=\"{sha}\">\n{safe}\n</untrusted_source>")
+}
+
+/// Escape a string for safe inclusion in an XML attribute value (`"..."`).
+/// Covers the five XML metacharacters plus the whitespace controls that would
+/// break a single-line attribute.
+fn xml_attr_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Read and format file contents for the extraction prompt.

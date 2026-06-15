@@ -144,12 +144,15 @@ fn try_log_query(rec: &QueryLog<'_>) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let line = serde_json::to_string(&Value::Object(map)).map_err(std::io::Error::other)?;
+    let mut line = serde_json::to_string(&Value::Object(map)).map_err(std::io::Error::other)?;
+    // Append the newline to the payload so the record is written with a single
+    // `write_all`. With two writes, concurrent appenders could interleave a
+    // record and its terminating newline and corrupt the JSONL framing.
+    line.push('\n');
     let mut fh = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)?;
     fh.write_all(line.as_bytes())?;
-    fh.write_all(b"\n")?;
     Ok(())
 }

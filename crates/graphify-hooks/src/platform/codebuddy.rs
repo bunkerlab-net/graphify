@@ -59,14 +59,19 @@ pub fn codebuddy_install(project_dir: &Path) -> Result<String, HooksError> {
     msgs.push(format!("  skill installed  ->  {}", skill_dst.display()));
 
     let target = project_dir.join("CODEBUDDY.md");
-    let new_content = if target.exists() {
-        let content = fs::read_to_string(&target)?;
-        replace_or_append_section(&content, CLAUDE_MD_MARKER, CLAUDE_MD_SECTION)
+    // Read the existing file once and reuse it for both the section merge and the
+    // no-change comparison below.
+    let existing = if target.exists() {
+        Some(fs::read_to_string(&target)?)
     } else {
-        CLAUDE_MD_SECTION.trim_start().to_string()
+        None
+    };
+    let new_content = match &existing {
+        Some(content) => replace_or_append_section(content, CLAUDE_MD_MARKER, CLAUDE_MD_SECTION),
+        None => CLAUDE_MD_SECTION.trim_start().to_string(),
     };
 
-    if target.exists() && fs::read_to_string(&target).is_ok_and(|c| c == new_content) {
+    if existing.as_deref() == Some(new_content.as_str()) {
         msgs.push(format!(
             "graphify already configured in {} (no change)",
             target.display()

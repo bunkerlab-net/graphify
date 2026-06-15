@@ -145,16 +145,19 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("antigravity", PlatformCmd::Uninstall { project: true }) => {
             antigravity_uninstall(&cwd, true)?
         }
+        // `CodeBuddy` writes CODEBUDDY.md + a .codebuddy/settings.json hook and
+        // copies the skill, like `claude install` (#1136). graphify-py's
+        // `codebuddy` CLI dispatch ignores `--project` (`codebuddy_install()` /
+        // `codebuddy_uninstall()` at `__main__.py:2374-2377`), so BOTH the plain
+        // and `--project` forms run the full CodeBuddy setup. Matched before the
+        // generic `--project` branch below so the flag can't divert it to a
+        // skill-only project install.
+        ("codebuddy", PlatformCmd::Install { .. }) => codebuddy_install(&cwd)?,
+        ("codebuddy", PlatformCmd::Uninstall { .. }) => codebuddy_uninstall(&cwd)?,
         (p, PlatformCmd::Install { project: true }) => install_platform_skill_project(p, &cwd)?,
         (p, PlatformCmd::Uninstall { project: true }) => uninstall_platform_skill_project(p, &cwd)?,
         ("claude", PlatformCmd::Install { .. }) => claude_install(&cwd)?,
         ("claude", PlatformCmd::Uninstall { .. }) => claude_uninstall(&cwd)?,
-        // `CodeBuddy` writes CODEBUDDY.md + a .codebuddy/settings.json hook and
-        // copies the skill, like `claude install` (#1136). graphify-py's
-        // `codebuddy` CLI dispatch ignores `--project`, so a `--project` flag
-        // falls through to the generic project-skill branch above.
-        ("codebuddy", PlatformCmd::Install { .. }) => codebuddy_install(&cwd)?,
-        ("codebuddy", PlatformCmd::Uninstall { .. }) => codebuddy_uninstall(&cwd)?,
         ("gemini", PlatformCmd::Install { .. }) => gemini_install(&cwd)?,
         ("gemini", PlatformCmd::Uninstall { .. }) => gemini_uninstall(&cwd)?,
         ("vscode", PlatformCmd::Install { .. }) => vscode_install(&cwd)?,

@@ -29,6 +29,7 @@ pub fn max_graph_file_bytes() -> u64 {
 /// [`MAX_GRAPH_FILE_BYTES`] for blank/zero/negative/unparseable input. Split
 /// out from [`max_graph_file_bytes`] so the parsing can be tested without
 /// mutating the process environment.
+#[must_use]
 fn parse_graph_byte_cap(raw: &str) -> u64 {
     let raw = raw.trim();
     if raw.is_empty() {

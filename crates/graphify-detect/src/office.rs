@@ -714,11 +714,23 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
         .unwrap_or("document");
     let out_path = out_dir.join(format!("{stem}_{name_hash}.md"));
 
-    // Once the hash is stable the sidecar name is deterministic; skip rewriting
-    // an existing sidecar so an unchanged source never churns its mtime (which
-    // would otherwise still flag it as changed in `detect_incremental`).
+    // The sidecar name is derived from the source *path*, not its content, so a
+    // modified source maps to the same sidecar. Skip rewriting only when the
+    // existing sidecar is at least as new as the source: an unchanged source
+    // never churns its sidecar's mtime (#1226), but a modified source is
+    // regenerated so extraction sees the new content. graphify-py
+    // (`detect.py:_convert_office_file`) skips on existence alone, leaving a
+    // changed Office file's sidecar stale — fixed here. If either mtime can't be
+    // read, fall back to the existence-based skip.
     if out_path.exists() {
-        return Ok(Some(out_path));
+        let source_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+        let sidecar_mtime = std::fs::metadata(&out_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        let stale = matches!((source_mtime, sidecar_mtime), (Some(src), Some(side)) if src > side);
+        if !stale {
+            return Ok(Some(out_path));
+        }
     }
 
     let content = format!(

@@ -30,7 +30,7 @@ inline `python -c "..."` plumbing, no subagent dispatch from the host.
 /graphify <path> --neo4j                              # generate graphify-out/cypher.txt for Neo4j
 /graphify <path> --neo4j-push bolt://localhost:7687   # push directly to Neo4j
 /graphify <path> --falkordb                           # generate graphify-out/cypher.txt for FalkorDB
-/graphify <path> --falkordb-push falkordb://localhost:6379   # push directly to FalkorDB
+/graphify <path> --falkordb-push falkordb://localhost:6379   # push directly to FalkorDB (needs the `falkordb` build feature)
 /graphify <path> --mcp                                # start MCP stdio server for agent access
 /graphify <path> --watch                              # watch folder, auto-rebuild on code changes (no LLM needed)
 /graphify <path> --wiki                               # build agent-crawlable wiki (index.md + per-community article)

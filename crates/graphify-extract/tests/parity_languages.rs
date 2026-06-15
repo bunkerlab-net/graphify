@@ -849,6 +849,55 @@ fn apex_trigger_uses_sobject() {
     assert!(labels(&r).contains(&"Account"));
 }
 
+/// Inline annotations (annotation + declaration on the same line) must not
+/// drop the declaration. This is a DIVERGENCE from graphify-py's `extract_apex`,
+/// which `continue`s on every `@`-line and so loses inline-annotated classes and
+/// methods despite the declaration regexes carrying an annotation prefix.
+#[test]
+fn apex_inline_annotation_keeps_declaration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("Inline.cls");
+    std::fs::write(
+        &src,
+        "@IsTest public class Inline {\n    @AuraEnabled public static String foo() { return null; }\n}\n",
+    )
+    .expect("write cls");
+    let r = extract_apex(&src);
+    let ls = labels(&r);
+    assert!(
+        ls.contains(&"Inline"),
+        "inline-annotated class was dropped: {ls:?}"
+    );
+    assert!(
+        ls.iter().any(|l| l.contains("foo")),
+        "inline-annotated method was dropped: {ls:?}"
+    );
+}
+
+/// Own-line annotations must keep working after the inline-annotation fix: the
+/// pending annotation has to carry to the declaration on the next line so the
+/// `@AuraEnabled`/`@InvocableMethod` `contains` edge is still emitted.
+#[test]
+fn apex_own_line_annotation_still_carries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("OwnLine.cls");
+    std::fs::write(
+        &src,
+        "public class OwnLine {\n    @AuraEnabled\n    public static String bar() { return null; }\n}\n",
+    )
+    .expect("write cls");
+    let r = extract_apex(&src);
+    assert!(
+        labels(&r).iter().any(|l| l.contains("bar")),
+        "own-line-annotated method was dropped: {:?}",
+        labels(&r)
+    );
+    assert!(
+        relations(&r).contains("contains"),
+        "carried @AuraEnabled did not produce a contains edge"
+    );
+}
+
 /// `test_apex_missing_file_returns_empty`
 #[test]
 fn apex_missing_file_returns_empty() {

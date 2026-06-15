@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use graphify_llm::extract_files_direct;
 use serde_json::json;
+use serial_test::serial;
 
 /// RAII guard that sets/restores env vars (mirrors `per_backend_http.rs`).
 struct EnvGuard {
@@ -63,6 +64,7 @@ fn openai_mock_body() -> String {
 }
 
 #[test]
+#[serial]
 fn openai_vision_sends_image_url_data_uri() {
     let (_dir, files, root) = fixture();
     let mut server = mockito::Server::new();
@@ -86,6 +88,7 @@ fn openai_vision_sends_image_url_data_uri() {
 }
 
 #[test]
+#[serial]
 fn claude_vision_sends_image_block() {
     let (_dir, files, root) = fixture();
     let mut server = mockito::Server::new();
@@ -116,6 +119,7 @@ fn claude_vision_sends_image_block() {
 }
 
 #[test]
+#[serial]
 fn deepseek_non_vision_sends_text_note() {
     // deepseek has no vision support: the image is stripped to a pixel-free ref
     // and surfaces only as the `=== IMAGES ===` text note, so it still becomes a

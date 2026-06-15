@@ -356,59 +356,68 @@ const SV_NON_TYPE_WORDS: &[&str] = &[
     "endtask",
 ];
 
-#[allow(clippy::unwrap_used)] // static literal patterns; compilation cannot fail
+#[allow(clippy::expect_used)] // static literal patterns; compilation cannot fail
 static SV_CLASS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)\b(?:(interface)\s+)?class\s+(\w+)([^;{]*)\s*;(.*?)\bendclass\b").unwrap()
+    Regex::new(r"(?s)\b(?:(interface)\s+)?class\s+(\w+)([^;{]*)\s*;(.*?)\bendclass\b")
+        .expect("static SV_CLASS_RE regex")
 });
 
-#[allow(clippy::unwrap_used)] // static literal pattern
-static SV_TYPE_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\btype\s+(\w+)").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern
+static SV_TYPE_PARAM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\btype\s+(\w+)").expect("static SV_TYPE_PARAM_RE regex"));
 
-#[allow(clippy::unwrap_used)] // static literal pattern
-static SV_EXTENDS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bextends\s+(\w+)").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern
+static SV_EXTENDS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bextends\s+(\w+)").expect("static SV_EXTENDS_RE regex"));
 
-#[allow(clippy::unwrap_used)] // static literal pattern
-static SV_IMPLEMENTS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bimplements\s+([^;{]+)").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern
+static SV_IMPLEMENTS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bimplements\s+([^;{]+)").expect("static SV_IMPLEMENTS_RE regex")
+});
 
-#[allow(clippy::unwrap_used)] // static literal pattern (function body, DOTALL)
-static SV_FUNC_BODY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)\bfunction\b.*?\bendfunction\b").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern (function body, DOTALL)
+static SV_FUNC_BODY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)\bfunction\b.*?\bendfunction\b").expect("static SV_FUNC_BODY_RE regex")
+});
 
-#[allow(clippy::unwrap_used)] // static literal pattern (field declaration, MULTILINE)
+#[allow(clippy::expect_used)] // static literal pattern (field declaration, MULTILINE)
 static SV_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*([A-Za-z_]\w*(?:\s*#\s*\([^;]+?\))?)\s+\w+\s*;").unwrap()
+    Regex::new(r"(?m)^\s*([A-Za-z_]\w*(?:\s*#\s*\([^;]+?\))?)\s+\w+\s*;")
+        .expect("static SV_FIELD_RE regex")
 });
 
-#[allow(clippy::unwrap_used)] // static literal pattern (one level of balanced parens)
+#[allow(clippy::expect_used)] // static literal pattern (one level of balanced parens)
 static SV_FUNC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"\bfunction\s+([A-Za-z_]\w*(?:\s*#\s*\((?:[^()]|\([^()]*\))*\))?)\s+(\w+)\s*\(((?:[^()]|\([^()]*\))*)\)\s*;",
     )
-    .unwrap()
+    .expect("static SV_FUNC_RE regex")
 });
 
-#[allow(clippy::unwrap_used)] // static literal pattern; anchored like Python `.match`
+#[allow(clippy::expect_used)] // static literal pattern; anchored like Python `.match`
 static SV_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"^\s*(?:input|output|inout|ref|const\s+ref)?\s*([A-Za-z_]\w*(?:\s*#\s*\((?:[^()]|\([^()]*\))*\))?)\s+\w+",
     )
-    .unwrap()
+    .expect("static SV_PARAM_RE regex")
 });
 
-#[allow(clippy::unwrap_used)] // static literal pattern (type head identifier)
-static SV_HEAD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([A-Za-z_]\w*)").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern (type head identifier)
+static SV_HEAD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([A-Za-z_]\w*)").expect("static SV_HEAD_RE regex"));
 
-#[allow(clippy::unwrap_used)] // static literal pattern (parameterized type args)
-static SV_TYPE_PARAMS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*\(((?:[^()]|\([^()]*\))*)\)").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern (parameterized type args)
+static SV_TYPE_PARAMS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"#\s*\(((?:[^()]|\([^()]*\))*)\)").expect("static SV_TYPE_PARAMS_RE regex")
+});
 
-#[allow(clippy::unwrap_used)] // static literal patterns
+#[allow(clippy::expect_used)] // static literal patterns
 static SV_BLOCK_COMMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
+    LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").expect("static SV_BLOCK_COMMENT_RE regex"));
 
-#[allow(clippy::unwrap_used)] // static literal pattern
-static SV_LINE_COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"//.*").unwrap());
+#[allow(clippy::expect_used)] // static literal pattern
+static SV_LINE_COMMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"//.*").expect("static SV_LINE_COMMENT_RE regex"));
 
 /// Replace every non-newline character with a space, preserving newlines.
 fn blank_keep_newlines(s: &str) -> String {

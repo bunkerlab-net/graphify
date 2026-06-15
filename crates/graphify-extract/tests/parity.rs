@@ -884,6 +884,31 @@ fn extract_ts_tsconfig_subdirectory_baseurl_resolves_existing_ts_file() {
 }
 
 #[test]
+fn tsconfig_alias_excess_parent_dirs_clamp_at_root() {
+    // A `paths` target with more `..` segments than the tsconfig is deep must
+    // clamp at the filesystem root (os.path.normpath semantics) rather than
+    // leaving a stray `..`, which would break alias resolution downstream.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::write(
+        root.join("tsconfig.json"),
+        "{\"compilerOptions\": {\"baseUrl\": \".\", \"paths\": {\"@top/*\": \
+         [\"../../../../../../../../../../../../../../../../../../../../../../../../src/*\"]}}}",
+    )
+    .expect("write tsconfig");
+    let aliases = graphify_extract::tsconfig::load_tsconfig_aliases(root);
+    let target = aliases.get("@top").expect("@top alias present");
+    assert!(
+        !target.contains(".."),
+        "excess `..` left a stray parent component: {target}"
+    );
+    assert!(
+        target.ends_with("src"),
+        "clamped alias should still end at the `src` target: {target}"
+    );
+}
+
+#[test]
 fn extract_js_pure_export_no_from_not_treated_as_reexport() {
     // `export { x }` with no `from` clause is a local re-bind — must NOT
     // emit a re_exports edge.

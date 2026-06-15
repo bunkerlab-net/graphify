@@ -74,6 +74,30 @@ fn empty_arg_credentials_are_treated_as_absent() {
     assert_eq!(c.password, None);
 }
 
+// ── push fail-fast on an unparseable URI (gated) ────────────────────────────
+
+#[cfg(feature = "falkordb")]
+#[test]
+fn push_rejects_unparseable_uri_before_connecting() {
+    // A malformed URI must error out before any connection attempt rather than
+    // silently defaulting to localhost:6379 and writing to the wrong database.
+    let g = one_node_graph();
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    let err = graphify_export::falkordb::push_to_falkordb(
+        "ht!tp://nope",
+        None,
+        None,
+        &g,
+        &communities,
+        "graphify",
+    )
+    .expect_err("malformed URI must error");
+    assert!(
+        matches!(err, graphify_export::falkordb::FalkorDbError::InvalidUri(_)),
+        "expected InvalidUri, got {err:?}"
+    );
+}
+
 // ── OpenCypher MERGE/SET generation (shared with Neo4j) ─────────────────────
 
 fn one_node_graph() -> graphify_build::Graph {

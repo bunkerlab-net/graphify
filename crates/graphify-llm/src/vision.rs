@@ -129,23 +129,24 @@ pub fn build_image_refs(image_files: &[PathBuf], root: &Path, read_bytes: bool) 
         let media = image_media_type(&ext).to_string();
         let mut raw: Option<Vec<u8>> = None;
         if read_bytes {
-            match std::fs::read(p) {
-                Ok(bytes) => {
-                    if bytes.len() > MAX_IMAGE_BYTES {
-                        eprintln!(
-                            "[graphify] image {rel} is {} KB, over the {} MB inline-image \
-                             limit for this backend; sending it as a reference node without \
-                             inline pixels.",
-                            bytes.len() / 1024,
-                            MAX_IMAGE_BYTES / (1024 * 1024)
-                        );
-                    } else {
-                        raw = Some(bytes);
-                    }
+            // Check the on-disk size first so an oversized image is never read
+            // into memory just to be dropped — a multi-GB file would otherwise
+            // be fully allocated before the length check rejected it.
+            match std::fs::metadata(p) {
+                Ok(meta) if meta.len() > MAX_IMAGE_BYTES as u64 => {
+                    eprintln!(
+                        "[graphify] image {rel} is {} KB, over the {} MB inline-image \
+                         limit for this backend; sending it as a reference node without \
+                         inline pixels.",
+                        meta.len() / 1024,
+                        MAX_IMAGE_BYTES / (1024 * 1024)
+                    );
                 }
-                Err(exc) => {
-                    eprintln!("[graphify] could not read image {rel}: {exc}");
-                }
+                Ok(_) => match std::fs::read(p) {
+                    Ok(bytes) => raw = Some(bytes),
+                    Err(exc) => eprintln!("[graphify] could not read image {rel}: {exc}"),
+                },
+                Err(exc) => eprintln!("[graphify] could not stat image {rel}: {exc}"),
             }
         }
         let abs_path = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());

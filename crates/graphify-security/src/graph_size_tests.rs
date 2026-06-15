@@ -4,6 +4,14 @@
 //! that used to live at the bottom of `graph_size.rs`. Behaviour is
 //! unchanged; this layout matches the workspace convention that
 //! tests live in dedicated `_tests.rs` (or `tests/parity.rs`) files.
+//!
+//! NOTE (`CodeRabbit` dispute): these cases exercise the *private* helpers
+//! `parse_graph_byte_cap` and `format_with_underscores`, which are not part of
+//! the crate's public API. An integration test under `tests/` cannot reach
+//! them, and exposing them as `pub` purely to relocate the test would leak
+//! internals. So this stays an in-crate unit-test module (compiled only under
+//! `#[cfg(test)]` and pulled in via `#[path]`), which is itself a dedicated
+//! test file — not inline with the production code it covers.
 
 #![allow(clippy::expect_used)] // test-only — `.expect("...")` panics are the failure
 

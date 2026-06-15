@@ -625,7 +625,7 @@ The semantic-extraction layer routes to one of: `gemini`, `kimi`, `claude`, `ope
 | `claude`   | `ANTHROPIC_API_KEY`                                     |
 | `kimi`     | `MOONSHOT_API_KEY`                                      |
 | `deepseek` | `DEEPSEEK_API_KEY`                                      |
-| `ollama`   | local daemon — set `OLLAMA_HOST` if non-default         |
+| `ollama`   | local daemon — set `OLLAMA_BASE_URL` if non-default     |
 | `bedrock`  | Any AWS credential-chain entry — see paragraph below    |
 | `azure`    | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`        |
 
