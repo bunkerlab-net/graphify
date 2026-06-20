@@ -103,6 +103,7 @@ pub fn push_to_falkordb(
     graph_name: &str,
 ) -> Result<(usize, usize), FalkorDbError> {
     use crate::neo4j::{build_edge_rows, build_node_rows, merge_edge_cypher, merge_node_cypher};
+    use redis::IntoConnectionInfo;
 
     // `parse_falkordb_uri` swallows a parse failure and defaults to
     // localhost:6379 (mirroring Python's lenient `urlparse`, fine for the
@@ -120,14 +121,16 @@ pub fn push_to_falkordb(
     }
 
     let conn = parse_falkordb_uri(uri, user, password);
-    let info = redis::ConnectionInfo {
-        addr: redis::ConnectionAddr::Tcp(conn.host, conn.port),
-        redis: redis::RedisConnectionInfo {
-            username: conn.username,
-            password: conn.password,
-            ..Default::default()
-        },
-    };
+    let mut redis_info = redis::RedisConnectionInfo::default();
+    if let Some(username) = conn.username {
+        redis_info = redis_info.set_username(username);
+    }
+    if let Some(password) = conn.password {
+        redis_info = redis_info.set_password(password);
+    }
+    let info = redis::ConnectionAddr::Tcp(conn.host, conn.port)
+        .into_connection_info()?
+        .set_redis_settings(redis_info);
     let client = redis::Client::open(info)?;
     let mut con = client.get_connection()?;
 
