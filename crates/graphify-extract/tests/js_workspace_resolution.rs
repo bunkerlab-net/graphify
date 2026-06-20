@@ -5,8 +5,6 @@
 //! guard. The pnpm-only resolution and `.`-package cases already live in
 //! `parity.rs`.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 use std::error::Error;
 use std::path::Path;
 

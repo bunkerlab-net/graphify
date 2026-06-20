@@ -316,6 +316,10 @@ fn resolve_seed_preserves_distinct_accents() {
     fs::write(&path, payload.to_string()).expect("write");
     let graph = load_graph(&path).expect("load");
     assert_eq!(resolve_seed(&graph, "resume"), Some("a".to_owned()));
+    assert_eq!(
+        resolve_seed(&graph, "r\u{00e9}sum\u{00e9}"),
+        Some("b".to_owned())
+    );
 }
 
 #[test]

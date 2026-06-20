@@ -13,8 +13,6 @@
 //! (`graphify-py/`), not in this crate's tree, so its intent is covered here by
 //! the joined-spec example and the cautionary wrong-form assertions instead.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 use graphify_build::normalize_id;
 use graphify_extract::{make_id, make_id1};
 

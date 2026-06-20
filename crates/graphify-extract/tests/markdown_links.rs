@@ -1,16 +1,18 @@
 //! Parity tests for markdown link edges (#1376), ported from
 //! `graphify-py/tests/test_languages.py` (`test_markdown_link_*`).
-#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::HashSet;
+use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use graphify_extract::{extract, extract_markdown};
 
+type TestResult = Result<(), Box<dyn Error>>;
+
 /// A hub doc linking to sibling docs, plus those docs (#1376).
-fn md_link_fixture(root: &Path) -> PathBuf {
+fn md_link_fixture(root: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let pkg = root.join("packages").join("coding-standards-csharp");
-    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::create_dir_all(&pkg)?;
     std::fs::write(
         pkg.join("index.md"),
         "# C# Coding Standards\n\n\
@@ -21,40 +23,35 @@ fn md_link_fixture(root: &Path) -> PathBuf {
          See also [external](https://example.com/x) and ![logo](./logo.png).\n\
          Anchor: [section](./repository.md#setup).\n\
          Wikilink: [[http-client]].\n",
-    )
-    .unwrap();
+    )?;
     std::fs::write(
         pkg.join("repository.md"),
         "# C# Repository Standards\nContent.\n",
-    )
-    .unwrap();
+    )?;
     std::fs::write(
         pkg.join("http-client.md"),
         "# C# HTTP Client Standards\nContent.\n",
-    )
-    .unwrap();
+    )?;
     std::fs::write(
         pkg.join("unit-tests.md"),
         "# C# Unit Test Standards\nContent.\n",
-    )
-    .unwrap();
-    pkg
+    )?;
+    Ok(pkg)
 }
 
-fn md_paths(pkg: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(pkg)
-        .unwrap()
+fn md_paths(pkg: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(pkg)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "md"))
         .collect();
     paths.sort();
-    paths
+    Ok(paths)
 }
 
 #[test]
-fn markdown_link_edges_emitted() {
-    let tmp = tempfile::tempdir().unwrap();
-    let pkg = md_link_fixture(tmp.path());
+fn markdown_link_edges_emitted() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let pkg = md_link_fixture(tmp.path())?;
     let r = extract_markdown(&pkg.join("index.md"));
     let refs: Vec<&str> = r
         .edges
@@ -68,12 +65,13 @@ fn markdown_link_edges_emitted() {
     assert!(refs.iter().any(|t| t.contains("repository")), "{refs:?}");
     assert!(refs.iter().any(|t| t.contains("http_client")), "{refs:?}");
     assert!(refs.iter().any(|t| t.contains("unit_tests")), "{refs:?}");
+    Ok(())
 }
 
 #[test]
-fn markdown_link_skips_external_and_images() {
-    let tmp = tempfile::tempdir().unwrap();
-    let pkg = md_link_fixture(tmp.path());
+fn markdown_link_skips_external_and_images() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let pkg = md_link_fixture(tmp.path())?;
     let r = extract_markdown(&pkg.join("index.md"));
     for e in r.edges.iter().filter(|e| e.relation == "references") {
         assert!(
@@ -83,15 +81,16 @@ fn markdown_link_skips_external_and_images() {
         );
         assert!(!e.target.contains("logo"), "image leaked: {}", e.target);
     }
+    Ok(())
 }
 
 #[test]
-fn markdown_link_edges_resolve_to_real_nodes() {
+fn markdown_link_edges_resolve_to_real_nodes() -> TestResult {
     // End-to-end: after extract()'s ID remap, link targets are real doc nodes,
     // so the hub doc gains edges into existing nodes instead of ghost nodes.
-    let tmp = tempfile::tempdir().unwrap();
-    let pkg = md_link_fixture(tmp.path());
-    let paths = md_paths(&pkg);
+    let tmp = tempfile::tempdir()?;
+    let pkg = md_link_fixture(tmp.path())?;
+    let paths = md_paths(&pkg)?;
     let res = extract(&paths, Some(tmp.path()));
 
     let node_ids: HashSet<&str> = res
@@ -121,7 +120,7 @@ fn markdown_link_edges_resolve_to_real_nodes() {
         .iter()
         .find(|n| n.get("label").and_then(|v| v.as_str()) == Some("index.md"))
         .and_then(|n| n.get("id").and_then(|v| v.as_str()))
-        .expect("index.md node present");
+        .ok_or("index.md node present")?;
     let index_refs: HashSet<&str> = res
         .edges
         .iter()
@@ -136,4 +135,5 @@ fn markdown_link_edges_resolve_to_real_nodes() {
         3,
         "hub doc under-connected: {index_refs:?}"
     );
+    Ok(())
 }

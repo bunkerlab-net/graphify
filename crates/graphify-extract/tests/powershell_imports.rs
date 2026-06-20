@@ -1,7 +1,6 @@
 //! Parity tests for PowerShell Import-Module / dot-source edges and `.psd1`
 //! manifest ingestion (#1331, #1315), ported from
 //! `graphify-py/tests/test_languages.py`.
-#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
 
@@ -78,15 +77,14 @@ fn powershell_import_module_not_a_raw_call() {
 }
 
 #[test]
-fn powershell_psm1_dispatched_and_extracted() {
+fn powershell_psm1_dispatched_and_extracted() -> Result<(), Box<dyn std::error::Error>> {
     // #1315: .psm1 routes to extract_powershell and is indexed.
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir()?;
     let mod_path = tmp.path().join("Utils.psm1");
     std::fs::write(
         &mod_path,
         "function Get-Greeting { param([string]$Name) return \"Hi $Name\" }\n",
-    )
-    .unwrap();
+    )?;
     let res = extract(&[mod_path], Some(tmp.path()));
     assert!(
         res.nodes.iter().any(|n| n
@@ -96,6 +94,7 @@ fn powershell_psm1_dispatched_and_extracted() {
             .contains("Get-Greeting")),
         "psm1 not dispatched/extracted"
     );
+    Ok(())
 }
 
 // ── PowerShell manifest (.psd1) (#1331) ──────────────────────────────────────

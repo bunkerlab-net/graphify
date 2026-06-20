@@ -111,10 +111,12 @@ pub fn load_graphifyignore(root: &Path) -> IgnorePatterns {
     for dir in &dirs {
         // Merge .gitignore and .graphifyignore for this dir (#1363): read
         // .gitignore first (base) then .graphifyignore (overrides), appending
-        // every pattern from each that exists. Because patterns evaluate
-        // last-match-wins, .graphifyignore patterns — including `!` negations —
-        // win on conflict, so adding a .graphifyignore can only exclude more,
-        // never silently re-enable a .gitignore-excluded file.
+        // every pattern from each that exists. Patterns evaluate
+        // last-match-wins, so a .graphifyignore pattern — including a `!`
+        // negation — wins over a conflicting .gitignore rule and can re-enable
+        // a file that .gitignore excluded (subject to the gitignore
+        // parent-exclusion rule enforced in `is_ignored_impl`: a `!` cannot
+        // rescue a file beneath an excluded directory).
         for fname in [".gitignore", ".graphifyignore"] {
             let ignore_file = dir.join(fname);
             if ignore_file.exists()

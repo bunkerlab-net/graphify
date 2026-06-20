@@ -196,6 +196,7 @@ fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
 ///
 /// When `community_labels` is `Some` and non-empty, nodes with a community id
 /// also get a `community_name` field (the label, or `"Community {cid}"`).
+#[must_use]
 fn build_node_link_nodes(
     graph: &Graph,
     node_community: &IndexMap<String, i64>,

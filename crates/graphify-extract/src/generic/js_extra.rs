@@ -49,6 +49,7 @@ pub(super) enum JsAssignTarget {
 /// function. Returns `None` for an arbitrary `obj.x = fn`, which is skipped —
 /// capturing those would reintroduce the bare-named / phantom-god-node class of
 /// bug the module-level scope guard (#1077) prevents.
+#[must_use]
 pub(super) fn js_member_assignment_target(left: Node<'_>, source: &[u8]) -> Option<JsAssignTarget> {
     if left.kind() != "member_expression" {
         return None;

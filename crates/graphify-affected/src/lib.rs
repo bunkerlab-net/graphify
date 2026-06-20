@@ -70,11 +70,13 @@ pub enum AffectedError {
 /// Rust uses `to_lowercase` here (not full Unicode casefold) to match the
 /// normalization convention used across the codebase — an acceptable
 /// divergence, since no matching path depends on the ß→ss casefold distinction.
+#[must_use]
 fn normalize_label(s: &str) -> String {
     s.nfc().collect::<String>().to_lowercase()
 }
 
 /// Normalized label with the callable decoration (trailing `()`) removed.
+#[must_use]
 fn bare_name(label: &str) -> String {
     let normalized = normalize_label(label);
     match normalized.strip_suffix("()") {

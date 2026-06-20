@@ -283,6 +283,7 @@ fn add_markdown_link(ctx: &mut LineCtx<'_>, raw: &str, line_num: usize) {
 /// document, or `None` to skip it (external URLs, in-page anchors, non-doc
 /// targets). Anchor/query suffixes are stripped; extension-less targets (typical
 /// of wikilinks) are treated as sibling `.md`. Mirrors `_resolve_markdown_link`.
+#[must_use]
 fn resolve_markdown_link(raw: &str, source_dir: &Path) -> Option<PathBuf> {
     let target = raw.trim();
     if target.is_empty() {
@@ -330,6 +331,7 @@ fn resolve_markdown_link(raw: &str, source_dir: &Path) -> Option<PathBuf> {
 
 /// Lexically normalize a path (collapse `.`/`..`/redundant separators) without
 /// touching the filesystem, matching Python's `os.path.normpath`.
+#[must_use]
 fn lexical_normalize(p: &Path) -> PathBuf {
     let mut comps: Vec<Component<'_>> = Vec::new();
     for c in p.components() {
