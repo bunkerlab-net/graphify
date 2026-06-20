@@ -152,6 +152,13 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     persist_semantic_marker(&out_dir, sem_output_tokens)?;
 
     if no_cluster {
+        // Persist the manifest so a later `extract --no-cluster` / `update` run
+        // takes the incremental path, matching graphify-py's `--no-cluster`
+        // `_save_manifest` (`__main__.py:4492`). Output stays byte-identical: the
+        // incremental union re-extract is deterministically sorted (see
+        // `detect_result_from_incremental`), so the rebuilt graph matches a full
+        // scan.
+        persist_manifest(&detect.files, &out_dir, path);
         if global {
             cmd_extract_global_add(&graph_path, as_tag, path);
         }
