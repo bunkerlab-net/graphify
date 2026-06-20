@@ -383,6 +383,7 @@ fn extract_callee(
 
 /// First string-literal argument of a PHP call's `arguments` (e.g. `'foo.bar'`
 /// in `config('foo.bar')`). Mirrors graphify-py's helper-fn-call arg scan.
+#[must_use]
 fn php_first_string_arg(node: Node<'_>, source: &[u8]) -> Option<String> {
     let args = node.child_by_field_name("arguments")?;
     for arg in named_children(args) {
@@ -404,6 +405,7 @@ fn php_first_string_arg(node: Node<'_>, source: &[u8]) -> Option<String> {
 
 /// Up to two `Foo::class` arguments of a PHP container-bind call
 /// (`$app->bind(Foo::class, Bar::class)`). Mirrors graphify-py's bind arg scan.
+#[must_use]
 fn php_bind_class_args(node: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut classes: Vec<String> = Vec::new();
     let Some(args) = node.child_by_field_name("arguments") else {
@@ -429,6 +431,7 @@ fn php_bind_class_args(node: Node<'_>, source: &[u8]) -> Vec<String> {
 
 /// Build an EXTRACTED PHP reference edge (used for `uses_config`, `bound_to`,
 /// `uses_static_prop`, and `references_constant`).
+#[must_use]
 fn php_ref_edge(src: &str, tgt: &str, relation: &str, line: u32, str_path: &str) -> Edge {
     Edge {
         external: false,

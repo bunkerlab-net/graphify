@@ -1396,23 +1396,34 @@ fn python_import_from_specs(
     Some((module_raw, specs))
 }
 
-/// Resolve a relative Python module (`.foo`) against `from_path` to its `.py` file.
-fn python_relative_module_path(from_path: &Path, module_raw: &str) -> Option<PathBuf> {
+/// Candidate file paths a relative Python module reference can resolve to,
+/// against `from_path`. A `.foo` reference can name either a module file
+/// (`foo.py`) or a package (`foo/__init__.py`); `from . import x` names the
+/// current package's `__init__.py`. Returns an empty list for a non-relative
+/// module. The caller picks the first candidate present in the scan set.
+fn python_relative_module_candidates(from_path: &Path, module_raw: &str) -> Vec<PathBuf> {
     if !module_raw.starts_with('.') {
-        return None;
+        return Vec::new();
     }
     let dots = module_raw.len() - module_raw.trim_start_matches('.').len();
     let module_name = module_raw.trim_start_matches('.');
-    let mut base = from_path.parent()?.to_path_buf();
-    for _ in 0..dots.saturating_sub(1) {
-        base = base.parent()?.to_path_buf();
-    }
-    let rel = if module_name.is_empty() {
-        "__init__.py".to_string()
-    } else {
-        format!("{}.py", module_name.replace('.', "/"))
+    let Some(mut base) = from_path.parent().map(Path::to_path_buf) else {
+        return Vec::new();
     };
-    Some(base.join(rel))
+    for _ in 0..dots.saturating_sub(1) {
+        let Some(parent) = base.parent() else {
+            return Vec::new();
+        };
+        base = parent.to_path_buf();
+    }
+    if module_name.is_empty() {
+        return vec![base.join("__init__.py")];
+    }
+    let rel = module_name.replace('.', "/");
+    vec![
+        base.join(format!("{rel}.py")),
+        base.join(&rel).join("__init__.py"),
+    ]
 }
 
 /// Look up a path's `paths` index, falling back to its canonicalised form.
@@ -1468,10 +1479,10 @@ impl PyReexportResolver<'_> {
                 let Some((module_raw, specs)) = python_import_from_specs(&source, stmt) else {
                     continue;
                 };
-                let Some(sub_path) = python_relative_module_path(path, &module_raw) else {
-                    continue;
-                };
-                let Some(sub_idx) = py_idx_of(self.idx_by_path, &sub_path) else {
+                let Some(sub_idx) = python_relative_module_candidates(path, &module_raw)
+                    .iter()
+                    .find_map(|cand| py_idx_of(self.idx_by_path, cand))
+                else {
                     continue;
                 };
                 for (imported, public) in specs {

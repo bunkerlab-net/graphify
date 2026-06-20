@@ -1192,6 +1192,7 @@ pub(super) fn walk<'tree>(
 /// Return the class (scope) name of a PHP `Foo::BAR` / `Foo::class` / `Foo::$bar`
 /// access node: the `scope` field, else the first named `name`/`qualified_name`/
 /// `identifier` child. Mirrors graphify-py `_php_class_const_scope`.
+#[must_use]
 pub(super) fn php_class_const_scope(node: Node<'_>, source: &[u8]) -> Option<String> {
     let scope = node.child_by_field_name("scope").or_else(|| {
         named_children(node)

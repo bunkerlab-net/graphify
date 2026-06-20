@@ -460,6 +460,8 @@ fn export_callflow_html_message_matches_python() {
 /// `graphify export callflow-html <GRAPH.json>` (positional) renders that graph
 /// and derives `GRAPH_REPORT.md` from the graph's own directory — Python parity
 /// with the `export callflow-html [GRAPH|DIR]` positional argument.
+// Keeps `.unwrap()` to match this file's `#![allow(clippy::expect_used,
+// clippy::unwrap_used)]` and every sibling test in it.
 #[test]
 fn export_callflow_html_accepts_positional_graph_path() {
     let dir = tempfile::tempdir().unwrap();

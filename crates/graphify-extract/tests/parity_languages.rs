@@ -590,6 +590,13 @@ fn php_finds_container_bind() {
         php_has_edge(&r, &register, &payment, "references_constant"),
         "register() should reference PaymentGateway via its ::class constant"
     );
+    // The singleton() binding takes the same abstract→concrete shape.
+    let cashier = php_node_id(&r, "CashierGateway");
+    assert!(
+        php_has_edge(&r, &cashier, &stripe, "bound_to"),
+        "singleton(CashierGateway::class, StripeGateway::class) should also bind \
+         the abstract to the concrete implementation"
+    );
 }
 
 /// PHP `$listen = [Event::class => [Listener::class]]` → `listened_by` edges.

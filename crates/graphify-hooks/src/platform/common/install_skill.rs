@@ -238,7 +238,14 @@ pub fn install_platform_skill_project(
 
     msgs.push(String::new());
     let scope_root = scope_root_for(rel);
-    msgs.push(format!("Don't forget to: git add {scope_root}"));
+    // Agents-group platforms also create AGENTS.md at the project root, so the
+    // git-add hint must name it too; staging only the scope root would miss it.
+    let git_add_targets = if is_agents_md_platform(platform) {
+        format!("{scope_root} AGENTS.md")
+    } else {
+        scope_root.to_string()
+    };
+    msgs.push(format!("Don't forget to: git add {git_add_targets}"));
     msgs.push(String::new());
     Ok(msgs.join("\n"))
 }

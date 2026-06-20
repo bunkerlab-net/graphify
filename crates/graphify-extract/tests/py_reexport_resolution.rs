@@ -96,3 +96,57 @@ fn python_package_reexport_resolves_import_and_call_to_origin_symbol() -> TestRe
     );
     Ok(())
 }
+
+#[test]
+fn python_subpackage_reexport_resolves_import_and_call_to_origin_symbol() -> TestResult {
+    // Same chain as the module-origin case, but the re-exported symbol lives in
+    // a *package* (`pkg/subpkg/__init__.py`), so `from .subpkg import Helper`
+    // must resolve to the package's `__init__.py`, not a nonexistent `subpkg.py`.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pkg/subpkg/__init__.py"),
+        "def Helper():\n    return 1\n",
+    )?;
+    write(
+        &root.join("pkg/__init__.py"),
+        "from .subpkg import Helper as PublicHelper\n",
+    )?;
+    write(
+        &root.join("app.py"),
+        "from pkg import PublicHelper\n\ndef X():\n    return PublicHelper()\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("pkg/subpkg/__init__.py"),
+            root.join("pkg/__init__.py"),
+            root.join("app.py"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_file_edge(
+            &out,
+            "pkg/__init__.py",
+            "pkg/subpkg/__init__.py",
+            "re_exports"
+        ),
+        "package __init__ should re_export the origin subpackage"
+    );
+    assert!(
+        has_symbol_edge(&out, "app.py", "pkg/subpkg/__init__.py", "Helper"),
+        "consumer should import the origin symbol from the subpackage"
+    );
+    assert!(
+        has_symbol_to_symbol_edge(
+            &out,
+            "app.py",
+            "X",
+            "pkg/subpkg/__init__.py",
+            "Helper",
+            "calls"
+        ),
+        "call through the re-exported alias should target the subpackage origin symbol"
+    );
+    Ok(())
+}
