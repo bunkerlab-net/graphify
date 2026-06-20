@@ -31,7 +31,9 @@ mod ingest;
 mod normalize;
 
 pub use attrs::{EdgeAttrs, NodeAttrs};
-pub use build_fn::{build, build_from_json, build_merge, build_merge_with_graph_cap};
+pub use build_fn::{
+    build, build_from_json, build_merge, build_merge_with_graph_cap, dedupe_edges, dedupe_nodes,
+};
 pub use dedup_label::{deduplicate_by_label, norm_label};
 pub use error::BuildError;
 pub use global_ops::{prefix_graph_for_global, prune_repo_from_graph};

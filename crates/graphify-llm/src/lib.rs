@@ -41,6 +41,7 @@ mod constants;
 pub mod deepseek;
 mod error;
 pub mod extract;
+pub mod file_slice;
 pub mod gemini;
 pub mod kimi;
 pub mod labeling;
@@ -58,8 +59,9 @@ pub mod tokens;
 pub mod vision;
 
 pub use backends::{
-    BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars, detect_backend,
-    detect_backend_with, format_backend_env_keys, get_backend_api_key, router,
+    BACKENDS, BackendConfig, Pricing, backend_config, backend_selection_env_vars,
+    default_model_for_backend, detect_backend, detect_backend_with, format_backend_env_keys,
+    get_backend_api_key, router,
 };
 pub use call::{call_llm, call_llm_with_model};
 pub use constants::{
@@ -68,6 +70,10 @@ pub use constants::{
 };
 pub use error::LlmError;
 pub use extract::{extract_files_direct, extract_files_direct_mode};
+pub use file_slice::{
+    FileSlice, Unit, bisect_slice, expand_oversized_files, is_splittable_text, read_slice_text,
+    slice_boundaries, unit_path,
+};
 pub use labeling::{
     LABEL_BATCH_SIZE, LABEL_MAX_COMMUNITIES, LabelOptions, generate_community_labels,
     generate_community_labels_with, label_communities, label_communities_with,
@@ -82,13 +88,17 @@ pub use providers::{
     CustomProvider, custom_providers_path, is_builtin_backend, load_custom_providers,
     load_custom_providers_from, provider_base_url_ok,
 };
-pub use read::{neutralise_injection_sentinels, read_files, wrap_untrusted};
+pub use read::{neutralise_injection_sentinels, read_files, read_units, wrap_untrusted};
 pub use response::{LlmBackend, LlmResponse};
 pub use retry::{
     extract_with_adaptive_retry, looks_like_context_exceeded, looks_like_context_exceeded_dyn,
 };
-pub use tokens::{estimate_cost, estimate_file_tokens, pack_chunks_by_tokens};
+pub use tokens::{
+    estimate_cost, estimate_file_tokens, estimate_unit_tokens, pack_chunks_by_tokens,
+    pack_chunks_by_tokens_units,
+};
 pub use vision::{
     ImageRef, anthropic_content, backend_supports_vision, build_image_refs, image_notes,
-    is_vision_image, openai_content, partition_semantic_files, strip_pixels, with_image_notes,
+    is_vision_image, openai_content, partition_semantic_files, partition_semantic_units,
+    strip_pixels, with_image_notes,
 };

@@ -21,22 +21,90 @@ use crate::tsconfig::load_tsconfig_aliases;
 use crate::types::Edge;
 
 use super::names::{read_text, read_text_owned};
-use super::walk::{add_edge, add_node};
+use super::walk::{add_edge, add_node, first_child_kind};
+
+// ── JS/TS assignment-form helpers (#09da529) ──────────────────────────────────
+
+/// `true` if a node kind is a callable value, for the JS/TS assignment /
+/// class-field / function-expression forms. Older tree-sitter-javascript
+/// grammars label a function expression `function`; current ones use
+/// `function_expression`. Mirrors Python `_JS_FUNCTION_VALUE_TYPES`.
+#[must_use]
+pub(super) fn is_js_function_value(kind: &str) -> bool {
+    matches!(kind, "arrow_function" | "function_expression" | "function")
+}
+
+/// Symbol an `assignment_expression` LHS defines when its RHS is a function.
+/// Mirrors Python `_js_member_assignment_target`.
+pub(super) enum JsAssignTarget {
+    /// `this.foo = fn` — owner is the enclosing function/class.
+    This(String),
+    /// `exports.foo = fn` / `module.exports.foo = fn` — file-contained function.
+    Exports(String),
+    /// `Foo.prototype.bar = fn` — method `member` owned by `owner`.
+    Prototype { owner: String, member: String },
+}
+
+/// Classify the symbol an `assignment_expression` LHS defines when its RHS is a
+/// function. Returns `None` for an arbitrary `obj.x = fn`, which is skipped —
+/// capturing those would reintroduce the bare-named / phantom-god-node class of
+/// bug the module-level scope guard (#1077) prevents.
+#[must_use]
+pub(super) fn js_member_assignment_target(left: Node<'_>, source: &[u8]) -> Option<JsAssignTarget> {
+    if left.kind() != "member_expression" {
+        return None;
+    }
+    let member_name = read_text(left.child_by_field_name("property")?, source);
+    if member_name.is_empty() {
+        return None;
+    }
+    let obj = left.child_by_field_name("object")?;
+    match obj.kind() {
+        "this" => Some(JsAssignTarget::This(member_name.to_string())),
+        "identifier" if read_text(obj, source) == "exports" => {
+            Some(JsAssignTarget::Exports(member_name.to_string()))
+        }
+        "member_expression" => {
+            // module.exports.X  or  Foo.prototype.X
+            let inner_obj = obj.child_by_field_name("object")?;
+            let inner_prop_name = read_text(obj.child_by_field_name("property")?, source);
+            if inner_obj.kind() != "identifier" {
+                return None;
+            }
+            let inner_obj_name = read_text(inner_obj, source);
+            if inner_obj_name == "module" && inner_prop_name == "exports" {
+                Some(JsAssignTarget::Exports(member_name.to_string()))
+            } else if inner_prop_name == "prototype" {
+                Some(JsAssignTarget::Prototype {
+                    owner: inner_obj_name.to_string(),
+                    member: member_name.to_string(),
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
 
 // ── JS/TS extra walk ──────────────────────────────────────────────────────────
 
-/// Handle JS/TS `lexical_declaration` / `variable_declaration` nodes that the generic walk misses.
+/// Handle JS/TS nodes the generic structural walk misses.
 ///
-/// Detects three constructs not captured by the generic structural pass:
-/// arrow-function declarations (`const f = () => {}`), top-level `const` value nodes, and
-/// `CommonJS` `require()` imports. Returns `true` when at least one construct was handled,
-/// signalling to the caller that the node should not be processed again generically.
-/// Mirrors Python `_js_extra_walk`.
+/// Covers arrow / function-expression declarations (`const f = () => {}`,
+/// `const f = function(){}`), `CommonJS` `require()` imports, module-level
+/// `const` value nodes, `CommonJS` / prototype member assignments
+/// (`exports.X = fn`, `module.exports.X = fn`, `Foo.prototype.bar = fn`), and
+/// class fields whose
+/// value is a function (`class C { handler = () => {} }`). Returns `true` when a
+/// construct was handled, so the caller skips generic processing. Mirrors Python
+/// `_js_extra_walk`.
+#[allow(clippy::too_many_lines)] // linear node-kind dispatch mirroring Python's _js_extra_walk
 pub(super) fn js_extra_walk<'tree>(
     ctx: &mut super::walk::WalkCtx<'_, 'tree>,
     node: Node<'tree>,
     source: &[u8],
-    _parent_class_nid: Option<&str>,
+    parent_class_nid: Option<&str>,
 ) -> bool {
     let file_nid = ctx.file_nid;
     let stem = ctx.stem;
@@ -46,6 +114,88 @@ pub(super) fn js_extra_walk<'tree>(
     let seen_ids = &mut *ctx.seen_ids;
     let function_bodies = &mut *ctx.function_bodies;
     let t = node.kind();
+
+    // CommonJS / prototype member assignments whose value is a function:
+    //   exports.X = () => {}      → file-contained function  X()
+    //   module.exports.X = fn     → file-contained function  X()
+    //   Foo.prototype.bar = fn    → method bar() owned by Foo
+    // (`this.X = fn` lives inside a function body, captured at the function.)
+    if t == "expression_statement"
+        && let Some(assign) = first_child_kind(node, "assignment_expression")
+        && let Some(value) = assign.child_by_field_name("right")
+        && is_js_function_value(value.kind())
+        && let Some(left) = assign.child_by_field_name("left")
+        && let Some(target) = js_member_assignment_target(left, source)
+    {
+        let line = node.start_position().row as u32 + 1;
+        let nid = match target {
+            JsAssignTarget::Exports(member) => {
+                let nid = make_id(&[stem, member.as_str()]);
+                add_node(
+                    &nid,
+                    &format!("{member}()"),
+                    line,
+                    str_path,
+                    nodes,
+                    seen_ids,
+                );
+                add_edge(file_nid, &nid, "contains", line, str_path, None, edges);
+                Some(nid)
+            }
+            JsAssignTarget::Prototype { owner, member } => {
+                let owner_nid = make_id(&[stem, owner.as_str()]);
+                let nid = make_id(&[owner_nid.as_str(), member.as_str()]);
+                add_node(
+                    &nid,
+                    &format!(".{member}()"),
+                    line,
+                    str_path,
+                    nodes,
+                    seen_ids,
+                );
+                add_edge(&owner_nid, &nid, "method", line, str_path, None, edges);
+                Some(nid)
+            }
+            JsAssignTarget::This(_) => None,
+        };
+        if let Some(nid) = nid {
+            if let Some(body) = value.child_by_field_name("body") {
+                function_bodies.push((nid, body));
+            }
+            return true;
+        }
+    }
+
+    // Class fields whose value is a function:
+    //   class C { handler = () => {} }   → method handler() owned by C
+    if let Some(parent_nid) = parent_class_nid
+        && matches!(t, "field_definition" | "public_field_definition")
+        && let Some(prop) = node
+            .child_by_field_name("property")
+            .or_else(|| node.child_by_field_name("name"))
+        && let Some(value) = node.child_by_field_name("value")
+        && is_js_function_value(value.kind())
+    {
+        let field_name = read_text(prop, source);
+        if !field_name.is_empty() {
+            let line = node.start_position().row as u32 + 1;
+            let nid = make_id(&[parent_nid, field_name]);
+            add_node(
+                &nid,
+                &format!(".{field_name}()"),
+                line,
+                str_path,
+                nodes,
+                seen_ids,
+            );
+            add_edge(parent_nid, &nid, "method", line, str_path, None, edges);
+            if let Some(body) = value.child_by_field_name("body") {
+                function_bodies.push((nid, body));
+            }
+            return true;
+        }
+    }
+
     if t != "lexical_declaration" && t != "variable_declaration" {
         return false;
     }
@@ -76,7 +226,7 @@ pub(super) fn js_extra_walk<'tree>(
                 if child.kind() == "variable_declarator"
                     && let Some(value) = child.child_by_field_name("value")
                 {
-                    if value.kind() == "arrow_function" {
+                    if is_js_function_value(value.kind()) {
                         if let Some(name_node) = child.child_by_field_name("name") {
                             let func_name = read_text_owned(name_node, source);
                             let line = child.start_position().row as u32 + 1;

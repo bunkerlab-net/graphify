@@ -859,7 +859,31 @@ fn find_require_module(text: &str) -> Option<String> {
 
 // ── Swift ─────────────────────────────────────────────────────────────────────
 
-/// Emit an `imports` edge for a Swift `import_declaration` node.
+/// Return the `(module_node_id, module_label)` for a Swift `import_declaration`
+/// (its first `identifier` child), or `None`. The id matches the `imports` edge
+/// target so the `type=module` anchor node materialized in `extract_generic`
+/// connects the edge (#1327).
+#[must_use]
+pub(crate) fn swift_import_module(node: Node<'_>, source: &[u8]) -> Option<(String, String)> {
+    let mut cur = node.walk();
+    if !cur.goto_first_child() {
+        return None;
+    }
+    loop {
+        let child = cur.node();
+        if child.kind() == "identifier" {
+            let raw = read_text_owned(child, source);
+            return Some((make_id1(&raw), raw));
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+    None
+}
+
+/// Emit an `imports` edge for a Swift `import_declaration` node. The target is a
+/// `type=module` anchor node materialized by `extract_generic` (#1327).
 pub fn import_swift(
     source: &[u8],
     node: Node<'_>,
@@ -868,28 +892,15 @@ pub fn import_swift(
     str_path: &str,
     edges: &mut Vec<Edge>,
 ) {
-    let line = node.start_position().row as u32 + 1;
-    let mut cur = node.walk();
-    if !cur.goto_first_child() {
-        return;
-    }
-    loop {
-        let child = cur.node();
-        if child.kind() == "identifier" {
-            let raw = read_text_owned(child, source);
-            let tgt_nid = make_id1(&raw);
-            edges.push(make_edge(
-                file_nid,
-                &tgt_nid,
-                "imports",
-                Some("import"),
-                str_path,
-                line,
-            ));
-            break;
-        }
-        if !cur.goto_next_sibling() {
-            break;
-        }
+    if let Some((tgt_nid, _label)) = swift_import_module(node, source) {
+        let line = node.start_position().row as u32 + 1;
+        edges.push(make_edge(
+            file_nid,
+            &tgt_nid,
+            "imports",
+            Some("import"),
+            str_path,
+            line,
+        ));
     }
 }

@@ -37,8 +37,12 @@ pub fn parse_llm_json(raw: &str) -> Value {
     // Strategy 0: already-valid JSON. Try this *before* any fence stripping so a
     // response that genuinely is valid JSON — but happens to contain a ```
     // substring inside a string value — is parsed verbatim rather than mangled
-    // by the fence logic below.
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+    // by the fence logic below. Only an *object* is a usable graph fragment; a
+    // top-level array/scalar is valid JSON but callers subscript the result
+    // (e.g. `result["input_tokens"]`), so fall through rather than return it.
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed)
+        && v.is_object()
+    {
         return v;
     }
 
@@ -58,7 +62,11 @@ pub fn parse_llm_json(raw: &str) -> Value {
             Some(fence_end) => after_fence[..fence_end].trim(),
             None => after_fence.trim(),
         };
-        if let Ok(v) = serde_json::from_str::<Value>(stripped) {
+        // Same non-object guard as Strategy 0: a fenced top-level array/scalar
+        // falls through instead of being returned as a non-dict fragment.
+        if let Ok(v) = serde_json::from_str::<Value>(stripped)
+            && v.is_object()
+        {
             return v;
         }
     }

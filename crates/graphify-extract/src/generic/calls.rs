@@ -75,7 +75,7 @@ pub(super) fn walk_calls(
             return;
         }
 
-        let (callee_name, is_member_call) =
+        let (callee_name, is_member_call, receiver) =
             extract_callee(node, source, ctx.config, ctx.label_to_nid);
 
         if let Some(callee) = callee_name
@@ -112,6 +112,7 @@ pub(super) fn walk_calls(
                     is_member_call,
                     source_file: ctx.str_path.to_string(),
                     source_location: format!("L{}", node.start_position().row + 1),
+                    receiver,
                 });
             }
         }
@@ -126,6 +127,49 @@ pub(super) fn walk_calls(
                 break;
             }
         }
+    }
+}
+
+/// Return the depth-1 receiver name of a Swift member call (`recv.method()`):
+/// `vm.update()` -> `vm`; `Type.staticMethod()` -> `Type`;
+/// `Singleton.shared.method()` -> `Singleton`; `self.svc.fetch()` -> `svc`.
+/// `None` for anything deeper, keeping resolution depth-1. Mirrors
+/// `_swift_receiver_name`.
+fn swift_receiver_name(recv: Node<'_>, source: &[u8]) -> Option<String> {
+    match recv.kind() {
+        "simple_identifier" => Some(read_text_owned(recv, source)),
+        "navigation_expression" => {
+            let head = recv.child(0)?;
+            if head.kind() == "simple_identifier" {
+                return Some(read_text_owned(head, source));
+            }
+            if head.kind() == "self_expression" {
+                let mut cur = recv.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        let child = cur.node();
+                        if child.kind() == "navigation_suffix" {
+                            let mut sc = child.walk();
+                            if sc.goto_first_child() {
+                                loop {
+                                    if sc.node().kind() == "simple_identifier" {
+                                        return Some(read_text_owned(sc.node(), source));
+                                    }
+                                    if !sc.goto_next_sibling() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -144,9 +188,10 @@ fn extract_callee(
     source: &[u8],
     config: &LangConfig,
     _label_to_nid: &HashMap<String, String>,
-) -> (Option<String>, bool) {
+) -> (Option<String>, bool, Option<String>) {
     let mut callee_name: Option<String> = None;
     let mut is_member_call = false;
+    let mut receiver: Option<String> = None;
 
     match config.lang_id {
         LangId::Swift => {
@@ -155,6 +200,11 @@ fn extract_callee(
                     callee_name = Some(read_text_owned(first, source));
                 } else if first.kind() == "navigation_expression" {
                     is_member_call = true;
+                    // #1356: capture the depth-1 receiver so cross-file
+                    // member-call resolution can type it via the file's table.
+                    receiver = first
+                        .child(0)
+                        .and_then(|recv| swift_receiver_name(recv, source));
                     let mut cur = first.walk();
                     if cur.goto_first_child() {
                         loop {
@@ -287,6 +337,19 @@ fn extract_callee(
                 }
             }
         }
+        LangId::Java if node.kind() == "object_creation_expression" => {
+            // `new Foo(...)` — the constructed type is in the `type` field, not
+            // `name`, so the generic path misses it (#1373). Reduce a qualified /
+            // generic type to its simple name (`com.a.Foo<Bar>` -> `Foo`). Java
+            // `method_invocation` still flows through the generic branch below.
+            if let Some(type_node) = node.child_by_field_name("type") {
+                let raw = read_text_owned(type_node, source);
+                let simple = raw.split('<').next().unwrap_or("").trim();
+                if !simple.is_empty() {
+                    callee_name = Some(simple.rsplit('.').next().unwrap_or(simple).to_string());
+                }
+            }
+        }
         _ => {
             // Generic: use call_function_field
             if !config.call_function_field.is_empty()
@@ -309,5 +372,5 @@ fn extract_callee(
         }
     }
 
-    (callee_name, is_member_call)
+    (callee_name, is_member_call, receiver)
 }

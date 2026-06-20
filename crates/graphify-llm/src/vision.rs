@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde_json::{Value, json};
 
+use crate::file_slice::Unit;
+
 /// Raster image extensions routed through the vision path (not read as text).
 pub const VISION_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 
@@ -64,6 +66,23 @@ pub fn partition_semantic_files(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf
             images.push(f.clone());
         } else {
             text.push(f.clone());
+        }
+    }
+    (text, images)
+}
+
+/// Split a chunk of units into `(text-like units, raster-image files)`.
+///
+/// A [`Unit::Slice`] is always text (only splittable text is sliced), so it
+/// never lands in the image partition. Mirrors `_partition_semantic_files`.
+#[must_use]
+pub fn partition_semantic_units(units: &[Unit]) -> (Vec<Unit>, Vec<PathBuf>) {
+    let mut text = Vec::new();
+    let mut images = Vec::new();
+    for u in units {
+        match u {
+            Unit::Whole(p) if is_vision_image(p) => images.push(p.clone()),
+            Unit::Slice(_) | Unit::Whole(_) => text.push(u.clone()),
         }
     }
     (text, images)

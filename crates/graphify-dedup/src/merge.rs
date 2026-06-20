@@ -12,7 +12,8 @@ use crate::{
     minhash::MinHash,
     score::{
         COMMUNITY_BOOST, ENTROPY_THRESHOLD, LSH_THRESHOLD, MERGE_THRESHOLD, entropy,
-        is_variant_pair, jaro_winkler_score, make_minhash, norm, short_label_blocked,
+        is_variant_pair, jaro_score, jaro_winkler_score, make_minhash, norm, numeric_tokens_differ,
+        short_label_blocked,
     },
 };
 
@@ -200,7 +201,16 @@ fn consider_tiebreak_pair(
         return;
     }
     let norm_b = norm(node_b.get("label").and_then(Value::as_str).unwrap_or(id_b));
-    let mut score = jaro_winkler_score(norm_a, &norm_b);
+    // Mirror pass 2: plain Jaro for cross-file long labels (#1243). Jaro-Winkler's
+    // leading-prefix bonus would otherwise lift shared-prefix/token-divergent
+    // pairs past threshold; on plain Jaro they fall short while true cross-file
+    // duplicates still clear it. Same-file and short pairs keep Jaro-Winkler.
+    let xfile = source_file(node_a) != source_file(node_b);
+    let mut score = if xfile && norm_a.len().max(norm_b.len()) >= 12 {
+        jaro_score(norm_a, &norm_b)
+    } else {
+        jaro_winkler_score(norm_a, &norm_b)
+    };
     if is_variant_pair(norm_a, &norm_b) {
         return;
     }
@@ -208,6 +218,15 @@ fn consider_tiebreak_pair(
         return;
     }
     if is_prefix_extension(norm_a, &norm_b) {
+        return;
+    }
+    // Mirror pass 2: numbered/versioned siblings and cross-file file-anchored
+    // boilerplate (rationale/document) are decisively distinct, never reach the
+    // LLM (#1284).
+    if numeric_tokens_differ(norm_a, &norm_b) {
+        return;
+    }
+    if crossfile_fileanchored_blocked(node_a, node_b) {
         return;
     }
     let c1 = communities.get(id_a).copied();
@@ -267,6 +286,46 @@ fn is_prefix_extension(a: &str, b: &str) -> bool {
 /// exact-ID pre-dedup, so code never needs label-based merging.
 fn is_code(node: &Value) -> bool {
     node.get("file_type").and_then(Value::as_str) == Some("code")
+}
+
+/// `file_type` values whose identity is anchored to their source location, not
+/// their label text. Like code (#1205), these must not be label-merged across
+/// files: `rationale` = module/class docstrings, `document` =
+/// headings/positional content. `concept` is intentionally excluded — it is the
+/// type meant to unify across files (protected from over-merge by the
+/// numeric/Jaro guards instead). Mirrors `_FILE_ANCHORED_NONCODE`.
+const FILE_ANCHORED_NONCODE: [&str; 2] = ["rationale", "document"];
+
+/// True when `node`'s `file_type` is one of [`FILE_ANCHORED_NONCODE`].
+fn is_file_anchored_noncode(node: &Value) -> bool {
+    node.get("file_type")
+        .and_then(Value::as_str)
+        .is_some_and(|ft| FILE_ANCHORED_NONCODE.contains(&ft))
+}
+
+/// Extract a node's `source_file`, treating an absent or non-string value as
+/// the empty string (mirrors Python's `node.get("source_file") or ""`).
+fn source_file(node: &Value) -> &str {
+    node.get("source_file")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+/// Block label-based merging of file-anchored non-code nodes across files (#1284).
+///
+/// `rationale`/`document` nodes are docstring- and heading-derived and as
+/// file-anchored as the code they describe (#1205's reasoning, one layer up):
+/// parallel modules carry near-identical boilerplate ("Django app config for
+/// apps.<name>. No business logic here…") that differs by one word and sails
+/// past the JW threshold. Returns `true` only when at least one node is
+/// file-anchored AND the two live in different source files; same-file
+/// duplicates of these types may still merge. Mirrors
+/// `_crossfile_fileanchored_blocked`.
+fn crossfile_fileanchored_blocked(node: &Value, neighbor: &Value) -> bool {
+    if !is_file_anchored_noncode(node) && !is_file_anchored_noncode(neighbor) {
+        return false;
+    }
+    source_file(node) != source_file(neighbor)
 }
 
 // ── pass 1: exact normalisation ───────────────────────────────────────────────
@@ -381,7 +440,17 @@ fn pass2_fuzzy(
 
         let norm_a = norm(node_label(node_a));
         let norm_b = norm(node_label(node_b));
-        let mut score = jaro_winkler_score(&norm_a, &norm_b);
+        // Cross-file long labels score on plain Jaro (no prefix bonus). Jaro-Winkler's
+        // leading-prefix bonus lifts shared-prefix/token-divergent pairs past
+        // threshold, fabricating destructive cross-file merges; plain Jaro drops
+        // them while true cross-file duplicates still clear it (#1243). Same-file
+        // near-duplicates and short labels keep Jaro-Winkler.
+        let xfile = source_file(node_a) != source_file(node_b);
+        let mut score = if xfile && norm_a.len().max(norm_b.len()) >= 12 {
+            jaro_score(&norm_a, &norm_b)
+        } else {
+            jaro_winkler_score(&norm_a, &norm_b)
+        };
 
         if is_variant_pair(&norm_a, &norm_b) {
             continue;
@@ -393,6 +462,14 @@ fn pass2_fuzzy(
         // parseConfig / parseConfigFile) are almost never duplicates — one is a
         // strict suffix-extension of the other. Block regardless of JW score (#1201).
         if is_prefix_extension(&norm_a, &norm_b) {
+            continue;
+        }
+        // Numbered/versioned siblings and cross-file file-anchored boilerplate
+        // (rationale/document) are decisively distinct regardless of score (#1284).
+        if numeric_tokens_differ(&norm_a, &norm_b) {
+            continue;
+        }
+        if crossfile_fileanchored_blocked(node_a, node_b) {
             continue;
         }
 

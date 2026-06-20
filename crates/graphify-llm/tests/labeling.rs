@@ -551,3 +551,49 @@ fn label_communities_max_communities_caps_total() {
     // Only 40 communities should have been sent to the backend.
     assert_eq!(captured.borrow().len(), 40);
 }
+
+// ---------------------------------------------------------------------------
+// Adaptive split-and-retry on parse failure (#1278): a full batch that returns
+// malformed JSON is bisected and each half retried, so no community is dropped.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn label_batch_recovers_via_split_on_invalid_json() {
+    // One batch of 4 communities; the first (full-batch) call returns broken
+    // JSON, forcing a 2+2 split. Both halves return valid JSON, so every
+    // community ends up labeled — none silently dropped.
+    let (node_labels, communities) = wide_graph(4);
+    let gods = IndexSet::new();
+    let n_calls = Cell::new(0u32);
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |prompt, _backend, _max, _model| {
+            n_calls.set(n_calls.get() + 1);
+            if n_calls.get() == 1 {
+                // Broken JSON on the full batch triggers the split-and-retry.
+                return Ok("{this is not valid json, missing quotes".to_string());
+            }
+            // Each retried half returns a clean object for its own cids.
+            let body = cids_in_prompt(prompt)
+                .iter()
+                .map(|c| format!("\"{c}\": \"Label {c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling recovers via split");
+
+    for cid in 0i64..4 {
+        assert_eq!(labels[&cid], format!("Label {cid}"));
+    }
+    assert_eq!(
+        n_calls.get(),
+        3,
+        "expected 1 initial call + 2 retry calls after split"
+    );
+}

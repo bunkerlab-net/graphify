@@ -17,7 +17,8 @@ use serde_json::Value;
 use crate::ReloadState;
 use crate::ServeError;
 use crate::graph::{
-    find_node, node_degree, predecessors, query_graph_text, score_nodes, shortest_path, successors,
+    community_label, find_node, node_degree, predecessors, query_graph_text, score_nodes,
+    shortest_path, successors,
 };
 
 /// Execute the `query_graph` tool.
@@ -106,7 +107,7 @@ pub fn tool_get_node(graph: &Graph, arguments: &serde_json::Map<String, Value>) 
         ),
         format!(
             "  Community: {}",
-            sanitize_label(d.get("community").map(ToString::to_string).as_deref())
+            sanitize_label(community_label(d).as_deref())
         ),
         format!("  Degree: {}", node_degree(graph, nid)),
     ]

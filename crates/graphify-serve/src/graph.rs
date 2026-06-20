@@ -559,6 +559,29 @@ pub fn dfs(
 
 // ── Subgraph text rendering ───────────────────────────────────────────────────
 
+/// Resolve a node's displayed community, mirroring Python
+/// `str(d.get('community_name') or d.get('community', ''))`.
+///
+/// Prefers a non-empty `community_name` (the human-readable label, e.g.
+/// `"Auth Layer"`) and otherwise falls back to the numeric `community` id.
+/// Returns `None` when neither attribute is present, which renders as `""`.
+#[must_use]
+pub fn community_label(attrs: &IndexMap<String, Value>) -> Option<String> {
+    attrs
+        .get("community_name")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            attrs.get("community").and_then(|v| {
+                v.as_i64()
+                    .map(|n| n.to_string())
+                    .or_else(|| v.as_str().map(str::to_owned))
+                    .or_else(|| (!v.is_null()).then(|| v.to_string()))
+            })
+        })
+}
+
 /// Render subgraph as text, truncating at `token_budget` (approx 3 chars/token).
 ///
 /// Mirrors Python `_subgraph_to_text`.
@@ -600,7 +623,7 @@ pub fn subgraph_to_text<S: BuildHasher>(
                     .and_then(Value::as_str)
                     .or(Some(""))
             ),
-            sanitize_label(d.get("community").map(ToString::to_string).as_deref()),
+            sanitize_label(community_label(d).as_deref()),
         );
         lines.push(line);
     }
@@ -667,9 +690,10 @@ pub fn subgraph_to_text<S: BuildHasher>(
 ///
 /// Both the query and the node label/ID are run through [`search_tokens`] so
 /// punctuated names (`foo.bar`, `foo()`, `pkg::Type`) match a tokenised query.
-/// This diverges from graphify-py `_find_node`, which compares the tokenised
-/// query against the *raw* label/ID and so silently misses punctuated names —
-/// a real search-recall bug not worth replicating.
+/// graphify-py `_find_node` matches this on the *label* side since #1338 (it
+/// builds `label_tokens = " ".join(_search_tokens(label))`). The Rust port also
+/// tokenises the node ID for exact/prefix/substring matching — a benign superset
+/// that gives broader id recall than graphify-py.
 #[must_use]
 pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     let term = search_tokens(label).join(" ");

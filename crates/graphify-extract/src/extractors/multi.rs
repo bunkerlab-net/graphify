@@ -26,9 +26,10 @@ use crate::extractors::{
     extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy,
     extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
     extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
-    extract_pascal, extract_php, extract_powershell, extract_python, extract_razor, extract_ruby,
-    extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte,
-    extract_swift, extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
+    extract_package_manifest, extract_pascal, extract_php, extract_powershell,
+    extract_powershell_manifest, extract_python, extract_razor, extract_ruby, extract_rust,
+    extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte, extract_swift,
+    extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
 };
 use crate::ids::make_id1;
 use crate::import_handlers::make_edge;
@@ -57,6 +58,12 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
     if is_mcp_config_path(path) {
         return Some(extract_mcp_config);
     }
+    // Package manifests (apm.yml/pyproject.toml/go.mod/pom.xml) -> a canonical
+    // package node + depends_on edges, by filename before generic suffix dispatch
+    // (#1377). apm.yml would otherwise be a .yml document handled by the LLM.
+    if graphify_detect::is_package_manifest_path(path) {
+        return Some(extract_package_manifest);
+    }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
         "py" => Some(extract_python),
@@ -75,7 +82,8 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "swift" => Some(extract_swift),
         "lua" | "luau" | "toc" => Some(extract_lua),
         "zig" => Some(extract_zig),
-        "ps1" => Some(extract_powershell),
+        "ps1" | "psm1" => Some(extract_powershell),
+        "psd1" => Some(extract_powershell_manifest),
         "ex" | "exs" => Some(extract_elixir),
         "m" | "mm" => Some(extract_objc),
         "jl" => Some(extract_julia),
@@ -135,6 +143,7 @@ fn file_result_to_value(result: &FileResult) -> Value {
                 "is_member_call": rc.is_member_call,
                 "source_file": rc.source_file,
                 "source_location": rc.source_location,
+                "receiver": rc.receiver,
             })
         })
         .collect();
@@ -191,6 +200,17 @@ fn value_to_file_result(v: &Value) -> FileResult {
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string(),
+                        // `receiver` (#1356) reads back as `None` when absent.
+                        // Safe without a Swift cache bypass or schema-version
+                        // check: the AST cache is namespaced by crate version
+                        // (`cache/ast/v{version}/` via graphify-cache's
+                        // EXTRACTOR_VERSION), so a pre-`receiver` entry sits
+                        // under an older version dir `load_cached` never reads,
+                        // invalidated by the version bump that shipped the field.
+                        receiver: rc
+                            .get("receiver")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     })
                 })
                 .collect()
@@ -206,15 +226,27 @@ fn value_to_file_result(v: &Value) -> FileResult {
 
 // ── Extract a single file (with cache) ───────────────────────────────────────
 
+/// File suffixes whose per-file AST extraction is never cached: their cross-file
+/// import resolution depends on sibling files that can appear or change between
+/// runs, so a cached result would serve a stale (unresolved) import edge.
+/// Mirrors Python `_JS_CACHE_BYPASS_SUFFIXES`.
+const JS_CACHE_BYPASS_SUFFIXES: [&str; 7] = ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte"];
+
 /// Extract a single file, returning a cached result when available.
 ///
 /// Looks up the on-disk AST cache first; on a miss, dispatches to the language-specific
 /// extractor and writes the result back to the cache. Files with no matching extractor
 /// return an empty `FileResult` rather than an error.
 fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
-    // Check cache
-    let cached = graphify_cache::load_cached(path, effective_root, "ast");
-    if let Some(v) = cached {
+    // JS/TS files bypass the AST cache so workspace/sibling import resolution is
+    // recomputed each run (#9a7dbfb): a result cached while a sibling was absent
+    // would otherwise pin a stale unresolved import edge.
+    let bypass_cache = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| JS_CACHE_BYPASS_SUFFIXES.contains(&ext));
+
+    if !bypass_cache && let Some(v) = graphify_cache::load_cached(path, effective_root, "ast") {
         return value_to_file_result(&v);
     }
 
@@ -228,7 +260,7 @@ fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
     };
 
     let result = extractor(path);
-    if result.error.is_none() {
+    if !bypass_cache && result.error.is_none() {
         let v = file_result_to_value(&result);
         // best-effort save; ignore failures
         let _ = graphify_cache::save_cached(path, &v, effective_root, "ast");
@@ -940,6 +972,404 @@ fn relativise_under_root(path: &Path, root: &Path) -> Option<PathBuf> {
         .and_then(|c| c.strip_prefix(root).map(Path::to_path_buf).ok())
 }
 
+/// Recursively collect the `package` declaration and `import`s (simple name ->
+/// FQN, capitalised type imports only) from a parsed Java file. Mirrors the
+/// inner `walk` in Python `_resolve_java_type_references`.
+fn collect_java_pkg_imports(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    pkg: &mut String,
+    imps: &mut HashMap<String, String>,
+) {
+    match node.kind() {
+        "package_declaration" => {
+            let txt = node.utf8_text(source).unwrap_or("");
+            *pkg = txt
+                .trim()
+                .strip_prefix("package")
+                .unwrap_or(txt)
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .to_string();
+        }
+        "import_declaration" => {
+            let txt = node.utf8_text(source).unwrap_or("");
+            let stripped = txt
+                .trim()
+                .strip_prefix("import")
+                .unwrap_or(txt)
+                .trim()
+                .trim_end_matches(';')
+                .trim();
+            let body = stripped.strip_prefix("static ").map_or(stripped, str::trim);
+            if !body.ends_with(".*")
+                && body.contains('.')
+                && let Some(simple) = body.rsplit('.').next()
+                && !simple.is_empty()
+                && simple.chars().next().is_some_and(char::is_uppercase)
+            {
+                imps.insert(simple.to_string(), body.to_string());
+            }
+        }
+        _ => {}
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            collect_java_pkg_imports(cur.node(), source, pkg, imps);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+// Java edge relations re-pointed from shadow stubs to real defs by
+// `resolve_java_type_references`. `imports` is included so a file-level import
+// edge that also landed on the shadow stub gets re-pointed too, leaving the stub
+// unreferenced (and dropped). External/stdlib imports never resolve, so their
+// edges correctly stay on their stub.
+const JAVA_REPOINT_RELATIONS: &[&str] = &["implements", "inherits", "extends", "imports"];
+
+/// Re-point dangling Java `implements`/`inherits`/`extends`/`imports` edges that
+/// bare-name resolution left on sourceless shadow stubs, using each referencing
+/// file's `import` statements (then its package) to disambiguate same-named types
+/// across packages (#1318). Drops shadow stubs no edge references anymore.
+///
+/// Mirrors Python `_resolve_java_type_references`. Runs after id-disambiguation
+/// and `rewire_unique_stub_nodes` (so it only handles the ambiguous remainder),
+/// in the final node-id space; keyed by the absolute `source_file` strings the
+/// nodes/edges still carry before the closing relativisation pass.
+fn resolve_java_type_references(
+    java_paths: &[PathBuf],
+    all_nodes: &mut Vec<Node>,
+    all_edges: &mut [Edge],
+) {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_java::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+    let mut pkg_by_file: HashMap<String, String> = HashMap::new();
+    let mut imports_by_file: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for path in java_paths {
+        let Ok(source) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+        let mut pkg = String::new();
+        let mut imps: HashMap<String, String> = HashMap::new();
+        collect_java_pkg_imports(tree.root_node(), &source, &mut pkg, &mut imps);
+        let src = path.to_string_lossy().into_owned();
+        pkg_by_file.insert(src.clone(), pkg);
+        imports_by_file.insert(src, imps);
+    }
+
+    // FQN (`package.Class`) -> definition node id, for source-backed type-like defs.
+    let mut fqn_to_id: HashMap<String, String> = HashMap::new();
+    for n in all_nodes.iter() {
+        if n.label.is_empty() || n.source_file.is_empty() || n.id.is_empty() {
+            continue;
+        }
+        let Some(pkg) = pkg_by_file.get(&n.source_file) else {
+            continue;
+        };
+        let first_upper = n.label.chars().next().is_some_and(char::is_uppercase);
+        if !first_upper || n.label.ends_with(')') || n.label.ends_with(".java") {
+            continue;
+        }
+        let fqn = if pkg.is_empty() {
+            n.label.clone()
+        } else {
+            format!("{pkg}.{}", n.label)
+        };
+        fqn_to_id.entry(fqn).or_insert_with(|| n.id.clone());
+    }
+
+    // Bare shadow stubs: no source_file, capitalised (type-like) label.
+    let stub_label: HashMap<String, String> = all_nodes
+        .iter()
+        .filter(|n| {
+            !n.id.is_empty()
+                && n.source_file.is_empty()
+                && n.label.chars().next().is_some_and(char::is_uppercase)
+        })
+        .map(|n| (n.id.clone(), n.label.clone()))
+        .collect();
+    if stub_label.is_empty() {
+        return;
+    }
+
+    let mut repointed_from: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for edge in all_edges.iter_mut() {
+        if !JAVA_REPOINT_RELATIONS.contains(&edge.relation.as_str()) {
+            continue;
+        }
+        let Some(label) = stub_label.get(&edge.target) else {
+            continue;
+        };
+        let resolved: Option<String> = {
+            let ref_file = edge.source_file.as_str();
+            imports_by_file
+                .get(ref_file)
+                .and_then(|imps| imps.get(label))
+                .and_then(|fqn| fqn_to_id.get(fqn))
+                .or_else(|| {
+                    // Same-package reference (no explicit import).
+                    let pkg = pkg_by_file.get(ref_file).map_or("", String::as_str);
+                    let fqn = if pkg.is_empty() {
+                        label.clone()
+                    } else {
+                        format!("{pkg}.{label}")
+                    };
+                    fqn_to_id.get(&fqn)
+                })
+                .cloned()
+        };
+        if let Some(r) = resolved
+            && r != edge.target
+        {
+            repointed_from.insert(std::mem::replace(&mut edge.target, r));
+        }
+    }
+    if repointed_from.is_empty() {
+        return;
+    }
+
+    // Drop shadow stubs that no edge references anymore.
+    let still_referenced: std::collections::HashSet<&str> = all_edges
+        .iter()
+        .flat_map(|e| [e.source.as_str(), e.target.as_str()])
+        .collect();
+    all_nodes
+        .retain(|n| !repointed_from.contains(&n.id) || still_referenced.contains(n.id.as_str()));
+}
+
+/// `_is_type_like_definition`: a real type def (not a method, not a qualified or
+/// decorated reference). Mirrors the Python predicate.
+fn is_type_like_definition(node: &Node) -> bool {
+    let label = node.label.trim();
+    !label.is_empty()
+        && !label.ends_with(')')
+        && !label.starts_with('.')
+        && !label.contains('.')
+        && node.file_type == "code"
+}
+
+/// Re-parse a Swift file's AST into a `local name -> type name` table, from
+/// property declarations (type annotation, else constructor inference) and
+/// function parameters. Feeds [`resolve_swift_member_calls`]. Rebuilt by
+/// re-parsing (like the Java type-reference pass) rather than threaded through a
+/// `FileResult` sidecar.
+fn collect_swift_type_table(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    table: &mut HashMap<String, String>,
+) {
+    use crate::generic::references::{
+        RefRole, swift_collect_type_refs, swift_constructor_type, swift_property_name,
+        swift_property_type_node,
+    };
+    match node.kind() {
+        "property_declaration" => {
+            let mut prop_type: Option<String> = None;
+            if let Some(anno) = swift_property_type_node(node) {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                swift_collect_type_refs(anno, source, false, &mut refs);
+                prop_type = refs
+                    .into_iter()
+                    .find(|(_, r)| *r == RefRole::Direct)
+                    .map(|(n, _)| n);
+            }
+            if prop_type.is_none() {
+                let mut cur = node.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        if cur.node().kind() == "call_expression"
+                            && let Some(ctor) = swift_constructor_type(cur.node(), source)
+                        {
+                            prop_type = Some(ctor);
+                            break;
+                        }
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if let (Some(name), Some(ty)) = (swift_property_name(node, source), prop_type) {
+                table.insert(name, ty);
+            }
+        }
+        "parameter" => {
+            if let Some(type_node) = node.child_by_field_name("type") {
+                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                swift_collect_type_refs(type_node, source, false, &mut refs);
+                if let Some((ty, _)) = refs.into_iter().find(|(_, r)| *r == RefRole::Direct)
+                    && let Some(name_node) = node.child_by_field_name("name")
+                {
+                    let pname = name_node.utf8_text(source).unwrap_or("");
+                    if !pname.is_empty() {
+                        table.insert(pname.to_string(), ty);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            collect_swift_type_table(cur.node(), source, table);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Resolve cross-file Swift member calls (`recv.method()`) to the receiver's
+/// real type definition (#1356). The shared call pass drops every
+/// `is_member_call` (a bare method name collides across the corpus); this pass
+/// types the receiver via the file's local type table (or treats an upper-cased
+/// receiver as a type itself), then emits an edge ONLY when the type name
+/// resolves to exactly one definition (god-node guard). Everything it adds is
+/// INFERRED (type inference, not an explicit import).
+#[allow(clippy::too_many_lines)] // linear: re-parse type tables, build indexes, resolve each member call
+fn resolve_swift_member_calls(
+    swift_paths: &[PathBuf],
+    all_nodes: &[Node],
+    all_edges: &mut Vec<Edge>,
+    all_raw_calls: &[RawCall],
+) {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_swift::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+    let mut type_table_by_file: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for path in swift_paths {
+        let Ok(source) = std::fs::read(path) else {
+            continue;
+        };
+        let Some(tree) = parser.parse(&source, None) else {
+            continue;
+        };
+        let mut table: HashMap<String, String> = HashMap::new();
+        collect_swift_type_table(tree.root_node(), &source, &mut table);
+        type_table_by_file.insert(path.to_string_lossy().into_owned(), table);
+    }
+    if type_table_by_file.is_empty() {
+        return;
+    }
+
+    let key = |s: &str| -> String {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_lowercase()
+    };
+
+    // A genuine type is the target of a `contains` edge from its file; bare type
+    // references create same-label shadow nodes that are NOT contained, so this
+    // keeps a shadow from making a real type name look ambiguous.
+    let contained: std::collections::HashSet<&str> = all_edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .map(|e| e.target.as_str())
+        .collect();
+    let mut type_def_nids: HashMap<String, Vec<String>> = HashMap::new();
+    let mut node_by_id: HashMap<&str, &Node> = HashMap::new();
+    for n in all_nodes {
+        node_by_id.insert(n.id.as_str(), n);
+        if !n.source_file.is_empty()
+            && contained.contains(n.id.as_str())
+            && is_type_like_definition(n)
+        {
+            type_def_nids
+                .entry(key(n.label.as_str()))
+                .or_default()
+                .push(n.id.clone());
+        }
+    }
+
+    // (type_node_id, method_key) -> method_node_id, from `method` edges.
+    let mut method_index: HashMap<(String, String), String> = HashMap::new();
+    for e in all_edges.iter() {
+        if e.relation == "method"
+            && let Some(tnode) = node_by_id.get(e.target.as_str())
+        {
+            method_index.insert(
+                (e.source.clone(), key(tnode.label.as_str())),
+                e.target.clone(),
+            );
+        }
+    }
+
+    let mut existing_pairs: std::collections::HashSet<(String, String)> = all_edges
+        .iter()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+
+    let mut new_edges: Vec<Edge> = Vec::new();
+    for rc in all_raw_calls {
+        if !rc.is_member_call || rc.callee.is_empty() || rc.caller_nid.is_empty() {
+            continue;
+        }
+        let Some(receiver) = rc.receiver.as_deref() else {
+            continue;
+        };
+        // An upper-cased receiver is itself a type (`Type.staticMethod()`,
+        // `Singleton.shared.x()`); otherwise look it up in the declaring file's
+        // local type table.
+        let type_name = if receiver.chars().next().is_some_and(char::is_uppercase) {
+            receiver.to_string()
+        } else if let Some(t) = type_table_by_file
+            .get(&rc.source_file)
+            .and_then(|tbl| tbl.get(receiver))
+        {
+            t.clone()
+        } else {
+            continue;
+        };
+        let type_nid = match type_def_nids.get(&key(type_name.as_str())) {
+            Some(defs) if defs.len() == 1 => &defs[0],
+            _ => continue, // ambiguous or absent -> god-node guard
+        };
+        let (target, relation) =
+            match method_index.get(&(type_nid.clone(), key(rc.callee.as_str()))) {
+                Some(method) => (method.clone(), "calls"),
+                None => (type_nid.clone(), "references"),
+            };
+        if target == rc.caller_nid
+            || existing_pairs.contains(&(rc.caller_nid.clone(), target.clone()))
+        {
+            continue;
+        }
+        existing_pairs.insert((rc.caller_nid.clone(), target.clone()));
+        new_edges.push(Edge {
+            external: false,
+            source: rc.caller_nid.clone(),
+            target,
+            relation: relation.to_string(),
+            confidence: "INFERRED".to_string(),
+            source_file: rc.source_file.clone(),
+            source_location: Some(rc.source_location.clone()),
+            weight: 1.0,
+            context: Some("call".to_string()),
+            confidence_score: Some(0.8),
+        });
+    }
+    all_edges.extend(new_edges);
+}
+
 // ── Main extract() ────────────────────────────────────────────────────────────
 
 /// Extract AST nodes and edges from a list of code files.
@@ -958,6 +1388,11 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             output_tokens: 0,
         };
     }
+
+    // Workspace package manifests/globs can change between repeated extractions
+    // (e.g. a new package added) or during `watch`; clear the cache so each run
+    // re-scans. Mirrors Python `extract()`'s `_WORKSPACE_PACKAGE_CACHE.clear()`.
+    crate::workspace::clear_workspace_cache();
 
     // Infer common root for ID relativisation
     let root: PathBuf = {
@@ -1125,6 +1560,18 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             if n.source_file.is_empty() {
                 continue;
             }
+            // Package (#1377) and Swift module (#1327) anchor nodes carry a
+            // canonical name-keyed id (`pkg_<name>` / the shared module id) that
+            // must stay identical across every manifest/file that references them,
+            // so they are exempt from the file-stem prefix remap.
+            if n.metadata
+                .as_ref()
+                .and_then(|m| m.get("type"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "package" || t == "module")
+            {
+                continue;
+            }
             let Some((old_pref, new_pref)) = prefix_remap.get(&n.source_file) else {
                 continue;
             };
@@ -1180,6 +1627,20 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // a unique real definition with the same label. Drops the stub when
     // the rewire succeeds.
     crate::postprocess::rewire_unique_stub_nodes(&mut all_nodes, &mut all_edges);
+
+    // Re-point dangling Java implements/inherits edges left on shadow stubs by
+    // bare-name resolution, using imports for exact-package disambiguation
+    // (#1318). After rewire_unique_stub_nodes so it only handles the ambiguous
+    // remainder; before the closing source_file relativisation so node/edge
+    // source_files still match the parsed Java file paths.
+    let java_type_paths: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "java"))
+        .cloned()
+        .collect();
+    if !java_type_paths.is_empty() {
+        resolve_java_type_references(&java_type_paths, &mut all_nodes, &mut all_edges);
+    }
 
     // Collapse Swift `extension Foo` nodes onto the canonical `class Foo`
     // declaration. Mirrors `_merge_swift_extensions` in graphify-py.
@@ -1317,6 +1778,18 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             context: Some("call".to_string()),
             confidence_score: Some(confidence_score),
         });
+    }
+
+    // Cross-file Swift member-call resolution (#1356): after the shared call pass
+    // (node ids and caller_nids final) and before source_file relativisation (the
+    // type-table re-parse keys on the absolute paths nodes/raw_calls still carry).
+    let swift_paths: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "swift"))
+        .cloned()
+        .collect();
+    if !swift_paths.is_empty() {
+        resolve_swift_member_calls(&swift_paths, &all_nodes, &mut all_edges, &all_raw_calls);
     }
 
     // Relativise source_file fields

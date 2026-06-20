@@ -128,11 +128,6 @@ pub(crate) fn cmd_cluster_only(
     std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
     eprintln!("      wrote {}", analysis_path.display());
 
-    // Refresh graph.json so node community attrs match the new partition.
-    // Mirrors Python `__main__.py:1831` (`to_json(G, communities, ...)`).
-    graphify_export::to_json(&g, &communities, &graph_path, true, None)?;
-    eprintln!("      wrote {}", graph_path.display());
-
     // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
     // find community labels. Three paths, checked in this order:
     //   1. labels file exists & not forced → load it (preserve user edits, fill
@@ -185,6 +180,13 @@ pub(crate) fn cmd_cluster_only(
         );
         labels
     };
+
+    // Refresh graph.json so node community attrs match the new partition and
+    // carry the human community_name labels resolved above. Mirrors Python
+    // `__main__.py:3283` (`to_json(G, communities, ..., community_labels=labels)`).
+    graphify_export::to_json(&g, &communities, &graph_path, true, None, Some(&labels))?;
+    eprintln!("      wrote {}", graph_path.display());
+
     if skip_label_write {
         eprintln!(
             "      kept existing {} (not overwritten)",

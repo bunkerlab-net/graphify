@@ -93,11 +93,14 @@ fn dirs_home() -> Option<PathBuf> {
 
 // ── .graphifyignore / .gitignore loading ─────────────────────────────────────
 
-/// Read `.graphifyignore` (falling back to `.gitignore`) files from `root` upward
-/// to the VCS ceiling and return `(anchor_dir, pattern)` pairs.
+/// Read `.gitignore` then `.graphifyignore` files from `root` upward to the VCS
+/// ceiling and return `(anchor_dir, pattern)` pairs.
 ///
 /// Outer-first (ceiling first, scan root last) so inner rules win via
-/// last-match-wins semantics, matching gitignore behaviour exactly.
+/// last-match-wins semantics, matching gitignore behaviour exactly. Within a
+/// single directory both files are read in the order `[.gitignore,
+/// .graphifyignore]` and their patterns merged (#1363), so `.graphifyignore`
+/// patterns — including `!` negations — win over `.gitignore` on conflict.
 #[must_use]
 pub fn load_graphifyignore(root: &Path) -> IgnorePatterns {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -106,22 +109,24 @@ pub fn load_graphifyignore(root: &Path) -> IgnorePatterns {
 
     let mut patterns: IgnorePatterns = Vec::new();
     for dir in &dirs {
-        // Prefer .graphifyignore; fall back to .gitignore.
-        let ignore_file = {
-            let gfi = dir.join(".graphifyignore");
-            if gfi.exists() {
-                gfi
-            } else {
-                dir.join(".gitignore")
-            }
-        };
-        if ignore_file.exists()
-            && let Ok(text) = std::fs::read_to_string(&ignore_file)
-        {
-            for raw in text.lines() {
-                let line = parse_gitignore_line(raw);
-                if !line.is_empty() {
-                    patterns.push((dir.clone(), line));
+        // Merge .gitignore and .graphifyignore for this dir (#1363): read
+        // .gitignore first (base) then .graphifyignore (overrides), appending
+        // every pattern from each that exists. Patterns evaluate
+        // last-match-wins, so a .graphifyignore pattern — including a `!`
+        // negation — wins over a conflicting .gitignore rule and can re-enable
+        // a file that .gitignore excluded (subject to the gitignore
+        // parent-exclusion rule enforced in `is_ignored_impl`: a `!` cannot
+        // rescue a file beneath an excluded directory).
+        for fname in [".gitignore", ".graphifyignore"] {
+            let ignore_file = dir.join(fname);
+            if ignore_file.exists()
+                && let Ok(text) = std::fs::read_to_string(&ignore_file)
+            {
+                for raw in text.lines() {
+                    let line = parse_gitignore_line(raw);
+                    if !line.is_empty() {
+                        patterns.push((dir.clone(), line));
+                    }
                 }
             }
         }

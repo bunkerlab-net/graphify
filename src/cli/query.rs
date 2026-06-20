@@ -195,15 +195,23 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
     let source_file = get_str("source_file");
     let source_loc = get_str("source_location");
     let file_type = get_str("file_type");
-    let community = attrs
-        .and_then(|a| a.get("community"))
-        .map(|v| {
-            v.as_i64()
-                .map(|i| i.to_string())
-                .or_else(|| v.as_str().map(str::to_string))
-                .unwrap_or_else(|| v.to_string())
-        })
-        .unwrap_or_default();
+    // Prefer the human community_name label (#85de47e); fall back to the numeric
+    // community id when it's absent or empty. Mirrors Python `__main__.py:2973`
+    // `d.get('community_name') or d.get('community', '')`.
+    let community_name = get_str("community_name");
+    let community = if community_name.is_empty() {
+        attrs
+            .and_then(|a| a.get("community"))
+            .map(|v| {
+                v.as_i64()
+                    .map(|i| i.to_string())
+                    .or_else(|| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .unwrap_or_default()
+    } else {
+        community_name.to_string()
+    };
     let degree = graphify_serve::graph::node_degree(&g, node_id);
 
     println!("Node: {label_or_id}");

@@ -3,7 +3,7 @@
 //! Mirrors `graphify-py/tests/test_detect.py` — classification tests.
 #![allow(clippy::expect_used)]
 
-use graphify_detect::{FileType, classify_file};
+use graphify_detect::{FileType, classify_file, is_package_manifest_path};
 use std::path::Path;
 use tempfile::tempdir;
 
@@ -15,6 +15,41 @@ fn classify_python() {
 #[test]
 fn classify_typescript() {
     assert_eq!(classify_file(Path::new("bar.ts")), Some(FileType::Code));
+}
+
+/// #1315: `.psm1` PowerShell modules were never indexed (a `CODE_EXTENSIONS` gap).
+#[test]
+fn classify_powershell_module() {
+    assert_eq!(classify_file(Path::new("Utils.psm1")), Some(FileType::Code));
+}
+
+/// #1331: `.psd1` PowerShell manifests must classify as code so the manifest
+/// extractor runs.
+#[test]
+fn classify_powershell_manifest() {
+    assert_eq!(
+        classify_file(Path::new("MyModule.psd1")),
+        Some(FileType::Code)
+    );
+}
+
+/// #1377: package manifests route to the deterministic AST/code path, not the
+/// LLM document path — even when their extension (`.yml`/`.toml`/`.xml`) would
+/// otherwise classify as a document. A generic yaml stays a document. Mirrors
+/// Python `test_manifests_classify_as_code_not_document`.
+#[test]
+fn manifests_classify_as_code_not_document() {
+    let tmp = tempdir().expect("tempdir");
+    for name in ["apm.yml", "pyproject.toml", "go.mod", "pom.xml"] {
+        let p = tmp.path().join(name);
+        std::fs::write(&p, "x").expect("write manifest");
+        assert!(is_package_manifest_path(&p), "{name} is a manifest");
+        assert_eq!(classify_file(&p), Some(FileType::Code), "{name} -> Code");
+    }
+    // A generic yaml stays a document.
+    let cfg = tmp.path().join("config.yaml");
+    std::fs::write(&cfg, "a: 1").expect("write config");
+    assert_eq!(classify_file(&cfg), Some(FileType::Document));
 }
 
 #[test]

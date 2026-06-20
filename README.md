@@ -54,6 +54,11 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var _names_ (values are never read).
+- **Package manifests & doc links** — `apm.yml`, `pyproject.toml`, `go.mod`, and `pom.xml` become canonical
+  `package` nodes with `depends_on` edges (a package referenced across manifests collapses to one hub node);
+  PowerShell `.psm1` modules and `.psd1` manifests emit `imports_from` edges; and Markdown links (inline,
+  reference-style, and `[[wikilinks]]`) become `references` edges so hub docs (`index.md`, tables of contents)
+  connect to the documents they link instead of orphaning.
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
   Untrusted office/PDF files are screened before parsing (50 MiB on-disk cap; `.docx`/`.xlsx` zip-bomb guard at
   512 MiB decompressed / 200:1 ratio) and silently skipped if they exceed the limits, so a malicious corpus file
@@ -62,6 +67,9 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 - **Optional LLM-driven semantic extraction** through OpenAI, Claude (Anthropic), Gemini, DeepSeek, Kimi (Moonshot),
   Ollama, Bedrock, Azure OpenAI, or any OpenAI-compatible **custom provider** registered with `graphify provider add`.
   The `--backend` identifiers are `openai`, `claude`, `gemini`, `deepseek`, `kimi`, `ollama`, `bedrock`, and `azure`.
+  The `openai` and `claude` backends also honour `OPENAI_BASE_URL`/`OPENAI_MODEL` and
+  `ANTHROPIC_BASE_URL`/`ANTHROPIC_MODEL` to reach self-hosted OpenAI-compatible servers (llama.cpp, vLLM,
+  LM Studio) or Anthropic-compatible proxies (LiteLLM) without a custom-provider entry.
   Vision-capable backends read raster images (PNG/JPG/GIF/WebP) as pixels, so a diagram or screenshot becomes a graph
   node; non-vision backends record it as a text-reference node instead.
 - **Structural introspection** — `graphify extract --cargo` adds `crate -> crate` dependency edges from `Cargo.toml`

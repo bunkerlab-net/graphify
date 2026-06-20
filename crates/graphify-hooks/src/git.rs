@@ -36,7 +36,9 @@ pub(crate) fn git_root(path: &Path) -> Option<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns `HooksError::Io` if the resolved hooks directory cannot be created.
+/// Returns `HooksError::Io` if the resolved hooks directory cannot be created,
+/// or `HooksError::WindowsPath` if a configured hooks path looks like a Windows
+/// path (drive-letter prefix or backslash) and cannot resolve on WSL/POSIX.
 pub fn hooks_dir(root: &Path) -> Result<PathBuf, HooksError> {
     hooks_dir_with(root, &default_rev_parse)
 }
@@ -68,7 +70,9 @@ pub fn user_hooks_dir(hooks_dir: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// Returns `HooksError::Io` if the resolved hooks directory cannot be created.
+/// Returns `HooksError::Io` if the resolved hooks directory cannot be created,
+/// or `HooksError::WindowsPath` if a configured hooks path looks like a Windows
+/// path (drive-letter prefix or backslash) and cannot resolve on WSL/POSIX.
 pub fn hooks_dir_with(
     root: &Path,
     rev_parse_fn: &dyn Fn(&Path) -> Option<String>,
@@ -77,6 +81,7 @@ pub fn hooks_dir_with(
     if let Ok(content) = fs::read_to_string(&git_config)
         && let Some(custom) = parse_hooks_path(&content)
     {
+        reject_windows_path(&custom, "core.hooksPath")?;
         let p = PathBuf::from(shellexpand::tilde(&custom).as_ref());
         let p = if p.is_absolute() { p } else { root.join(&p) };
         let root_canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -90,6 +95,7 @@ pub fn hooks_dir_with(
     if let Some(raw) = rev_parse_fn(root) {
         let raw = raw.trim().to_string();
         if !raw.is_empty() && !raw.contains('\n') && !raw.contains('\r') && !raw.contains('\x00') {
+            reject_windows_path(&raw, "git rev-parse --git-path hooks")?;
             let d = root.join(&raw);
             fs::create_dir_all(&d)?;
             return Ok(d.canonicalize().unwrap_or(d));
@@ -147,4 +153,38 @@ fn parse_hooks_path(config_text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Reject a hooks path that looks like a Windows absolute path (#1385).
+///
+/// Gated to non-Windows targets. On POSIX/WSL, `Path::new("C:\\Users\\...")` is
+/// not absolute, so an absolute Windows hooks path would get joined under the
+/// repo root and `mkdir`'d as a literal junk directory (backslashes and all)
+/// while install reports success and the real `.git/hooks` gets nothing — so we
+/// fail loudly. On native Windows that same string IS a valid absolute path
+/// that `fs::create_dir_all` resolves correctly, so it is accepted. This
+/// diverges from graphify-py, which rejects unconditionally and would therefore
+/// break a legitimate Husky / `core.hooksPath` setup on native Windows.
+///
+/// # Errors
+///
+/// On non-Windows targets, returns `HooksError::WindowsPath` if `value` begins
+/// with a drive-letter prefix (e.g. `C:\` or `c:/`) or contains a backslash.
+#[cfg_attr(windows, allow(unused_variables, clippy::unnecessary_wraps))]
+fn reject_windows_path(value: &str, source: &'static str) -> Result<(), HooksError> {
+    #[cfg(not(windows))]
+    {
+        #[allow(clippy::expect_used)]
+        static WINDOWS_DRIVE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+            // A single ASCII letter, a colon, then `\` or `/`. Literal, always valid.
+            Regex::new(r"^[A-Za-z]:[\\/]").expect("literal pattern is valid")
+        });
+        if WINDOWS_DRIVE_RE.is_match(value) || value.contains('\\') {
+            return Err(HooksError::WindowsPath {
+                origin: source,
+                value: value.to_string(),
+            });
+        }
+    }
+    Ok(())
 }

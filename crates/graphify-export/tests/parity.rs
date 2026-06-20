@@ -37,7 +37,7 @@ fn test_to_json_creates_file() {
     let communities = make_communities();
     let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.json");
-    to_json(&g, &communities, &out, true, None).expect("test invariant");
+    to_json(&g, &communities, &out, true, None, None).expect("test invariant");
     assert!(out.exists());
 }
 
@@ -47,7 +47,7 @@ fn test_to_json_valid_json() {
     let communities = make_communities();
     let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.json");
-    to_json(&g, &communities, &out, true, None).expect("test invariant");
+    to_json(&g, &communities, &out, true, None, None).expect("test invariant");
     let text = std::fs::read_to_string(&out).expect("read fixture");
     let data: Value = serde_json::from_str(&text).expect("valid JSON");
     assert!(data.get("nodes").is_some(), "nodes key missing");
@@ -60,7 +60,7 @@ fn test_to_json_nodes_have_community() {
     let communities = make_communities();
     let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graph.json");
-    to_json(&g, &communities, &out, true, None).expect("test invariant");
+    to_json(&g, &communities, &out, true, None, None).expect("test invariant");
     let text = std::fs::read_to_string(&out).expect("read fixture");
     let data: Value = serde_json::from_str(&text).expect("valid JSON");
     let nodes = data["nodes"].as_array().expect("array field");
@@ -68,6 +68,71 @@ fn test_to_json_nodes_have_community() {
         assert!(
             node.get("community").is_some(),
             "node missing 'community' field: {node}"
+        );
+    }
+}
+
+#[test]
+fn test_to_json_community_name() {
+    // #1305: `community_labels` writes a human `community_name` per node, with a
+    // `Community {cid}` fallback for community ids that have no label. Split all
+    // nodes into two communities, label only cid 0, and assert both branches.
+    let g = make_graph();
+    let node_ids: Vec<String> = g.nodes().map(|(id, _)| id.clone()).collect();
+    assert!(
+        node_ids.len() >= 2,
+        "fixture must have >= 2 nodes to split into two communities"
+    );
+    let mid = node_ids.len() / 2;
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(0, node_ids[..mid].to_vec());
+    communities.insert(1, node_ids[mid..].to_vec());
+
+    let mut labels: IndexMap<i64, String> = IndexMap::new();
+    labels.insert(0, "Labeled Community".to_string()); // cid 1 left unlabeled
+
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    to_json(&g, &communities, &out, true, None, Some(&labels)).expect("test invariant");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+
+    let mut saw_labeled = false;
+    let mut saw_fallback = false;
+    for node in data["nodes"].as_array().expect("array field") {
+        let cid = node
+            .get("community")
+            .and_then(Value::as_i64)
+            .expect("every node is in a community");
+        let name = node
+            .get("community_name")
+            .and_then(Value::as_str)
+            .expect("node with a community id must carry community_name");
+        if cid == 0 {
+            assert_eq!(name, "Labeled Community");
+            saw_labeled = true;
+        } else {
+            assert_eq!(name, format!("Community {cid}"));
+            saw_fallback = true;
+        }
+    }
+    assert!(saw_labeled, "expected nodes in the labeled community");
+    assert!(
+        saw_fallback,
+        "expected nodes hitting the 'Community {{cid}}' fallback"
+    );
+
+    // None / empty labels must omit `community_name` entirely (unchanged behavior).
+    let empty: IndexMap<i64, String> = IndexMap::new();
+    let out_empty = tmp.path().join("graph_empty.json");
+    to_json(&g, &communities, &out_empty, true, None, Some(&empty)).expect("test invariant");
+    let data_empty: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_empty).expect("read"))
+            .expect("valid JSON");
+    for node in data_empty["nodes"].as_array().expect("array field") {
+        assert!(
+            node.get("community_name").is_none(),
+            "empty labels must omit community_name: {node}"
         );
     }
 }
@@ -245,6 +310,32 @@ fn test_to_canvas_file_paths_relative_to_vault() {
             "file should end with .md: {file}"
         );
     }
+}
+
+#[test]
+fn test_to_canvas_no_communities_still_populates() {
+    // #1324: empty communities (e.g. --no-cluster builds) on a populated graph
+    // must NOT produce the 32-byte empty `{"nodes": [], "edges": []}` shell.
+    let g = make_graph();
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.canvas");
+    // no community data — the bug condition
+    to_canvas(&g, &communities, &out, None, None).expect("test invariant");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    let nodes = data["nodes"].as_array().expect("array field");
+    let edges = data["edges"].as_array().expect("array field");
+    assert!(
+        nodes.len() >= g.node_count(),
+        "canvas should hold at least one entry per graph node"
+    );
+    assert!(!edges.is_empty(), "canvas should hold at least one edge");
+    let size = std::fs::metadata(&out).expect("metadata").len();
+    assert!(
+        size > 32,
+        "canvas must not be the empty 32-byte shell (got {size})"
+    );
 }
 
 // ── backup_if_protected ───────────────────────────────────────────────────────

@@ -76,6 +76,35 @@ fn tool_get_node_no_match() {
     assert!(out.contains("No node matching"));
 }
 
+#[test]
+fn tool_get_node_prefers_community_name() {
+    // `community_name` wins over the numeric cid; absent it, the cid renders.
+    // Mirrors graphify-py serve.py `_build_server` get_node (#1305).
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "alpha", "source_file": "alpha.py",
+                 "source_location": "L1", "community": 3, "community_name": "Auth Layer",
+                 "file_type": "code"},
+                {"id": "n2", "label": "beta", "source_file": "beta.py",
+                 "source_location": "L1", "community": 3, "file_type": "code"},
+            ],
+            "edges": []
+        }),
+        false,
+        None,
+    )
+    .expect("test invariant");
+    let named = tool_get_node(&g, &arg_map(&[("label", json!("alpha"))]));
+    assert!(named.contains("  Community: Auth Layer"), "got: {named}");
+    assert!(
+        !named.contains("Community: 3"),
+        "numeric cid leaked: {named}"
+    );
+    let numbered = tool_get_node(&g, &arg_map(&[("label", json!("beta"))]));
+    assert!(numbered.contains("  Community: 3"), "got: {numbered}");
+}
+
 // ── tool_get_neighbors ──────────────────────────────────────────────────────
 
 #[test]

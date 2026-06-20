@@ -79,3 +79,30 @@ fn emit_tree_html_neutralises_script_close() {
         "expected neutralised <\\/script> in JSON"
     );
 }
+
+/// U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) are valid inside
+/// JSON strings but are JavaScript line terminators: left raw in the inline
+/// `<script>` data island they break out of the `const initialJsonData = …;`
+/// string literal and enable XSS. `emit_tree_html` escapes them to
+/// `\u2028`/`\u2029` (matching Python `tree_html.emit_html`'s `ensure_ascii=True`).
+#[test]
+fn emit_tree_html_escapes_js_line_terminators() {
+    let tree = serde_json::json!({
+        "name": "a\u{2028}b\u{2029}c",
+        "total_count": 1,
+        "children": [],
+    });
+    let html = emit_tree_html(&tree, "t", "h", 100, 100);
+    assert!(
+        !html.contains('\u{2028}'),
+        "raw U+2028 survived in <script>"
+    );
+    assert!(
+        !html.contains('\u{2029}'),
+        "raw U+2029 survived in <script>"
+    );
+    assert!(
+        html.contains("a\\u2028b\\u2029c"),
+        "expected escaped \\u2028/\\u2029 in embedded JSON"
+    );
+}

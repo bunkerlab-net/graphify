@@ -147,11 +147,18 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     )?;
     let graph_path = out_dir.join("graph.json");
     let communities = run_cluster_phase(&graph, no_cluster, resolution, exclude_hubs)?;
-    graphify_export::to_json(&graph, &communities, &graph_path, true, None)?;
+    graphify_export::to_json(&graph, &communities, &graph_path, true, None, None)?;
     eprintln!("      wrote {}", graph_path.display());
     persist_semantic_marker(&out_dir, sem_output_tokens)?;
 
     if no_cluster {
+        // Persist the manifest so a later `extract --no-cluster` / `update` run
+        // takes the incremental path, matching graphify-py's `--no-cluster`
+        // `_save_manifest` (`__main__.py:4492`). Output stays byte-identical: the
+        // incremental union re-extract is deterministically sorted (see
+        // `detect_result_from_incremental`), so the rebuilt graph matches a full
+        // scan.
+        persist_manifest(&detect.files, &out_dir, path);
         if global {
             cmd_extract_global_add(&graph_path, as_tag, path);
         }

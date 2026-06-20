@@ -2,6 +2,8 @@
 //!
 //! Ports the `_call_claude` function in `graphify-py/graphify/llm.py`.
 
+use std::borrow::Cow;
+
 use serde::Deserialize;
 use serde_json::json;
 
@@ -18,16 +20,44 @@ pub const ENV_KEY: &str = "ANTHROPIC_API_KEY";
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_CLAUDE_MODEL";
 /// Base URL override environment variable.
 pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_CLAUDE_BASE_URL";
+/// Upstream Anthropic base-URL env var, pointing the backend at any
+/// Anthropic-compatible server (`LiteLLM` proxy, gateways, ...).
+pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
+/// Upstream Anthropic model env var, overriding the default model.
+pub const ANTHROPIC_MODEL_ENV: &str = "ANTHROPIC_MODEL";
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
-/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+/// Effective base URL: [`BASE_URL_ENV_KEY`] (test redirect) then
+/// [`ANTHROPIC_BASE_URL_ENV`], else the public Anthropic endpoint. Mirrors the
+/// env-derived `BACKENDS["claude"]["base_url"]` in graphify-py.
 #[must_use]
 pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV_KEY)
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(ANTHROPIC_BASE_URL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
+
+/// Effective default model: [`MODEL_ENV_KEY`] (`GRAPHIFY_CLAUDE_MODEL`) wins
+/// over [`ANTHROPIC_MODEL_ENV`] (`ANTHROPIC_MODEL`), else [`DEFAULT_MODEL`].
+/// Mirrors the env-derived `BACKENDS["claude"]["default_model"]` in graphify-py.
+#[must_use]
+pub fn default_model() -> Cow<'static, str> {
+    std::env::var(MODEL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(ANTHROPIC_MODEL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
+        .map_or(Cow::Borrowed(DEFAULT_MODEL), Cow::Owned)
 }
 
 #[derive(Deserialize)]

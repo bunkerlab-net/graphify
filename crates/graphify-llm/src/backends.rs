@@ -4,6 +4,8 @@
 //! `get_backend_api_key`, and `format_backend_env_keys` — the static metadata
 //! and environment-key resolution layer shared by all call sites.
 
+use std::borrow::Cow;
+
 use crate::{
     LlmBackend, LlmError, azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama,
     openai,
@@ -67,7 +69,7 @@ pub const BACKENDS: &[BackendConfig] = &[
             input: 0.40,
             output: 1.60,
         },
-        default_max_tokens: 8_192,
+        default_max_tokens: 16_384,
     },
     BackendConfig {
         name: "deepseek",
@@ -121,6 +123,22 @@ pub const BACKENDS: &[BackendConfig] = &[
 #[must_use]
 pub fn backend_config(name: &str) -> Option<&'static BackendConfig> {
     BACKENDS.iter().find(|b| b.name == name)
+}
+
+/// Resolve a backend's default model, honouring its model-override env var.
+///
+/// Mirrors graphify-py `_default_model_for_backend`: `openai` / `claude` layer
+/// `GRAPHIFY_*_MODEL` over the upstream `OPENAI_MODEL` / `ANTHROPIC_MODEL`
+/// env-derived default, then the literal fallback. Every other backend uses its
+/// static [`BackendConfig::default_model`]. Returns an empty string for unknown
+/// names (callers validate the backend before reaching here).
+#[must_use]
+pub fn default_model_for_backend(backend: &str) -> Cow<'static, str> {
+    match backend {
+        "openai" => openai::default_model(),
+        "claude" => claude::default_model(),
+        other => Cow::Borrowed(backend_config(other).map_or("", |c| c.default_model)),
+    }
 }
 
 /// Construct a boxed [`LlmBackend`] by name.

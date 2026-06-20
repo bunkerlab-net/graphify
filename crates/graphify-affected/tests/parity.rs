@@ -277,6 +277,51 @@ fn resolve_seed_bare_name_tie_still_returns_none() {
     assert_eq!(resolve_seed(&graph, "dup"), None);
 }
 
+// Mirrors: test_resolve_seed_matches_unicode_normalized_label
+#[test]
+fn resolve_seed_matches_unicode_normalized_label() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    // Label is stored NFC-composed: "í" is U+00ED.
+    let payload = json!({
+        "directed": true,
+        "nodes": [
+            {"id": "a", "label": "Auditor\u{00ed}a", "source_file": "pkg/auditoria.py"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    // Query is the NFD-decomposed form: "i" + U+0301 (combining acute accent).
+    // It must still resolve to the NFC-stored label.
+    assert_eq!(
+        resolve_seed(&graph, "Auditori\u{0301}a"),
+        Some("a".to_owned())
+    );
+}
+
+// Mirrors: test_resolve_seed_preserves_distinct_accents
+#[test]
+fn resolve_seed_preserves_distinct_accents() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true,
+        "nodes": [
+            {"id": "a", "label": "resume", "source_file": "pkg/resume.py"},
+            {"id": "b", "label": "r\u{00e9}sum\u{00e9}", "source_file": "pkg/resume_accented.py"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(resolve_seed(&graph, "resume"), Some("a".to_owned()));
+    assert_eq!(
+        resolve_seed(&graph, "r\u{00e9}sum\u{00e9}"),
+        Some("b".to_owned())
+    );
+}
+
 #[test]
 fn affected_hit_struct_carries_expected_fields() {
     let hit = AffectedHit {

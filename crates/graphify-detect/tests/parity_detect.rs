@@ -477,19 +477,39 @@ fn detect_gitignore_fallback_when_no_graphifyignore() {
 }
 
 #[test]
-fn detect_graphifyignore_takes_precedence_over_gitignore() {
-    // When both exist, .graphifyignore is used and .gitignore is ignored.
+fn detect_graphifyignore_and_gitignore_are_merged() {
+    // #1363: when both exist, their patterns are MERGED — a file excluded only
+    // by .gitignore stays excluded even though .graphifyignore says nothing
+    // about it. Previously a .graphifyignore silently disabled the dir's
+    // .gitignore, leaking gitignore-only secrets into the graph.
     let tmp = tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join(".git")).expect("test invariant");
-    // .gitignore would exclude main.py; .graphifyignore excludes only other.py
     std::fs::write(tmp.path().join(".gitignore"), "main.py\n").expect("test invariant");
     std::fs::write(tmp.path().join(".graphifyignore"), "other.py\n").expect("test invariant");
     std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
     std::fs::write(tmp.path().join("other.py"), "x = 2").expect("test invariant");
+    std::fs::write(tmp.path().join("keep.py"), "x = 3").expect("test invariant");
     let result = detect(tmp.path(), None, None);
     let code = &result.files["code"];
-    assert!(code.iter().any(|f| f.contains("main.py")));
-    assert!(!code.iter().any(|f| f.contains("other.py")));
+    assert!(!code.iter().any(|f| f.contains("main.py"))); // gitignore STILL applied
+    assert!(!code.iter().any(|f| f.contains("other.py"))); // graphifyignore applied
+    assert!(code.iter().any(|f| f.contains("keep.py"))); // neither excludes it
+}
+
+#[test]
+fn detect_graphifyignore_negation_overrides_gitignore() {
+    // #1363: .graphifyignore is evaluated after .gitignore, so a `!` negation in
+    // it re-includes a file the .gitignore excluded (last-match-wins).
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join(".git")).expect("test invariant");
+    std::fs::write(tmp.path().join(".gitignore"), "*.py\n").expect("test invariant");
+    std::fs::write(tmp.path().join(".graphifyignore"), "!keep.py\n").expect("test invariant");
+    std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
+    std::fs::write(tmp.path().join("keep.py"), "x = 2").expect("test invariant");
+    let result = detect(tmp.path(), None, None);
+    let code = &result.files["code"];
+    assert!(code.iter().any(|f| f.contains("keep.py"))); // rescued by negation
+    assert!(!code.iter().any(|f| f.contains("main.py"))); // still excluded
 }
 
 // ── #1276: a single `!` negation must not disable directory pruning ──────────

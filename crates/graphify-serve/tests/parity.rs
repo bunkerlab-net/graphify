@@ -226,6 +226,26 @@ fn test_find_node_ignores_trailing_punctuation() {
 }
 
 #[test]
+fn test_find_node_matches_full_punctuated_unicode_label() {
+    // Mirrors graphify-py test_serve.py::test_find_node_matches_full_punctuated_unicode_label.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "Skill /auditar — Auditoría inquisitiva de enlaces"}
+            ],
+            "edges": []
+        }),
+        false,
+        None,
+    )
+    .expect("build graph");
+    assert_eq!(
+        find_node(&g, "Skill /auditar — Auditoría inquisitiva de enlaces"),
+        vec!["n1".to_string()]
+    );
+}
+
+#[test]
 fn test_query_terms_strips_search_punctuation() {
     assert_eq!(
         query_terms("what calls extract?"),
@@ -444,6 +464,71 @@ fn test_subgraph_to_text_contains_labels() {
     );
     assert!(text.contains("extract"));
     assert!(text.contains("cluster"));
+}
+
+#[test]
+fn test_subgraph_to_text_prefers_community_name() {
+    // A node carrying `community_name` renders the human label; a node without
+    // it falls back to the numeric `community` id. Mirrors graphify-py
+    // `str(d.get('community_name') or d.get('community', ''))` (#1305).
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "extract", "source_file": "extract.py",
+                 "source_location": "L10", "community": 7, "community_name": "Auth Layer"},
+                {"id": "n2", "label": "cluster", "source_file": "cluster.py",
+                 "source_location": "L5", "community": 7},
+            ],
+            "edges": [
+                {"source": "n1", "target": "n2", "relation": "calls",
+                 "confidence": "INFERRED"}
+            ]
+        }),
+        false,
+        None,
+    )
+    .expect("build graph");
+    let nodes: std::collections::HashSet<String> =
+        ["n1".to_string(), "n2".to_string()].into_iter().collect();
+    let text = subgraph_to_text(&g, &nodes, &[], 2000, None);
+    // community_name wins for n1 (human label, not the numeric cid).
+    assert!(
+        text.contains("NODE extract [src=extract.py loc=L10 community=Auth Layer]"),
+        "named community not rendered: {text}"
+    );
+    // n2 has no community_name -> falls back to the numeric community id.
+    assert!(
+        text.contains("NODE cluster [src=cluster.py loc=L5 community=7]"),
+        "numeric community fallback missing: {text}"
+    );
+}
+
+#[test]
+fn test_subgraph_to_text_string_community_renders_unquoted() {
+    // A `community` stored as a JSON string must render like Python's
+    // `str("7")` -> `7`, not the quoted `"7"` that `Value::to_string` emits.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "extract", "source_file": "extract.py",
+                 "source_location": "L10", "community": "7"},
+            ],
+            "edges": []
+        }),
+        false,
+        None,
+    )
+    .expect("build graph");
+    let nodes: std::collections::HashSet<String> = ["n1".to_string()].into_iter().collect();
+    let text = subgraph_to_text(&g, &nodes, &[], 2000, None);
+    assert!(
+        text.contains("NODE extract [src=extract.py loc=L10 community=7]"),
+        "string community should render unquoted: {text}"
+    );
+    assert!(
+        !text.contains("community=\"7\""),
+        "string community must not be JSON-quoted: {text}"
+    );
 }
 
 #[test]

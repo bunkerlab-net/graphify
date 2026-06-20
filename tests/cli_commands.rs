@@ -881,3 +881,56 @@ fn label_accepts_model_flag() {
         "expected placeholder labels: {labels}"
     );
 }
+
+/// #1347/#1350: a no-op incremental `extract --no-cluster` re-run must leave
+/// graph.json byte-identical. The first run persists `manifest.json` (parity with
+/// graphify-py `__main__.py:4492`), so the second run takes the incremental path;
+/// it rebuilds deterministically from the sorted changed+unchanged union via
+/// `build_from_json`, and `to_json` carries no timestamp, so the output stays
+/// byte-identical without an explicit no-op short-circuit.
+#[test]
+fn extract_no_cluster_incremental_noop_preserves_existing_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("app.py"), "def alpha():\n    return 1\n").unwrap();
+
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    let graph_path = dir.path().join("graphify-out").join("graph.json");
+    assert!(
+        dir.path()
+            .join("graphify-out")
+            .join("manifest.json")
+            .exists(),
+        "--no-cluster must persist manifest.json so a re-run takes the incremental path"
+    );
+    let before = fs::read_to_string(&graph_path).unwrap();
+    let before_json: serde_json::Value = serde_json::from_str(&before).unwrap();
+    assert!(
+        before_json
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "first run should produce a non-empty code graph"
+    );
+
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    let after = fs::read_to_string(&graph_path).unwrap();
+    let after_json: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert!(
+        after_json
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "no-op incremental run must not empty the graph"
+    );
+    assert_eq!(after, before, "no-op incremental run changed graph.json");
+}

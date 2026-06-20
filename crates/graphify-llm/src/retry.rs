@@ -6,7 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::extract::extract_files_direct_mode;
+use crate::extract::extract_units_direct_mode;
+use crate::file_slice::{FileSlice, Unit, bisect_slice, unit_path};
 use crate::{LlmError, LlmResponse};
 
 /// Run-constant context for [`extract_with_adaptive_retry_ctx`].
@@ -102,8 +103,8 @@ pub(crate) fn merge_responses(
 
 /// Extract a chunk; split in half and retry on context overflow or truncation.
 ///
-/// Standard (non-deep) entry point. See [`extract_with_adaptive_retry_ctx`] to
-/// thread deep mode and other run-constant settings.
+/// Standard (non-deep) entry point. See [`extract_with_adaptive_retry_units`] to
+/// thread deep mode, run-constant settings, and `FileSlice` units.
 ///
 /// # Errors
 /// Propagates errors that don't look like context-window overflow.
@@ -124,20 +125,27 @@ pub fn extract_with_adaptive_retry(
         max_depth,
         deep_mode: false,
     };
-    extract_with_adaptive_retry_ctx(chunk, &ctx, depth)
+    let units: Vec<Unit> = chunk.iter().map(|p| Unit::Whole(p.clone())).collect();
+    extract_with_adaptive_retry_units(&units, &ctx, depth)
 }
 
-/// Extract a chunk; split in half and retry on context overflow or truncation,
-/// honouring the run-constant settings in `ctx` (including `deep_mode`).
+/// Extract a chunk of [`Unit`]s; split in half and retry on context overflow or
+/// truncation, honouring the run-constant settings in `ctx` (including
+/// `deep_mode`).
+///
+/// A single-unit chunk that overflows or truncates is recoverable only when it
+/// is a [`Unit::Slice`] of a splittable document: the slice is bisected and
+/// retried (#1369). A whole non-splittable file can't be made smaller than
+/// itself, so the (partial) result is surfaced with a warning.
 ///
 /// # Errors
 /// Propagates errors that don't look like context-window overflow.
-pub(crate) fn extract_with_adaptive_retry_ctx(
-    chunk: &[PathBuf],
+pub(crate) fn extract_with_adaptive_retry_units(
+    chunk: &[Unit],
     ctx: &AdaptiveRetryCtx<'_>,
     depth: usize,
 ) -> Result<LlmResponse, LlmError> {
-    let result = extract_files_direct_mode(
+    let result = extract_units_direct_mode(
         chunk,
         ctx.backend,
         ctx.api_key,
@@ -149,12 +157,20 @@ pub(crate) fn extract_with_adaptive_retry_ctx(
     match result {
         Err(ref e) if looks_like_context_exceeded(e) => {
             if chunk.len() <= 1 {
+                if let Some((left, right)) = split_lone_slice(chunk, ctx, depth) {
+                    eprintln!(
+                        "[graphify] slice of {} exceeded context at depth {depth}; \
+                         splitting the slice and retrying",
+                        unit_path(&chunk[0]).display()
+                    );
+                    return merge_two(&[Unit::Slice(left)], &[Unit::Slice(right)], ctx, depth);
+                }
                 eprintln!(
                     "[graphify] single-file chunk {} exceeds model context \
                      and cannot be split further: {e}",
                     chunk
                         .first()
-                        .map(|p| p.display().to_string())
+                        .map(|u| unit_path(u).display().to_string())
                         .unwrap_or_default()
                 );
                 return Ok(empty_llm_response(ctx.model));
@@ -174,19 +190,25 @@ pub(crate) fn extract_with_adaptive_retry_ctx(
                 chunk.len()
             );
             let mid = chunk.len() / 2;
-            let left = extract_with_adaptive_retry_ctx(&chunk[..mid], ctx, depth + 1)?;
-            let right = extract_with_adaptive_retry_ctx(&chunk[mid..], ctx, depth + 1)?;
-            Ok(merge_responses(&left, &right, ctx.model))
+            merge_two(&chunk[..mid], &chunk[mid..], ctx, depth)
         }
         Err(e) => Err(e),
         Ok(resp) if resp.finish_reason == "length" => {
             if chunk.len() <= 1 {
+                if let Some((left, right)) = split_lone_slice(chunk, ctx, depth) {
+                    eprintln!(
+                        "[graphify] slice of {} truncated at depth {depth}; \
+                         splitting the slice and retrying",
+                        unit_path(&chunk[0]).display()
+                    );
+                    return merge_two(&[Unit::Slice(left)], &[Unit::Slice(right)], ctx, depth);
+                }
                 eprintln!(
                     "[graphify] single-file chunk {} truncated at \
                      max_completion_tokens — partial result kept",
                     chunk
                         .first()
-                        .map(|p| p.display().to_string())
+                        .map(|u| unit_path(u).display().to_string())
                         .unwrap_or_default()
                 );
                 return Ok(resp);
@@ -208,10 +230,36 @@ pub(crate) fn extract_with_adaptive_retry_ctx(
                 chunk.len() - chunk.len() / 2,
             );
             let mid = chunk.len() / 2;
-            let left = extract_with_adaptive_retry_ctx(&chunk[..mid], ctx, depth + 1)?;
-            let right = extract_with_adaptive_retry_ctx(&chunk[mid..], ctx, depth + 1)?;
-            Ok(merge_responses(&left, &right, ctx.model))
+            merge_two(&chunk[..mid], &chunk[mid..], ctx, depth)
         }
         Ok(resp) => Ok(resp),
     }
+}
+
+/// Recurse on both halves at `depth + 1` and reunite the results.
+fn merge_two(
+    left: &[Unit],
+    right: &[Unit],
+    ctx: &AdaptiveRetryCtx<'_>,
+    depth: usize,
+) -> Result<LlmResponse, LlmError> {
+    let l = extract_with_adaptive_retry_units(left, ctx, depth + 1)?;
+    let r = extract_with_adaptive_retry_units(right, ctx, depth + 1)?;
+    Ok(merge_responses(&l, &r, ctx.model))
+}
+
+/// Bisect a single-unit chunk when it is a slice and depth allows, so an
+/// oversized slice is retried on a smaller range rather than dropped (#1369).
+fn split_lone_slice(
+    chunk: &[Unit],
+    ctx: &AdaptiveRetryCtx<'_>,
+    depth: usize,
+) -> Option<(FileSlice, FileSlice)> {
+    if chunk.len() == 1
+        && depth < ctx.max_depth
+        && let Unit::Slice(fs) = &chunk[0]
+    {
+        return bisect_slice(fs);
+    }
+    None
 }

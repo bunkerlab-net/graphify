@@ -411,11 +411,16 @@ pub fn emit_tree_html(
     svg_width: u32,
     svg_height: u32,
 ) -> String {
-    // Compact JSON, neutralise `</script>` so embedded JSON cannot break out.
+    // Compact JSON, neutralise `</script>` so embedded JSON cannot break out,
+    // and escape U+2028/U+2029 — valid inside JSON strings but JavaScript line
+    // terminators that would otherwise break out of the `<script>` block and
+    // enable XSS (matches Python `tree_html.emit_html`'s `ensure_ascii=True`).
     let data_json = serde_json::to_string(tree)
         // infallible for a well-formed serde_json::Value
         .unwrap_or_else(|_| "{}".to_owned())
-        .replace("</", "<\\/");
+        .replace("</", "<\\/")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
 
     HTML_TEMPLATE
         .replace("{title}", &htmlescape::encode_minimal(title))

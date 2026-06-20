@@ -47,11 +47,25 @@ impl FileType {
 pub const CODE_EXTENSIONS: &[&str] = &[
     "py", "ts", "tsx", "js", "jsx", "mjs", "ejs", "ets", "go", "rs", "java", "groovy", "gradle",
     "cpp", "cc", "cxx", "c", "h", "hpp", "rb", "swift", "kt", "kts", "cs", "scala", "php", "lua",
-    "luau", "toc", "zig", "ps1", "ex", "exs", "m", "mm", "jl", "vue", "svelte", "astro", "dart",
-    "v", "sv", "svh", "sql", "r", "f", "F", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08",
-    "pas", "pp", "dpr", "dpk", "lpr", "inc", "dfm", "lfm", "lpk", "sh", "bash", "json", "tf",
-    "tfvars", "hcl", "dm", "dme", "dmi", "dmm", "dmf", "sln", "slnx", "csproj", "fsproj", "vbproj",
-    "razor", "cshtml", "cls", "trigger",
+    "luau", "toc", "zig", "ps1", "psm1", "psd1", "ex", "exs", "m", "mm", "jl", "vue", "svelte",
+    "astro", "dart", "v", "sv", "svh", "sql", "r", "f", "F", "f90", "F90", "f95", "F95", "f03",
+    "F03", "f08", "F08", "pas", "pp", "dpr", "dpk", "lpr", "inc", "dfm", "lfm", "lpk", "sh",
+    "bash", "json", "tf", "tfvars", "hcl", "dm", "dme", "dmi", "dmm", "dmf", "sln", "slnx",
+    "csproj", "fsproj", "vbproj", "razor", "cshtml", "cls", "trigger",
+];
+
+/// Package-manifest filename (lowercased) → ecosystem tag.
+///
+/// Mirrors Python `graphify.manifest_ingest.PACKAGE_MANIFEST_NAMES`. The
+/// ecosystem tag selects the manifest parser downstream in `graphify-extract`.
+/// Kept as an ordered slice so the few entries stay allocation-free yet iterate
+/// in a stable order matching the Python dict's insertion order.
+pub const PACKAGE_MANIFEST_NAMES: &[(&str, &str)] = &[
+    ("apm.yml", "apm"),
+    ("apm.yaml", "apm"),
+    ("pyproject.toml", "python"),
+    ("go.mod", "go"),
+    ("pom.xml", "maven"),
 ];
 
 const DOC_EXTENSIONS: &[&str] = &["md", "mdx", "qmd", "txt", "rst", "html", "yaml", "yml"];
@@ -141,11 +155,39 @@ fn shebang_file_type(path: &Path) -> Option<FileType> {
     }
 }
 
+/// Returns `true` if `path`'s filename (lowercased) is a recognized package
+/// manifest. Mirrors Python `manifest_ingest.is_package_manifest_path`.
+#[must_use]
+pub fn is_package_manifest_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    // Allocate the lowercase form only when the filename actually has uppercase
+    // ASCII; manifest filenames are checked on every file, so the common
+    // already-lowercase case stays allocation-free.
+    let name_owned;
+    let name_lc: &str = if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        name_owned = name.to_ascii_lowercase();
+        &name_owned
+    } else {
+        name
+    };
+    PACKAGE_MANIFEST_NAMES.iter().any(|(n, _)| *n == name_lc)
+}
+
 /// Classify a file by its extension (and content for ambiguous cases).
 ///
 /// Returns `None` for unknown/unsupported types.
 #[must_use]
 pub fn classify_file(path: &Path) -> Option<FileType> {
+    // Package manifests (apm.yml, pyproject.toml, go.mod, pom.xml) are parsed
+    // deterministically, so route them to the AST path (Code) rather than the
+    // LLM document path — otherwise apm.yml (a .yml "document") would be
+    // LLM-extracted and a package would split into duplicate file-anchored
+    // nodes (#1377).
+    if is_package_manifest_path(path) {
+        return Some(FileType::Code);
+    }
     // Compound extension check first (.blade.php). The case-insensitive
     // `.to_lowercase()` on the full path was the most expensive allocation
     // in this function — replace with an `eq_ignore_ascii_case` suffix

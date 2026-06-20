@@ -23,7 +23,10 @@ pub mod shebang;
 pub mod walk;
 
 pub use error::DetectError;
-pub use extensions::{CODE_EXTENSIONS, FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
+pub use extensions::{
+    CODE_EXTENSIONS, FileType, GOOGLE_WORKSPACE_EXTENSIONS, PACKAGE_MANIFEST_NAMES, classify_file,
+    is_package_manifest_path,
+};
 pub use ignore::{
     IgnoreEvalCache, could_contain_included_path, find_vcs_root, is_ignored, is_ignored_with_cache,
     is_included, load_graphifyignore, load_graphifyinclude, parse_gitignore_line,

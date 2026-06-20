@@ -302,6 +302,104 @@ fn test_hooks_dir_accepts_absolute_git_hooks_path() {
 }
 
 // ---------------------------------------------------------------------------
+// #1385: reject Windows-style hooks paths instead of creating a junk dir
+// ---------------------------------------------------------------------------
+
+/// Set `core.hooksPath` on `repo` via `git config --local` (mirrors the
+/// Python `_set_hookspath` test helper).
+fn set_hookspath(repo: &Path, value: &str) {
+    Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "config",
+            "--local",
+            "core.hooksPath",
+            value,
+        ])
+        .output()
+        .expect("git config failed");
+}
+
+/// Recursively collect every path under `dir` (mirrors Python `Path.rglob("*")`).
+#[cfg(not(windows))]
+fn walk_all(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_all(&path, out);
+        }
+        out.push(path);
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn test_windows_hookspath_rejected_no_junk_dir() {
+    // A Windows-style core.hooksPath must raise (loud failure), not silently
+    // create a backslash-named junk directory and report success (#1385).
+    // Ports each `winpath` pytest.parametrize value as a case.
+    let winpaths = [
+        r"C:\Users\u\repo\.git\hooks",
+        r"c:/Users/u/.git/hooks",
+        r"D:\hooks",
+        r"some\back\slashed\path",
+    ];
+    for winpath in winpaths {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = make_git_repo(dir.path());
+        set_hookspath(&repo, winpath);
+
+        let err = install(&repo).expect_err("windows hooks path must be rejected");
+        assert!(
+            err.to_string().contains("Windows path"),
+            "error for {winpath:?} must mention 'Windows path', got: {err}"
+        );
+
+        // No junk directory got created anywhere under the repo.
+        let mut all = Vec::new();
+        walk_all(&repo, &mut all);
+        let junk: Vec<&PathBuf> = all
+            .iter()
+            .filter(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name.contains('\\')
+                    || name.starts_with("C:")
+                    || name.starts_with("c:")
+                    || name.starts_with("D:")
+            })
+            .collect();
+        assert!(
+            junk.is_empty(),
+            "junk dir created for {winpath:?}: {junk:?}"
+        );
+    }
+}
+
+#[test]
+fn test_posix_custom_hookspath_still_works() {
+    // A legitimate POSIX core.hooksPath (Husky-style) must still install.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    set_hookspath(&repo, ".husky");
+    let msg = install(&repo).expect("posix custom hooks path must install");
+    assert!(msg.contains("post-commit"));
+    assert!(repo.join(".husky").join("post-commit").exists());
+}
+
+#[test]
+fn test_default_hooks_dir_unaffected() {
+    // No core.hooksPath -> normal .git/hooks install, no rejection.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    install(&repo).expect("default hooks dir must install");
+    assert!(repo.join(".git").join("hooks").join("post-commit").exists());
+}
+
+// ---------------------------------------------------------------------------
 // Script content assertions
 // ---------------------------------------------------------------------------
 

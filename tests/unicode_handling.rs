@@ -118,7 +118,7 @@ fn graph_build_and_serialize_with_unicode_labels() {
 
     let tmp = tempdir().unwrap();
     let out = tmp.path().join("graph.json");
-    to_json(&graph, &communities, &out, true, None).unwrap();
+    to_json(&graph, &communities, &out, true, None, None).unwrap();
     let text = fs::read_to_string(&out).unwrap();
     // JSON serialization may escape with \uXXXX OR emit literal UTF-8.
     // Either is valid JSON — check that round-tripping recovers the strings.

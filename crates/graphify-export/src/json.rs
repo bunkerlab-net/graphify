@@ -101,6 +101,11 @@ fn git_head() -> Option<String> {
 /// Mirrors Python `to_json`. Returns `false` if the write was refused because
 /// `force=false` and the new graph would silently shrink the existing one.
 ///
+/// When `community_labels` is `Some` and non-empty, each node with a community
+/// id `cid` additionally gets a `community_name` field set to its label,
+/// falling back to `"Community {cid}"`. `None` or an empty map omits the field
+/// entirely (mirrors Python's `community_labels=None` keyword argument).
+///
 /// # Errors
 ///
 /// Returns [`ExportError::Io`] or [`ExportError::Json`] on write / serialisation
@@ -111,13 +116,14 @@ pub fn to_json(
     output_path: &Path,
     force: bool,
     built_at_commit: Option<&str>,
+    community_labels: Option<&IndexMap<i64, String>>,
 ) -> Result<bool, ExportError> {
     if !force && would_shrink_graph(graph, output_path) {
         return Ok(false);
     }
 
     let node_community = node_community_map(communities);
-    let nodes = build_node_link_nodes(graph, &node_community);
+    let nodes = build_node_link_nodes(graph, &node_community, community_labels);
     let links = build_node_link_edges(graph);
     let hyperedges = graph
         .graph_attrs
@@ -187,7 +193,18 @@ fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
 }
 
 /// Build the `node_link_data.nodes` array (with Python field-order parity).
-fn build_node_link_nodes(graph: &Graph, node_community: &IndexMap<String, i64>) -> Vec<Value> {
+///
+/// When `community_labels` is `Some` and non-empty, nodes with a community id
+/// also get a `community_name` field (the label, or `"Community {cid}"`).
+#[must_use]
+fn build_node_link_nodes(
+    graph: &Graph,
+    node_community: &IndexMap<String, i64>,
+    community_labels: Option<&IndexMap<i64, String>>,
+) -> Vec<Value> {
+    // Python: `_labels = {int(k): v for ...}; if cid is not None and _labels`.
+    // An empty or absent map disables `community_name` entirely.
+    let labels = community_labels.filter(|l| !l.is_empty());
     let mut nodes: Vec<Value> = graph
         .nodes()
         .map(|(id, attrs)| {
@@ -195,12 +212,18 @@ fn build_node_link_nodes(graph: &Graph, node_community: &IndexMap<String, i64>) 
             for (k, v) in attrs {
                 node.insert(k.clone(), v.clone());
             }
+            let cid = node_community.get(id).copied();
             node.insert(
                 "community".to_string(),
-                node_community
-                    .get(id)
-                    .map_or(Value::Null, |&cid| json!(cid)),
+                cid.map_or(Value::Null, |c| json!(c)),
             );
+            if let (Some(cid), Some(labels)) = (cid, labels) {
+                let name = labels
+                    .get(&cid)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Community {cid}"));
+                node.insert("community_name".to_string(), Value::String(name));
+            }
             let label = attrs
                 .get("label")
                 .and_then(Value::as_str)
@@ -214,18 +237,23 @@ fn build_node_link_nodes(graph: &Graph, node_community: &IndexMap<String, i64>) 
         })
         .collect();
 
-    // Python node_link_data emits: <all node attrs in insertion order>, id, community,
-    // norm_label. Reorder each node's tail to match.
+    // Python node_link_data emits: <all node attrs in insertion order>, id,
+    // community, community_name (optional), norm_label. Reorder each node's
+    // tail to match.
     for node in &mut nodes {
         if let Value::Object(map) = node {
             let id_val = map.remove("id");
             let community_val = map.remove("community");
+            let community_name_val = map.remove("community_name");
             let norm_label_val = map.remove("norm_label");
             if let Some(v) = id_val {
                 map.insert("id".to_string(), v);
             }
             if let Some(v) = community_val {
                 map.insert("community".to_string(), v);
+            }
+            if let Some(v) = community_name_val {
+                map.insert("community_name".to_string(), v);
             }
             if let Some(v) = norm_label_val {
                 map.insert("norm_label".to_string(), v);

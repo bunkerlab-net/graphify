@@ -578,3 +578,51 @@ fn cluster_only_does_not_clobber_malformed_labels() {
         "malformed labels file must not be clobbered"
     );
 }
+
+#[test]
+fn cluster_only_writes_community_name_from_labels_file() {
+    // Path-1 (labels file exists, no --force, no LLM call): cluster-only must
+    // stamp each node's `community_name` in the rewritten graph.json from the
+    // resolved labels, mirroring Python `__main__.py:3283`
+    // `to_json(G, communities, ..., community_labels=labels)`.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    let labels_path = out.join(".graphify_labels.json");
+
+    // Tag both nodes with a sentinel community so the remap pins the resolved
+    // community id to 4242, keeping the preset label attached after re-cluster.
+    fs::write(
+        &graph_path,
+        r#"{"nodes":[
+            {"id":"a","label":"A","file_type":"code","source_file":"a.py","community":4242},
+            {"id":"b","label":"B","file_type":"code","source_file":"b.py","community":4242}
+        ],"edges":[
+            {"source":"a","target":"b","context":"CALLS","confidence":"EXTRACTED","source_file":"a.py"}
+        ]}"#,
+    )
+    .unwrap();
+    fs::write(&labels_path, r#"{"4242":"Auth Layer"}"#).unwrap();
+
+    cli()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--no-viz")
+        .assert()
+        .success();
+
+    let final_graph: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&graph_path).unwrap()).unwrap();
+    let nodes = final_graph
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
+    assert!(
+        nodes.iter().any(
+            |n| n.get("community_name").and_then(serde_json::Value::as_str) == Some("Auth Layer")
+        ),
+        "cluster-only must stamp community_name from the labels file onto \
+         graph.json nodes: {final_graph}"
+    );
+}

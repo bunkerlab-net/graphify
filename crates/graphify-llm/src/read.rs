@@ -13,6 +13,7 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::FILE_CHAR_CAP;
+use crate::file_slice::{Unit, read_slice_text, unit_path};
 
 /// Known prompt-injection / chat-template sentinels a hostile source file might
 /// embed to break out of the `untrusted_source` block or impersonate a
@@ -111,23 +112,42 @@ fn xml_attr_escape(s: &str) -> String {
     out
 }
 
-/// Read and format file contents for the extraction prompt.
+/// Read and format whole-file contents for the extraction prompt.
 ///
-/// Each file is capped at [`FILE_CHAR_CAP`] chars, sentinel-defanged, and
-/// wrapped in an `<untrusted_source>` block; sections are separated by blank
-/// lines. Mirrors `_read_files`.
+/// Thin wrapper over [`read_units`] for the common all-whole-files case. Each
+/// file is capped at [`FILE_CHAR_CAP`] chars, sentinel-defanged, and wrapped in
+/// an `<untrusted_source>` block; sections are separated by blank lines. Mirrors
+/// `_read_files`.
 #[must_use]
 pub fn read_files(paths: &[PathBuf], root: &Path) -> String {
+    let units: Vec<Unit> = paths.iter().map(|p| Unit::Whole(p.clone())).collect();
+    read_units(&units, root)
+}
+
+/// Read and format unit (whole file or slice) contents for the extraction prompt.
+///
+/// A [`Unit::Slice`] reports its **parent file path** as the relative path so
+/// every slice of a document shares one `source_file` and the graph isn't
+/// fragmented per-slice (#1369); its bytes are already bounded to the slice
+/// range, so the [`FILE_CHAR_CAP`] cap is a no-op for it. Whole files are still
+/// capped (covering non-splittable large files like code). Mirrors `_read_files`.
+#[must_use]
+pub fn read_units(units: &[Unit], root: &Path) -> String {
     let mut parts: Vec<String> = Vec::new();
-    for p in paths {
+    for u in units {
+        let p = unit_path(u);
         // When `p` is outside `root` (e.g. an absolute path), only emit the
         // file name so we don't ship absolute filesystem paths to a remote
         // LLM backend (deliberate divergence from graphify-py's `str(p)`).
         let rel: PathBuf = p.strip_prefix(root).map_or_else(
-            |_| p.file_name().map_or_else(|| p.clone(), PathBuf::from),
+            |_| p.file_name().map_or_else(|| p.to_path_buf(), PathBuf::from),
             Path::to_path_buf,
         );
-        let Some(content) = file_to_text(p) else {
+        let content = match u {
+            Unit::Slice(fs) => read_slice_text(fs),
+            Unit::Whole(_) => file_to_text(p),
+        };
+        let Some(content) = content else {
             eprintln!("[graphify] failed to read {} for extraction", p.display());
             continue;
         };

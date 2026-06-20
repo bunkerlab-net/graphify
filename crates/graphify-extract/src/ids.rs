@@ -3,39 +3,24 @@
 //! These mirror Python's `_make_id` and `_file_stem` exactly.
 
 use std::path::Path;
-use std::sync::LazyLock;
-
-use regex::Regex;
-use unicode_normalization::UnicodeNormalization;
-
-#[allow(clippy::expect_used)] // literal pattern; build cannot panic
-static NON_WORD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[^\w]+").expect("static non-word regex"));
-#[allow(clippy::expect_used)] // literal pattern; build cannot panic
-static UNDERSCORE_RUN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"_+").expect("static underscore-run regex"));
 
 /// Build a stable node ID from one or more name parts.
 ///
-/// Mirrors Python `_make_id(*parts)`:
-/// - joins non-empty parts with `_`
-/// - NFKC-normalises
-/// - collapses non-word runs to `_`
-/// - strips leading/trailing `_`
-/// - casefolds
+/// Mirrors Python `graphify.ids.make_id(*parts)` (#811 unification): stray
+/// `_`/`.` are trimmed from each non-empty part, the parts are joined with `_`,
+/// and the joined string is normalised by [`graphify_build::normalize_id`] — the
+/// single shared recipe (NFKC → non-word→`_` → collapse `_` → strip → casefold)
+/// the graph builder also uses, so the AST id-maker and the builder can no
+/// longer drift.
 #[must_use]
 pub fn make_id(parts: &[&str]) -> String {
-    let combined: String = parts
+    let combined = parts
         .iter()
         .filter(|p| !p.is_empty())
         .map(|p| p.trim_matches(|c| c == '_' || c == '.'))
-        .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join("_");
-    let nfkc: String = combined.nfkc().collect();
-    let cleaned = NON_WORD.replace_all(&nfkc, "_");
-    let collapsed = UNDERSCORE_RUN.replace_all(&cleaned, "_");
-    collapsed.trim_matches('_').to_lowercase()
+    graphify_build::normalize_id(&combined)
 }
 
 /// Convenience wrapper for a single part.

@@ -33,6 +33,10 @@ const LABEL_MAXLEN: usize = 60;
 /// overflowing context and dropping the whole labeling pass to placeholders.
 pub const LABEL_BATCH_SIZE: usize = 100;
 
+/// Max recursion depth for [`label_batch_with_retry`]'s split-and-retry on a
+/// parse failure, bounding cost. Mirrors Python `_label_batch_with_retry`.
+const LABEL_MAX_DEPTH: usize = 3;
+
 /// Knobs for [`label_communities`] / [`label_communities_with`].
 ///
 /// Mirrors the keyword arguments of Python's `label_communities`: `model`,
@@ -168,6 +172,83 @@ fn parse_label_response(
     Ok(out)
 }
 
+/// Label one batch of communities, splitting in half and retrying on a JSON
+/// parse failure (#1278).
+///
+/// Mirrors `_extract_with_adaptive_retry`'s recovery shape for the labeling
+/// path: a malformed or non-object reply for a multi-community batch is retried
+/// on each half (smaller prompts → less likely to truncate/mangle). At the base
+/// case (a single community or `depth >= LABEL_MAX_DEPTH`) the parse error is
+/// re-raised so the caller skips that batch. Any non-parse error (network,
+/// missing config) propagates unchanged — those are never split-retried.
+fn label_batch_with_retry<F>(
+    batch_cids: &[i64],
+    batch_lines: &[String],
+    backend: &str,
+    model: Option<&str>,
+    depth: usize,
+    call: &F,
+) -> Result<IndexMap<i64, String>, LlmError>
+where
+    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError>,
+{
+    let prompt = format!(
+        "You are naming clusters in a knowledge graph. For each community below, \
+         return a concise 2-5 word plain-language name describing what it is about \
+         (e.g. \"Order Management\", \"Payment Flow\", \"Auth Middleware\"). \
+         Respond ONLY with a JSON object mapping the community id (as a string) to \
+         its name - no prose, no markdown fences.\n\n{}",
+        batch_lines.join("\n")
+    );
+    // 24 tok/community covers a 2-5 word JSON entry (id, quotes, punctuation).
+    // Cap at 8192 for 16k-context models; honour GRAPHIFY_MAX_OUTPUT_TOKENS.
+    let default_tokens = 64usize
+        .saturating_add(24usize.saturating_mul(batch_cids.len()))
+        .min(8192);
+    let max_tokens = resolve_max_tokens(u32::try_from(default_tokens).unwrap_or(8192));
+
+    match call(&prompt, backend, max_tokens, model)
+        .and_then(|text| parse_label_response(&text, batch_cids))
+    {
+        Ok(parsed) => Ok(parsed),
+        // Only a parse failure is recoverable by splitting; anything else
+        // (network, missing key) propagates so the caller records it without
+        // burning extra calls — matching Python's `(JSONDecodeError, ValueError)`.
+        Err(exc) if matches!(exc, LlmError::Parse(_)) => {
+            if batch_cids.len() <= 1 || depth >= LABEL_MAX_DEPTH {
+                let preview: Vec<i64> = batch_cids.iter().take(5).copied().collect();
+                eprintln!(
+                    "[graphify label] batch of {} still unparseable at depth {depth} \
+                     (cids={preview:?}{}): {exc}",
+                    batch_cids.len(),
+                    if batch_cids.len() > 5 { "..." } else { "" },
+                );
+                return Err(exc);
+            }
+            let mid = batch_cids.len() / 2;
+            let mut left = label_batch_with_retry(
+                &batch_cids[..mid],
+                &batch_lines[..mid],
+                backend,
+                model,
+                depth + 1,
+                call,
+            )?;
+            let right = label_batch_with_retry(
+                &batch_cids[mid..],
+                &batch_lines[mid..],
+                backend,
+                model,
+                depth + 1,
+                call,
+            )?;
+            left.extend(right);
+            Ok(left)
+        }
+        Err(exc) => Err(exc),
+    }
+}
+
 /// Return a complete `{cid: name}` map using `backend` for naming.
 ///
 /// Communities are labeled in batches of [`LabelOptions::batch_size`] so each
@@ -234,25 +315,7 @@ where
         let batch_lines = &lines[start..end];
         let batch_cids = &labeled_cids[start..end];
 
-        let prompt = format!(
-            "You are naming clusters in a knowledge graph. For each community below, \
-             return a concise 2-5 word plain-language name describing what it is about \
-             (e.g. \"Order Management\", \"Payment Flow\", \"Auth Middleware\"). \
-             Respond ONLY with a JSON object mapping the community id (as a string) to \
-             its name - no prose, no markdown fences.\n\n{}",
-            batch_lines.join("\n")
-        );
-
-        // 24 tok/community covers a 2-5 word JSON entry (id, quotes, punctuation).
-        // Cap at 8192 for 16k-context models; honour GRAPHIFY_MAX_OUTPUT_TOKENS.
-        let default_tokens = 64usize
-            .saturating_add(24usize.saturating_mul(batch_cids.len()))
-            .min(8192);
-        let max_tokens = resolve_max_tokens(u32::try_from(default_tokens).unwrap_or(8192));
-
-        match call(&prompt, backend, max_tokens, opts.model)
-            .and_then(|text| parse_label_response(&text, batch_cids))
-        {
+        match label_batch_with_retry(batch_cids, batch_lines, backend, opts.model, 0, &call) {
             Ok(parsed) => {
                 written += parsed.len();
                 labels.extend(parsed);
