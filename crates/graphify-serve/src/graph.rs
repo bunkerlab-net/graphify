@@ -572,7 +572,14 @@ pub fn community_label(attrs: &IndexMap<String, Value>) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
-        .or_else(|| attrs.get("community").map(ToString::to_string))
+        .or_else(|| {
+            attrs.get("community").and_then(|v| {
+                v.as_i64()
+                    .map(|n| n.to_string())
+                    .or_else(|| v.as_str().map(str::to_owned))
+                    .or_else(|| (!v.is_null()).then(|| v.to_string()))
+            })
+        })
 }
 
 /// Render subgraph as text, truncating at `token_budget` (approx 3 chars/token).

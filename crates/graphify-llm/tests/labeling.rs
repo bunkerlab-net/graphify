@@ -591,5 +591,9 @@ fn label_batch_recovers_via_split_on_invalid_json() {
     for cid in 0i64..4 {
         assert_eq!(labels[&cid], format!("Label {cid}"));
     }
-    assert!(n_calls.get() >= 2, "expected a split into at least 2 calls");
+    assert_eq!(
+        n_calls.get(),
+        3,
+        "expected 1 initial call + 2 retry calls after split"
+    );
 }

@@ -33,17 +33,17 @@ fn canonicalize_root_to_string(root: &Path) -> String {
 /// nodes (e.g. a Swift `type=module` anchor emitted once per importing file,
 /// #1327) would otherwise survive as duplicates. Insertion order follows each
 /// id's first appearance; the retained object is the last one seen. Nodes whose
-/// `id` is missing or null are skipped.
+/// `id` is missing, null, or non-string are skipped.
 ///
 /// Mirrors graphify-py `build.dedupe_nodes`.
 #[must_use]
 pub fn dedupe_nodes(nodes: &[Value]) -> Vec<Value> {
     let mut by_id: IndexMap<String, Value> = IndexMap::new();
     for node in nodes {
-        let Some(id) = node.get("id").filter(|v| !v.is_null()) else {
+        let Some(id) = node.get("id").and_then(Value::as_str) else {
             continue;
         };
-        by_id.insert(id.to_string(), node.clone());
+        by_id.insert(id.to_owned(), node.clone());
     }
     by_id.into_values().collect()
 }
@@ -66,11 +66,7 @@ pub fn dedupe_edges(edges: &[Value]) -> Vec<Value> {
     let mut seen: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
     let mut out: Vec<Value> = Vec::with_capacity(edges.len());
     for edge in edges {
-        let component = |k: &str| {
-            edge.get(k)
-                .filter(|v| !v.is_null())
-                .map(ToString::to_string)
-        };
+        let component = |k: &str| edge.get(k).and_then(Value::as_str).map(String::from);
         let key = (
             component("source"),
             component("target"),

@@ -504,6 +504,34 @@ fn test_subgraph_to_text_prefers_community_name() {
 }
 
 #[test]
+fn test_subgraph_to_text_string_community_renders_unquoted() {
+    // A `community` stored as a JSON string must render like Python's
+    // `str("7")` -> `7`, not the quoted `"7"` that `Value::to_string` emits.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "extract", "source_file": "extract.py",
+                 "source_location": "L10", "community": "7"},
+            ],
+            "edges": []
+        }),
+        false,
+        None,
+    )
+    .expect("build graph");
+    let nodes: std::collections::HashSet<String> = ["n1".to_string()].into_iter().collect();
+    let text = subgraph_to_text(&g, &nodes, &[], 2000, None);
+    assert!(
+        text.contains("NODE extract [src=extract.py loc=L10 community=7]"),
+        "string community should render unquoted: {text}"
+    );
+    assert!(
+        !text.contains("community=\"7\""),
+        "string community must not be JSON-quoted: {text}"
+    );
+}
+
+#[test]
 fn test_subgraph_to_text_truncates() {
     let g = make_graph();
     let nodes: std::collections::HashSet<String> = ["n1", "n2", "n3", "n4"]
