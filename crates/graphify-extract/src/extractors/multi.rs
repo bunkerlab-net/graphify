@@ -200,6 +200,13 @@ fn value_to_file_result(v: &Value) -> FileResult {
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string(),
+                        // `receiver` (#1356) reads back as `None` when absent.
+                        // Safe without a Swift cache bypass or schema-version
+                        // check: the AST cache is namespaced by crate version
+                        // (`cache/ast/v{version}/` via graphify-cache's
+                        // EXTRACTOR_VERSION), so a pre-`receiver` entry sits
+                        // under an older version dir `load_cached` never reads,
+                        // invalidated by the version bump that shipped the field.
                         receiver: rc
                             .get("receiver")
                             .and_then(Value::as_str)

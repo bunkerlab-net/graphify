@@ -157,27 +157,34 @@ fn parse_hooks_path(config_text: &str) -> Option<String> {
 
 /// Reject a hooks path that looks like a Windows absolute path (#1385).
 ///
-/// On POSIX/WSL, `Path::new("C:\\Users\\...")` is not absolute, so an absolute
-/// Windows hooks path would get joined under the repo root and `mkdir`'d as a
-/// literal junk directory (backslashes and all) while install reports success
-/// and the real `.git/hooks` gets nothing. Fail loudly instead so the user can
-/// fix it. Mirrors Python `_reject_windows_path` + `_WINDOWS_DRIVE_RE`.
+/// Gated to non-Windows targets. On POSIX/WSL, `Path::new("C:\\Users\\...")` is
+/// not absolute, so an absolute Windows hooks path would get joined under the
+/// repo root and `mkdir`'d as a literal junk directory (backslashes and all)
+/// while install reports success and the real `.git/hooks` gets nothing — so we
+/// fail loudly. On native Windows that same string IS a valid absolute path
+/// that `fs::create_dir_all` resolves correctly, so it is accepted. This
+/// diverges from graphify-py, which rejects unconditionally and would therefore
+/// break a legitimate Husky / `core.hooksPath` setup on native Windows.
 ///
 /// # Errors
 ///
-/// Returns `HooksError::WindowsPath` if `value` begins with a drive-letter
-/// prefix (e.g. `C:\` or `c:/`) or contains a backslash.
+/// On non-Windows targets, returns `HooksError::WindowsPath` if `value` begins
+/// with a drive-letter prefix (e.g. `C:\` or `c:/`) or contains a backslash.
+#[cfg_attr(windows, allow(unused_variables, clippy::unnecessary_wraps))]
 fn reject_windows_path(value: &str, source: &'static str) -> Result<(), HooksError> {
-    #[allow(clippy::expect_used)]
-    static WINDOWS_DRIVE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        // A single ASCII letter, a colon, then `\` or `/`. Literal, always valid.
-        Regex::new(r"^[A-Za-z]:[\\/]").expect("literal pattern is valid")
-    });
-    if WINDOWS_DRIVE_RE.is_match(value) || value.contains('\\') {
-        return Err(HooksError::WindowsPath {
-            origin: source,
-            value: value.to_string(),
+    #[cfg(not(windows))]
+    {
+        #[allow(clippy::expect_used)]
+        static WINDOWS_DRIVE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+            // A single ASCII letter, a colon, then `\` or `/`. Literal, always valid.
+            Regex::new(r"^[A-Za-z]:[\\/]").expect("literal pattern is valid")
         });
+        if WINDOWS_DRIVE_RE.is_match(value) || value.contains('\\') {
+            return Err(HooksError::WindowsPath {
+                origin: source,
+                value: value.to_string(),
+            });
+        }
     }
     Ok(())
 }

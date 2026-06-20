@@ -322,6 +322,7 @@ fn set_hookspath(repo: &Path, value: &str) {
 }
 
 /// Recursively collect every path under `dir` (mirrors Python `Path.rglob("*")`).
+#[cfg(not(windows))]
 fn walk_all(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -335,6 +336,7 @@ fn walk_all(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+#[cfg(not(windows))]
 #[test]
 fn test_windows_hookspath_rejected_no_junk_dir() {
     // A Windows-style core.hooksPath must raise (loud failure), not silently

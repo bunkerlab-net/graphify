@@ -186,3 +186,38 @@ fn workspace_package_cache_refreshes_between_extract_calls() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn malformed_inner_workspaces_does_not_shadow_real_root() -> TestResult {
+    // A nested package.json carrying a present-but-malformed `workspaces` value
+    // (here an object with no `packages` array, which resolves to zero globs)
+    // must NOT terminate the workspace-root walk. Before the shape check in
+    // `find_workspace_root`, this inner manifest shadowed the real root one
+    // level up and the package import silently failed to resolve.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("package.json"),
+        r#"{"workspaces": ["apps/*", "packages/*"]}"#,
+    )?;
+    // Intermediate package between the importer and the real root.
+    write(
+        &root.join("apps/web/package.json"),
+        r#"{"name": "web", "workspaces": {}}"#,
+    )?;
+    write_package_and_importer(root)?;
+
+    let out = extract(
+        &[
+            root.join("packages/types/src/index.ts"),
+            root.join("apps/web/src/page.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(&out, "apps/web/src/page.ts", "packages/types/src/index.ts"),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}

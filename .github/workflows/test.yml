@@ -81,7 +81,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: cargo binstall -y --force cargo-nextest cargo-llvm-cov
 
-      - run: cargo nextest run --workspace
+      - run: cargo llvm-cov --workspace nextest
 
       - if: matrix.runs-on != 'ubuntu-24.04'
         run: cargo llvm-cov --all-features --workspace nextest

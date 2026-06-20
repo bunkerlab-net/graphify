@@ -59,8 +59,9 @@ fn workspace_cache_key(root: &Path) -> String {
 }
 
 /// Find the closest ancestor of `start_dir` that marks a JS/TS workspace root —
-/// one containing a `pnpm-workspace.yaml`, or a `package.json` with a
-/// `workspaces` key (npm / yarn). Returns `None` when no ancestor qualifies.
+/// one containing a `pnpm-workspace.yaml`, or a `package.json` with a valid
+/// `workspaces` field — a string array or `{ packages: [...] }`. Returns
+/// `None` when no ancestor qualifies.
 /// Mirrors Python `_find_workspace_root`.
 #[must_use]
 pub fn find_workspace_root(start_dir: &Path) -> Option<PathBuf> {
@@ -72,17 +73,36 @@ pub fn find_workspace_root(start_dir: &Path) -> Option<PathBuf> {
         if candidate.join("pnpm-workspace.yaml").is_file() {
             return Some(candidate.to_path_buf());
         }
-        // npm / yarn classic & berry: a `package.json` with a `workspaces` key
-        // (list or `{ packages: [...] }`) marks the monorepo root.
+        // npm / yarn classic & berry: a `package.json` whose `workspaces` is a
+        // shape `workspace_globs` can consume — a string array, or a
+        // `{ "packages": [...] }` object. A present-but-malformed `workspaces`
+        // (null, a bare string, or an object without a `packages` array) must
+        // NOT stop the walk here: that would shadow a real workspace root
+        // higher up and resolve to zero globs. Diverges from graphify-py's bare
+        // `"workspaces" in data` presence check.
         let package_json = candidate.join("package.json");
         if package_json.is_file()
             && let Ok(text) = std::fs::read_to_string(&package_json)
             && let Ok(data) = serde_json::from_str::<Value>(&text)
-            && data.get("workspaces").is_some()
+            && is_workspace_root_manifest(data.get("workspaces"))
         {
             return Some(candidate.to_path_buf());
         }
         candidate = candidate.parent()?;
+    }
+}
+
+/// `true` if a `package.json` `workspaces` value is a shape `workspace_globs`
+/// can actually consume: a string array (npm / yarn classic) or a
+/// `{ "packages": [...] }` object (yarn berry). A present-but-malformed value
+/// (null, a string, or an object without a `packages` array) is rejected so a
+/// broken inner `package.json` cannot shadow a real workspace root higher up
+/// the tree and silently yield zero globs.
+fn is_workspace_root_manifest(workspaces: Option<&Value>) -> bool {
+    match workspaces {
+        Some(Value::Array(_)) => true,
+        Some(Value::Object(obj)) => matches!(obj.get("packages"), Some(Value::Array(_))),
+        _ => false,
     }
 }
 
