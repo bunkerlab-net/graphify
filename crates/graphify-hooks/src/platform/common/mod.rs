@@ -24,7 +24,8 @@ pub(super) mod uninstall_all;
 // imports inside the per-platform files continue to resolve.
 pub use fs::{replace_or_append_section, resolve_graphify_exe};
 pub use install_skill::{
-    install_platform_skill, install_platform_skill_project, uninstall_platform_skill_project,
+    amp_install, amp_uninstall, install_platform_skill, install_platform_skill_project,
+    uninstall_platform_skill_project,
 };
 pub use markdown::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, ANTIGRAVITY_WORKFLOW, CLAUDE_MD_MARKER,

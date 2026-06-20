@@ -161,7 +161,7 @@ const PYTHON_PKG_PROBE_LEVELS: usize = 6;
 /// Mirrors the package branch of `_resolve_python_module_path`. Relative
 /// imports resolve against the importing file's directory; absolute imports
 /// walk up from it to discover the project root.
-fn resolve_python_package_dir(raw: &str, str_path: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_python_package_dir(raw: &str, str_path: &str) -> Option<std::path::PathBuf> {
     let file_dir = Path::new(str_path).parent().unwrap_or(Path::new("."));
     if raw.starts_with('.') {
         let dots = raw.len() - raw.trim_start_matches('.').len();

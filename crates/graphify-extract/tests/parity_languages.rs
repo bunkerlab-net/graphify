@@ -523,6 +523,55 @@ fn php_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+/// PHP static property access (`DefaultPalette::$primary`) → `uses_static_prop`.
+/// Mirrors `test_php_finds_static_property_access`.
+#[test]
+fn php_finds_static_property_access() {
+    let r = extract_php(&fixtures().join("sample_php_static_prop.php"));
+    assert!(
+        r.edges.iter().any(|e| e.relation == "uses_static_prop"),
+        "expected a uses_static_prop edge"
+    );
+}
+
+/// PHP `config('throttle.api.per_second')` → `uses_config` edge to `Throttle`.
+/// Mirrors `test_php_finds_config_helper_call`.
+#[test]
+fn php_finds_config_helper_call() {
+    let r = extract_php(&fixtures().join("sample_php_config.php"));
+    assert!(
+        r.edges.iter().any(|e| e.relation == "uses_config"),
+        "expected a uses_config edge"
+    );
+}
+
+/// PHP `$this->app->bind(Foo::class, Bar::class)` → `bound_to` edge.
+/// Mirrors `test_php_finds_container_bind`.
+#[test]
+fn php_finds_container_bind() {
+    let r = extract_php(&fixtures().join("sample_php_container.php"));
+    assert!(
+        r.edges.iter().any(|e| e.relation == "bound_to"),
+        "expected a bound_to edge"
+    );
+    // `Foo::class` arguments are class-constant accesses → references_constant.
+    assert!(
+        r.edges.iter().any(|e| e.relation == "references_constant"),
+        "expected a references_constant edge from the ::class arguments"
+    );
+}
+
+/// PHP `$listen = [Event::class => [Listener::class]]` → `listened_by` edges.
+/// Mirrors `test_php_finds_event_listeners`.
+#[test]
+fn php_finds_event_listeners() {
+    let r = extract_php(&fixtures().join("sample_php_listen.php"));
+    assert!(
+        r.edges.iter().any(|e| e.relation == "listened_by"),
+        "expected a listened_by edge"
+    );
+}
+
 #[test]
 fn lua_extractor_produces_nodes() {
     let result = extract_lua(&fixtures().join("sample.luau"));

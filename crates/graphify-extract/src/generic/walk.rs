@@ -565,6 +565,10 @@ pub(super) struct WalkCtx<'a, 'tree> {
     /// compilation unit, used to classify a base as `inherits`. Empty for
     /// non-Swift files.
     pub swift_class_names: &'a HashSet<String>,
+    /// PHP event-listener edges (`$listen`/`$subscribe` arrays) collected during
+    /// the structural walk and resolved to `listened_by` edges after every node
+    /// exists. `(event_class, listener_class, line)`. Empty for non-PHP files.
+    pub pending_listen_edges: &'a mut Vec<(String, String, u32)>,
 }
 
 /// Recursive structural AST walk that emits nodes and edges for classes,
@@ -804,6 +808,14 @@ pub(super) fn walk<'tree>(
         && t == "property_declaration"
         && let Some(parent) = parent_class_nid
     {
+        // Event-listener arrays ($listen/$subscribe = [Event::class => [Listener::class]])
+        // defer `listened_by` edges until every node exists (resolved in the
+        // orchestrator). Mirrors graphify-py's property_declaration listener pass.
+        if !config.event_listener_properties.is_empty()
+            && collect_php_event_listeners(node, source, config, ctx.pending_listen_edges)
+        {
+            return;
+        }
         let line = node.start_position().row as u32 + 1;
         if let Some(type_node) = named_children(node)
             .into_iter()
@@ -1175,4 +1187,90 @@ pub(super) fn walk<'tree>(
             }
         }
     }
+}
+
+/// Return the class (scope) name of a PHP `Foo::BAR` / `Foo::class` / `Foo::$bar`
+/// access node: the `scope` field, else the first named `name`/`qualified_name`/
+/// `identifier` child. Mirrors graphify-py `_php_class_const_scope`.
+pub(super) fn php_class_const_scope(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let scope = node.child_by_field_name("scope").or_else(|| {
+        named_children(node)
+            .into_iter()
+            .find(|c| matches!(c.kind(), "name" | "qualified_name" | "identifier"))
+    });
+    scope.map(|s| read_text_owned(s, source))
+}
+
+/// Collect PHP event-listener edges from a `$listen`/`$subscribe` property array
+/// (`[Event::class => [Listener::class, ...]]`) into `pending_listen_edges`.
+///
+/// Returns `true` when a listener property was handled (so the caller stops
+/// descending). Mirrors the `property_declaration` listener branch in
+/// graphify-py `_extract_generic`'s structural `walk`.
+fn collect_php_event_listeners(
+    node: Node<'_>,
+    source: &[u8],
+    config: &LangConfig,
+    pending_listen_edges: &mut Vec<(String, String, u32)>,
+) -> bool {
+    let mut handled = false;
+    for element in named_children(node) {
+        if element.kind() != "property_element" {
+            continue;
+        }
+        let mut prop_name: Option<String> = None;
+        let mut array_node: Option<Node<'_>> = None;
+        for c in named_children(element) {
+            match c.kind() {
+                "variable_name" => {
+                    if let Some(name) = named_children(c).into_iter().find(|n| n.kind() == "name") {
+                        prop_name = Some(read_text_owned(name, source));
+                    }
+                }
+                "array_creation_expression" => array_node = Some(c),
+                _ => {}
+            }
+        }
+        let (Some(prop_name), Some(array_node)) = (prop_name, array_node) else {
+            continue;
+        };
+        if !config
+            .event_listener_properties
+            .contains(&prop_name.as_str())
+        {
+            continue;
+        }
+        handled = true;
+        for entry in named_children(array_node) {
+            if entry.kind() != "array_element_initializer" {
+                continue;
+            }
+            let mut event_cls: Option<String> = None;
+            let mut listener_arr: Option<Node<'_>> = None;
+            for sub in named_children(entry) {
+                if sub.kind() == "class_constant_access_expression" && event_cls.is_none() {
+                    event_cls = php_class_const_scope(sub, source);
+                } else if sub.kind() == "array_creation_expression" {
+                    listener_arr = Some(sub);
+                }
+            }
+            let (Some(event_cls), Some(listener_arr)) = (event_cls, listener_arr) else {
+                continue;
+            };
+            for listener_entry in named_children(listener_arr) {
+                if listener_entry.kind() != "array_element_initializer" {
+                    continue;
+                }
+                if let Some(item) = named_children(listener_entry)
+                    .into_iter()
+                    .find(|i| i.kind() == "class_constant_access_expression")
+                    && let Some(listener_cls) = php_class_const_scope(item, source)
+                {
+                    let line = item.start_position().row as u32 + 1;
+                    pending_listen_edges.push((event_cls.clone(), listener_cls, line));
+                }
+            }
+        }
+    }
+    handled
 }

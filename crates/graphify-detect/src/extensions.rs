@@ -77,9 +77,7 @@ const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const OFFICE_EXTENSIONS: &[&str] = &["docx", "xlsx"];
 
 /// Google Workspace shortcut extensions (mirrors Python `GOOGLE_WORKSPACE_EXTENSIONS`).
-pub const GOOGLE_WORKSPACE_EXTENSIONS: &[&str] = &[
-    "gdoc", "gsheet", "gslides", "gdraw", "gform", "gmap", "gsite",
-];
+pub const GOOGLE_WORKSPACE_EXTENSIONS: &[&str] = &["gdoc", "gsheet", "gslides"];
 
 const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "webm", "mkv", "avi", "m4v", "mp3", "wav", "m4a", "ogg",

@@ -9,13 +9,14 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 use graphify_hooks::platform::{
-    agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
-    claude_uninstall, codebuddy_install, codebuddy_uninstall, copilot_install, copilot_uninstall,
-    cursor_install, cursor_uninstall, devin_install, devin_project_install,
-    devin_project_uninstall, devin_uninstall, gemini_install, gemini_uninstall,
-    install_kilo_skill_and_command, install_platform_skill, install_platform_skill_project,
-    kilo_install, kilo_uninstall, kiro_install, kiro_uninstall, pi_install, pi_uninstall,
-    uninstall_all, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
+    agents_install, agents_uninstall, amp_install, amp_uninstall, antigravity_install,
+    antigravity_uninstall, claude_install, claude_uninstall, codebuddy_install,
+    codebuddy_uninstall, copilot_install, copilot_uninstall, cursor_install, cursor_uninstall,
+    devin_install, devin_project_install, devin_project_uninstall, devin_uninstall, gemini_install,
+    gemini_uninstall, install_kilo_skill_and_command, install_platform_skill,
+    install_platform_skill_project, kilo_install, kilo_uninstall, kiro_install, kiro_uninstall,
+    pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project, vscode_install,
+    vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
@@ -172,6 +173,13 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         ("antigravity", PlatformCmd::Uninstall { .. }) => antigravity_uninstall(&cwd, false)?,
         ("cursor", PlatformCmd::Install { .. }) => cursor_install(&cwd)?,
         ("cursor", PlatformCmd::Uninstall { .. }) => cursor_uninstall(&cwd)?,
+        // Amp's non-project install mirrors graphify-py `_amp_install`: clean the
+        // legacy ~/.amp/skills dir, write the skill into ~/.config/agents/skills,
+        // and write the AGENTS.md always-on section. Project scope flows through
+        // the generic `install_platform_skill_project` arm above, which now wires
+        // AGENTS.md for agents-group platforms.
+        ("amp", PlatformCmd::Install { .. }) => amp_install(&cwd)?,
+        ("amp", PlatformCmd::Uninstall { .. }) => amp_uninstall(&cwd)?,
         (p, PlatformCmd::Install { .. }) => agents_install(&cwd, p)?,
         (p, PlatformCmd::Uninstall { .. }) => agents_uninstall(&cwd, p)?,
     };

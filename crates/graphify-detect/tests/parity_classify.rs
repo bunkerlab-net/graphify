@@ -190,6 +190,17 @@ fn classify_google_workspace_gslides() {
     );
 }
 
+/// Only `.gdoc`/`.gsheet`/`.gslides` are Google Workspace shortcuts (Python
+/// parity: `GOOGLE_WORKSPACE_EXTENSIONS = {".gdoc", ".gsheet", ".gslides"}`).
+/// Other Drive shortcut types are unrecognized and classify as `None`, so they
+/// are ignored exactly as graphify-py ignores them.
+#[test]
+fn classify_other_google_drive_shortcuts_return_none() {
+    for name in ["diagram.gdraw", "survey.gform", "places.gmap", "site.gsite"] {
+        assert_eq!(classify_file(Path::new(name)), None, "{name} -> None");
+    }
+}
+
 #[test]
 fn classify_md_paper_by_signals() {
     let tmp = tempdir().expect("tempdir");

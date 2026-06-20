@@ -23,6 +23,7 @@ pub(crate) fn cmd_export(cmd: ExportCmd) -> Result<()> {
         ExportCmd::Obsidian { graph, out, labels } => export_obsidian(graph, out, labels),
         ExportCmd::Wiki { graph, labels } => export_wiki(graph, labels),
         ExportCmd::CallflowHtml {
+            path,
             graph,
             output,
             lang,
@@ -33,6 +34,9 @@ pub(crate) fn cmd_export(cmd: ExportCmd) -> Result<()> {
             report,
             sections,
         } => {
+            // `--graph` wins; otherwise the optional positional GRAPH|DIR is
+            // resolved to a graph.json path (mirrors __main__.py callflow-html).
+            let graph = graph.or_else(|| path.map(resolve_callflow_graph_arg));
             let opts = CallflowDispatchOptions {
                 graph,
                 output,
@@ -58,6 +62,27 @@ pub(crate) fn cmd_export(cmd: ExportCmd) -> Result<()> {
             user,
             password,
         } => export_falkordb(graph, push, user.as_deref(), password),
+    }
+}
+
+/// Resolve a positional `export callflow-html [GRAPH|DIR]` argument to a
+/// `graph.json` path.
+///
+/// Mirrors `__main__.py`: a `graph.json` / `*.json` path is used as-is; a
+/// directory containing `graph.json` resolves to it; otherwise the argument is
+/// treated as a project root and resolved to `<dir>/<GRAPHIFY_OUT>/graph.json`.
+fn resolve_callflow_graph_arg(candidate: std::path::PathBuf) -> std::path::PathBuf {
+    let is_json = candidate.file_name().and_then(|n| n.to_str()) == Some("graph.json")
+        || candidate
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+    if is_json {
+        candidate
+    } else if candidate.join("graph.json").exists() {
+        candidate.join("graph.json")
+    } else {
+        candidate.join(graphify_out_dir()).join("graph.json")
     }
 }
 

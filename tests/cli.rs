@@ -457,6 +457,46 @@ fn export_callflow_html_message_matches_python() {
     assert!(output.exists());
 }
 
+/// `graphify export callflow-html <GRAPH.json>` (positional) renders that graph
+/// and derives `GRAPH_REPORT.md` from the graph's own directory — Python parity
+/// with the `export callflow-html [GRAPH|DIR]` positional argument.
+#[test]
+fn export_callflow_html_accepts_positional_graph_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let external = dir.path().join("GitNexus").join("graphify-out");
+    fs::create_dir_all(&external).unwrap();
+    fs::write(
+        external.join("graph.json"),
+        r#"{"directed":false,"multigraph":false,"graph":{},"nodes":[{"id":"external","label":"ExternalOnly","source_file":"src/external.py","file_type":"code","community":0},{"id":"writer","label":"write_external()","source_file":"src/writer.py","file_type":"code","community":1}],"links":[{"source":"external","target":"writer","relation":"calls","confidence":"EXTRACTED","confidence_score":1.0}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        external.join("GRAPH_REPORT.md"),
+        "# Graph Report - external\n\n## God Nodes (most connected - your core abstractions)\n1. `ExternalGod` - 1 edges\n",
+    )
+    .unwrap();
+    let output = dir.path().join("positional.html");
+    cli()
+        .arg("export")
+        .arg("callflow-html")
+        .arg(external.join("graph.json"))
+        .arg("--output")
+        .arg(&output)
+        .arg("--max-sections")
+        .arg("4")
+        .assert()
+        .success();
+    let html = fs::read_to_string(&output).unwrap();
+    assert!(
+        html.contains("ExternalOnly"),
+        "positional graph node missing"
+    );
+    assert!(
+        html.contains("ExternalGod"),
+        "report resolved from the positional graph's directory missing"
+    );
+}
+
 /// `graphify trae-cn install` is reachable as a named subcommand (parity with
 /// Python's per-platform install routes). Just exercise the dispatch — we
 /// don't want to permanently install the skill, so use --help.

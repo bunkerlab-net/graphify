@@ -351,23 +351,38 @@ fn detect_incremental_struct_unchanged_files_keyed_by_type() {
 }
 
 #[test]
-fn detect_incremental_struct_new_total_matches_changed_count() {
+fn detect_incremental_new_total_counts_changed_files_only() {
     let tmp = tempdir().expect("tempdir");
-    std::fs::write(tmp.path().join("c.py"), "z = 3").expect("test invariant");
-    std::fs::write(tmp.path().join("d.py"), "w = 4").expect("test invariant");
+    // Canonicalize so manifest paths match detect()'s symlink-resolved root.
+    let base = tmp.path().canonicalize().expect("canon");
+    std::fs::write(base.join("c.py"), "z = 3").expect("test invariant");
+    std::fs::write(base.join("d.py"), "w = 4").expect("test invariant");
 
-    let prev: Manifest = IndexMap::new();
-    let result = detect_incremental(tmp.path(), &prev).expect("test invariant");
-    let total_changed: u64 = result.changed_files.values().map(|v| v.len() as u64).sum();
-    let total_unchanged: u64 = result
-        .unchanged_files
-        .values()
-        .map(|v| v.len() as u64)
-        .sum();
+    // Stamp both files into the manifest detect_incremental reads.
+    let manifest = base.join("graphify-out").join("manifest.json");
+    let mut files: IndexMap<String, Vec<String>> = IndexMap::new();
+    files.insert(
+        "code".to_string(),
+        vec![
+            base.join("c.py").to_string_lossy().into_owned(),
+            base.join("d.py").to_string_lossy().into_owned(),
+        ],
+    );
+    save_manifest_to_path_with_root(&files, &manifest, "both", Some(&base)).expect("save");
+
+    // Change only c.py; d.py stays byte-identical.
+    std::fs::write(base.join("c.py"), "z = 999").expect("test invariant");
+
+    let inc = detect_incremental(&base, &Manifest::new()).expect("incremental");
+    let changed: u64 = inc.changed_files.values().map(|v| v.len() as u64).sum();
+    let unchanged: u64 = inc.unchanged_files.values().map(|v| v.len() as u64).sum();
+    assert_eq!(changed, 1, "only c.py changed");
+    assert_eq!(unchanged, 1, "d.py unchanged");
+    // Python parity: new_total is the count of CHANGED files only, never the
+    // total (changed + unchanged) file count.
     assert_eq!(
-        result.new_total,
-        total_changed + total_unchanged,
-        "new_total must equal changed + unchanged file counts"
+        inc.new_total, 1,
+        "new_total must count changed files only, not changed + unchanged"
     );
 }
 
@@ -567,7 +582,7 @@ fn detect_incremental_portable_across_paths() {
     .expect("copy");
 
     let inc = detect_incremental(&repo_b, &Manifest::new()).expect("incremental");
-    assert_eq!(inc.new_total, 2);
+    assert_eq!(inc.new_total, 0);
     let changed: Vec<&String> = inc.changed_files.values().flatten().collect();
     assert!(
         changed.is_empty(),

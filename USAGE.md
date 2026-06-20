@@ -201,23 +201,28 @@ The query / affected / explain / serve commands filter on these.
 
 **Relations** (`--relation` on `affected`):
 
-| Relation       | Emitted by                                                                                                                             |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `contains`     | File / config node → contained entity (function, class, `mcp_server`).                                                                 |
-| `method`       | Class node → method.                                                                                                                   |
-| `calls`        | Function / method node → callee, resolved within the file or cross-file.                                                               |
-| `imports`      | File node → imported module.                                                                                                           |
-| `imports_from` | File node → imported symbol from another file (`from x import y`).                                                                     |
-| `depends_on`   | Package-manifest node → a dependency package node (`apm.yml` / `pyproject.toml` / `go.mod` / `pom.xml`).                               |
-| `re_exports`   | Module → re-exported module (`export … from 'x'`).                                                                                     |
-| `inherits`     | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia) is normalized here. |
-| `implements`   | Class → interface / protocol (Java, C#, TypeScript, Kotlin, PHP, Swift, Objective-C, Rust trait `impl`).                               |
-| `embeds`       | Go struct/interface embedding (anonymous field or embedded interface).                                                                 |
-| `mixes_in`     | Trait mixin: PHP `use`, Scala `with`.                                                                                                  |
-| `references`   | Function / method / class → type referenced in its signature or body.                                                                  |
-| `instantiates` | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).                                                                  |
-| `uses`         | BYOND `.dmm` map → each type path referenced in its tile dictionary.                                                                   |
-| `requires_env` | MCP server → env-var _name_ it depends on (values are never read).                                                                     |
+| Relation              | Emitted by                                                                                                                             |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `contains`            | File / config node → contained entity (function, class, `mcp_server`).                                                                 |
+| `method`              | Class node → method.                                                                                                                   |
+| `calls`               | Function / method node → callee, resolved within the file or cross-file.                                                               |
+| `imports`             | File node → imported module.                                                                                                           |
+| `imports_from`        | File node → imported symbol from another file (`from x import y`).                                                                     |
+| `depends_on`          | Package-manifest node → a dependency package node (`apm.yml` / `pyproject.toml` / `go.mod` / `pom.xml`).                               |
+| `re_exports`          | Module → re-exported module (`export … from 'x'`).                                                                                     |
+| `inherits`            | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia) is normalized here. |
+| `implements`          | Class → interface / protocol (Java, C#, TypeScript, Kotlin, PHP, Swift, Objective-C, Rust trait `impl`).                               |
+| `embeds`              | Go struct/interface embedding (anonymous field or embedded interface).                                                                 |
+| `mixes_in`            | Trait mixin: PHP `use`, Scala `with`.                                                                                                  |
+| `uses_static_prop`    | Caller → class whose static property is read (Laravel/PHP `Class::$prop`).                                                             |
+| `uses_config`         | Caller → config namespace referenced via Laravel `config('a.b.c')` (PHP).                                                              |
+| `bound_to`            | Laravel service-container binding `$app->bind(Abstract::class, Concrete::class)` (PHP).                                                |
+| `listened_by`         | Event class → listener class from a Laravel `$listen` map (PHP).                                                                       |
+| `references_constant` | Caller → class referenced through a class constant (PHP `Class::CONST` / `Class::class`).                                              |
+| `references`          | Function / method / class → type referenced in its signature or body.                                                                  |
+| `instantiates`        | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).                                                                  |
+| `uses`                | BYOND `.dmm` map → each type path referenced in its tile dictionary.                                                                   |
+| `requires_env`        | MCP server → env-var _name_ it depends on (values are never read).                                                                     |
 
 `references` edges typically carry a `context` describing _how_ the type is
 used; older extractors (SQL, for one) still emit `references` without a
@@ -356,7 +361,13 @@ A self-contained dark-themed architecture page with Mermaid call-flow diagrams p
 ```bash
 graphify export callflow-html
 graphify export callflow-html --graph other/graph.json --output ARCH.html
+graphify export callflow-html other/graphify-out/graph.json
+graphify export callflow-html ../other-project
 ```
+
+The optional positional `GRAPH|DIR` mirrors `--graph`: a `*.json` path is used
+directly, a directory resolves to its `graph.json` (falling back to
+`<dir>/graphify-out/graph.json`). An explicit `--graph` takes precedence.
 
 ### `export html`, `export obsidian`, `export svg`, `export graphml`, `export wiki`, `export neo4j`
 
@@ -501,7 +512,9 @@ graphify cursor install        # .cursor/rules/graphify.mdc
 graphify vscode install        # .github/copilot-instructions.md + skill copy
 graphify copilot install       # ~/.copilot/skills (GitHub Copilot CLI)
 graphify codex install         # AGENTS.md section
-graphify amp install           # AGENTS.md section (Amp)
+graphify amp install           # AGENTS.md section + skill (Amp); removes legacy ~/.amp/skills
+                               #   user scope: ~/.config/agents/skills/graphify/SKILL.md
+                               #   --project:  ./.agents/skills/graphify/SKILL.md
 graphify opencode install      # AGENTS.md + tool.execute.before plugin
                                #   user scope: ~/.config/opencode/skills/graphify/SKILL.md
                                #   --project:  ./.opencode/skills/graphify/SKILL.md
@@ -550,6 +563,7 @@ available and is untouched by the project flag.
 ```bash
 graphify install --platform claude    # same as `graphify claude install`
 graphify install claude               # positional shorthand also accepted
+graphify install --platform kimi      # Kimi CLI → ~/.kimi/skills/graphify/SKILL.md (no dedicated subcommand)
 graphify uninstall                    # removes graphify from every detected platform
 graphify uninstall --purge            # also deletes graphify-out/
 ```

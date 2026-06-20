@@ -32,8 +32,8 @@ pub struct IncrementalDetectResult {
     pub manifest: Manifest,
     /// Files that are present but unchanged, keyed by file type.
     pub unchanged_files: IndexMap<String, Vec<String>>,
-    /// Total number of files seen in the current scan (changed +
-    /// unchanged).
+    /// Number of changed (new) files since the last manifest; equals the total
+    /// file count on a first scan with no manifest. Mirrors Python `new_total`.
     pub new_total: u64,
     /// `true` when a manifest existed (i.e. this was a real
     /// incremental run, not a first scan).
@@ -129,8 +129,8 @@ pub fn detect_incremental(
     let mut new_total: u64 = 0;
     for (kind, paths) in &full.files {
         for p in paths {
-            new_total += 1;
             if changed_set.contains(&PathBuf::from(p)) {
+                new_total += 1;
                 changed_files
                     .entry(kind.clone())
                     .or_default()
