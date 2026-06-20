@@ -32,6 +32,26 @@ fn assert_no_dangling_edges(result: &graphify_extract::FileResult) {
     }
 }
 
+/// Node id of the first node whose exact `label` matches, panicking with the
+/// label when absent so endpoint assertions fail loudly on a missing fixture node.
+fn php_node_id(result: &FileResult, label: &str) -> String {
+    result
+        .nodes
+        .iter()
+        .find(|n| n.label == label)
+        .unwrap_or_else(|| panic!("fixture has no node labeled {label:?}"))
+        .id
+        .clone()
+}
+
+/// True when a `source -[relation]-> target` edge exists (compared by node id).
+fn php_has_edge(result: &FileResult, source: &str, target: &str, relation: &str) -> bool {
+    result
+        .edges
+        .iter()
+        .any(|e| e.source == source && e.target == target && e.relation == relation)
+}
+
 #[test]
 fn pascal_extractor_produces_nodes() {
     let result = extract_pascal(&fixtures().join("sample.pas"));
@@ -528,9 +548,12 @@ fn php_extractor_produces_nodes() {
 #[test]
 fn php_finds_static_property_access() {
     let r = extract_php(&fixtures().join("sample_php_static_prop.php"));
+    let primary = php_node_id(&r, ".primary()");
+    let palette = php_node_id(&r, "DefaultPalette");
     assert!(
-        r.edges.iter().any(|e| e.relation == "uses_static_prop"),
-        "expected a uses_static_prop edge"
+        php_has_edge(&r, &primary, &palette, "uses_static_prop"),
+        "ColorResolver::primary() should resolve DefaultPalette::$primary to a \
+         uses_static_prop edge into the owning class"
     );
 }
 
@@ -539,9 +562,12 @@ fn php_finds_static_property_access() {
 #[test]
 fn php_finds_config_helper_call() {
     let r = extract_php(&fixtures().join("sample_php_config.php"));
+    let per_second = php_node_id(&r, ".perSecond()");
+    let throttle = php_node_id(&r, "Throttle");
     assert!(
-        r.edges.iter().any(|e| e.relation == "uses_config"),
-        "expected a uses_config edge"
+        php_has_edge(&r, &per_second, &throttle, "uses_config"),
+        "RateLimiter::perSecond() should resolve config('throttle.api.per_second') \
+         to a uses_config edge into the Throttle config class"
     );
 }
 
@@ -550,14 +576,19 @@ fn php_finds_config_helper_call() {
 #[test]
 fn php_finds_container_bind() {
     let r = extract_php(&fixtures().join("sample_php_container.php"));
+    let payment = php_node_id(&r, "PaymentGateway");
+    let stripe = php_node_id(&r, "StripeGateway");
+    let register = php_node_id(&r, ".register()");
     assert!(
-        r.edges.iter().any(|e| e.relation == "bound_to"),
-        "expected a bound_to edge"
+        php_has_edge(&r, &payment, &stripe, "bound_to"),
+        "bind(PaymentGateway::class, StripeGateway::class) should bind the abstract \
+         to the concrete implementation"
     );
-    // `Foo::class` arguments are class-constant accesses → references_constant.
+    // Each `::class` argument is a class-constant access → a references_constant
+    // edge from the enclosing method to the referenced class.
     assert!(
-        r.edges.iter().any(|e| e.relation == "references_constant"),
-        "expected a references_constant edge from the ::class arguments"
+        php_has_edge(&r, &register, &payment, "references_constant"),
+        "register() should reference PaymentGateway via its ::class constant"
     );
 }
 
@@ -566,9 +597,11 @@ fn php_finds_container_bind() {
 #[test]
 fn php_finds_event_listeners() {
     let r = extract_php(&fixtures().join("sample_php_listen.php"));
+    let user_registered = php_node_id(&r, "UserRegistered");
+    let welcome = php_node_id(&r, "SendWelcomeEmail");
     assert!(
-        r.edges.iter().any(|e| e.relation == "listened_by"),
-        "expected a listened_by edge"
+        php_has_edge(&r, &user_registered, &welcome, "listened_by"),
+        "UserRegistered should map to a listened_by edge into SendWelcomeEmail"
     );
 }
 

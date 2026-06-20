@@ -4,7 +4,6 @@
 //! named/aliased/star/type re-exports, local-alias re-exports, and
 //! call-through-barrel — each must resolve the consumer's import (and calls) to
 //! the origin symbol, not the barrel.
-#![allow(clippy::expect_used)]
 
 use std::error::Error;
 use std::path::Path;
