@@ -224,6 +224,16 @@ pub(crate) enum Command {
     /// Headless full extraction (AST + semantic LLM) for CI/scripts.
     Extract {
         path: PathBuf,
+        /// LLM backend for semantic extraction:
+        /// `gemini|kimi|claude|openai|deepseek|ollama` (default: whichever API
+        /// key is set).
+        ///
+        /// `openai` also reaches self-hosted `OpenAI`-compatible servers
+        /// (`llama.cpp`, `vLLM`, LM Studio): set `OPENAI_BASE_URL`
+        /// (e.g. `http://localhost:8080/v1`) and `OPENAI_MODEL` to the model name
+        /// your server serves. `claude` also reaches custom Anthropic-compatible
+        /// endpoints (`LiteLLM` proxy, gateways): set `ANTHROPIC_BASE_URL` and
+        /// `ANTHROPIC_MODEL`.
         #[arg(long)]
         backend: Option<String>,
         #[arg(long)]

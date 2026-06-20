@@ -352,6 +352,35 @@ fn test_parse_llm_json_prefers_extraction_shaped_object() {
     assert_eq!(result["nodes"], json!([]));
 }
 
+#[test]
+fn test_parse_llm_json_top_level_array_falls_through_to_empty_fragment() {
+    // #d8fa70e: a top-level JSON array is valid JSON but not a usable graph
+    // fragment; returning it would let callers subscript result["input_tokens"]
+    // on a list. The non-object guard falls through to the empty fragment.
+    let result = parse_llm_json("[1, 2, 3]");
+    assert_eq!(result, json!({"nodes": [], "edges": [], "hyperedges": []}));
+}
+
+#[test]
+fn test_parse_llm_json_top_level_scalar_falls_through_to_empty_fragment() {
+    assert_eq!(
+        parse_llm_json("42"),
+        json!({"nodes": [], "edges": [], "hyperedges": []})
+    );
+    assert_eq!(
+        parse_llm_json("\"hello\""),
+        json!({"nodes": [], "edges": [], "hyperedges": []})
+    );
+}
+
+#[test]
+fn test_parse_llm_json_fenced_array_falls_through_to_empty_fragment() {
+    // A fenced top-level array (no object anywhere) must not be returned as a
+    // non-dict: strategy 1 strips the fence, sees an array, and falls through.
+    let result = parse_llm_json("```json\n[1, 2, 3]\n```");
+    assert_eq!(result, json!({"nodes": [], "edges": [], "hyperedges": []}));
+}
+
 // ---------------------------------------------------------------------------
 // test_llm_parser.py / test_claude_cli_backend.py — claude -p argv shape
 // ---------------------------------------------------------------------------

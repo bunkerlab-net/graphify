@@ -9,7 +9,8 @@
 
 use graphify_build::{
     Graph, GraphKind, build, build_from_json, build_merge, build_merge_with_graph_cap,
-    deduplicate_by_label, norm_label, prefix_graph_for_global, prune_repo_from_graph,
+    dedupe_edges, dedupe_nodes, deduplicate_by_label, norm_label, prefix_graph_for_global,
+    prune_repo_from_graph,
 };
 use serde_json::{Value, json};
 
@@ -818,4 +819,300 @@ fn ghost_merge_keeps_distinct_symbols_in_different_files() {
     assert!(g.contains_node("a_render"));
     assert!(g.contains_node("b_render"));
     assert_eq!(g.node_count(), 2);
+}
+
+// ── #1317: dedupe_nodes / dedupe_edges for the --no-cluster raw write path ──
+
+#[test]
+fn dedupe_edges_collapses_exact_parallels() {
+    // #1317: --no-cluster / incremental update concatenate edge lists raw.
+    let edges = [
+        json!({"source": "a", "target": "b", "relation": "calls", "source_location": "L1"}),
+        json!({"source": "a", "target": "b", "relation": "calls", "source_location": "L9"}),
+        json!({"source": "a", "target": "b", "relation": "imports"}),
+        json!({"source": "b", "target": "c", "relation": "calls"}),
+    ];
+    let out = dedupe_edges(&edges);
+    let keys: Vec<(&str, &str, &str)> = out
+        .iter()
+        .map(|e| {
+            (
+                e.get("source").and_then(Value::as_str).unwrap_or(""),
+                e.get("target").and_then(Value::as_str).unwrap_or(""),
+                e.get("relation").and_then(Value::as_str).unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            ("a", "b", "calls"),
+            ("a", "b", "imports"),
+            ("b", "c", "calls")
+        ]
+    );
+    // First occurrence wins (keeps L1, not L9).
+    assert_eq!(
+        out[0].get("source_location").and_then(Value::as_str),
+        Some("L1")
+    );
+}
+
+#[test]
+fn dedupe_edges_is_idempotent() {
+    let edges = [
+        json!({"source": "a", "target": "b", "relation": "calls"}),
+        json!({"source": "a", "target": "b", "relation": "calls"}),
+    ];
+    let once = dedupe_edges(&edges);
+    // Simulate a second `update` re-concatenating its edges.
+    let mut combined = once.clone();
+    combined.extend(edges.iter().cloned());
+    let twice = dedupe_edges(&combined);
+    assert_eq!(once.len(), 1);
+    assert_eq!(twice.len(), 1);
+}
+
+#[test]
+fn dedupe_nodes_collapses_by_id_last_wins() {
+    // #1327: a shared module anchor is emitted once per importing file; the
+    // --no-cluster raw writer must collapse same-id node dicts (#1317).
+    let nodes = [
+        json!({"id": "foundation", "label": "Foundation", "type": "module", "source_file": "A.swift"}),
+        json!({"id": "akit", "label": "AKit", "file_type": "code"}),
+        json!({"id": "foundation", "label": "Foundation", "type": "module", "source_file": "B.swift"}),
+    ];
+    let out = dedupe_nodes(&nodes);
+    let ids: Vec<&str> = out
+        .iter()
+        .map(|n| n.get("id").and_then(Value::as_str).unwrap_or(""))
+        .collect();
+    assert_eq!(ids, vec!["foundation", "akit"]); // first-appearance order
+    // Last writer wins on attributes.
+    let foundation = out
+        .iter()
+        .find(|n| n.get("id").and_then(Value::as_str) == Some("foundation"))
+        .expect("foundation node present");
+    assert_eq!(
+        foundation.get("source_file").and_then(Value::as_str),
+        Some("B.swift")
+    );
+}
+
+// ── #1279: edge source_file backfilled from endpoint node ───────────────────
+
+#[test]
+fn edge_missing_source_file_backfilled_from_node() {
+    // #1279: a semantic/LLM edge lacking source_file must inherit it from its
+    // source node rather than reach graph.json with no file reference.
+    let extraction = json!({
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "concept", "source_file": "docs/a.md"},
+            {"id": "n2", "label": "B", "file_type": "concept", "source_file": "docs/b.md"},
+        ],
+        // No source_file on the edge (as LLM output sometimes omits it).
+        "edges": [{"source": "n1", "target": "n2", "relation": "relates_to", "confidence": "INFERRED"}],
+        "input_tokens": 0, "output_tokens": 0,
+    });
+    let g = build_from_json(extraction, false, None).expect("build");
+    let sf = g
+        .edge_data("n1", "n2")
+        .and_then(|attrs| attrs.get("source_file"))
+        .and_then(Value::as_str);
+    assert_eq!(sf, Some("docs/a.md")); // backfilled from the source node
+}
+
+// ── #1257: ghost-merge skipped on ambiguous (basename, label) collision ─────
+
+#[test]
+fn ghost_merge_unique_located_node_still_merges() {
+    // #1145: a semantic ghost collapses into the single AST node sharing its
+    // (basename, label), and the edge re-points to the AST node.
+    let ext = json!({
+        "nodes": [
+            {"id": "ast_render", "label": "render", "file_type": "code",
+             "source_file": "src/app/index.ts", "source_location": "L10", "_origin": "ast"},
+            {"id": "ghost_render", "label": "render", "file_type": "code",
+             "source_file": "src/app/index.ts"},
+            {"id": "caller", "label": "main", "file_type": "code",
+             "source_file": "src/main.ts", "source_location": "L1", "_origin": "ast"},
+        ],
+        "edges": [{"source": "caller", "target": "ghost_render", "relation": "calls",
+                   "confidence": "EXTRACTED", "source_file": "src/main.ts", "weight": 1.0}],
+        "input_tokens": 0, "output_tokens": 0,
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    assert!(!g.contains_node("ghost_render"), "ghost removed");
+    assert!(
+        g.edge_data("caller", "ast_render").is_some(),
+        "edge re-pointed to the AST node"
+    );
+}
+
+#[test]
+fn ghost_merge_skipped_on_basename_collision() {
+    // #1257: when two files with the same basename both define a symbol with the
+    // same label, the (basename, label) key is ambiguous and the semantic ghost
+    // must not be merged into an arbitrary one of them.
+    let ext = json!({
+        "nodes": [
+            {"id": "a_render", "label": "render", "file_type": "code",
+             "source_file": "src/a/index.ts", "source_location": "L10", "_origin": "ast"},
+            {"id": "b_render", "label": "render", "file_type": "code",
+             "source_file": "src/b/index.ts", "source_location": "L20", "_origin": "ast"},
+            {"id": "ghost_render", "label": "render", "file_type": "code",
+             "source_file": "src/a/index.ts"},
+            {"id": "caller", "label": "main", "file_type": "code",
+             "source_file": "src/main.ts", "source_location": "L1", "_origin": "ast"},
+        ],
+        "edges": [{"source": "caller", "target": "ghost_render", "relation": "calls",
+                   "confidence": "EXTRACTED", "source_file": "src/main.ts", "weight": 1.0}],
+        "input_tokens": 0, "output_tokens": 0,
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    // The ghost survives: merging it into either a_render or b_render would
+    // pick an arbitrary winner via iteration order over the node set.
+    assert!(g.contains_node("ghost_render"));
+    assert_eq!(g.node_count(), 4);
+    assert!(g.edge_data("caller", "ghost_render").is_some());
+    assert!(g.edge_data("caller", "a_render").is_none());
+    assert!(g.edge_data("caller", "b_render").is_none());
+}
+
+// ── #1344: build_merge replaces a re-extracted file's stale contribution ────
+
+#[test]
+fn build_merge_replaces_changed_file_stale_edges() {
+    // Re-extracting a CHANGED file must REPLACE its prior nodes/edges, not
+    // accumulate them (#1344). The new-chunk source_file may be an absolute
+    // win32 path while the stored graph keeps relative posix — both forms match.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon").join("corpus");
+    std::fs::create_dir(&root).expect("mkdir");
+    let graph_path = tmp.path().join("graph.json");
+
+    // First build: changed.md contributed A, B and edge A->B; keep.md unrelated.
+    let stored = json!({
+        "nodes": [
+            {"id": "A", "label": "A", "file_type": "document", "source_file": "changed.md"},
+            {"id": "B", "label": "B", "file_type": "document", "source_file": "changed.md"},
+            {"id": "K", "label": "K", "file_type": "document", "source_file": "keep.md"},
+        ],
+        "edges": [
+            {"source": "A", "target": "B", "relation": "references", "confidence": "EXTRACTED",
+             "source_file": "changed.md", "weight": 1.0},
+            {"source": "K", "target": "A", "relation": "references", "confidence": "EXTRACTED",
+             "source_file": "keep.md", "weight": 1.0},
+        ],
+    });
+    std::fs::write(&graph_path, serde_json::to_string(&stored).expect("ser")).expect("write");
+
+    // changed.md edited: re-extraction now yields A, C and edge A->C (B dropped).
+    // source_file arrives as an absolute win32-style path (as detect emits on Windows).
+    let abs_changed = root.join("changed.md").to_string_lossy().replace('/', "\\");
+    let new_chunk = json!({
+        "nodes": [
+            {"id": "A", "label": "A", "file_type": "document", "source_file": abs_changed.clone()},
+            {"id": "C", "label": "C", "file_type": "document", "source_file": abs_changed.clone()},
+        ],
+        "edges": [
+            {"source": "A", "target": "C", "relation": "references", "confidence": "EXTRACTED",
+             "source_file": abs_changed.clone(), "weight": 1.0},
+        ],
+    });
+    let g = build_merge(&[new_chunk], &graph_path, None, false, false, Some(&root))
+        .expect("build_merge");
+
+    let labels = node_labels(&g);
+    let has_edge = |u: &str, v: &str| g.edge_data(u, v).is_some();
+
+    // Stale contribution from the old version of changed.md is gone.
+    assert!(
+        !labels.contains("B"),
+        "stale node from changed file's old version must be dropped"
+    );
+    assert!(!has_edge("A", "B"), "stale edge must be dropped");
+    // Fresh contribution is present.
+    assert!(labels.contains("C"), "re-extracted node must be present");
+    assert!(has_edge("A", "C"), "re-extracted edge must be present");
+    // An unchanged file is untouched.
+    assert!(labels.contains("K"), "unchanged file's node must survive");
+    assert!(has_edge("K", "A"), "unchanged file's edge must survive");
+}
+
+#[test]
+fn build_merge_root_collapses_convention_drift() {
+    // #1344: the caller must pass root so build_merge canonicalizes the new
+    // chunk to the same relative base as the stored graph; only then does
+    // re-extraction REPLACE the prior node (incl. stale nodes) for that file.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    let graph_dir = root.join("graphify-out");
+    std::fs::create_dir_all(&graph_dir).expect("mkdir");
+    let graph_path = graph_dir.join("graph.json");
+
+    // Stored graph: nested project-relative convention + a STALE node for the
+    // same file that the re-extraction no longer emits.
+    let stored = json!({
+        "nodes": [
+            {"id": "wiki_overview_overview", "label": "Overview", "file_type": "document",
+             "source_file": "docs/wiki/overview.md"},
+            {"id": "wiki_overview_stale", "label": "Stale", "file_type": "document",
+             "source_file": "docs/wiki/overview.md"},
+        ],
+        "edges": [],
+    });
+    let saved = serde_json::to_string(&stored).expect("ser");
+    std::fs::write(&graph_path, &saved).expect("write");
+
+    // BUG: --update drifted to a bare basename and no root was passed. Different
+    // base -> source_file replace misses -> stale + duplicate both survive.
+    let drift = json!({
+        "nodes": [
+            {"id": "overview_overview", "label": "Overview", "file_type": "document",
+             "source_file": "overview.md"},
+        ],
+        "edges": [],
+    });
+    let g_bug = build_merge(&[drift], &graph_path, None, false, false, None).expect("build_merge");
+    assert_eq!(
+        g_bug.node_count(),
+        3,
+        "mismatched base must NOT replace -> stale+dup remain"
+    );
+
+    // FIX: caller passes root; the verbatim absolute path canonicalizes to the
+    // stored relative base, so the re-extraction replaces the prior node.
+    std::fs::write(&graph_path, &saved).expect("rewrite");
+    let abs_overview = root
+        .join("docs")
+        .join("wiki")
+        .join("overview.md")
+        .to_string_lossy()
+        .into_owned();
+    let fixed = json!({
+        "nodes": [
+            {"id": "wiki_overview_overview", "label": "Overview", "file_type": "document",
+             "source_file": abs_overview},
+        ],
+        "edges": [],
+    });
+    let g_ok =
+        build_merge(&[fixed], &graph_path, None, false, false, Some(&root)).expect("build_merge");
+    assert_eq!(
+        g_ok.node_count(),
+        1,
+        "verbatim path + root must collapse to one node"
+    );
+    assert!(
+        !g_ok.contains_node("wiki_overview_stale"),
+        "stale node for the re-extracted file must be dropped"
+    );
+    assert_eq!(
+        g_ok.node_data("wiki_overview_overview")
+            .and_then(|a| a.get("source_file"))
+            .and_then(Value::as_str),
+        Some("docs/wiki/overview.md"),
+        "new chunk must be canonicalized to the stored relative base"
+    );
 }

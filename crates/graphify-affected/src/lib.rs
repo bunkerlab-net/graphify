@@ -12,6 +12,7 @@ use std::path::Path;
 use indexmap::{IndexMap, IndexSet};
 use serde_json::Value;
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 use graphify_build::{Graph, build_from_json};
 
@@ -62,19 +63,32 @@ pub enum AffectedError {
     Build(String),
 }
 
-/// Lowercased label with the callable decoration (trailing `()`) removed.
+/// NFC-normalize then lowercase a string for case-insensitive, accent-aware
+/// matching.
+///
+/// Mirrors Python's `_normalize_label`, which composes `NFC` then `casefold()`.
+/// Rust uses `to_lowercase` here (not full Unicode casefold) to match the
+/// normalization convention used across the codebase — an acceptable
+/// divergence, since no matching path depends on the ß→ss casefold distinction.
+fn normalize_label(s: &str) -> String {
+    s.nfc().collect::<String>().to_lowercase()
+}
+
+/// Normalized label with the callable decoration (trailing `()`) removed.
 fn bare_name(label: &str) -> String {
-    let lower = label.to_lowercase();
-    match lower.strip_suffix("()") {
+    let normalized = normalize_label(label);
+    match normalized.strip_suffix("()") {
         Some(stripped) => stripped.to_string(),
-        None => lower,
+        None => normalized,
     }
 }
 
 /// Resolve a free-form query string to a node ID using a fuzzy fallback
 /// chain. Returns `None` when the query is ambiguous or has no match.
 ///
-/// Resolution order (matching the Python `resolve_seed`):
+/// Resolution order (matching the Python `resolve_seed`). All label and
+/// `source_file` comparisons are NFC-normalized and case-insensitive
+/// (see [`normalize_label`]):
 /// 1. Exact node-ID match.
 /// 2. Exact label match (case-insensitive). Skipped when there is more
 ///    than one matching node.
@@ -88,14 +102,14 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
     if graph.node_data(query).is_some() {
         return Some(query.to_string());
     }
-    let q = query.to_lowercase();
+    let q = normalize_label(query);
 
     let exact_label_matches: Vec<String> = graph
         .nodes()
         .filter(|(_, data)| {
             data.get("label")
                 .and_then(Value::as_str)
-                .is_some_and(|s| s.to_lowercase() == q)
+                .is_some_and(|s| normalize_label(s) == q)
         })
         .map(|(id, _)| id.clone())
         .collect();
@@ -124,7 +138,7 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
         .filter(|(_, data)| {
             data.get("source_file")
                 .and_then(Value::as_str)
-                .is_some_and(|s| s.to_lowercase() == q)
+                .is_some_and(|s| normalize_label(s) == q)
         })
         .map(|(id, _)| id.clone())
         .collect();
@@ -137,7 +151,7 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
         .filter(|(_, data)| {
             data.get("label")
                 .and_then(Value::as_str)
-                .is_some_and(|label| label.to_lowercase().contains(&q))
+                .is_some_and(|label| normalize_label(label).contains(&q))
         })
         .map(|(id, _)| id.clone())
         .collect();

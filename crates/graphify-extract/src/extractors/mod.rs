@@ -13,6 +13,7 @@ pub mod fortran;
 pub mod go;
 pub mod json_lang;
 pub mod julia;
+pub mod manifest_ingest;
 pub mod markdown;
 pub mod mcp;
 pub mod multi;
@@ -385,7 +386,7 @@ pub use rust_lang::extract_rust;
 pub use zig::extract_zig;
 
 // ── PowerShell ────────────────────────────────────────────────────────────────
-pub use powershell::extract_powershell;
+pub use powershell::{extract_powershell, extract_powershell_manifest};
 
 // ── Elixir ────────────────────────────────────────────────────────────────────
 pub use elixir::extract_elixir;
@@ -436,6 +437,9 @@ pub use dm::{extract_dm, extract_dmf, extract_dmi, extract_dmm};
 
 // ── MCP config (.mcp.json / claude_desktop_config.json / ...) ─────────────────
 pub use mcp::{extract_mcp_config, is_mcp_config_path};
+
+// ── Package manifests (apm.yml / pyproject.toml / go.mod / pom.xml) ────────────
+pub use manifest_ingest::extract_package_manifest;
 
 // ── Blade ─────────────────────────────────────────────────────────────────────
 pub use blade::extract_blade;

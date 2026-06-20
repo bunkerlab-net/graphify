@@ -222,16 +222,34 @@ fn is_truthy(v: &Value) -> bool {
 /// their edges.
 pub(crate) fn merge_ghost_duplicates(graph: &mut Graph) -> IndexMap<String, String> {
     // Pass 1: collect canonical nodes — AST-origin nodes take precedence over
-    // LLM nodes; among non-AST nodes the first occurrence per key wins.
+    // LLM nodes; among non-AST nodes the first occurrence per key wins. When 2+
+    // AST nodes share a key (same-named symbols in same-named files across
+    // directories, e.g. `render` in two `index.ts`), the key is ambiguous:
+    // merging a ghost onto it would pick an arbitrary winner via iteration
+    // order (#1257). Such keys are tracked so Pass 2 leaves their ghosts intact.
     let mut loc_nodes: IndexMap<(String, String), String> = IndexMap::new();
+    let mut loc_collisions: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    let mut loc_ast_keys: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     for (nid, attrs) in graph.nodes() {
         let Some(key) = ghost_key(attrs) else {
             continue;
         };
         let is_ast = attrs.get("_origin").and_then(Value::as_str) == Some("ast");
         let has_loc = attrs.get("source_location").is_some_and(is_truthy);
-        // AST-origin nodes always overwrite; non-AST only when the key is unseen.
-        if is_ast || (has_loc && !loc_nodes.contains_key(&key)) {
+        if !is_ast && !has_loc {
+            continue;
+        }
+        if is_ast {
+            // A second AST node on a key already held by an AST node is an
+            // ambiguous collision; AST-origin nodes always overwrite a prior entry.
+            if loc_ast_keys.contains(&key) {
+                loc_collisions.insert(key.clone());
+            }
+            loc_ast_keys.insert(key.clone());
+            loc_nodes.insert(key, nid.clone());
+        } else if !loc_nodes.contains_key(&key) {
             loc_nodes.insert(key, nid.clone());
         }
     }
@@ -246,6 +264,9 @@ pub(crate) fn merge_ghost_duplicates(graph: &mut Graph) -> IndexMap<String, Stri
         let Some(key) = ghost_key(attrs) else {
             continue;
         };
+        if loc_collisions.contains(&key) {
+            continue; // ambiguous key: no safe canonical winner, leave ghost intact
+        }
         if loc_nodes.get(&key).is_some_and(|canon| canon != nid) {
             noloc_nodes.insert(key, nid.clone());
         }
@@ -279,6 +300,24 @@ fn build_norm_to_id(
         norm_to_id.insert(normalize_id(ghost_id), canonical_id.clone());
     }
     norm_to_id
+}
+
+/// Resolve an edge's `source_file`: keep an explicit truthy value, otherwise
+/// backfill from the source then target node (#1279). The result is relativised
+/// against `root_str`. Returns `None` only when the edge carries a non-string
+/// `source_file`, which is left untouched.
+fn edge_source_file(
+    current: Option<&Value>,
+    src_file: &str,
+    tgt_file: &str,
+    root_str: Option<&str>,
+) -> Option<String> {
+    let raw = match current {
+        Some(v) if is_truthy(v) => v.as_str()?.to_string(),
+        _ if src_file.is_empty() => tgt_file.to_string(),
+        _ => src_file.to_string(),
+    };
+    Some(norm_source_file(&raw, root_str))
 }
 
 pub(crate) fn add_edges(
@@ -371,13 +410,19 @@ pub(crate) fn add_edges(
             if k == "source" || k == "target" {
                 continue;
             }
-            if k == "source_file"
-                && let Value::String(sf) = v
-            {
-                attrs.insert(k.clone(), Value::String(norm_source_file(sf, root_str)));
-                continue;
-            }
             attrs.insert(k.clone(), v.clone());
+        }
+        // Resolve source_file: keep an explicit value, else backfill from the
+        // endpoint nodes (#1279), then relativise against the root.
+        let src_file = node_source_files
+            .get(&resolved_src)
+            .map_or("", String::as_str);
+        let tgt_file = node_source_files
+            .get(&resolved_tgt)
+            .map_or("", String::as_str);
+        let resolved_sf = edge_source_file(attrs.get("source_file"), src_file, tgt_file, root_str);
+        if let Some(sf) = resolved_sf {
+            attrs.insert("source_file".to_string(), Value::String(sf));
         }
         attrs.insert("_src".to_string(), Value::String(resolved_src.clone()));
         attrs.insert("_tgt".to_string(), Value::String(resolved_tgt.clone()));

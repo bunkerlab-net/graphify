@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::LazyLock;
 
+use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::dedup_label::deduplicate_by_label;
@@ -22,6 +23,64 @@ fn canonicalize_root_to_string(root: &Path) -> String {
         .unwrap_or_else(|_| root.to_path_buf())
         .to_string_lossy()
         .into_owned()
+}
+
+/// Collapse nodes sharing an `id`, last-writer-wins on attributes.
+///
+/// Node insertion in [`build_from_json`] is idempotent — a later node with the
+/// same `id` overwrites the earlier one's attributes — but the `--no-cluster`
+/// write path dumps the raw node list without building a graph, so same-id
+/// nodes (e.g. a Swift `type=module` anchor emitted once per importing file,
+/// #1327) would otherwise survive as duplicates. Insertion order follows each
+/// id's first appearance; the retained object is the last one seen. Nodes whose
+/// `id` is missing or null are skipped.
+///
+/// Mirrors graphify-py `build.dedupe_nodes`.
+#[must_use]
+pub fn dedupe_nodes(nodes: &[Value]) -> Vec<Value> {
+    let mut by_id: IndexMap<String, Value> = IndexMap::new();
+    for node in nodes {
+        let Some(id) = node.get("id").filter(|v| !v.is_null()) else {
+            continue;
+        };
+        by_id.insert(id.to_string(), node.clone());
+    }
+    by_id.into_values().collect()
+}
+
+/// Collapse exact parallel edges by `(source, target, relation)`, keeping the
+/// first occurrence and preserving order.
+///
+/// The clustered build path runs edges through a graph that collapses parallel
+/// edges automatically; the `--no-cluster` and incremental `update` write paths
+/// bypass it and concatenate edge lists raw, so duplicates accumulate and edge
+/// counts become non-deterministic across build modes and repeated updates
+/// (#1317). Deduping on the connectivity identity is zero-signal-loss and
+/// restores idempotency. Callers that intentionally keep parallel edges
+/// (multigraph output) must not use this.
+///
+/// Mirrors graphify-py `build.dedupe_edges`.
+#[must_use]
+pub fn dedupe_edges(edges: &[Value]) -> Vec<Value> {
+    type EdgeKey = (Option<String>, Option<String>, Option<String>);
+    let mut seen: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
+    let mut out: Vec<Value> = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let component = |k: &str| {
+            edge.get(k)
+                .filter(|v| !v.is_null())
+                .map(ToString::to_string)
+        };
+        let key = (
+            component("source"),
+            component("target"),
+            component("relation"),
+        );
+        if seen.insert(key) {
+            out.push(edge.clone());
+        }
+    }
+    out
 }
 
 /// Build a graph from a single extraction dict.
@@ -256,17 +315,30 @@ pub fn build_merge_with_graph_cap(
         graphify_security::check_graph_file_size_cap_with(graph_path, graph_cap)?;
         let text = std::fs::read_to_string(graph_path)?;
         let data: Value = serde_json::from_str(&text)?;
-        let existing_nodes = data
+        let mut existing_nodes = data
             .get("nodes")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let existing_edges = data
+        let mut existing_edges = data
             .get("links")
             .or_else(|| data.get("edges"))
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        // #1344: re-extracted files REPLACE their prior contribution. Drop from
+        // the loaded graph every node/edge whose source_file (raw or
+        // root-normalised) is re-emitted in `new_chunks`, so a CHANGED file's
+        // stale nodes/edges don't accumulate across incremental updates. Files
+        // absent from `new_chunks` stay untouched; deletions go via prune_sources.
+        let replace_root = root.map(canonicalize_root_to_string);
+        let new_sources = collect_new_chunk_sources(new_chunks, replace_root.as_deref());
+        if !new_sources.is_empty() {
+            existing_nodes
+                .retain(|n| source_file_not_replaced(n, &new_sources, replace_root.as_deref()));
+            existing_edges
+                .retain(|e| source_file_not_replaced(e, &new_sources, replace_root.as_deref()));
+        }
         existing_node_count = existing_nodes.len();
         all_chunks.push(serde_json::json!({
             "nodes": existing_nodes,
@@ -359,4 +431,51 @@ fn prune_deleted_sources(graph: &mut Graph, pruned: &[String], root: Option<&Pat
             pruned.len()
         );
     }
+}
+
+/// Collect the `source_file` values (raw and root-normalised) present in
+/// `new_chunks` nodes. Items in the loaded graph matching any of these are the
+/// stale contribution of a re-extracted file and are dropped before merging so
+/// the new version REPLACES the old (#1344).
+fn collect_new_chunk_sources(
+    new_chunks: &[Value],
+    root: Option<&str>,
+) -> std::collections::HashSet<String> {
+    let mut sources = std::collections::HashSet::new();
+    for chunk in new_chunks {
+        let Some(nodes) = chunk.get("nodes").and_then(Value::as_array) else {
+            continue;
+        };
+        for node in nodes {
+            let Some(sf) = node.get("source_file").and_then(Value::as_str) else {
+                continue;
+            };
+            if sf.is_empty() {
+                continue;
+            }
+            sources.insert(sf.to_string());
+            let norm = norm_source_file(sf, root);
+            if !norm.is_empty() {
+                sources.insert(norm);
+            }
+        }
+    }
+    sources
+}
+
+/// `true` if `item` (a node or edge) should be KEPT in the loaded graph — i.e.
+/// neither its raw nor its root-normalised `source_file` was re-emitted in the
+/// new chunks. Items without a `source_file` are always kept.
+fn source_file_not_replaced(
+    item: &Value,
+    new_sources: &std::collections::HashSet<String>,
+    root: Option<&str>,
+) -> bool {
+    let Some(sf) = item.get("source_file").and_then(Value::as_str) else {
+        return true;
+    };
+    if new_sources.contains(sf) {
+        return false;
+    }
+    !new_sources.contains(norm_source_file(sf, root).as_str())
 }

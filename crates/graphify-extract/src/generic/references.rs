@@ -16,7 +16,7 @@ use super::walk::first_child_kind;
 /// (e.g. `def f(x: Foo)`), `Generic` = used as a type argument to a generic
 /// (e.g. `def f(x: list[Foo])`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RefRole {
+pub(crate) enum RefRole {
     Direct,
     Generic,
 }
@@ -888,13 +888,53 @@ pub(super) fn swift_user_type_name(user_type_node: Node<'_>, source: &[u8]) -> O
 
 /// Return the `type_annotation` child of a Swift `property_declaration`, if any.
 #[must_use]
-pub(super) fn swift_property_type_node(property_node: Node<'_>) -> Option<Node<'_>> {
+pub(crate) fn swift_property_type_node(property_node: Node<'_>) -> Option<Node<'_>> {
     first_child_kind(property_node, "type_annotation")
+}
+
+/// Return the bound name of a Swift property (`let x` / `var x = ...`). Mirrors
+/// `_swift_property_name`.
+#[must_use]
+pub(crate) fn swift_property_name(property_node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut cur = property_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if c.kind() == "pattern"
+                && let Some(id) = first_child_kind(c, "simple_identifier")
+            {
+                return Some(read_text_owned(id, source));
+            }
+            if c.kind() == "simple_identifier" {
+                return Some(read_text_owned(c, source));
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// If a Swift call expression is a constructor (`Foo()`), return the type name.
+/// Only upper-cased callees are treated as types so a free-function call like
+/// `configure()` in an initializer is not mistaken for a constructor. Mirrors
+/// `_swift_constructor_type`.
+#[must_use]
+pub(crate) fn swift_constructor_type(call_node: Node<'_>, source: &[u8]) -> Option<String> {
+    let first = call_node.child(0)?;
+    if first.kind() == "simple_identifier" {
+        let text = read_text_owned(first, source);
+        if text.chars().next().is_some_and(char::is_uppercase) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 /// Walk a Swift type expression; append `(name, role)` tuples. Mirrors
 /// Python `_swift_collect_type_refs`.
-pub(super) fn swift_collect_type_refs(
+pub(crate) fn swift_collect_type_refs(
     node: Node<'_>,
     source: &[u8],
     generic: bool,

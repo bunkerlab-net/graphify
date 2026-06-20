@@ -70,6 +70,7 @@ pub(crate) fn rebuild_code_inner(
         &extract_targets,
         &code_files,
         &project_root,
+        &watch_root,
     );
     let existing_graph_data = merge.existing_graph_data;
     // A full re-extraction that evicts deleted-file nodes is a legitimate

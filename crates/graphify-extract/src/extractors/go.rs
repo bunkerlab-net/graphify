@@ -1011,6 +1011,7 @@ fn walk_calls_go(
                             is_member_call,
                             source_file: str_path.to_string(),
                             source_location: format!("L{}", node.start_position().row + 1),
+                            receiver: None,
                         });
                     }
                 }

@@ -107,6 +107,18 @@ scan (unlike graphify-py, the Rust `extract` keeps `<PATH>` required — point i
 introspect a database alone). Raster images in the corpus reach the LLM as vision input; see
 [LLM backends](#llm-backends).
 
+Beyond tree-sitter source files, the AST pass also ingests **package manifests**
+(`apm.yml`, `apm.yaml`, `pyproject.toml`, `go.mod`, `pom.xml`) into one canonical
+`type=package` node per package plus `depends_on` edges, so a package referenced
+across manifests collapses to a single hub node (#1377); **PowerShell modules**
+(`.psm1`) and **manifests** (`.psd1`) — `Import-Module`, dot-sourcing, and
+`RootModule`/`NestedModules`/`RequiredModules` become `imports_from` edges (#1331);
+and **Markdown links** (inline, reference-style, and `[[wikilinks]]`) as
+`references` edges, so a hub doc (`index.md`, a table of contents) connects to the
+documents it links instead of being an orphan (#1376). Swift `import` targets
+become shared `type=module` anchor nodes and cross-file member calls
+(`recv.method()`) resolve through the file's local type table (#1327, #1356).
+
 Optional LLM-driven semantic extraction is wired through `--backend`/`--model`/`--mode`/`--token-budget`/
 `--max-concurrency`/`--api-timeout`/`--max-workers` (see `graphify extract --help` and the
 [LLM backends](#llm-backends) section). `--mode deep` is the only mode beyond the default; it appends a
@@ -189,22 +201,23 @@ The query / affected / explain / serve commands filter on these.
 
 **Relations** (`--relation` on `affected`):
 
-| Relation       | Emitted by                                                                                                                                |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `contains`     | File / config node → contained entity (function, class, `mcp_server`).                                                                    |
-| `method`       | Class node → method.                                                                                                                      |
-| `calls`        | Function / method node → callee, resolved within the file or cross-file.                                                                  |
-| `imports`      | File node → imported module.                                                                                                              |
-| `imports_from` | File node → imported symbol from another file (`from x import y`).                                                                        |
-| `re_exports`   | Module → re-exported module (`export … from 'x'`).                                                                                        |
-| `inherits`     | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia) is normalized here.    |
-| `implements`   | Class → interface / protocol (Java, C#, TypeScript, Kotlin, PHP, Swift, Objective-C, Rust trait `impl`).                                  |
-| `embeds`       | Go struct/interface embedding (anonymous field or embedded interface).                                                                    |
-| `mixes_in`     | Trait mixin: PHP `use`, Scala `with`.                                                                                                     |
-| `references`   | Function / method / class → type referenced in its signature or body.                                                                     |
-| `instantiates` | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).                                                                     |
-| `uses`         | BYOND `.dmm` map → each type path referenced in its tile dictionary.                                                                      |
-| `requires_env` | MCP server → env-var _name_ it depends on (values are never read).                                                                        |
+| Relation       | Emitted by                                                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `contains`     | File / config node → contained entity (function, class, `mcp_server`).                                                                 |
+| `method`       | Class node → method.                                                                                                                   |
+| `calls`        | Function / method node → callee, resolved within the file or cross-file.                                                               |
+| `imports`      | File node → imported module.                                                                                                           |
+| `imports_from` | File node → imported symbol from another file (`from x import y`).                                                                     |
+| `depends_on`   | Package-manifest node → a dependency package node (`apm.yml` / `pyproject.toml` / `go.mod` / `pom.xml`).                               |
+| `re_exports`   | Module → re-exported module (`export … from 'x'`).                                                                                     |
+| `inherits`     | Class → base class. Source-level `extends` (Java, Kotlin, Scala, PHP, Swift, Objective-C, Rust supertraits, Julia) is normalized here. |
+| `implements`   | Class → interface / protocol (Java, C#, TypeScript, Kotlin, PHP, Swift, Objective-C, Rust trait `impl`).                               |
+| `embeds`       | Go struct/interface embedding (anonymous field or embedded interface).                                                                 |
+| `mixes_in`     | Trait mixin: PHP `use`, Scala `with`.                                                                                                  |
+| `references`   | Function / method / class → type referenced in its signature or body.                                                                  |
+| `instantiates` | Caller → BYOND `DreamMaker` type constructed via `new /type` (`.dm`).                                                                  |
+| `uses`         | BYOND `.dmm` map → each type path referenced in its tile dictionary.                                                                   |
+| `requires_env` | MCP server → env-var _name_ it depends on (values are never read).                                                                     |
 
 `references` edges typically carry a `context` describing _how_ the type is
 used; older extractors (SQL, for one) still emit `references` without a
@@ -228,6 +241,7 @@ file outside the corpus). Resolved imports use `imports_from` and omit the flag.
 | `map`            | BYOND `.dmm` map tile → a type path it places.                   |
 | `command`        | MCP server → its executable (`npx`, `uvx`, …).                   |
 | `package`        | MCP server → npm / pypi package parsed from its args.            |
+| `dependency`     | Package-manifest `depends_on` edge to a required package.        |
 
 `parameter_type`, `return_type`, `generic_arg`, and `field` are emitted by the
 Python, C#, Java, TypeScript, Go, Rust, Swift, Kotlin, Scala, PHP, C, C++,
@@ -608,6 +622,10 @@ completes the feature.)
 | `GRAPHIFY_BEDROCK_MODEL`         | Override the default model for the Bedrock backend.                                                                                                 |
 | `GRAPHIFY_BEDROCK_BASE_URL`      | Override the Bedrock Runtime endpoint URL (mainly for tests).                                                                                       |
 | `GRAPHIFY_CLAUDE_CLI_MODEL`      | Model passed to `claude -p --model` for the `claude-cli` backend (e.g. `haiku`, `sonnet`, or a full model id). Unset uses claude-cli's own default. |
+| `OPENAI_BASE_URL`                | Point the `openai` backend at any OpenAI-compatible server (llama.cpp, vLLM, LM Studio). `GRAPHIFY_OPENAI_BASE_URL` still wins.                     |
+| `OPENAI_MODEL`                   | Default model for the `openai` backend. `--model` and `GRAPHIFY_OPENAI_MODEL` still win.                                                            |
+| `ANTHROPIC_BASE_URL`             | Point the `claude` backend at a custom Anthropic-compatible endpoint (LiteLLM proxy, gateways). `GRAPHIFY_CLAUDE_BASE_URL` still wins.              |
+| `ANTHROPIC_MODEL`                | Default model for the `claude` backend. `--model` and `GRAPHIFY_CLAUDE_MODEL` still win.                                                            |
 | `GRAPHIFY_CLUSTER_PROGRESS`      | Truthy value prints per-level cluster progress to stderr.                                                                                           |
 | `GRAPHIFY_CLUSTER_BACKEND`       | `leiden` (default) or `louvain` to force the fallback.                                                                                              |
 | `GRAPHIFY_ALLOW_LOCAL_PROVIDERS` | Opt in to loading a project-local `.graphify/providers.json` (ignored by default; see Custom providers).                                            |
@@ -618,16 +636,16 @@ completes the feature.)
 The semantic-extraction layer routes to one of: `gemini`, `kimi`, `claude`, `openai`, `deepseek`, `ollama`,
 `bedrock`, `azure`. The active backend is auto-detected from environment variables:
 
-| Backend    | Required env                                            |
-| ---------- | ------------------------------------------------------- |
-| `openai`   | `OPENAI_API_KEY`                                        |
-| `gemini`   | `GOOGLE_API_KEY`                                        |
-| `claude`   | `ANTHROPIC_API_KEY`                                     |
-| `kimi`     | `MOONSHOT_API_KEY`                                      |
-| `deepseek` | `DEEPSEEK_API_KEY`                                      |
-| `ollama`   | local daemon — set `OLLAMA_BASE_URL` if non-default     |
-| `bedrock`  | Any AWS credential-chain entry — see paragraph below    |
-| `azure`    | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`        |
+| Backend    | Required env                                         |
+| ---------- | ---------------------------------------------------- |
+| `openai`   | `OPENAI_API_KEY`                                     |
+| `gemini`   | `GOOGLE_API_KEY`                                     |
+| `claude`   | `ANTHROPIC_API_KEY`                                  |
+| `kimi`     | `MOONSHOT_API_KEY`                                   |
+| `deepseek` | `DEEPSEEK_API_KEY`                                   |
+| `ollama`   | local daemon — set `OLLAMA_BASE_URL` if non-default  |
+| `bedrock`  | Any AWS credential-chain entry — see paragraph below |
+| `azure`    | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`     |
 
 The Azure OpenAI backend posts to `{endpoint}/openai/deployments/{model}/chat/completions` with an `api-key`
 header. The deployment/model resolves from `--model`, else `AZURE_OPENAI_DEPLOYMENT` / `GRAPHIFY_AZURE_MODEL`
@@ -645,6 +663,12 @@ roles), IMDS, and SSO. `AWS_REGION` alone is **not** sufficient to auto-select B
 present, otherwise auto-detection falls through to the next backend.
 
 Force a backend with `--backend`; override its default model with `--model`.
+
+The `openai` and `claude` backends additionally honour `OPENAI_BASE_URL` /
+`OPENAI_MODEL` and `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`, so they can target a
+self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio) or an
+Anthropic-compatible proxy/gateway (LiteLLM) without registering a custom provider
+(#1273). The `GRAPHIFY_*` overrides and `--model` still take precedence.
 
 #### Custom providers
 

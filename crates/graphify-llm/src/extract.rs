@@ -6,8 +6,12 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
-use crate::read::read_files;
+use crate::backends::{
+    BACKENDS, backend_config, default_model_for_backend, format_backend_env_keys,
+    get_backend_api_key,
+};
+use crate::file_slice::Unit;
+use crate::read::read_units;
 use crate::{LlmError, LlmResponse};
 use crate::{
     azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
@@ -43,12 +47,31 @@ pub fn extract_files_direct_mode(
     root: &Path,
     deep_mode: bool,
 ) -> Result<LlmResponse, LlmError> {
+    let units: Vec<Unit> = files.iter().map(|p| Unit::Whole(p.clone())).collect();
+    extract_units_direct_mode(&units, backend, api_key, model, root, deep_mode)
+}
+
+/// Same as [`extract_files_direct_mode`] but over [`Unit`]s, so chunks carrying
+/// [`Unit::Slice`]s (pre-sliced oversized documents, #1369) flow through the
+/// extraction path. A slice reads its parent's bytes and reports the parent path.
+///
+/// # Errors
+/// Same as [`extract_files_direct`].
+#[allow(clippy::too_many_lines)] // linear per-backend dispatch; splitting hurts flow
+pub(crate) fn extract_units_direct_mode(
+    units: &[Unit],
+    backend: &str,
+    api_key: Option<&str>,
+    model: Option<&str>,
+    root: &Path,
+    deep_mode: bool,
+) -> Result<LlmResponse, LlmError> {
     // Custom (non-built-in) provider: extract via the OpenAI-compatible client
     // using the provider's base_url / model / env_key (#1084).
     if !crate::providers::is_builtin_backend(backend)
         && let Some(provider) = crate::providers::load_custom_providers().get(backend)
     {
-        return extract_custom(provider, files, api_key, model, root, deep_mode);
+        return extract_custom(provider, units, api_key, model, root, deep_mode);
     }
 
     let cfg = backend_config(backend).ok_or_else(|| {
@@ -101,14 +124,17 @@ pub fn extract_files_direct_mode(
         )));
     }
 
-    let mdl = model.filter(|s| !s.is_empty()).unwrap_or(cfg.default_model);
+    let resolved_default = default_model_for_backend(backend);
+    let mdl = model
+        .filter(|s| !s.is_empty())
+        .unwrap_or(resolved_default.as_ref());
     // Vision: separate raster images from text-like files (#1110). Text goes
     // through `read_files`; images become structured refs the backend renders as
     // pixels (vision backends) or a text-reference node (everything else), so a
     // diagram/screenshot becomes a graph node instead of garbage text. Mirrors
     // graphify-py `extract_files_direct`.
-    let image_refs = collect_image_refs(files, backend, root);
-    let user_msg = read_files(&vision::partition_semantic_files(files).0, root);
+    let image_refs = collect_image_refs(units, backend, root);
+    let user_msg = read_units(&vision::partition_semantic_units(units).0, root);
     // `resolve_max_tokens` applies the `GRAPHIFY_MAX_OUTPUT_TOKENS` env var
     // override uniformly across every backend (parity fix from
     // graphify-py 06a9b72 — env var was previously silently ignored on the
@@ -182,8 +208,8 @@ pub fn extract_files_direct_mode(
 /// inline (base64) vision backends; path-based and non-vision backends get
 /// pixel-free refs (a text reference node). Mirrors graphify-py's
 /// `read_bytes = vision and backend not in _PATH_IMAGE_BACKENDS` gate.
-fn collect_image_refs(files: &[PathBuf], backend: &str, root: &Path) -> Vec<vision::ImageRef> {
-    let (_, image_files) = vision::partition_semantic_files(files);
+fn collect_image_refs(units: &[Unit], backend: &str, root: &Path) -> Vec<vision::ImageRef> {
+    let (_, image_files) = vision::partition_semantic_units(units);
     if image_files.is_empty() {
         return Vec::new();
     }
@@ -212,7 +238,7 @@ fn openai_compat_vision_messages(
 /// `api_key`/`model`, else falls back to the provider's `env_key`/`default_model`.
 fn extract_custom(
     provider: &crate::providers::CustomProvider,
-    files: &[PathBuf],
+    units: &[Unit],
     api_key: Option<&str>,
     model: Option<&str>,
     root: &Path,
@@ -233,8 +259,8 @@ fn extract_custom(
         .unwrap_or(&provider.default_model);
     // Custom providers carry no vision flag, so images become text-reference
     // nodes (pixel-free refs), matching graphify-py's non-vision path.
-    let image_refs = collect_image_refs(files, &provider.name, root);
-    let user_msg = read_files(&vision::partition_semantic_files(files).0, root);
+    let image_refs = collect_image_refs(units, &provider.name, root);
+    let user_msg = read_units(&vision::partition_semantic_units(units).0, root);
     // Honour the provider's configured `max_completion_tokens` (default 8192),
     // then apply the `GRAPHIFY_MAX_OUTPUT_TOKENS` override — mirroring Python's
     // `_resolve_max_tokens(cfg.get("max_completion_tokens", 8192))` (llm.py:720).

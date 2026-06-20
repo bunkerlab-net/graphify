@@ -68,6 +68,21 @@ pub fn to_canvas(
         &owned_filenames
     };
 
+    // Fallback (#1324): with no community data (e.g. --no-cluster builds or a
+    // missing analysis sidecar) the grid below produces nothing and the canvas
+    // is written as an empty 32-byte shell on an otherwise populated graph.
+    // Emit every node into one synthetic community so the canvas always
+    // reflects the graph.
+    let owned_communities: IndexMap<i64, Vec<String>>;
+    let communities: &IndexMap<i64, Vec<String>> =
+        if communities.is_empty() && graph.node_count() > 0 {
+            let all_ids: Vec<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
+            owned_communities = std::iter::once((0_i64, all_ids)).collect();
+            &owned_communities
+        } else {
+            communities
+        };
+
     let sorted_cids: Vec<i64> = {
         let mut v: Vec<i64> = communities.keys().copied().collect();
         v.sort_unstable();

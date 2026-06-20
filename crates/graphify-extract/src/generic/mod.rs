@@ -18,7 +18,7 @@ pub mod config;
 mod inherit;
 mod js_extra;
 mod names;
-mod references;
+pub(crate) mod references;
 pub(crate) mod walk;
 
 pub use config::{ImportHandlerFn, LangConfig, LangId, ResolveFnNameFn};

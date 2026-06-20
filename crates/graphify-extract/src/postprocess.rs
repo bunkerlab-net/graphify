@@ -14,6 +14,7 @@ use regex::Regex;
 
 use crate::ids::make_id;
 use crate::types::{Edge, Node, RawCall};
+use serde_json::Value;
 
 #[allow(clippy::expect_used)] // literal pattern; cannot fail at runtime
 static NON_ALNUM: LazyLock<Regex> =
@@ -53,6 +54,18 @@ pub fn disambiguate_colliding_node_ids(
 ) {
     let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
     for (idx, node) in nodes.iter().enumerate() {
+        // Module anchor nodes (#1327) intentionally share one id across every
+        // file importing the same module; disambiguating them by source path
+        // would scatter a single module into N file-qualified duplicates.
+        if node
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("type"))
+            .and_then(Value::as_str)
+            == Some("module")
+        {
+            continue;
+        }
         if !node.id.is_empty() {
             by_id.entry(node.id.clone()).or_default().push(idx);
         }

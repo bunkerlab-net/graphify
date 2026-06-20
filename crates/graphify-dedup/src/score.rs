@@ -38,6 +38,13 @@ pub static VARIANT_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.*[a-z])([0-9]+[a-z]*|[a-z]{2,})$").expect("static variant-suffix regex")
 });
 
+/// Digit-run regex for [`numeric_tokens_differ`] — matches maximal runs of
+/// decimal digits (`\d+`). Unicode-aware by default in the `regex` crate,
+/// matching Python's `re.compile(r"\d+")` under `re.UNICODE`.
+#[allow(clippy::expect_used)] // literal pattern; cannot panic at runtime.
+static DIGIT_RUN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d+").expect("static digit-run regex"));
+
 // ── normalisation ─────────────────────────────────────────────────────────────
 
 /// Casefold + collapse runs of non-word characters (Unicode-aware) to a
@@ -201,4 +208,53 @@ fn damerau_levenshtein(a: &str, b: &str) -> usize {
 #[must_use]
 pub fn jaro_winkler_score(a: &str, b: &str) -> f64 {
     strsim::jaro_winkler(a, b) * 100.0
+}
+
+/// Compute plain Jaro similarity score in the range `[0, 100]`.
+///
+/// Wraps `strsim::jaro` and scales to match the Python
+/// `Jaro.normalized_similarity * 100` convention. Unlike [`jaro_winkler_score`]
+/// it carries no leading-prefix bonus, so cross-file long labels that merely
+/// share a prefix but diverge in a distinguishing token ("testing library jest
+/// native" vs "testing library react native") fall short of the merge threshold
+/// instead of being fabricated into a merge (#1243).
+#[must_use]
+pub fn jaro_score(a: &str, b: &str) -> f64 {
+    strsim::jaro(a, b) * 100.0
+}
+
+/// Returns `true` when `a` and `b` carry different embedded numbers (#1284).
+///
+/// Long labels that differ only in their digit runs ("adr 0011 d5" vs
+/// "adr 0013 d4", "3 1 product goals" vs "1 1 product goals", "block3" vs
+/// "block13") are numbered/versioned siblings, not duplicates — but the long
+/// shared boilerplate keeps Jaro-Winkler above [`MERGE_THRESHOLD`], and
+/// [`is_variant_pair`] only covers short trailing suffixes. Digit runs are
+/// compared as multisets with leading zeros stripped, so zero-padding ("09" vs
+/// "9") is not a difference. Comparison is on the stripped strings (not parsed
+/// integers), matching Python's `_numeric_tokens_differ`. Labels with identical
+/// numbers, or none at all, are unaffected.
+#[must_use]
+pub fn numeric_tokens_differ(a: &str, b: &str) -> bool {
+    if a == b {
+        return false;
+    }
+    let mut ta: Vec<&str> = DIGIT_RUN
+        .find_iter(a)
+        .map(|m| strip_leading_zeros(m.as_str()))
+        .collect();
+    let mut tb: Vec<&str> = DIGIT_RUN
+        .find_iter(b)
+        .map(|m| strip_leading_zeros(m.as_str()))
+        .collect();
+    ta.sort_unstable();
+    tb.sort_unstable();
+    ta != tb
+}
+
+/// Strip leading ASCII zeros from a digit run, mapping an all-zero run to `"0"`.
+/// Mirrors Python's `t.lstrip("0") or "0"`.
+fn strip_leading_zeros(t: &str) -> &str {
+    let stripped = t.trim_start_matches('0');
+    if stripped.is_empty() { "0" } else { stripped }
 }

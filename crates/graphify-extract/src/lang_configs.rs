@@ -162,10 +162,19 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 /// Pre-built [`LangConfig`] for Java, using tree-sitter-java.
 pub static JAVA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_java::LANGUAGE.into(),
-    class_types: &["class_declaration", "interface_declaration"],
+    // `record_declaration` shares class_declaration's name/body/interfaces
+    // fields, so a record becomes a first-class type node, not an isolated
+    // file (#1373).
+    class_types: &[
+        "class_declaration",
+        "interface_declaration",
+        "record_declaration",
+    ],
     function_types: &["method_declaration", "constructor_declaration"],
     import_types: &["import_declaration"],
-    call_types: &["method_invocation"],
+    // `object_creation_expression` (`new Foo(...)`) is handled by a dedicated
+    // Java branch in `extract_callee` — its callee is in the `type` field (#1373).
+    call_types: &["method_invocation", "object_creation_expression"],
     static_prop_types: &[],
     name_field: "name",
     name_fallback_child_types: &[],

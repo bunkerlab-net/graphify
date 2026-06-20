@@ -285,6 +285,7 @@ impl CallCtx<'_> {
             is_member_call: is_member,
             source_file: self.str_path.to_string(),
             source_location: format!("L{line}"),
+            receiver: None,
         });
     }
 

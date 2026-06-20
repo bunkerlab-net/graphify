@@ -74,6 +74,10 @@ pub struct RawCall {
     pub source_file: String,
     /// Source location string (e.g. `"file.py:42"`) for traceability.
     pub source_location: String,
+    /// For Swift member calls (`recv.method()`), the depth-1 receiver name used
+    /// by cross-file member-call resolution (#1356). `None` for other languages
+    /// and non-member calls.
+    pub receiver: Option<String>,
 }
 
 /// Result of extracting a single file.

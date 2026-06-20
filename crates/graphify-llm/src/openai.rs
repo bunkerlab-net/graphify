@@ -2,6 +2,8 @@
 //!
 //! Ports the openai section in `graphify-py/graphify/llm.py`.
 
+use std::borrow::Cow;
+
 use crate::kimi::call_plain_openai_compat;
 use crate::openai_compat::{OpenAiRequest, api_timeout, call_openai_compat, resolve_max_tokens};
 use crate::{LlmBackend, LlmError, LlmResponse};
@@ -14,15 +16,44 @@ pub const ENV_KEY: &str = "OPENAI_API_KEY";
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_OPENAI_MODEL";
 /// Base URL override env var (defaults to `https://api.openai.com/v1`).
 pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_OPENAI_BASE_URL";
+/// Upstream `OpenAI` base-URL env var, pointing the backend at any
+/// `OpenAI`-compatible server (llama.cpp, vLLM, LM Studio, ...).
+pub const OPENAI_BASE_URL_ENV: &str = "OPENAI_BASE_URL";
+/// Upstream `OpenAI` model env var, overriding the default model.
+pub const OPENAI_MODEL_ENV: &str = "OPENAI_MODEL";
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
-/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+/// Effective base URL: [`BASE_URL_ENV_KEY`] (test redirect) then
+/// [`OPENAI_BASE_URL_ENV`], else the public `OpenAI` endpoint. Mirrors the
+/// env-derived `BACKENDS["openai"]["base_url"]` in graphify-py.
 #[must_use]
 pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV_KEY)
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(OPENAI_BASE_URL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
+
+/// Effective default model: [`MODEL_ENV_KEY`] (`GRAPHIFY_OPENAI_MODEL`) wins
+/// over [`OPENAI_MODEL_ENV`] (`OPENAI_MODEL`), else [`DEFAULT_MODEL`]. Mirrors
+/// graphify-py `_default_model_for_backend("openai")` layered over the
+/// env-derived `default_model`.
+#[must_use]
+pub fn default_model() -> Cow<'static, str> {
+    std::env::var(MODEL_ENV_KEY)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(OPENAI_MODEL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
+        .map_or(Cow::Borrowed(DEFAULT_MODEL), Cow::Owned)
 }
 
 /// `OpenAI` backend.
@@ -124,5 +155,5 @@ pub fn call_openai_plain(
 /// Default max tokens for openai.
 #[must_use]
 pub fn default_max_tokens() -> u32 {
-    resolve_max_tokens(8_192)
+    resolve_max_tokens(16_384)
 }

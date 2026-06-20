@@ -10,9 +10,28 @@ use crate::types::{Edge, FileResult, Node, RawCall};
 
 static PS_SKIP: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "using", "return", "if", "else", "elseif", "foreach", "for", "while", "do", "switch",
-        "try", "catch", "finally", "throw", "break", "continue", "exit", "param", "begin",
-        "process", "end",
+        "using",
+        "return",
+        "if",
+        "else",
+        "elseif",
+        "foreach",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "break",
+        "continue",
+        "exit",
+        "param",
+        "begin",
+        "process",
+        "end",
+        "import-module",
     ]
     .into_iter()
     .collect()
@@ -135,7 +154,8 @@ pub fn extract_powershell(path: &Path) -> FileResult {
         .into_iter()
         .filter(|e| {
             valid_ids.contains(&e.source)
-                && (valid_ids.contains(&e.target) || e.relation == "imports_from")
+                && (valid_ids.contains(&e.target)
+                    || matches!(e.relation.as_str(), "imports_from" | "imports"))
         })
         .collect();
 
@@ -251,6 +271,69 @@ impl PsRefCtx<'_> {
     }
 }
 
+/// If a `command` node is a dot-source (`. ./Shared.psm1` / `. .\Utils.ps1`),
+/// return the bare module name (leading `./\` and the extension stripped, then
+/// the basename). Uses `command_invokation_operator` + `command_name_expr`
+/// rather than `command_name`. Mirrors the Python dot-source branch (#1331).
+fn ps_dot_source_module(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let op = first_child_kind(node, "command_invokation_operator")?;
+    if read_text(op, source).trim() != "." {
+        return None;
+    }
+    let name_expr = first_child_kind(node, "command_name_expr")?;
+    let name_node = first_child_kind(name_expr, "command_name")?;
+    let raw_path = read_text(name_node, source);
+    let stripped = raw_path.trim_start_matches(['.', '/', '\\']);
+    let no_ext = stripped.rsplit_once('.').map_or(stripped, |(base, _)| base);
+    let normalized = no_ext.replace('\\', "/");
+    let module_name = normalized.rsplit('/').next().unwrap_or("");
+    (!module_name.is_empty()).then(|| module_name.to_string())
+}
+
+/// Collect the `Import-Module` module name — the first `generic_token`, or the
+/// one following a `-Name`/`-N` parameter — bare (extension stripped, basename).
+/// Mirrors the Python import-module branch (#1331).
+fn ps_import_module_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let mut module_name: Option<String> = None;
+    let mut expect_name = false;
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == "command_elements" {
+                let mut c2 = cur.node().walk();
+                if c2.goto_first_child() {
+                    loop {
+                        let el = c2.node();
+                        match el.kind() {
+                            "command_parameter" => {
+                                let p =
+                                    read_text(el, source).trim_start_matches('-').to_lowercase();
+                                expect_name = p == "name" || p == "n";
+                            }
+                            "generic_token" if module_name.is_none() || expect_name => {
+                                module_name = Some(read_text(el, source).to_string());
+                                expect_name = false;
+                            }
+                            _ => {}
+                        }
+                        if !c2.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    let raw = module_name?;
+    let no_ext = raw.rsplit_once('.').map_or(raw.as_str(), |(base, _)| base);
+    let normalized = no_ext.replace('\\', "/");
+    let bare = normalized.rsplit('/').next().unwrap_or("");
+    (!bare.is_empty()).then(|| bare.to_string())
+}
+
 #[allow(clippy::too_many_lines)] // linear dispatch over PowerShell's AST node kinds
 fn walk_ps(
     ctx: &mut PsWalkCtx<'_>,
@@ -315,6 +398,11 @@ fn walk_ps(
                 });
                 if let Some(body) = find_script_block_body(node) {
                     function_bodies.push((func_nid, body.start_byte(), body.end_byte()));
+                    // Walk the body in the main pass too so Import-Module /
+                    // dot-source inside the function emit file-level imports_from
+                    // edges (#1331). `function_bodies` still drives call
+                    // resolution; `walk_calls_ps` dedups so no double edges.
+                    walk_ps(ctx, body, source, parent_class_nid);
                 }
             }
         }
@@ -499,25 +587,24 @@ fn walk_ps(
             }
         }
         "command" => {
-            let cmd_name_node = {
-                let mut cur = node.walk();
-                if cur.goto_first_child() {
-                    let mut found = None;
-                    loop {
-                        if cur.node().kind() == "command_name" {
-                            found = Some(cur.node());
-                            break;
-                        }
-                        if !cur.goto_next_sibling() {
-                            break;
-                        }
-                    }
-                    found
-                } else {
-                    None
-                }
-            };
-            if let Some(cmd_nn) = cmd_name_node {
+            let line = node.start_position().row + 1;
+            // Dot-sourcing (`. ./Shared.psm1` / `. .\Utils.ps1`) uses
+            // command_invokation_operator + command_name_expr (not command_name),
+            // so handle it before the command-name path (#1331).
+            if let Some(module) = ps_dot_source_module(node, source) {
+                edges.push(Edge {
+                    external: false,
+                    source: file_nid.to_string(),
+                    target: make_id1(&module),
+                    relation: "imports_from".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: None,
+                    confidence_score: None,
+                });
+            } else if let Some(cmd_nn) = first_child_kind(node, "command_name") {
                 let cmd_text = read_text(cmd_nn, source).to_lowercase();
                 if cmd_text == "using" {
                     let mut tokens: Vec<String> = Vec::new();
@@ -553,14 +640,12 @@ fn walk_ps(
                         })
                         .collect();
                     if let Some(last) = module_tokens.last() {
-                        let module_name = last.split('.').next_back().unwrap_or("").to_string();
+                        let module_name = last.split('.').next_back().unwrap_or("");
                         if !module_name.is_empty() {
-                            let tgt_nid = make_id1(&module_name);
-                            let line = node.start_position().row + 1;
                             edges.push(Edge {
                                 external: false,
                                 source: file_nid.to_string(),
-                                target: tgt_nid,
+                                target: make_id1(module_name),
                                 relation: "imports_from".to_string(),
                                 confidence: "EXTRACTED".to_string(),
                                 source_file: str_path.to_string(),
@@ -570,6 +655,22 @@ fn walk_ps(
                                 confidence_score: None,
                             });
                         }
+                    }
+                } else if cmd_text == "import-module" {
+                    // Import-Module Foo / Import-Module -Name Bar.psm1 (#1331).
+                    if let Some(module) = ps_import_module_name(node, source) {
+                        edges.push(Edge {
+                            external: false,
+                            source: file_nid.to_string(),
+                            target: make_id1(&module),
+                            relation: "imports_from".to_string(),
+                            confidence: "EXTRACTED".to_string(),
+                            source_file: str_path.to_string(),
+                            source_location: Some(format!("L{line}")),
+                            weight: 1.0,
+                            context: None,
+                            confidence_score: None,
+                        });
                     }
                 }
             }
@@ -670,6 +771,7 @@ fn walk_calls_ps(
                         is_member_call: false,
                         source_file: str_path.to_string(),
                         source_location: format!("L{}", node.start_position().row + 1),
+                        receiver: None,
                     });
                 }
             }
@@ -684,5 +786,250 @@ fn walk_calls_ps(
                 break;
             }
         }
+    }
+}
+
+/// `.psd1` manifest keys whose values are module names/paths treated as imports.
+/// Mirrors `_PSD1_IMPORT_KEYS`.
+static PSD1_IMPORT_KEYS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    ["RootModule", "NestedModules", "RequiredModules"]
+        .into_iter()
+        .collect()
+});
+
+/// Derive a bare module name from a raw string value: strip the path prefix and
+/// extension (`MyModule.psm1` -> `MyModule`, `./sub/Util.psm1` -> `Util`).
+/// Mirrors `_psd1_module_name`.
+fn psd1_module_name(raw: &str) -> String {
+    let normalized = raw.replace('\\', "/");
+    let basename = normalized.rsplit('/').next().unwrap_or("");
+    let no_ext = basename.rsplit_once('.').map_or(basename, |(base, _)| base);
+    no_ext.trim().to_string()
+}
+
+/// Recursively collect all `string_literal` text values (surrounding quotes
+/// stripped) under `node`. Mirrors `_psd1_collect_string_literals`.
+fn psd1_collect_string_literals(node: tree_sitter::Node<'_>, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "string_literal" {
+        out.push(
+            read_text(node, source)
+                .trim_matches(['\'', '"'])
+                .to_string(),
+        );
+        return;
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            psd1_collect_string_literals(cur.node(), source, out);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Like [`psd1_collect_string_literals`] but keeps each string's start byte so a
+/// caller can distinguish strings nested inside a `hash_entry` from direct ones.
+fn psd1_collect_string_nodes(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    out: &mut Vec<(usize, String)>,
+) {
+    if node.kind() == "string_literal" {
+        out.push((
+            node.start_byte(),
+            read_text(node, source)
+                .trim_matches(['\'', '"'])
+                .to_string(),
+        ));
+        return;
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            psd1_collect_string_nodes(cur.node(), source, out);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// For `RequiredModules`: collect `ModuleName` values from hashtable specs and
+/// record every string nested in a `hash_entry` (so the caller can treat only
+/// the remaining direct strings as simple module names, and `ModuleVersion`
+/// values never leak in). Mirrors the inner `find_modulename_entries`.
+fn psd1_find_modulename_entries(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    module_names: &mut Vec<String>,
+    inside_hash: &mut HashSet<usize>,
+) {
+    if node.kind() == "hash_entry" {
+        let sub_key = first_child_kind(node, "key_expression");
+        let sk_text = sub_key.map_or_else(String::new, |k| read_text(k, source).trim().to_string());
+        let mut cur = node.walk();
+        if cur.goto_first_child() {
+            loop {
+                if cur.node().kind() == "pipeline" {
+                    let mut found = Vec::new();
+                    psd1_collect_string_nodes(cur.node(), source, &mut found);
+                    for (sb, s) in found {
+                        inside_hash.insert(sb);
+                        if sk_text == "ModuleName" {
+                            module_names.push(s);
+                        }
+                    }
+                }
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        return; // don't recurse further into this hash_entry
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            psd1_find_modulename_entries(cur.node(), source, module_names, inside_hash);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Push a `file -> module` `imports_from` edge for a raw `.psd1` module value.
+fn add_psd1_import_edge(
+    edges: &mut Vec<Edge>,
+    file_nid: &str,
+    str_path: &str,
+    module_raw: &str,
+    line: usize,
+) {
+    let name = psd1_module_name(module_raw);
+    if name.is_empty() {
+        return;
+    }
+    edges.push(Edge {
+        external: false,
+        source: file_nid.to_string(),
+        target: make_id1(&name),
+        relation: "imports_from".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: str_path.to_string(),
+        source_location: Some(format!("L{line}")),
+        weight: 1.0,
+        context: Some("import".to_string()),
+        confidence_score: None,
+    });
+}
+
+/// Walk a `.psd1` AST, emitting `imports_from` edges for `RootModule`,
+/// `NestedModules`, and `RequiredModules` entries. Mirrors `walk_manifest`.
+fn walk_psd1_manifest(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    file_nid: &str,
+    str_path: &str,
+    edges: &mut Vec<Edge>,
+) {
+    if node.kind() != "hash_entry" {
+        let mut cur = node.walk();
+        if cur.goto_first_child() {
+            loop {
+                walk_psd1_manifest(cur.node(), source, file_nid, str_path, edges);
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        return;
+    }
+    let Some(key_node) = first_child_kind(node, "key_expression") else {
+        return;
+    };
+    let key_text = read_text(key_node, source).trim().to_string();
+    if !PSD1_IMPORT_KEYS.contains(key_text.as_str()) {
+        return;
+    }
+    let line = node.start_position().row + 1;
+    let Some(value_node) = first_child_kind(node, "pipeline") else {
+        return;
+    };
+    match key_text.as_str() {
+        "RootModule" | "NestedModules" => {
+            let mut strings = Vec::new();
+            psd1_collect_string_literals(value_node, source, &mut strings);
+            for s in strings {
+                add_psd1_import_edge(edges, file_nid, str_path, &s, line);
+            }
+        }
+        "RequiredModules" => {
+            // Two forms: plain 'Module' strings, and @{ ModuleName='Foo'; ... }
+            // specs (follow only ModuleName; ModuleVersion etc. are excluded).
+            let mut module_names = Vec::new();
+            let mut inside_hash = HashSet::new();
+            psd1_find_modulename_entries(value_node, source, &mut module_names, &mut inside_hash);
+            let mut all_strings = Vec::new();
+            psd1_collect_string_nodes(value_node, source, &mut all_strings);
+            for (sb, s) in &all_strings {
+                if !inside_hash.contains(sb) {
+                    add_psd1_import_edge(edges, file_nid, str_path, s, line);
+                }
+            }
+            for s in &module_names {
+                add_psd1_import_edge(edges, file_nid, str_path, s, line);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract module dependency edges from a PowerShell `.psd1` manifest.
+///
+/// `.psd1` files are PowerShell data hashtables (syntactically valid PowerShell),
+/// so tree-sitter parses them. Emits a file node plus `imports_from` edges for
+/// every module named under `RootModule`, `NestedModules`, and `RequiredModules`
+/// (both the plain-string and `@{ ModuleName=... }` forms). Mirrors
+/// `extract_powershell_manifest`.
+#[must_use]
+pub fn extract_powershell_manifest(path: &Path) -> FileResult {
+    let source = match std::fs::read(path) {
+        Ok(s) => s,
+        Err(e) => return FileResult::error(format!("powershell manifest read error: {e}")),
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_powershell::LANGUAGE.into())
+        .is_err()
+    {
+        return FileResult::error("tree_sitter_powershell language load failed");
+    }
+    let Some(tree) = parser.parse(&source, None) else {
+        return FileResult::error("powershell manifest parse failed");
+    };
+
+    let str_path = path.to_string_lossy().into_owned();
+    let file_nid = make_id1(&str_path);
+    let nodes = vec![Node {
+        id: file_nid.clone(),
+        label: path
+            .file_name()
+            .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
+        file_type: "code".to_string(),
+        source_file: str_path.clone(),
+        source_location: Some("L1".to_string()),
+        metadata: None,
+    }];
+    let mut edges: Vec<Edge> = Vec::new();
+    walk_psd1_manifest(tree.root_node(), &source, &file_nid, &str_path, &mut edges);
+
+    FileResult {
+        nodes,
+        edges,
+        raw_calls: vec![],
+        error: None,
     }
 }

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use graphify_build::{Graph, build_from_json, norm_source_file};
+use graphify_build::{Graph, build_from_json, dedupe_edges, dedupe_nodes, norm_source_file};
 use graphify_cluster::{cluster, remap_communities_to_previous, score_all};
 use graphify_detect::extensions::CODE_EXTENSIONS;
 use graphify_detect::{FileType, classify_file};
@@ -66,6 +66,48 @@ fn is_tracked_code_path(path: &Path) -> bool {
     matches!(ext, "md" | "mdx" | "qmd")
 }
 
+/// Plausible absolute locations for a hook-provided changed path.
+///
+/// Git hooks pass paths relative to the repository root, but watch callers may
+/// pass them relative to the watched root. Keep both interpretations (deduped,
+/// `change_root` first) so a graph rooted at `src` accepts both `src/app.py`
+/// and `app.py`. Absolute inputs resolve to a single candidate. Canonicalises
+/// when the target exists, falling back to the lexical join for deleted files
+/// so the candidate is still usable for eviction. Mirrors
+/// `_changed_path_candidates` in `graphify-py/graphify/watch.py` (#1348).
+fn changed_path_candidates(raw: &Path, change_root: &Path, watch_root: &Path) -> Vec<PathBuf> {
+    if raw.is_absolute() {
+        return vec![raw.canonicalize().unwrap_or_else(|_| raw.to_path_buf())];
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for base in [change_root, watch_root] {
+        let joined = base.join(raw);
+        let cand = joined.canonicalize().unwrap_or(joined);
+        if !candidates.contains(&cand) {
+            candidates.push(cand);
+        }
+    }
+    candidates
+}
+
+/// Record `path` as an evicted source under BOTH the project root and the
+/// watched root, so eviction matches however the existing graph's `source_file`
+/// paths were relativised. Mirrors `_add_deleted_source` in
+/// `graphify-py/graphify/watch.py` (#1348).
+fn add_deleted_source(
+    deleted_paths: &mut Vec<String>,
+    path: &Path,
+    project_root: &Path,
+    watch_root: &Path,
+) {
+    for root in [project_root, watch_root] {
+        let rel = norm_source_file(&path.to_string_lossy(), Some(&root.to_string_lossy()));
+        if !deleted_paths.contains(&rel) {
+            deleted_paths.push(rel);
+        }
+    }
+}
+
 /// Result of [`compute_extract_targets`]: which files to extract from, which
 /// paths to evict from the existing graph, and whether the change set declared
 /// a tracked-code-file deletion (relevant for the shrink-guard bypass).
@@ -98,6 +140,11 @@ pub(crate) fn compute_extract_targets(
             had_tracked_deletion: false,
         });
     };
+    // Git hooks emit repo-root-relative paths; resolve candidates against the
+    // current working directory (the change root) as well as the watched root.
+    let change_root = std::env::current_dir()
+        .and_then(|cwd| cwd.canonicalize())
+        .unwrap_or_else(|_| watch_root.to_path_buf());
     let code_set: std::collections::HashSet<PathBuf> = code_files
         .iter()
         .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
@@ -106,34 +153,46 @@ pub(crate) fn compute_extract_targets(
     let mut deleted_paths: Vec<String> = Vec::new();
     let mut had_tracked_deletion = false;
     for raw in changed {
-        let cand = if raw.is_absolute() {
-            raw.canonicalize().unwrap_or_else(|_| raw.clone())
-        } else {
-            (watch_root.join(raw))
-                .canonicalize()
-                .unwrap_or_else(|_| watch_root.join(raw))
-        };
-        if cand.exists() && code_set.contains(&cand) {
-            wanted.push(cand);
-        } else {
-            // A path that doesn't exist on disk is a deletion. Only flip the
-            // shrink-guard bypass when the deleted path's extension matches
-            // the inclusion rule used by `detect_code_files` (code files plus
-            // markdown-family documents that have AST extractors). A deleted
-            // `.gitignore` or `.env` is not a tracked-code deletion and must
-            // not suppress the guard. A path that exists but isn't in
-            // `code_set` (e.g. a touched README that lives outside the watch
-            // root) still earns eviction so its stale nodes drop out.
-            if !cand.exists() && is_tracked_code_path(&cand) {
+        let candidates = changed_path_candidates(raw, &change_root, watch_root);
+
+        // Prefer a candidate that still exists and is a tracked code file:
+        // that's the file to re-extract from. Trying the change root (repo
+        // root / cwd) before the watched root lets a subdir-rooted graph
+        // accept a repo-relative hook path like `src/app.py` (#1348).
+        if let Some(tracked) = candidates
+            .iter()
+            .find(|cand| cand.exists() && code_set.contains(cand.as_path()))
+            .cloned()
+        {
+            if !wanted.contains(&tracked) {
+                wanted.push(tracked);
+            }
+            continue;
+        }
+
+        // A candidate that exists under the watched root but was filtered out
+        // by detect (vendored, gitignored, non-code): evict any stale nodes
+        // that still claim it. The file still exists, so this is not a
+        // tracked-code deletion and must not flip the shrink-guard bypass.
+        if let Some(existing) = candidates
+            .iter()
+            .find(|cand| cand.exists() && cand.starts_with(watch_root))
+        {
+            add_deleted_source(&mut deleted_paths, existing, project_root, watch_root);
+            continue;
+        }
+
+        // A candidate under the watched root that no longer exists: the file
+        // was deleted or renamed away. Evict its preserved nodes, and only when
+        // its extension matches the inclusion rule (code plus markdown-family
+        // documents with AST extractors) flag a tracked-code deletion so the
+        // shrink-guard bypass kicks in (#1007). A deleted `.gitignore` or
+        // `.env` is not a tracked-code deletion and must not suppress it.
+        if let Some(deleted) = candidates.iter().find(|cand| cand.starts_with(watch_root)) {
+            if is_tracked_code_path(deleted) {
                 had_tracked_deletion = true;
             }
-            // Normalise to a root-relative POSIX path so it matches nodes whose
-            // source_file was relativised at build time (#1007).
-            let rel = norm_source_file(
-                &cand.to_string_lossy(),
-                Some(&project_root.to_string_lossy()),
-            );
-            deleted_paths.push(rel);
+            add_deleted_source(&mut deleted_paths, deleted, project_root, watch_root);
         }
     }
     if wanted.is_empty() && deleted_paths.is_empty() {
@@ -191,7 +250,7 @@ pub(crate) struct MergeOutcome {
 ///
 /// Returns the existing graph JSON (or `Value::Null` when absent) so the caller can
 /// reuse it for downstream comparisons, plus whether a deleted source was evicted.
-#[allow(clippy::too_many_lines)] // single-pass merge — splitting would obscure ordering
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // single-pass merge over two relativisation roots
 pub(crate) fn merge_with_existing_graph(
     result: &mut Value,
     existing_graph_path: &Path,
@@ -200,6 +259,7 @@ pub(crate) fn merge_with_existing_graph(
     extract_targets: &[PathBuf],
     code_files: &[PathBuf],
     project_root: &Path,
+    watch_root: &Path,
 ) -> MergeOutcome {
     // Reject oversized graph files before reading them into memory — mirrors
     // the size-cap guard added in `graphify-py/graphify/watch.py`. Surface
@@ -251,10 +311,12 @@ pub(crate) fn merge_with_existing_graph(
     let mut evicted_deleted_sources = false;
     if has_changed_paths {
         for p in extract_targets {
-            evict_sources.insert(norm_source_file(
-                &p.to_string_lossy(),
-                Some(&project_root_str),
-            ));
+            for root in [project_root, watch_root] {
+                evict_sources.insert(norm_source_file(
+                    &p.to_string_lossy(),
+                    Some(&root.to_string_lossy()),
+                ));
+            }
         }
     } else {
         // Full re-extraction: reconcile existing code-file nodes against the
@@ -399,14 +461,28 @@ pub(crate) fn run_no_cluster_path(
     had_explicit_deletions: bool,
     t_post: std::time::Instant,
 ) -> Result<bool, WatchError> {
-    let edges = result
-        .get("edges")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
+    // Dedupe nodes by id and parallel edges by (source, target, relation): the
+    // clustered path's DiGraph collapses these implicitly, but --no-cluster +
+    // repeated `update` concatenate edge lists raw and accumulate duplicates,
+    // so edge counts diverge across build modes without this (#1317).
+    let deduped_nodes = dedupe_nodes(
+        result
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map_or(&[][..], |v| v.as_slice()),
+    );
+    let deduped_edges = dedupe_edges(
+        result
+            .get("edges")
+            .and_then(Value::as_array)
+            .map_or(&[][..], |v| v.as_slice()),
+    );
     let mut candidate: serde_json::Map<String, Value> =
         result.as_object().cloned().unwrap_or_default();
     candidate.remove("edges");
-    candidate.insert("links".to_string(), edges);
+    candidate.remove("nodes");
+    candidate.insert("nodes".to_string(), Value::Array(deduped_nodes));
+    candidate.insert("links".to_string(), Value::Array(deduped_edges));
     let candidate_data = Value::Object(candidate);
 
     let same_graph = compare_existing_graph(existing_graph_path, &candidate_data);
@@ -588,7 +664,7 @@ pub(crate) fn write_graph_tmp(
     commit: Option<&str>,
 ) -> Result<Option<Value>, WatchError> {
     let t_to_json = std::time::Instant::now();
-    let json_written = to_json(graph_with_hyper, communities, graph_tmp, true, commit)
+    let json_written = to_json(graph_with_hyper, communities, graph_tmp, true, commit, None)
         .map_err(|e| WatchError::Pipeline(e.to_string()))?;
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!("[perf] to_json: {:.2}s", t_to_json.elapsed().as_secs_f64());

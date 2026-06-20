@@ -22,4 +22,20 @@ pub enum HooksError {
     /// Unknown platform name passed to `install_platform_skill`.
     #[error("unknown platform '{0}'")]
     UnknownPlatform(String),
+
+    /// A configured git hooks path looks like a Windows absolute or backslash
+    /// path, which cannot resolve to a real directory on WSL/POSIX (#1385).
+    /// Carries where the value came from and the offending value.
+    #[error(
+        "git hooks path from {origin} looks like a Windows path: {value:?}. \
+         On WSL/POSIX this can't resolve to a real directory. Unset it with \
+         `git config --local --unset core.hooksPath`, or set a POSIX path."
+    )]
+    WindowsPath {
+        /// Where the value came from: `core.hooksPath` or
+        /// `git rev-parse --git-path hooks`.
+        origin: &'static str,
+        /// The offending raw value.
+        value: String,
+    },
 }

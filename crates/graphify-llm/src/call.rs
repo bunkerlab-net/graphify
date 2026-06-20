@@ -5,7 +5,10 @@
 //! than a structured extraction fragment.
 
 use crate::LlmError;
-use crate::backends::{BACKENDS, backend_config, format_backend_env_keys, get_backend_api_key};
+use crate::backends::{
+    BACKENDS, backend_config, default_model_for_backend, format_backend_env_keys,
+    get_backend_api_key,
+};
 use crate::{
     azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
 };
@@ -52,7 +55,8 @@ pub fn call_llm_with_model(
         return call_custom_plain(provider, prompt, max_tokens_u32, model);
     }
 
-    let cfg = backend_config(backend).ok_or_else(|| {
+    // Validate the backend name; per-arm config (base URL, model) is resolved below.
+    backend_config(backend).ok_or_else(|| {
         let available = BACKENDS
             .iter()
             .map(|b| b.name)
@@ -98,7 +102,8 @@ pub fn call_llm_with_model(
         )));
     }
 
-    let mdl = model.unwrap_or(cfg.default_model);
+    let resolved_default = default_model_for_backend(backend);
+    let mdl = model.unwrap_or(resolved_default.as_ref());
 
     match backend {
         "claude" => {

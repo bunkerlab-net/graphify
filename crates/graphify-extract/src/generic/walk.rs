@@ -11,6 +11,8 @@
 
 use std::collections::HashSet;
 
+use indexmap::IndexMap;
+use serde_json::Value;
 use tree_sitter::Node;
 
 use crate::ids::{make_id, make_id1};
@@ -21,7 +23,9 @@ use super::inherit::{
     emit_cpp_inheritance, emit_csharp_inheritance, emit_java_inheritance, emit_kotlin_inheritance,
     emit_php_inheritance, emit_scala_inheritance, emit_swift_inheritance, emit_ts_inheritance,
 };
-use super::js_extra::js_extra_walk;
+use super::js_extra::{
+    JsAssignTarget, is_js_function_value, js_extra_walk, js_member_assignment_target,
+};
 use super::names::{get_cpp_func_name, read_csharp_type_name, read_text_owned};
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
@@ -590,6 +594,28 @@ pub(super) fn walk<'tree>(
         if let Some(handler) = config.import_handler {
             handler(source, node, file_nid, stem, str_path, ctx.edges);
         }
+        // Swift `import CoreKit` names a module, not a file path, so there is no
+        // existing node for the edge to point at. Materialize a `type=module`
+        // anchor node — shared across every file importing the same module via
+        // its stable id — so build_from_json doesn't prune the `imports` edge as
+        // a dangling/external reference (#1327).
+        if config.lang_id == LangId::Swift
+            && let Some((mod_nid, mod_label)) =
+                crate::import_handlers::swift_import_module(node, source)
+            && ctx.seen_ids.insert(mod_nid.clone())
+        {
+            let line = node.start_position().row as u32 + 1;
+            let mut metadata = IndexMap::new();
+            metadata.insert("type".to_string(), Value::String("module".to_string()));
+            ctx.nodes.push(GNode {
+                id: mod_nid,
+                label: mod_label,
+                file_type: "code".to_string(),
+                source_file: str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                metadata: Some(metadata),
+            });
+        }
         // `export_statement` may also wrap a declaration body
         // (`export function App() {}` / `export class Foo {}`) — keep
         // walking its children so the wrapped declaration is extracted.
@@ -830,6 +856,16 @@ pub(super) fn walk<'tree>(
                 super::references::swift_collect_type_refs,
             );
         }
+        // #1356 Stage 1: a constructor call in a property initializer
+        // (`let vm = VM()`) lives outside any function body, so the call-graph
+        // pass never reaches it. Queue each initializer call node so it is walked
+        // with the enclosing type as caller, producing a `calls` edge to the
+        // constructed type via cross-file resolution.
+        for child in named_children(node) {
+            if config.call_types.contains(&child.kind()) {
+                ctx.function_bodies.push((parent.to_string(), child));
+            }
+        }
         return;
     }
 
@@ -986,6 +1022,52 @@ pub(super) fn walk<'tree>(
         emit_function_reference_edges(ctx, node, source, &func_nid, line);
 
         if let Some(body) = find_body(node, config) {
+            // JS/TS: capture `this.X = () => {}` / `this.X = function(){}`
+            // assigned directly in this function/constructor body. They live
+            // inside the body (otherwise only walked for calls), so without this
+            // they are never emitted. Owner is the enclosing class when present
+            // (a constructor's methods belong to the class), else the function
+            // itself. Mirrors graphify-py `_extract_generic` (#09da529).
+            if matches!(
+                config.lang_id,
+                LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+            ) {
+                let this_owner: &str = parent_class_nid.unwrap_or(&func_nid);
+                let mut bcur = body.walk();
+                if bcur.goto_first_child() {
+                    loop {
+                        let stmt = bcur.node();
+                        if stmt.kind() == "expression_statement"
+                            && let Some(assign) = first_child_kind(stmt, "assignment_expression")
+                            && let Some(val) = assign.child_by_field_name("right")
+                            && is_js_function_value(val.kind())
+                            && let Some(left) = assign.child_by_field_name("left")
+                            && let Some(JsAssignTarget::This(m_name)) =
+                                js_member_assignment_target(left, source)
+                        {
+                            let m_line = stmt.start_position().row as u32 + 1;
+                            let m_nid = make_id(&[this_owner, m_name.as_str()]);
+                            add_node(
+                                &m_nid,
+                                &format!(".{m_name}()"),
+                                m_line,
+                                str_path,
+                                ctx.nodes,
+                                ctx.seen_ids,
+                            );
+                            add_edge(
+                                this_owner, &m_nid, "method", m_line, str_path, None, ctx.edges,
+                            );
+                            if let Some(m_body) = val.child_by_field_name("body") {
+                                ctx.function_bodies.push((m_nid, m_body));
+                            }
+                        }
+                        if !bcur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
             ctx.function_bodies.push((func_nid, body));
         }
         return;

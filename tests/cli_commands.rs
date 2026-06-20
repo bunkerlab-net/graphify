@@ -881,3 +881,48 @@ fn label_accepts_model_flag() {
         "expected placeholder labels: {labels}"
     );
 }
+
+/// #1347: a no-op incremental `extract --no-cluster` re-run must leave graph.json
+/// byte-identical. Rust rebuilds deterministically from the changed+unchanged
+/// union via `build_from_json` (so the empty-write wipeout the Python guard works
+/// around cannot occur), and `to_json` carries no timestamp — divergence noted:
+/// no explicit no-op short-circuit is needed.
+#[test]
+fn extract_no_cluster_incremental_noop_preserves_existing_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("app.py"), "def alpha():\n    return 1\n").unwrap();
+
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    let graph_path = dir.path().join("graphify-out").join("graph.json");
+    let before = fs::read_to_string(&graph_path).unwrap();
+    let before_json: serde_json::Value = serde_json::from_str(&before).unwrap();
+    assert!(
+        before_json
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "first run should produce a non-empty code graph"
+    );
+
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+    let after = fs::read_to_string(&graph_path).unwrap();
+    let after_json: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert!(
+        after_json
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "no-op incremental run must not empty the graph"
+    );
+    assert_eq!(after, before, "no-op incremental run changed graph.json");
+}

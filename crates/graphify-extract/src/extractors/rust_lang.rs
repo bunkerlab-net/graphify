@@ -799,6 +799,7 @@ fn walk_calls_rust(
                     is_member_call,
                     source_file: ctx.str_path.to_string(),
                     source_location: format!("L{}", node.start_position().row + 1),
+                    receiver: None,
                 });
             }
         }

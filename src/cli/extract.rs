@@ -147,7 +147,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     )?;
     let graph_path = out_dir.join("graph.json");
     let communities = run_cluster_phase(&graph, no_cluster, resolution, exclude_hubs)?;
-    graphify_export::to_json(&graph, &communities, &graph_path, true, None)?;
+    graphify_export::to_json(&graph, &communities, &graph_path, true, None, None)?;
     eprintln!("      wrote {}", graph_path.display());
     persist_semantic_marker(&out_dir, sem_output_tokens)?;
 

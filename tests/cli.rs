@@ -360,6 +360,52 @@ fn explain_caller_shows_callee_as_outbound() {
     assert!(!stdout.contains("<-- "), "got: {stdout}");
 }
 
+/// Ports the `community_name` preference from Python `__main__.py:2973`
+/// (`d.get('community_name') or d.get('community', '')`): `explain` shows the
+/// human community label when the node carries one, and falls back to the
+/// numeric community id otherwise.
+#[test]
+fn explain_prefers_community_name_over_numeric() {
+    let dir = tempfile::tempdir().unwrap();
+    let graph_path = dir.path().join("graph.json");
+    let graph = r#"{
+        "directed": false, "multigraph": false, "graph": {},
+        "nodes": [
+            {"id": "labeled", "label": "labeledFn()", "source_file": "a.ts", "community": 0, "community_name": "Auth Layer"},
+            {"id": "plain", "label": "plainFn()", "source_file": "b.ts", "community": 5}
+        ],
+        "links": [
+            {"source": "labeled", "target": "plain", "relation": "calls", "confidence": "EXTRACTED"}
+        ]
+    }"#;
+    fs::write(&graph_path, graph).unwrap();
+
+    // Node with community_name -> the human label wins over the numeric id.
+    let labeled = cli()
+        .arg("explain")
+        .arg("labeledFn")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    let labeled_out = String::from_utf8_lossy(&labeled.get_output().stdout).into_owned();
+    assert!(
+        labeled_out.contains("Community: Auth Layer"),
+        "got: {labeled_out}"
+    );
+
+    // Node without community_name -> falls back to the numeric community id.
+    let plain = cli()
+        .arg("explain")
+        .arg("plainFn")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    let plain_out = String::from_utf8_lossy(&plain.get_output().stdout).into_owned();
+    assert!(plain_out.contains("Community: 5"), "got: {plain_out}");
+}
+
 /// `graphify export neo4j` (no --push) must write cypher.txt next to graph.json.
 ///
 /// Python writes the same default file at `__main__.py:2322`.

@@ -11,7 +11,9 @@ version.workspace = true
 [dependencies]
 flate2 = "1.1"
 glob = "0.3"
+graphify-build = { workspace = true }
 graphify-cache = { workspace = true }
+graphify-detect = { workspace = true }
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
 native-tls = { version = "0.2", optional = true }
@@ -69,7 +71,6 @@ tree-sitter-zig = "1.1"
 postgres = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
 
 [dev-dependencies]
-graphify-build = { workspace = true }
 # Sync PostgreSQL client used only to seed a live schema in the `net_*`
 # introspection integration tests (no TLS needed against the CI service).
 postgres = "0.19"

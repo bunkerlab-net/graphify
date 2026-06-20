@@ -20,11 +20,48 @@ use serde_json::Value;
 /// imports from multiple threads. Mirrors the Python module-level
 /// `_WORKSPACE_PACKAGE_CACHE` dict (single-threaded there, but the
 /// semantic intent is the same: load each workspace once).
-static WORKSPACE_PACKAGE_CACHE: LazyLock<Mutex<HashMap<PathBuf, IndexMap<String, PathBuf>>>> =
+static WORKSPACE_PACKAGE_CACHE: LazyLock<Mutex<HashMap<String, IndexMap<String, PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Find the closest ancestor of `start_dir` that contains a
-/// `pnpm-workspace.yaml`. Returns `None` when none of the ancestors do.
+/// Root-level manifests whose mtimes key the workspace-package cache, so editing
+/// a workspace manifest invalidates it. Mirrors Python `_WORKSPACE_MANIFEST_NAMES`.
+const WORKSPACE_MANIFEST_NAMES: [&str; 2] = ["pnpm-workspace.yaml", "package.json"];
+
+/// Clear the workspace-package cache. Called at the start of every `extract()`
+/// run because workspace manifests/globs can change between repeated extractions
+/// or during `watch`. Mirrors Python's `_WORKSPACE_PACKAGE_CACHE.clear()`.
+pub fn clear_workspace_cache() {
+    if let Ok(mut guard) = WORKSPACE_PACKAGE_CACHE.lock() {
+        guard.clear();
+    }
+}
+
+/// Build the cache key for `root`: the root path plus each present manifest's
+/// modification time, so an edited manifest is not served from a stale cache
+/// entry. Mirrors the `(root, manifest_mtimes)` key in Python
+/// `_load_workspace_packages`.
+fn workspace_cache_key(root: &Path) -> String {
+    let mut key = root.to_string_lossy().into_owned();
+    for name in WORKSPACE_MANIFEST_NAMES {
+        let path = root.join(name);
+        if let Ok(meta) = std::fs::metadata(&path)
+            && meta.is_file()
+            && let Ok(modified) = meta.modified()
+            && let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH)
+        {
+            key.push('|');
+            key.push_str(name);
+            key.push(':');
+            key.push_str(&since.as_nanos().to_string());
+        }
+    }
+    key
+}
+
+/// Find the closest ancestor of `start_dir` that marks a JS/TS workspace root —
+/// one containing a `pnpm-workspace.yaml`, or a `package.json` with a
+/// `workspaces` key (npm / yarn). Returns `None` when no ancestor qualifies.
+/// Mirrors Python `_find_workspace_root`.
 #[must_use]
 pub fn find_workspace_root(start_dir: &Path) -> Option<PathBuf> {
     let current = start_dir
@@ -35,7 +72,52 @@ pub fn find_workspace_root(start_dir: &Path) -> Option<PathBuf> {
         if candidate.join("pnpm-workspace.yaml").is_file() {
             return Some(candidate.to_path_buf());
         }
+        // npm / yarn classic & berry: a `package.json` with a `workspaces` key
+        // (list or `{ packages: [...] }`) marks the monorepo root.
+        let package_json = candidate.join("package.json");
+        if package_json.is_file()
+            && let Ok(text) = std::fs::read_to_string(&package_json)
+            && let Ok(data) = serde_json::from_str::<Value>(&text)
+            && data.get("workspaces").is_some()
+        {
+            return Some(candidate.to_path_buf());
+        }
         candidate = candidate.parent()?;
+    }
+}
+
+/// Resolve the workspace package globs for `root`, preferring
+/// `pnpm-workspace.yaml` over a `package.json` `workspaces` field.
+///
+/// `package.json` `workspaces` may be a string list (npm / yarn classic) or a
+/// `{ "packages": [...] }` object (yarn berry); `!`-prefixed negation entries
+/// are dropped. Mirrors Python `_workspace_globs`.
+#[must_use]
+pub fn workspace_globs(root: &Path) -> Vec<String> {
+    let pnpm_workspace = root.join("pnpm-workspace.yaml");
+    if pnpm_workspace.is_file() {
+        return pnpm_workspace_globs(&pnpm_workspace);
+    }
+    let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
+        return Vec::new();
+    };
+    let Ok(data) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let collect = |arr: &[Value]| -> Vec<String> {
+        arr.iter()
+            .filter_map(Value::as_str)
+            .filter(|item| !item.starts_with('!'))
+            .map(str::to_string)
+            .collect()
+    };
+    match data.get("workspaces") {
+        Some(Value::Array(arr)) => collect(arr),
+        Some(Value::Object(obj)) => match obj.get("packages") {
+            Some(Value::Array(arr)) => collect(arr),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
     }
 }
 
@@ -46,8 +128,9 @@ pub fn find_workspace_root(start_dir: &Path) -> Option<PathBuf> {
 /// (`!exclude`) are skipped. Inline `# comment` trailers on unquoted
 /// entries are stripped; for quoted entries we read the content
 /// between the matching quotes so a `#` inside the glob is preserved.
+/// Mirrors Python `_pnpm_workspace_globs`.
 #[must_use]
-pub fn workspace_globs(workspace_file: &Path) -> Vec<String> {
+fn pnpm_workspace_globs(workspace_file: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(workspace_file) else {
         return Vec::new();
     };
@@ -112,15 +195,15 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
     let Some(root) = find_workspace_root(start_dir) else {
         return IndexMap::new();
     };
+    let key = workspace_cache_key(&root);
     if let Ok(guard) = WORKSPACE_PACKAGE_CACHE.lock()
-        && let Some(packages) = guard.get(&root)
+        && let Some(packages) = guard.get(&key)
     {
         return packages.clone();
     }
 
     let mut packages: IndexMap<String, PathBuf> = IndexMap::new();
-    let workspace_file = root.join("pnpm-workspace.yaml");
-    for pattern in workspace_globs(&workspace_file) {
+    for pattern in workspace_globs(&root) {
         for package_dir in glob_workspace_pattern(&root, &pattern) {
             let manifest = package_dir.join("package.json");
             if !manifest.is_file() {
@@ -148,7 +231,7 @@ pub fn load_workspace_packages(start_dir: &Path) -> IndexMap<String, PathBuf> {
     // poison-induced error all the way out to a callsite that just wants
     // to resolve one import.
     if let Ok(mut guard) = WORKSPACE_PACKAGE_CACHE.lock() {
-        guard.insert(root, packages.clone());
+        guard.insert(key, packages.clone());
     }
     packages
 }

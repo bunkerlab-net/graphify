@@ -8,9 +8,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::LlmResponse;
-use crate::retry::{AdaptiveRetryCtx, extract_with_adaptive_retry_ctx};
-use crate::tokens::pack_chunks_by_tokens;
+use crate::file_slice::{Unit, expand_oversized_files};
+use crate::retry::{AdaptiveRetryCtx, extract_with_adaptive_retry_units};
+use crate::tokens::pack_chunks_by_tokens_units;
+use crate::{FILE_CHAR_CAP, LlmResponse};
 
 /// Merge a chunk result into the running accumulator in-place.
 ///
@@ -96,7 +97,11 @@ pub fn extract_corpus_parallel_with_total(
     cfg: &CorpusConfig<'_>,
     on_chunk_done: Option<&ChunkDoneCb>,
 ) -> (LlmResponse, usize, usize) {
-    let chunks = pack_chunks(files, cfg);
+    // Split oversized splittable documents into slices covering the whole file
+    // before packing, so content past the char cap is extracted instead of
+    // silently dropped (#1369). Files at/under the cap pass through unchanged.
+    let units = expand_oversized_files(files, FILE_CHAR_CAP);
+    let chunks = pack_chunks(&units, cfg);
     let total = chunks.len();
     let workers = resolve_worker_count(cfg, total);
     let outcomes = run_chunks(&chunks, cfg, workers);
@@ -106,18 +111,18 @@ pub fn extract_corpus_parallel_with_total(
 
 /// Split `files` into chunks using either the token-budget packer or a fixed
 /// `chunk_size` slice.
-fn pack_chunks(files: &[PathBuf], cfg: &CorpusConfig<'_>) -> Vec<Vec<PathBuf>> {
+fn pack_chunks(units: &[Unit], cfg: &CorpusConfig<'_>) -> Vec<Vec<Unit>> {
     if let Some(budget) = cfg.token_budget {
-        pack_chunks_by_tokens(files, budget).unwrap_or_else(|_| {
-            files
+        pack_chunks_by_tokens_units(units, budget).unwrap_or_else(|_| {
+            units
                 .chunks(cfg.chunk_size.max(1))
-                .map(<[PathBuf]>::to_vec)
+                .map(<[Unit]>::to_vec)
                 .collect()
         })
     } else {
-        files
+        units
             .chunks(cfg.chunk_size.max(1))
-            .map(<[PathBuf]>::to_vec)
+            .map(<[Unit]>::to_vec)
             .collect()
     }
 }
@@ -144,7 +149,7 @@ fn resolve_worker_count(cfg: &CorpusConfig<'_>, total: usize) -> usize {
 }
 
 /// Run a single chunk through the adaptive-retry extractor.
-fn extract_one_chunk(idx: usize, chunk: &[PathBuf], cfg: &CorpusConfig<'_>) -> ChunkOutcome {
+fn extract_one_chunk(idx: usize, chunk: &[Unit], cfg: &CorpusConfig<'_>) -> ChunkOutcome {
     let t0 = Instant::now();
     let ctx = AdaptiveRetryCtx {
         backend: cfg.backend,
@@ -154,7 +159,7 @@ fn extract_one_chunk(idx: usize, chunk: &[PathBuf], cfg: &CorpusConfig<'_>) -> C
         max_depth: cfg.max_retry_depth,
         deep_mode: cfg.deep_mode,
     };
-    match extract_with_adaptive_retry_ctx(chunk, &ctx, 0) {
+    match extract_with_adaptive_retry_units(chunk, &ctx, 0) {
         Ok(mut result) => {
             result.elapsed_seconds = t0.elapsed().as_secs_f64();
             ChunkOutcome::Ok { idx, result }
@@ -167,11 +172,7 @@ fn extract_one_chunk(idx: usize, chunk: &[PathBuf], cfg: &CorpusConfig<'_>) -> C
 }
 
 /// Execute all chunks, dispatching to Rayon when `workers > 1`.
-fn run_chunks(
-    chunks: &[Vec<PathBuf>],
-    cfg: &CorpusConfig<'_>,
-    workers: usize,
-) -> Vec<ChunkOutcome> {
+fn run_chunks(chunks: &[Vec<Unit>], cfg: &CorpusConfig<'_>, workers: usize) -> Vec<ChunkOutcome> {
     if workers == 1 {
         return chunks
             .iter()

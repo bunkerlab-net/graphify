@@ -6,7 +6,7 @@
 
 use graphify_dedup::{
     DedupLlmBackend, JudgeResult, NoOpBackend, deduplicate_entities, entropy, is_variant_pair,
-    norm, shingles, short_label_blocked,
+    norm, numeric_tokens_differ, shingles, short_label_blocked,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -453,4 +453,170 @@ fn prefix_guard_fires_for_extension_pairs() {
             "prefix guard should fire for ({a:?}, {b:?})"
         );
     }
+}
+
+// ── #1284: numbered siblings + cross-file file-anchored boilerplate ──────────
+
+#[test]
+fn test_numeric_tokens_differ_helper() {
+    // `numeric_tokens_differ` compares digit runs as zero-padding-insensitive
+    // multisets (#1284).
+    assert!(numeric_tokens_differ(
+        "adr 0011 d5 pipeline placement",
+        "adr 0013 d4 pipeline placement"
+    ));
+    assert!(numeric_tokens_differ(
+        "3 1 product goals",
+        "1 1 product goals"
+    ));
+    assert!(numeric_tokens_differ("code block3", "code block13"));
+    // zero-padding is not a difference
+    assert!(!numeric_tokens_differ(
+        "phase 09 overview",
+        "phase 9 overview"
+    ));
+    assert!(!numeric_tokens_differ(
+        "module layout wave 3",
+        "module layouts wave 3"
+    ));
+    // digitless labels never differ on numbers
+    assert!(!numeric_tokens_differ("graph extractor", "graph extractar"));
+}
+
+#[test]
+fn test_dedup_does_not_merge_numbered_siblings() {
+    // Long labels differing only in embedded numbers (ADR/section/issue ids)
+    // must not merge — numbered siblings, not duplicates (#1284).
+    let nodes = vec![
+        json!({
+            "id": "n1",
+            "label": "Pipeline placement — 4 call sites (ADR 0013 D4)",
+            "file_type": "document",
+            "source_file": "docs/index-activity.md"
+        }),
+        json!({
+            "id": "n2",
+            "label": "Pipeline placement — 4 call sites (ADR 0011 §D5)",
+            "file_type": "document",
+            "source_file": "docs/schema-matcher.md"
+        }),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 2);
+}
+
+#[test]
+fn test_dedup_does_not_merge_crossfile_rationale_boilerplate() {
+    // Rationale nodes are file-anchored like code (#1205): parallel modules'
+    // boilerplate docstrings differing by one word must not merge (#1284).
+    let boiler = |name: &str| {
+        format!(
+            "Django app config for {name}. No business logic here. \
+             Domain services live in services.py and adapters in providers."
+        )
+    };
+    let nodes = vec![
+        json!({
+            "id": "r1",
+            "label": boiler("apps.platform.cards"),
+            "file_type": "rationale",
+            "source_file": "apps/platform/cards/apps.py"
+        }),
+        json!({
+            "id": "r2",
+            "label": boiler("apps.platform.cores"),
+            "file_type": "rationale",
+            "source_file": "apps/platform/cores/apps.py"
+        }),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 2);
+}
+
+#[test]
+fn test_dedup_does_not_merge_crossfile_document_headings() {
+    // Document nodes are file-anchored too: near-identical headings in different
+    // files are distinct sections, not duplicates (#1284).
+    let nodes = vec![
+        json!({
+            "id": "d1",
+            "label": "Getting Started Installation Guide",
+            "file_type": "document",
+            "source_file": "docs/a.md"
+        }),
+        json!({
+            "id": "d2",
+            "label": "Getting Started Installation Setup",
+            "file_type": "document",
+            "source_file": "docs/b.md"
+        }),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 2);
+}
+
+#[test]
+fn test_dedup_still_merges_samefile_rationale_duplicates() {
+    // The file-anchored guard only blocks cross-file pairs — near-identical
+    // rationale duplicates within one file still merge (#1284 non-regression).
+    let nodes = vec![
+        json!({
+            "id": "r1",
+            "label": "Counts-only metrics export, a read-only aggregation service.",
+            "file_type": "rationale",
+            "source_file": "apps/schemas/metrics.py"
+        }),
+        json!({
+            "id": "r2",
+            "label": "Counts-only metrics export, the read-only aggregation service.",
+            "file_type": "rationale",
+            "source_file": "apps/schemas/metrics.py"
+        }),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+}
+
+// ── #1243: JaroWinkler prefix-bonus over-merge (cross-file) ──────────────────
+
+#[test]
+fn test_dedup_does_not_merge_crossfile_shared_prefix_divergence() {
+    // Cross-file labels sharing a long prefix but diverging in a distinguishing
+    // token ("…jest native" vs "…react native") get JaroWinkler's prefix bonus
+    // past threshold but are distinct entities; scoring them on plain Jaro
+    // blocks the merge (#1243).
+    let nodes = vec![
+        json!({
+            "id": "p1",
+            "label": "testing library jest native",
+            "file_type": "concept",
+            "source_file": "pkg-a/package.json"
+        }),
+        json!({
+            "id": "p2",
+            "label": "testing library react native",
+            "file_type": "concept",
+            "source_file": "pkg-b/package.json"
+        }),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 2);
+}
+
+#[test]
+fn test_dedup_still_merges_crossfile_true_duplicates() {
+    // The #1243 guard only drops the prefix bonus — a genuine cross-file
+    // duplicate (high similarity on Jaro alone) must still merge.
+    let nodes = vec![
+        json!({"id": "g1", "label": "GraphExtractor", "file_type": "concept", "source_file": "a.md"}),
+        json!({"id": "g2", "label": "Graph Extractor", "file_type": "concept", "source_file": "b.md"}),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
 }
