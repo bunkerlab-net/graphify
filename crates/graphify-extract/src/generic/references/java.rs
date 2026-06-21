@@ -2,7 +2,7 @@
 
 use tree_sitter::Node;
 
-use super::RefRole;
+use super::{RefRole, role_of};
 use crate::generic::names::read_text_owned;
 
 #[allow(clippy::too_many_lines)] // single recursive dispatch over tree-sitter Java type kinds
@@ -22,11 +22,7 @@ pub(crate) fn java_collect_type_refs(
     if t == "type_identifier" {
         let name = read_text_owned(node, source);
         if !name.is_empty() {
-            let role = if generic {
-                RefRole::Generic
-            } else {
-                RefRole::Direct
-            };
+            let role = role_of(generic);
             out.push((name, role));
         }
         return;
@@ -35,11 +31,7 @@ pub(crate) fn java_collect_type_refs(
         let text = read_text_owned(node, source);
         let tail = text.rsplit('.').next().unwrap_or(&text);
         if !tail.is_empty() {
-            let role = if generic {
-                RefRole::Generic
-            } else {
-                RefRole::Direct
-            };
+            let role = role_of(generic);
             out.push((tail.to_string(), role));
         }
         return;
@@ -53,11 +45,7 @@ pub(crate) fn java_collect_type_refs(
                     let text = read_text_owned(child, source);
                     let tail = text.rsplit('.').next().unwrap_or(&text);
                     if !tail.is_empty() {
-                        let role = if generic {
-                            RefRole::Generic
-                        } else {
-                            RefRole::Direct
-                        };
+                        let role = role_of(generic);
                         out.push((tail.to_string(), role));
                     }
                     break;

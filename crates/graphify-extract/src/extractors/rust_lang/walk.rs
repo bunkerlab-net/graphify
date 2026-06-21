@@ -163,7 +163,10 @@ pub(super) fn walk_rust(
                     .trim_end_matches('*')
                     .trim_end_matches(':')
                     .to_string();
-                let module_name = clean.split("::").last().unwrap_or("").trim().to_string();
+                // Strip any `as` alias (`use foo::bar as baz` -> `bar`). Diverges
+                // from graphify-py (extract.py:6813), which keeps `bar as baz`.
+                let base = clean.split_once(" as ").map_or(clean.as_str(), |(b, _)| b);
+                let module_name = base.split("::").last().unwrap_or("").trim().to_string();
                 if !module_name.is_empty() {
                     let tgt_nid = make_id1(&module_name);
                     let line = node.start_position().row + 1;

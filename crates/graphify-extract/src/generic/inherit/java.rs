@@ -45,14 +45,8 @@ pub(crate) fn emit_java_inheritance(
         if cur.goto_first_child() {
             loop {
                 let sub = cur.node();
-                if sub.kind() == "type_identifier" {
-                    emit(
-                        &read_text_owned(sub, source),
-                        "inherits",
-                        nodes,
-                        edges,
-                        seen_ids,
-                    );
+                if let Some(name) = java_base_name(sub, source) {
+                    emit(&name, "inherits", nodes, edges, seen_ids);
                     break;
                 }
                 if !cur.goto_next_sibling() {
@@ -72,14 +66,8 @@ pub(crate) fn emit_java_inheritance(
                     if tcur.goto_first_child() {
                         loop {
                             let tid = tcur.node();
-                            if tid.kind() == "type_identifier" {
-                                emit(
-                                    &read_text_owned(tid, source),
-                                    "implements",
-                                    nodes,
-                                    edges,
-                                    seen_ids,
-                                );
+                            if let Some(name) = java_base_name(tid, source) {
+                                emit(&name, "implements", nodes, edges, seen_ids);
                             }
                             if !tcur.goto_next_sibling() {
                                 break;
@@ -109,14 +97,8 @@ pub(crate) fn emit_java_inheritance(
                                 if tcur.goto_first_child() {
                                     loop {
                                         let tid = tcur.node();
-                                        if tid.kind() == "type_identifier" {
-                                            emit(
-                                                &read_text_owned(tid, source),
-                                                "inherits",
-                                                nodes,
-                                                edges,
-                                                seen_ids,
-                                            );
+                                        if let Some(name) = java_base_name(tid, source) {
+                                            emit(&name, "inherits", nodes, edges, seen_ids);
                                         }
                                         if !tcur.goto_next_sibling() {
                                             break;
@@ -135,5 +117,42 @@ pub(crate) fn emit_java_inheritance(
                 }
             }
         }
+    }
+}
+
+/// Extract the base type name from a Java inheritance entry: a plain
+/// `type_identifier`, a qualified `scoped_type_identifier` (tail after the
+/// final `.`), or a `generic_type` (its base, qualified-tail when scoped).
+/// Returns `None` for non-type nodes such as the `extends` keyword.
+///
+/// Divergence from graphify-py `_extract_java` (extract.py:2777-2799), which
+/// matches only `type_identifier` and silently drops qualified/generic bases.
+fn java_base_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => {
+            let name = read_text_owned(node, source);
+            (!name.is_empty()).then_some(name)
+        }
+        "scoped_type_identifier" => {
+            let text = read_text_owned(node, source);
+            let tail = text.rsplit('.').next().unwrap_or(&text);
+            (!tail.is_empty()).then(|| tail.to_string())
+        }
+        "generic_type" => {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    let child = cur.node();
+                    if matches!(child.kind(), "type_identifier" | "scoped_type_identifier") {
+                        return java_base_name(child, source);
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }

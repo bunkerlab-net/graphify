@@ -2,7 +2,7 @@
 
 use tree_sitter::Node;
 
-use super::RefRole;
+use super::{RefRole, role_of};
 use crate::generic::names::read_text_owned;
 
 /// TS/JS primitive type names that are emitted by tree-sitter as `identifier`
@@ -58,11 +58,7 @@ pub(crate) fn ts_collect_type_refs(
     if matches!(t, "type_identifier" | "identifier") {
         let name = read_text_owned(node, source);
         if !name.is_empty() && !is_js_primitive(&name) {
-            let role = if generic {
-                RefRole::Generic
-            } else {
-                RefRole::Direct
-            };
+            let role = role_of(generic);
             out.push((name, role));
         }
         return;
@@ -71,11 +67,7 @@ pub(crate) fn ts_collect_type_refs(
         let text = read_text_owned(node, source);
         let tail = text.rsplit('.').next().unwrap_or(&text);
         if !tail.is_empty() && !is_js_primitive(tail) {
-            let role = if generic {
-                RefRole::Generic
-            } else {
-                RefRole::Direct
-            };
+            let role = role_of(generic);
             out.push((tail.to_string(), role));
         }
         return;
@@ -86,11 +78,7 @@ pub(crate) fn ts_collect_type_refs(
             let text = read_text_owned(nn, source);
             let tail = text.rsplit('.').next().unwrap_or(&text);
             if !tail.is_empty() && !is_js_primitive(tail) {
-                let role = if generic {
-                    RefRole::Generic
-                } else {
-                    RefRole::Direct
-                };
+                let role = role_of(generic);
                 out.push((tail.to_string(), role));
             }
         } else {
@@ -104,11 +92,7 @@ pub(crate) fn ts_collect_type_refs(
                         let text = read_text_owned(cur.node(), source);
                         let tail = text.rsplit('.').next().unwrap_or(&text);
                         if !tail.is_empty() && !is_js_primitive(tail) {
-                            let role = if generic {
-                                RefRole::Generic
-                            } else {
-                                RefRole::Direct
-                            };
+                            let role = role_of(generic);
                             out.push((tail.to_string(), role));
                         }
                         break;

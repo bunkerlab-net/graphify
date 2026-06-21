@@ -1,10 +1,31 @@
 //! Groovy / Gradle extractor with Spock-test regex fallback.
 
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use crate::generic::extract_generic;
 use crate::lang_configs;
 use crate::types::FileResult;
+
+#[allow(clippy::expect_used)] // literal pattern; build cannot panic
+static CLASS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:[\w@]+\s+)*class\s+(\w+)").expect("static spock class regex")
+});
+#[allow(clippy::expect_used)]
+static FEATURE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^\s*def\s+(?:"([^"]+)"|'([^']+)')\s*\("#).expect("static spock feature regex")
+});
+#[allow(clippy::expect_used)]
+static PLAIN_METHOD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*def\s+(\w+)\s*\(").expect("static spock method regex"));
+static SPOCK_KWS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    ["if", "while", "for", "switch", "catch"]
+        .into_iter()
+        .collect()
+});
 
 /// Extract classes, methods, constructors, and imports from a `.groovy`/`.gradle` file.
 /// Falls back to regex-based Spock extractor when needed.
@@ -39,16 +60,11 @@ fn is_spock_file(path: &Path) -> bool {
 /// method names. This function discards the tree-sitter node/method edges, keeps the file
 /// node and import edges, then re-scans line-by-line with three regexes:
 /// `class`, `def "feature"()`, and `def plainMethod()`. Mirrors Python `_extract_spock_fallback`.
-#[allow(
-    clippy::too_many_lines,
-    clippy::expect_used,
-    clippy::cast_possible_truncation
-)]
+#[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
 // ↑ literal regex patterns; function is a direct port; row→u32 is safe
 fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
     use crate::ids::{file_stem, make_id, make_id1};
     use crate::types::{Edge, Node};
-    use std::collections::HashSet;
 
     let Ok(source) = std::fs::read_to_string(path) else {
         return ts_result;
@@ -88,22 +104,11 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
         seen_ids.insert(file_nid.clone());
     }
 
-    let class_re =
-        regex::Regex::new(r"^\s*(?:[\w@]+\s+)*class\s+(\w+)").expect("static spock class regex");
-    let feature_re = regex::Regex::new(r#"^\s*def\s+(?:"([^"]+)"|'([^']+)')\s*\("#)
-        .expect("static spock feature regex");
-    let plain_method_re =
-        regex::Regex::new(r"^\s*def\s+(\w+)\s*\(").expect("static spock method regex");
-    let kws: std::collections::HashSet<&str> = ["if", "while", "for", "switch", "catch"]
-        .iter()
-        .copied()
-        .collect();
-
     let mut current_class_nid: Option<String> = None;
 
     for (lineno, line) in source.lines().enumerate() {
         let lineno = lineno + 1;
-        if let Some(cap) = class_re.captures(line) {
+        if let Some(cap) = CLASS_RE.captures(line) {
             let class_name = cap.get(1).map_or("", |m| m.as_str());
             let class_nid = make_id(&[&stem, class_name]);
             if !seen_ids.contains(&class_nid) {
@@ -137,7 +142,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
             continue;
         };
 
-        if let Some(cap) = feature_re.captures(line) {
+        if let Some(cap) = FEATURE_RE.captures(line) {
             let method_name = cap.get(1).or_else(|| cap.get(2)).map_or("", |m| m.as_str());
             let method_label = format!("\"{method_name}\"");
             let method_nid = make_id(&[class_nid, method_name]);
@@ -167,9 +172,9 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
             continue;
         }
 
-        if let Some(cap) = plain_method_re.captures(line) {
+        if let Some(cap) = PLAIN_METHOD_RE.captures(line) {
             let method_name = cap.get(1).map_or("", |m| m.as_str());
-            if !kws.contains(method_name) {
+            if !SPOCK_KWS.contains(method_name) {
                 let method_label = format!(".{method_name}()");
                 let method_nid = make_id(&[class_nid, method_name]);
                 if !seen_ids.contains(&method_nid) {

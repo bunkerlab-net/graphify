@@ -68,17 +68,25 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                 return FileResult::error(format!("XML parse error: {e}"));
             }
             Ok(Event::Eof) => break,
-            Ok(Event::Start(ref e) | Event::Empty(ref e)) => {
+            Ok(start @ (Event::Start(_) | Event::Empty(_))) => {
+                // A self-closing `<TargetFramework/>` (an `Empty` event) carries no
+                // text, so only a real open tag arms the capture; otherwise the flag
+                // would dangle and misattribute the next element's text. graphify-py
+                // reads `tf.text` (None for self-closing tags), so this matches it.
+                let is_empty = matches!(start, Event::Empty(_));
+                let (Event::Start(e) | Event::Empty(e)) = &start else {
+                    continue;
+                };
                 if !root_seen {
                     root_seen = true;
                     root_sdk = attr_ci(e, "Sdk");
                 }
                 let name = local_name(e);
                 match name.as_str() {
-                    "TargetFramework" => {
+                    "TargetFramework" if !is_empty => {
                         capture = TextCapture::TargetFramework;
                     }
-                    "TargetFrameworks" => {
+                    "TargetFrameworks" if !is_empty => {
                         capture = TextCapture::TargetFrameworks;
                     }
                     "PackageReference" => {
