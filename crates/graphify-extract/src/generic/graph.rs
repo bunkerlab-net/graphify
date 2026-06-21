@@ -127,6 +127,7 @@ pub(crate) fn any_child_kind(node: Node<'_>, kind: &str) -> bool {
 /// whose kind appears in `config.body_fallback_child_types`. The fallback is
 /// needed for languages like Kotlin whose grammar uses `class_body` or
 /// `function_body` node types rather than a named field.
+#[must_use]
 pub(crate) fn find_body<'tree>(node: Node<'tree>, config: &LangConfig) -> Option<Node<'tree>> {
     if let Some(b) = node.child_by_field_name(config.body_field) {
         return Some(b);

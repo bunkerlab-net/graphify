@@ -69,17 +69,9 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 /// `create_table_statement`, `create_view_statement`, etc.
 fn obj_name<'a>(n: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a str> {
     let mut cur = n.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().kind() == "object_reference" {
-                return Some(read_text(cur.node(), source));
-            }
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    None
+    n.children(&mut cur)
+        .find(|c| c.kind() == "object_reference")
+        .map(|c| read_text(c, source))
 }
 
 /// Extract tables, views, functions, and relationships from `.sql` files via tree-sitter.

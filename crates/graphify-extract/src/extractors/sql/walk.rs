@@ -442,6 +442,9 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                         });
                     }
                 }
+                // Divergence from graphify-py (extract.py:5702), which labels
+                // UPDATE targets `reads_from`: an UPDATE mutates its target, so
+                // emit `writes_to` for the correct data-flow direction.
                 for rm in SQL_UPDATE_RE.captures_iter(text) {
                     let tbl = rm[1].to_string();
                     if !SQL_NON_TABLES.contains(tbl.to_lowercase().as_str())
@@ -457,7 +460,7 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                             external: false,
                             source: obj_nid.clone(),
                             target: tbl_nid,
-                            relation: "reads_from".to_string(),
+                            relation: "writes_to".to_string(),
                             confidence: "EXTRACTED".to_string(),
                             source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),

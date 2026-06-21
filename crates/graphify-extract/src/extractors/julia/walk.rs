@@ -15,11 +15,10 @@ fn func_name_from_signature(sig_node: tree_sitter::Node<'_>, source: &[u8]) -> O
         loop {
             let child = cur.node();
             if child.kind() == "call_expression" {
-                let callee = child.walk().goto_first_child().then(|| {
+                let callee = {
                     let mut c = child.walk();
-                    c.goto_first_child();
-                    c.node()
-                });
+                    c.goto_first_child().then(|| c.node())
+                };
                 if let Some(callee_node) = callee
                     && callee_node.kind() == "identifier"
                 {

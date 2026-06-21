@@ -588,7 +588,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     for n in &mut all_nodes {
         let sf_path = PathBuf::from(&n.source_file);
         if sf_path.is_absolute()
-            && let Ok(rel) = sf_path.strip_prefix(&root)
+            && let Some(rel) = relativise_under_root(&sf_path, &root)
         {
             n.source_file = rel.to_string_lossy().into_owned();
         }
@@ -596,7 +596,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     for e in &mut all_edges {
         let sf_path = PathBuf::from(&e.source_file);
         if sf_path.is_absolute()
-            && let Ok(rel) = sf_path.strip_prefix(&root)
+            && let Some(rel) = relativise_under_root(&sf_path, &root)
         {
             e.source_file = rel.to_string_lossy().into_owned();
         }
