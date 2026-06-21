@@ -1,128 +1,9 @@
-//! Julia extractor — custom walk over tree-sitter-julia AST.
+//! Julia structural AST walk (modules, structs, functions, imports).
 
+use super::read_text;
+use crate::ids::{make_id, make_id1};
+use crate::types::{Edge, Node};
 use std::collections::HashSet;
-use std::path::Path;
-
-use crate::ids::{file_stem, make_id, make_id1};
-use crate::types::{Edge, FileResult, Node};
-
-/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
-fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
-    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
-}
-
-/// Extract modules, structs, functions, imports, and calls from a `.jl` file.
-#[must_use]
-pub fn extract_julia(path: &Path) -> FileResult {
-    let source = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => {
-            return FileResult {
-                nodes: vec![],
-                edges: vec![],
-                raw_calls: vec![],
-                error: Some(e.to_string()),
-            };
-        }
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser
-        .set_language(&tree_sitter_julia::LANGUAGE.into())
-        .is_err()
-    {
-        return FileResult {
-            nodes: vec![],
-            edges: vec![],
-            raw_calls: vec![],
-            error: Some("failed to set julia language".to_string()),
-        };
-    }
-    let Some(tree) = parser.parse(&source, None) else {
-        return FileResult {
-            nodes: vec![],
-            edges: vec![],
-            raw_calls: vec![],
-            error: Some("parse failed".to_string()),
-        };
-    };
-
-    let stem = file_stem(path);
-    let str_path = path.to_string_lossy().into_owned();
-
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut edges: Vec<Edge> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
-    // (func_nid, node_start_byte, node_end_byte, is_function_def)
-    let mut function_bodies: Vec<(String, usize, usize, bool)> = Vec::new();
-
-    let file_nid = make_id1(&str_path);
-    seen_ids.insert(file_nid.clone());
-    nodes.push(Node {
-        id: file_nid.clone(),
-        label: path
-            .file_name()
-            .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
-        file_type: "code".to_string(),
-        source_file: str_path.clone(),
-        source_location: Some("L1".to_string()),
-        metadata: None,
-    });
-
-    let root = tree.root_node();
-    {
-        let mut walk_ctx = JuliaWalkCtx {
-            str_path: &str_path,
-            stem: &stem,
-            file_nid: &file_nid,
-            nodes: &mut nodes,
-            edges: &mut edges,
-            seen_ids: &mut seen_ids,
-            function_bodies: &mut function_bodies,
-        };
-        walk_julia(&mut walk_ctx, root, &source, &file_nid);
-    }
-
-    // Second pass: call edges
-    {
-        let mut call_ctx = JuliaCallCtx {
-            str_path: &str_path,
-            stem: &stem,
-            edges: &mut edges,
-            seen_ids: &seen_ids,
-        };
-        for (func_nid, node_start, node_end, is_func_def) in &function_bodies {
-            let tree_root = tree.root_node();
-            if *is_func_def {
-                walk_calls_julia_children(
-                    &mut call_ctx,
-                    tree_root,
-                    &source,
-                    func_nid,
-                    *node_start,
-                    *node_end,
-                );
-            } else {
-                walk_calls_julia(
-                    &mut call_ctx,
-                    tree_root,
-                    &source,
-                    func_nid,
-                    *node_start,
-                    *node_end,
-                );
-            }
-        }
-    }
-
-    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
-    FileResult {
-        nodes,
-        edges,
-        raw_calls: vec![],
-        error: None,
-    }
-}
 
 /// Extract the function name from a Julia function signature node.
 ///
@@ -170,14 +51,14 @@ fn func_name_from_signature(sig_node: tree_sitter::Node<'_>, source: &[u8]) -> O
 /// Handles `module_definition`, `struct_definition`, `function_definition`, `macro_definition`,
 /// and `import_statement`/`using_statement`. Mirrors Python `_walk_julia`.
 /// Shared state threaded through every [`walk_julia`] recursion.
-struct JuliaWalkCtx<'a> {
-    str_path: &'a str,
-    stem: &'a str,
-    file_nid: &'a str,
-    nodes: &'a mut Vec<Node>,
-    edges: &'a mut Vec<Edge>,
-    seen_ids: &'a mut HashSet<String>,
-    function_bodies: &'a mut Vec<(String, usize, usize, bool)>,
+pub(super) struct JuliaWalkCtx<'a> {
+    pub(super) str_path: &'a str,
+    pub(super) stem: &'a str,
+    pub(super) file_nid: &'a str,
+    pub(super) nodes: &'a mut Vec<Node>,
+    pub(super) edges: &'a mut Vec<Edge>,
+    pub(super) seen_ids: &'a mut HashSet<String>,
+    pub(super) function_bodies: &'a mut Vec<(String, usize, usize, bool)>,
 }
 
 impl JuliaWalkCtx<'_> {
@@ -264,7 +145,7 @@ fn emit_julia_struct_fields(
 }
 
 #[allow(clippy::too_many_lines)] // linear dispatch over Julia's AST node kinds
-fn walk_julia(
+pub(super) fn walk_julia(
     ctx: &mut JuliaWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -741,151 +622,6 @@ fn walk_julia(
                         break;
                     }
                 }
-            }
-        }
-    }
-}
-
-/// Collect `calls` edges within a Julia function body's byte range.
-///
-/// Skips nested `function_definition` nodes. Emits `calls` edges for `call_expression` nodes
-/// whose callee matches a known NID. Mirrors Python `_walk_calls_julia`.
-/// Shared state threaded through every [`walk_calls_julia`] recursion.
-struct JuliaCallCtx<'a> {
-    str_path: &'a str,
-    stem: &'a str,
-    edges: &'a mut Vec<Edge>,
-    seen_ids: &'a HashSet<String>,
-}
-
-fn walk_calls_julia(
-    ctx: &mut JuliaCallCtx<'_>,
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    func_nid: &str,
-    body_start: usize,
-    body_end: usize,
-) {
-    if node.start_byte() >= body_end || node.end_byte() <= body_start {
-        return;
-    }
-    if matches!(
-        node.kind(),
-        "function_definition" | "short_function_definition"
-    ) {
-        return;
-    }
-    if node.kind() == "call_expression" && node.child_count() > 0 {
-        let callee = {
-            let mut cur = node.walk();
-            if cur.goto_first_child() {
-                Some(cur.node())
-            } else {
-                None
-            }
-        };
-        if let Some(callee_node) = callee {
-            if callee_node.kind() == "identifier" {
-                let callee_name = read_text(callee_node, source);
-                let target_nid = make_id(&[ctx.stem, callee_name]);
-                if ctx.seen_ids.contains(&target_nid) && target_nid != func_nid {
-                    ctx.edges.push(Edge {
-                        external: false,
-                        source: func_nid.to_string(),
-                        target: target_nid,
-                        relation: "calls".to_string(),
-                        confidence: "EXTRACTED".to_string(),
-                        source_file: ctx.str_path.to_string(),
-                        source_location: Some(format!("L{}", node.start_position().row + 1)),
-                        weight: 1.0,
-                        context: Some("call".to_string()),
-                        confidence_score: None,
-                    });
-                }
-            } else if callee_node.kind() == "field_expression" && callee_node.child_count() >= 3 {
-                let count = u32::try_from(callee_node.child_count()).unwrap_or(0);
-                let method_node = callee_node.child(count - 1);
-                if let Some(mn) = method_node {
-                    let method_name = read_text(mn, source);
-                    let target_nid = make_id(&[ctx.stem, method_name]);
-                    if ctx.seen_ids.contains(&target_nid) && target_nid != func_nid {
-                        ctx.edges.push(Edge {
-                            external: false,
-                            source: func_nid.to_string(),
-                            target: target_nid,
-                            relation: "calls".to_string(),
-                            confidence: "EXTRACTED".to_string(),
-                            source_file: ctx.str_path.to_string(),
-                            source_location: Some(format!("L{}", node.start_position().row + 1)),
-                            weight: 1.0,
-                            context: Some("call".to_string()),
-                            confidence_score: None,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            walk_calls_julia(ctx, cur.node(), source, func_nid, body_start, body_end);
-            if !cur.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-}
-
-/// Walk the body children of a `function_definition` node, calling `walk_calls_julia` on each.
-///
-/// Finds the `function_definition` node by byte range, then iterates its children starting
-/// after the signature, so nested function bodies are attributed to the right caller.
-// Walk children of a function_definition node (skipping signature)
-fn walk_calls_julia_children(
-    ctx: &mut JuliaCallCtx<'_>,
-    tree_root: tree_sitter::Node<'_>,
-    source: &[u8],
-    func_nid: &str,
-    node_start: usize,
-    node_end: usize,
-) {
-    // Find the function_definition node by byte range
-    /// Search the subtree rooted at `n` for a `function_definition` node matching `start`/`end` byte offsets.
-    fn find_node(
-        n: tree_sitter::Node<'_>,
-        start: usize,
-        end: usize,
-    ) -> Option<tree_sitter::Node<'_>> {
-        if n.start_byte() == start && n.end_byte() == end && n.kind() == "function_definition" {
-            return Some(n);
-        }
-        let mut cur = n.walk();
-        if cur.goto_first_child() {
-            loop {
-                if let Some(found) = find_node(cur.node(), start, end) {
-                    return Some(found);
-                }
-                if !cur.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-        None
-    }
-
-    let Some(func_node) = find_node(tree_root, node_start, node_end) else {
-        return;
-    };
-    let mut cur = func_node.walk();
-    if cur.goto_first_child() {
-        loop {
-            let child = cur.node();
-            if child.kind() != "signature" {
-                walk_calls_julia(ctx, child, source, func_nid, node_start, node_end);
-            }
-            if !cur.goto_next_sibling() {
-                break;
             }
         }
     }

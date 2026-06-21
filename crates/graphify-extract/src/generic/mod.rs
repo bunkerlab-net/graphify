@@ -15,6 +15,7 @@
 
 mod calls;
 pub mod config;
+mod graph;
 mod inherit;
 mod js_extra;
 mod names;
