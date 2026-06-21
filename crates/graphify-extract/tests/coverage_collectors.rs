@@ -10,8 +10,8 @@
 #![allow(clippy::expect_used)]
 
 use graphify_extract::{
-    FileResult, extract_c, extract_cpp, extract_go, extract_kotlin, extract_php, extract_rust,
-    extract_scala, extract_swift,
+    FileResult, extract_c, extract_cpp, extract_go, extract_java, extract_kotlin, extract_php,
+    extract_rust, extract_scala, extract_swift,
 };
 
 mod common;
@@ -452,4 +452,49 @@ fn go_forward_reference_binds_to_declaration_not_placeholder() {
         "Item node must be the package-qualified declaration, not a bare placeholder"
     );
     assert!(has_edge(&r, "references", Some("field"), "Store", "Item"));
+}
+
+// ── Java: qualified / generic inheritance bases ────────────────────────────────
+
+/// Java inheritance must follow qualified (`scoped_type_identifier`) and generic
+/// (`generic_type`) bases, not only a plain `type_identifier`. Divergence from
+/// graphify-py `_extract_java` (extract.py:2777-2799), which drops them.
+#[test]
+fn java_inheritance_handles_scoped_and_generic_bases() {
+    let src = "package app;\n\
+public class Sub extends pkg.Base implements Iface<Payload> {}\n";
+    let (_t, r) = extract_snippet("Sub.java", src, extract_java);
+    assert!(
+        has_edge(&r, "inherits", None, "Sub", "Base"),
+        "{:?}",
+        r.edges
+    );
+    assert!(
+        has_edge(&r, "implements", None, "Sub", "Iface"),
+        "{:?}",
+        r.edges
+    );
+}
+
+// ── Rust: `use` alias stripping ────────────────────────────────────────────────
+
+/// `use foo::bar as baz` must import `bar`, not `bar as baz`. Divergence from
+/// graphify-py (extract.py:6813), which keeps the alias in the node id.
+#[test]
+fn rust_use_strips_as_alias() {
+    let (_t1, aliased) = extract_snippet("aliased.rs", "use foo::bar as baz;\n", extract_rust);
+    let (_t2, plain) = extract_snippet("plain.rs", "use foo::bar;\n", extract_rust);
+    let import_target = |r: &FileResult| {
+        r.edges
+            .iter()
+            .find(|e| e.relation == "imports_from")
+            .map(|e| e.target.clone())
+    };
+    let aliased_tgt = import_target(&aliased);
+    assert!(aliased_tgt.is_some(), "expected an imports_from edge");
+    assert_eq!(
+        aliased_tgt,
+        import_target(&plain),
+        "`as` alias must not leak into the import target"
+    );
 }

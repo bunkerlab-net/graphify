@@ -1,185 +1,28 @@
-//! Rust extractor — custom walk over tree-sitter-rust AST.
+//! Rust structural AST walk + type-reference edge emitters.
 
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use std::sync::LazyLock;
-
-use crate::ids::{file_stem, make_id, make_id1};
-use crate::types::{Edge, FileResult, Node, RawCall};
-
-/// Common Rust trait/stdlib method names that appear in virtually every codebase.
-/// Resolving these cross-file produces spurious INFERRED edges — skip them from
-/// the unresolved-call queue entirely.
-static RUST_TRAIT_METHOD_BLOCKLIST: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "new",
-        "default",
-        "parse",
-        "from_str",
-        "now",
-        "clone",
-        "into",
-        "from",
-        "to_string",
-        "to_owned",
-        "len",
-        "is_empty",
-        "iter",
-        "next",
-        "build",
-        "start",
-        "run",
-        "init",
-        "app",
-        "get",
-        "set",
-        "push",
-        "pop",
-        "insert",
-        "remove",
-        "contains",
-        "collect",
-        "map",
-        "filter",
-        "unwrap",
-        "expect",
-        "ok",
-        "err",
-        "some",
-        "none",
-        "send",
-        "recv",
-        "lock",
-        "read",
-        "write",
-    ]
-    .into_iter()
-    .collect()
-});
-
-/// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
-fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
-    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
-}
-
-/// Extract functions, structs, enums, traits, impl methods, and use declarations from a `.rs` file.
-#[must_use]
-pub fn extract_rust(path: &Path) -> FileResult {
-    let Some((source, tree)) = parse_rust_source(path) else {
-        return FileResult {
-            nodes: vec![],
-            edges: vec![],
-            raw_calls: vec![],
-            error: Some("parse failed".to_string()),
-        };
-    };
-    let stem = file_stem(path);
-    let str_path = path.to_string_lossy().into_owned();
-    let file_nid = make_id1(&str_path);
-    let mut nodes: Vec<Node> = vec![Node {
-        id: file_nid.clone(),
-        label: path
-            .file_name()
-            .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
-        file_type: "code".to_string(),
-        source_file: str_path.clone(),
-        source_location: Some("L1".to_string()),
-        metadata: None,
-    }];
-    let mut edges: Vec<Edge> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::from([file_nid.clone()]);
-    let mut function_bodies: Vec<(String, usize, usize)> = Vec::new();
-
-    {
-        let mut walk_ctx = RustWalkCtx {
-            str_path: &str_path,
-            stem: &stem,
-            file_nid: &file_nid,
-            nodes: &mut nodes,
-            edges: &mut edges,
-            seen_ids: &mut seen_ids,
-            function_bodies: &mut function_bodies,
-        };
-        walk_rust(&mut walk_ctx, tree.root_node(), &source, None);
-    }
-
-    let mut label_to_nid: HashMap<String, String> = HashMap::new();
-    for n in &nodes {
-        let normalised = n.label.trim_end_matches("()").trim_start_matches('.');
-        label_to_nid.insert(normalised.to_lowercase(), n.id.clone());
-    }
-
-    let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
-    let mut raw_calls: Vec<RawCall> = Vec::new();
-    {
-        let mut call_ctx = RustCallCtx {
-            str_path: &str_path,
-            label_to_nid: &label_to_nid,
-            edges: &mut edges,
-            seen_call_pairs: &mut seen_call_pairs,
-            raw_calls: &mut raw_calls,
-        };
-        for (caller_nid, body_start, body_end) in &function_bodies {
-            walk_calls_rust(
-                &mut call_ctx,
-                tree.root_node(),
-                &source,
-                caller_nid,
-                *body_start,
-                *body_end,
-            );
-        }
-    }
-
-    crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
-    // Validate dangling edges against the reconciled graph rather than the
-    // now-stale `seen_ids`, which still lists any placeholder ids reconcile
-    // folded away.
-    let valid_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
-    let clean_edges: Vec<Edge> = edges
-        .into_iter()
-        .filter(|e| {
-            valid_ids.contains(&e.source)
-                && (valid_ids.contains(&e.target)
-                    || matches!(e.relation.as_str(), "imports" | "imports_from"))
-        })
-        .collect();
-    FileResult {
-        nodes,
-        edges: clean_edges,
-        raw_calls,
-        error: None,
-    }
-}
-
-/// Read + tree-sitter-parse a `.rs` file. `None` on any I/O or parse error.
-fn parse_rust_source(path: &Path) -> Option<(Vec<u8>, tree_sitter::Tree)> {
-    let source = std::fs::read(path).ok()?;
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .ok()?;
-    let tree = parser.parse(&source, None)?;
-    Some((source, tree))
-}
+use super::read_text;
+use super::refs::rust_collect_type_refs;
+use crate::ids::{make_id, make_id1};
+use crate::types::{Edge, Node};
+use std::collections::HashSet;
 
 /// Recursively walk a Rust AST emitting nodes for functions, structs, enums, traits, and impls.
 ///
 /// Records function body byte ranges for the subsequent call-graph pass. Handles `use_declaration`
 /// to produce import edges. Mirrors Python `_walk_rust`.
 /// Shared state threaded through every [`walk_rust`] recursion.
-struct RustWalkCtx<'a> {
-    str_path: &'a str,
-    stem: &'a str,
-    file_nid: &'a str,
-    nodes: &'a mut Vec<Node>,
-    edges: &'a mut Vec<Edge>,
-    seen_ids: &'a mut HashSet<String>,
-    function_bodies: &'a mut Vec<(String, usize, usize)>,
+pub(super) struct RustWalkCtx<'a> {
+    pub(super) str_path: &'a str,
+    pub(super) stem: &'a str,
+    pub(super) file_nid: &'a str,
+    pub(super) nodes: &'a mut Vec<Node>,
+    pub(super) edges: &'a mut Vec<Edge>,
+    pub(super) seen_ids: &'a mut HashSet<String>,
+    pub(super) function_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
 #[allow(clippy::too_many_lines)] // linear dispatch over Rust's AST node kinds
-fn walk_rust(
+pub(super) fn walk_rust(
     ctx: &mut RustWalkCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -320,7 +163,10 @@ fn walk_rust(
                     .trim_end_matches('*')
                     .trim_end_matches(':')
                     .to_string();
-                let module_name = clean.split("::").last().unwrap_or("").trim().to_string();
+                // Strip any `as` alias (`use foo::bar as baz` -> `bar`). Diverges
+                // from graphify-py (extract.py:6813), which keeps `bar as baz`.
+                let base = clean.split_once(" as ").map_or(clean.as_str(), |(b, _)| b);
+                let module_name = base.split("::").last().unwrap_or("").trim().to_string();
                 if !module_name.is_empty() {
                     let tgt_nid = make_id1(&module_name);
                     let line = node.start_position().row + 1;
@@ -353,105 +199,6 @@ fn walk_rust(
                         break;
                     }
                 }
-            }
-        }
-    }
-}
-
-/// Walk a Rust type expression, appending `(name, is_generic_arg)` tuples for
-/// each user-defined type referenced. Primitive types are skipped. Mirrors
-/// Python `_rust_collect_type_refs`.
-fn rust_collect_type_refs(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    generic: bool,
-    out: &mut Vec<(String, bool)>,
-) {
-    match node.kind() {
-        "primitive_type" => {}
-        "type_identifier" => {
-            let text = read_text(node, source);
-            if !text.is_empty() {
-                out.push((text.to_string(), generic));
-            }
-        }
-        "scoped_type_identifier" => {
-            let full = read_text(node, source);
-            let text = full.rsplit("::").next().unwrap_or(full);
-            if !text.is_empty() {
-                out.push((text.to_string(), generic));
-            }
-        }
-        "generic_type" => {
-            let name_node = node.child_by_field_name("type").or_else(|| {
-                let mut c = node.walk();
-                if c.goto_first_child() {
-                    loop {
-                        if matches!(
-                            c.node().kind(),
-                            "type_identifier" | "scoped_type_identifier"
-                        ) {
-                            return Some(c.node());
-                        }
-                        if !c.goto_next_sibling() {
-                            break;
-                        }
-                    }
-                }
-                None
-            });
-            if let Some(nn) = name_node {
-                let full = read_text(nn, source);
-                let text = full.rsplit("::").next().unwrap_or(full);
-                if !text.is_empty() {
-                    out.push((text.to_string(), generic));
-                }
-            }
-            let mut cur = node.walk();
-            if cur.goto_first_child() {
-                loop {
-                    if cur.node().kind() == "type_arguments" {
-                        let mut acur = cur.node().walk();
-                        if acur.goto_first_child() {
-                            loop {
-                                if acur.node().is_named() {
-                                    rust_collect_type_refs(acur.node(), source, true, out);
-                                }
-                                if !acur.goto_next_sibling() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if !cur.goto_next_sibling() {
-                        break;
-                    }
-                }
-            }
-        }
-        "reference_type" | "pointer_type" | "array_type" | "tuple_type" | "slice_type" => {
-            rust_recurse_named(node, source, generic, out);
-        }
-        _ if node.is_named() => rust_recurse_named(node, source, generic, out),
-        _ => {}
-    }
-}
-
-/// Recurse `rust_collect_type_refs` over every named child of `node`.
-fn rust_recurse_named(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    generic: bool,
-    out: &mut Vec<(String, bool)>,
-) {
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            if cur.node().is_named() {
-                rust_collect_type_refs(cur.node(), source, generic, out);
-            }
-            if !cur.goto_next_sibling() {
-                break;
             }
         }
     }
@@ -710,108 +457,6 @@ fn emit_rust_impl_trait(
             ctx.push_rel(impl_nid, &tgt, "implements", line);
         } else {
             ctx.push_ref(impl_nid, &tgt, "generic_arg", line);
-        }
-    }
-}
-
-/// Collect `calls` ctx.edges within a Rust function body's byte range.
-///
-/// Recurses through the body AST, emitting `calls` ctx.edges for `call_expression` and
-/// `macro_invocation` ctx.nodes whose callee matches a known NID. Mirrors Python `_walk_calls_rust`.
-/// Shared state threaded through every [`walk_calls_rust`] recursion.
-struct RustCallCtx<'a> {
-    str_path: &'a str,
-    label_to_nid: &'a HashMap<String, String>,
-    edges: &'a mut Vec<Edge>,
-    seen_call_pairs: &'a mut HashSet<(String, String)>,
-    raw_calls: &'a mut Vec<RawCall>,
-}
-
-fn walk_calls_rust(
-    ctx: &mut RustCallCtx<'_>,
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    caller_nid: &str,
-    body_start: usize,
-    body_end: usize,
-) {
-    if node.start_byte() >= body_end || node.end_byte() <= body_start {
-        return;
-    }
-    if node.kind() == "function_item" {
-        return;
-    }
-
-    if node.kind() == "call_expression"
-        && let Some(func_node) = node.child_by_field_name("function")
-    {
-        let mut callee_name: Option<String> = None;
-        let mut is_member_call = false;
-        let mut is_scoped_call = false;
-        match func_node.kind() {
-            "identifier" => {
-                callee_name = Some(read_text(func_node, source).to_string());
-            }
-            "field_expression" => {
-                is_member_call = true;
-                if let Some(field) = func_node.child_by_field_name("field") {
-                    callee_name = Some(read_text(field, source).to_string());
-                }
-            }
-            "scoped_identifier" => {
-                is_scoped_call = true;
-                if let Some(name) = func_node.child_by_field_name("name") {
-                    callee_name = Some(read_text(name, source).to_string());
-                }
-            }
-            _ => {}
-        }
-        if let Some(cn) = callee_name {
-            // Resolve first so a built-in name backing a real local symbol is
-            // kept; only drop unresolved built-ins (god-node guard, #726).
-            let tgt_nid = ctx.label_to_nid.get(&cn.to_lowercase()).cloned();
-            if let Some(tgt) = tgt_nid {
-                if tgt != caller_nid {
-                    let pair = (caller_nid.to_string(), tgt.clone());
-                    if ctx.seen_call_pairs.insert(pair) {
-                        let line = node.start_position().row + 1;
-                        ctx.edges.push(Edge {
-                            external: false,
-                            source: caller_nid.to_string(),
-                            target: tgt,
-                            relation: "calls".to_string(),
-                            confidence: "EXTRACTED".to_string(),
-                            source_file: ctx.str_path.to_string(),
-                            source_location: Some(format!("L{line}")),
-                            weight: 1.0,
-                            context: Some("call".to_string()),
-                            confidence_score: None,
-                        });
-                    }
-                }
-            } else if !is_scoped_call
-                && !RUST_TRAIT_METHOD_BLOCKLIST.contains(cn.to_lowercase().as_str())
-                && !crate::builtins::is_language_builtin_global(&cn)
-            {
-                ctx.raw_calls.push(RawCall {
-                    caller_nid: caller_nid.to_string(),
-                    callee: cn,
-                    is_member_call,
-                    source_file: ctx.str_path.to_string(),
-                    source_location: format!("L{}", node.start_position().row + 1),
-                    receiver: None,
-                });
-            }
-        }
-    }
-
-    let mut cur = node.walk();
-    if cur.goto_first_child() {
-        loop {
-            walk_calls_rust(ctx, cur.node(), source, caller_nid, body_start, body_end);
-            if !cur.goto_next_sibling() {
-                break;
-            }
         }
     }
 }
