@@ -2,6 +2,7 @@
 .claude/local/
 .claude/settings.local.json
 CLAUDE.local.md
+.omp/
 
 # Test artifacts — extract tests write SHA-keyed cache entries here when
 # they pass a `cache_root` to graphify_cache::save_cached. These are

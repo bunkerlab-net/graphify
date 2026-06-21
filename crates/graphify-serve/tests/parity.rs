@@ -220,6 +220,38 @@ fn test_score_nodes_ignores_trailing_punctuation() {
 }
 
 #[test]
+fn test_score_nodes_multiword_exact_label_outranks_superset() {
+    // A multi-word query equal to a whole label must resolve uniquely and
+    // strictly outrank a superset/decoy that shares the same token set
+    // (regression for the `graphify path` "No path found" bug). norm_label keeps
+    // the ':' punctuation; the exact node wins via the label's tokenized form.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "exact", "label": "UOCE: Dehumidifier Driver",
+                 "source_file": "uoce_dehumidifier.yaml", "community": 0},
+                {"id": "super", "label": "UOCE: Dehumidifier Driver State Machine",
+                 "source_file": "uoce_dehumidifier.yaml", "community": 0},
+                {"id": "decoy", "label": "Dehumidifier Driver Helper",
+                 "source_file": "uoce_dehumidifier.yaml", "community": 0},
+            ],
+            "edges": []
+        }),
+        false,
+        None,
+    )
+    .expect("graph");
+    let mut cache = HashMap::new();
+    // CLI resolves endpoints as [t.lower() for t in label.split()].
+    let scored = score_nodes(&g, &["uoce:", "dehumidifier", "driver"], &mut cache);
+    assert_eq!(scored[0].1, "exact");
+    assert!(
+        scored[0].0 > scored[1].0,
+        "exact label must strictly outrank superset/token-bag matches"
+    );
+}
+
+#[test]
 fn test_find_node_ignores_trailing_punctuation() {
     let g = make_graph();
     assert_eq!(find_node(&g, "extract?"), vec!["n1".to_string()]);

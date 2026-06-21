@@ -4,8 +4,11 @@ use std::borrow::Cow;
 
 /// Max chars read from a single file before joining.
 pub const FILE_CHAR_CAP: usize = 20_000;
-/// Per-file overhead for the `=== rel ===\n` separator.
-pub const PER_FILE_OVERHEAD_CHARS: usize = 80;
+/// Per-file overhead (chars) for the `<untrusted_source path=... sha256=...>`
+/// wrapper `read_files` adds around each file (open tag + 64-char sha + close
+/// tag + newlines, see graphify-py issue #1210). Matches Python
+/// `_PER_FILE_OVERHEAD_CHARS`.
+pub const PER_FILE_OVERHEAD_CHARS: usize = 160;
 /// Hard cap on LLM JSON response size before parsing (10 MB).
 pub const LLM_JSON_MAX_BYTES: usize = 10 * 1024 * 1024;
 

@@ -599,6 +599,11 @@ pub(crate) enum ExportCmd {
     /// Mermaid-based architecture/call-flow HTML.
     #[command(name = "callflow-html")]
     CallflowHtml {
+        /// Optional positional graph path or directory, mirroring Python's
+        /// `export callflow-html [GRAPH|DIR]`. A `*.json` path is used directly;
+        /// a directory resolves to `<dir>/graph.json` or `<dir>/graphify-out/graph.json`.
+        /// Ignored when `--graph` is supplied.
+        path: Option<PathBuf>,
         #[arg(long)]
         graph: Option<PathBuf>,
         #[arg(long)]

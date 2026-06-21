@@ -3,7 +3,8 @@
 
 #![allow(clippy::expect_used, unsafe_code)]
 
-use graphify_ingest::ingest;
+use graphify_ingest::{IngestError, ingest, ingest_with};
+use graphify_transcribe::{TranscribeError, YtDlpRunner};
 use serial_test::serial;
 
 struct EnvGuard {
@@ -91,19 +92,68 @@ fn ingest_image_url_downloads_with_inferred_extension() {
     assert!(out.extension().is_some_and(|e| e == "png"));
 }
 
+/// Stub `yt-dlp` runner so the `YouTube` ingest path is exercised
+/// deterministically without spawning `yt-dlp` or hitting the network.
+struct StubYtDlp {
+    ok: bool,
+}
+
+impl YtDlpRunner for StubYtDlp {
+    fn download(
+        &self,
+        _url: &str,
+        _out_template: &str,
+        output_dir: &std::path::Path,
+        hash_prefix: &str,
+    ) -> Result<std::path::PathBuf, TranscribeError> {
+        if self.ok {
+            let path = output_dir.join(format!("yt_{hash_prefix}.m4a"));
+            std::fs::write(&path, b"audio").expect("write stub audio");
+            Ok(path)
+        } else {
+            Err(TranscribeError::BinaryMissing {
+                binary: "yt-dlp".to_string(),
+            })
+        }
+    }
+}
+
 #[test]
 #[serial(graphify_test_allow_private_ips)]
-fn ingest_youtube_url_errors() {
+fn ingest_youtube_url_routes_to_transcribe() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
     let tmp = tempfile::tempdir().expect("tempdir");
-    let result = ingest(
+    let out = ingest_with(
         "https://www.youtube.com/watch?v=abc",
         tmp.path(),
         None,
         None,
+        &StubYtDlp { ok: true },
+    )
+    .expect("youtube ingest should route to the transcribe download path");
+    assert!(out.exists());
+    assert!(
+        out.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("yt_"))
     );
-    assert!(result.is_err());
+}
+
+#[test]
+#[serial(graphify_test_allow_private_ips)]
+fn ingest_youtube_url_maps_transcribe_error() {
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let err = ingest_with(
+        "https://youtu.be/abc123",
+        tmp.path(),
+        None,
+        None,
+        &StubYtDlp { ok: false },
+    )
+    .expect_err("missing yt-dlp should surface as an ingest error");
+    assert!(matches!(err, IngestError::Transcribe { .. }));
 }
 
 #[test]

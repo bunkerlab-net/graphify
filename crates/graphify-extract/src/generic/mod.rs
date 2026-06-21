@@ -69,6 +69,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
     let mut function_bodies: Vec<(String, tree_sitter::Node<'_>)> = Vec::new();
+    let mut pending_listen_edges: Vec<(String, String, u32)> = Vec::new();
 
     let file_nid = make_id1(&str_path);
     let filename = path
@@ -116,6 +117,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             csharp_interface_names: &csharp_interface_names,
             swift_protocol_names: &swift_protocol_names,
             swift_class_names: &swift_class_names,
+            pending_listen_edges: &mut pending_listen_edges,
         };
         loop {
             let child = cur.node();
@@ -142,6 +144,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
     let mut seen_dyn_import_pairs: HashSet<(String, String)> = HashSet::new();
     let mut raw_calls: Vec<RawCall> = Vec::new();
+    let mut seen_ref_pairs: HashSet<(String, String, String)> = HashSet::new();
 
     {
         let mut call_ctx = super::generic::calls::CallWalkCtx {
@@ -152,9 +155,42 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             seen_dyn_import_pairs: &mut seen_dyn_import_pairs,
             edges: &mut edges,
             raw_calls: &mut raw_calls,
+            seen_ref_pairs: &mut seen_ref_pairs,
         };
         for (caller_nid, body_node) in &function_bodies {
             walk_calls(&mut call_ctx, *body_node, caller_nid, &source);
+        }
+    }
+
+    // ── PHP event-listener pass ────────────────────────────────────────────────
+    // Resolve deferred ($event, $listener) pairs into `listened_by` edges now
+    // that every node (and thus `label_to_nid`) exists. Mirrors graphify-py.
+    {
+        let mut seen_listen_pairs: HashSet<(String, String)> = HashSet::new();
+        for (event_name, listener_name, line) in &pending_listen_edges {
+            let (Some(event_nid), Some(listener_nid)) = (
+                label_to_nid.get(&event_name.to_lowercase()),
+                label_to_nid.get(&listener_name.to_lowercase()),
+            ) else {
+                continue;
+            };
+            if event_nid == listener_nid
+                || !seen_listen_pairs.insert((event_nid.clone(), listener_nid.clone()))
+            {
+                continue;
+            }
+            edges.push(Edge {
+                external: false,
+                source: event_nid.clone(),
+                target: listener_nid.clone(),
+                relation: "listened_by".to_string(),
+                confidence: "EXTRACTED".to_string(),
+                source_file: str_path.clone(),
+                source_location: Some(format!("L{line}")),
+                weight: 1.0,
+                context: None,
+                confidence_score: Some(1.0),
+            });
         }
     }
 

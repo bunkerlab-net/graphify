@@ -192,10 +192,23 @@ pub fn score_nodes<S: BuildHasher>(
     let norm_term_refs: Vec<&str> = norm_terms.iter().map(String::as_str).collect();
     let idf = compute_idf(graph, &norm_term_refs, idf_cache);
 
-    let mut scored: Vec<(f64, String)> = Vec::new();
+    // Whole-query string + its weight (the rarest constituent term's idf;
+    // per-term default 1.0). Mirrors Python `_score_nodes`: a multi-word query
+    // that equals (or prefixes) the whole label must dominate the per-token
+    // bag-of-words sums so `path`/`query` resolve the same node `explain` does.
+    let joined = norm_terms.join(" ");
+    let joined_w = norm_terms
+        .iter()
+        .map(|t| idf.get(t.as_str()).copied().unwrap_or(1.0))
+        .reduce(f64::max)
+        .unwrap_or(1.0);
+
+    let mut scored: Vec<(f64, usize, String)> = Vec::new();
     for (nid, attrs) in graph.nodes() {
         let norm_label = get_norm_label(attrs);
         let bare_label = norm_label.trim_end_matches(['(', ')']).to_string();
+        let raw_label = attrs.get("label").and_then(Value::as_str).unwrap_or("");
+        let label_tokens = search_tokens(raw_label).join(" ");
         let source = attrs
             .get("source_file")
             .and_then(Value::as_str)
@@ -203,6 +216,24 @@ pub fn score_nodes<S: BuildHasher>(
             .to_lowercase();
 
         let mut score = 0.0_f64;
+        // Full-query tier: an exact/prefix match of the whole label outranks the
+        // per-token sums below (×10), weighted by the rarest term so a specific
+        // multi-word label beats common-token noise.
+        if !joined.is_empty() {
+            let nid_lower = nid.to_lowercase();
+            if joined == norm_label
+                || joined == bare_label
+                || joined == label_tokens
+                || joined == nid_lower
+            {
+                score += EXACT_MATCH_BONUS * 10.0 * joined_w;
+            } else if norm_label.starts_with(joined.as_str())
+                || bare_label.starts_with(joined.as_str())
+                || label_tokens.starts_with(joined.as_str())
+            {
+                score += PREFIX_MATCH_BONUS * 10.0 * joined_w;
+            }
+        }
         for t in &norm_terms {
             let w = idf.get(t.as_str()).copied().unwrap_or(1.0);
             // Three-tier: exact > prefix > substring (take strongest per term).
@@ -218,11 +249,23 @@ pub fn score_nodes<S: BuildHasher>(
             }
         }
         if score > 0.0 {
-            scored.push((score, nid.clone()));
+            // Tie-break toward the shorter label, then node id, so a concise
+            // exact match beats a longer superset of equal score.
+            let label_len = if raw_label.is_empty() {
+                nid.chars().count()
+            } else {
+                raw_label.chars().count()
+            };
+            scored.push((score, label_len, nid.clone()));
         }
     }
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    scored.into_iter().map(|(s, _, nid)| (s, nid)).collect()
 }
 
 // ── Seed selection ────────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ use crate::types::{Edge, RawCall};
 use super::config::{LangConfig, LangId};
 use super::js_extra::dynamic_import_js;
 use super::names::read_text_owned;
+use super::walk::{named_children, php_class_const_scope};
 
 // ── Call-graph walk ───────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ pub(super) struct CallWalkCtx<'a> {
     pub seen_dyn_import_pairs: &'a mut HashSet<(String, String)>,
     pub edges: &'a mut Vec<Edge>,
     pub raw_calls: &'a mut Vec<RawCall>,
+    pub seen_ref_pairs: &'a mut HashSet<(String, String, String)>,
 }
 
 /// Stops descending into nested function definitions (`function_boundary_types`)
@@ -115,8 +117,12 @@ pub(super) fn walk_calls(
                     receiver,
                 });
             }
+
+            emit_php_call_relations(ctx, node, &callee, caller_nid, source);
         }
     }
+
+    emit_php_ref_relations(ctx, node, caller_nid, source);
 
     let mut cur = node.walk();
     if cur.goto_first_child() {
@@ -373,4 +379,190 @@ fn extract_callee(
     }
 
     (callee_name, is_member_call, receiver)
+}
+
+/// First string-literal argument of a PHP call's `arguments` (e.g. `'foo.bar'`
+/// in `config('foo.bar')`). Mirrors graphify-py's helper-fn-call arg scan.
+#[must_use]
+fn php_first_string_arg(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let args = node.child_by_field_name("arguments")?;
+    for arg in named_children(args) {
+        if arg.kind() != "argument" {
+            continue;
+        }
+        for inner in named_children(arg) {
+            if inner.kind() == "string"
+                && let Some(sc) = named_children(inner)
+                    .into_iter()
+                    .find(|c| c.kind() == "string_content")
+            {
+                return Some(read_text_owned(sc, source));
+            }
+        }
+    }
+    None
+}
+
+/// Up to two `Foo::class` arguments of a PHP container-bind call
+/// (`$app->bind(Foo::class, Bar::class)`). Mirrors graphify-py's bind arg scan.
+#[must_use]
+fn php_bind_class_args(node: Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut classes: Vec<String> = Vec::new();
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return classes;
+    };
+    for arg in named_children(args) {
+        if arg.kind() != "argument" {
+            continue;
+        }
+        if let Some(cc) = named_children(arg)
+            .into_iter()
+            .find(|c| c.kind() == "class_constant_access_expression")
+            && let Some(cls) = php_class_const_scope(cc, source)
+        {
+            classes.push(cls);
+        }
+        if classes.len() >= 2 {
+            break;
+        }
+    }
+    classes
+}
+
+/// Build an EXTRACTED PHP reference edge (used for `uses_config`, `bound_to`,
+/// `uses_static_prop`, and `references_constant`).
+#[must_use]
+fn php_ref_edge(src: &str, tgt: &str, relation: &str, line: u32, str_path: &str) -> Edge {
+    Edge {
+        external: false,
+        source: src.to_string(),
+        target: tgt.to_string(),
+        relation: relation.to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: str_path.to_string(),
+        source_location: Some(format!("L{line}")),
+        weight: 1.0,
+        context: None,
+        confidence_score: Some(1.0),
+    }
+}
+
+/// Emit PHP call-site reference edges (`uses_config`, `bound_to`) for a call
+/// node whose resolved callee is `callee`. No-op for non-PHP configs (the
+/// relevant config lists are empty). Mirrors graphify-py's helper-fn and
+/// container-bind branches in `walk_calls`.
+fn emit_php_call_relations(
+    ctx: &mut CallWalkCtx<'_>,
+    node: Node<'_>,
+    callee: &str,
+    caller_nid: &str,
+    source: &[u8],
+) {
+    // config('foo.bar') -> uses_config edge to "foo".
+    if ctx.config.helper_fn_names.contains(&callee)
+        && let Some(first_key) = php_first_string_arg(node, source)
+    {
+        let segment = first_key.split('.').next().unwrap_or("").to_lowercase();
+        let tgt = ctx
+            .label_to_nid
+            .get(&segment)
+            .or_else(|| ctx.label_to_nid.get(&format!("{segment}.php")))
+            .cloned();
+        if let Some(tgt) = tgt
+            && tgt != caller_nid
+        {
+            let relation = format!("uses_{callee}");
+            if ctx
+                .seen_ref_pairs
+                .insert((caller_nid.to_string(), tgt.clone(), relation.clone()))
+            {
+                let line = node.start_position().row as u32 + 1;
+                ctx.edges.push(php_ref_edge(
+                    caller_nid,
+                    &tgt,
+                    &relation,
+                    line,
+                    ctx.str_path,
+                ));
+            }
+        }
+    }
+
+    // $app->bind(Foo::class, Bar::class) -> bound_to edge.
+    if node.kind() == "member_call_expression"
+        && ctx.config.container_bind_methods.contains(&callee)
+    {
+        let classes = php_bind_class_args(node, source);
+        if let [contract, impl_] = classes.as_slice() {
+            let contract_nid = ctx.label_to_nid.get(&contract.to_lowercase()).cloned();
+            let impl_nid = ctx.label_to_nid.get(&impl_.to_lowercase()).cloned();
+            if let (Some(contract_nid), Some(impl_nid)) = (contract_nid, impl_nid)
+                && contract_nid != impl_nid
+                && ctx.seen_ref_pairs.insert((
+                    contract_nid.clone(),
+                    impl_nid.clone(),
+                    "bound_to".to_string(),
+                ))
+            {
+                let line = node.start_position().row as u32 + 1;
+                ctx.edges.push(php_ref_edge(
+                    &contract_nid,
+                    &impl_nid,
+                    "bound_to",
+                    line,
+                    ctx.str_path,
+                ));
+            }
+        }
+    }
+}
+
+/// Emit PHP reference edges from non-call nodes: `uses_static_prop` (`Foo::$bar`)
+/// and `references_constant` (`Foo::BAR`). No-op for non-PHP configs.
+fn emit_php_ref_relations(
+    ctx: &mut CallWalkCtx<'_>,
+    node: Node<'_>,
+    caller_nid: &str,
+    source: &[u8],
+) {
+    if ctx.config.static_prop_types.contains(&node.kind())
+        && let Some(class_name) = php_class_const_scope(node, source)
+        && let Some(tgt) = ctx.label_to_nid.get(&class_name.to_lowercase()).cloned()
+        && tgt != caller_nid
+        && ctx.seen_ref_pairs.insert((
+            caller_nid.to_string(),
+            tgt.clone(),
+            "uses_static_prop".to_string(),
+        ))
+    {
+        let line = node.start_position().row as u32 + 1;
+        ctx.edges.push(php_ref_edge(
+            caller_nid,
+            &tgt,
+            "uses_static_prop",
+            line,
+            ctx.str_path,
+        ));
+    }
+
+    if ctx.config.lang_id == LangId::Php
+        && node.kind() == "class_constant_access_expression"
+        && let Some(class_name) = php_class_const_scope(node, source)
+        && let Some(tgt) = ctx.label_to_nid.get(&class_name.to_lowercase()).cloned()
+        && tgt != caller_nid
+        && ctx.seen_ref_pairs.insert((
+            caller_nid.to_string(),
+            tgt.clone(),
+            "references_constant".to_string(),
+        ))
+    {
+        let line = node.start_position().row as u32 + 1;
+        ctx.edges.push(php_ref_edge(
+            caller_nid,
+            &tgt,
+            "references_constant",
+            line,
+            ctx.str_path,
+        ));
+    }
 }

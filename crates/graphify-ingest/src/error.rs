@@ -23,6 +23,16 @@ pub enum IngestError {
         source: SecurityError,
     },
 
+    /// Audio download failed during `YouTube` ingestion (`yt-dlp` shell-out).
+    #[error("ingest: failed to fetch {url:?}: {source}")]
+    Transcribe {
+        /// The URL that failed to fetch.
+        url: String,
+        /// The underlying transcription / audio-download error.
+        #[source]
+        source: graphify_transcribe::TranscribeError,
+    },
+
     /// Filesystem I/O failure.
     #[error("ingest: I/O error: {0}")]
     Io(#[from] std::io::Error),

@@ -1859,6 +1859,7 @@ version = "0.8.44"
 dependencies = [
  "chrono",
  "graphify-security",
+ "graphify-transcribe",
  "html2md",
  "mockito",
  "percent-encoding",

@@ -3,7 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use graphify_security::{SecurityError, validate_url};
+use graphify_security::validate_url;
+use graphify_transcribe::{YtDlpCliRunner, YtDlpRunner, download_audio_with};
 
 use crate::error::IngestError;
 use crate::fetchers::{download_binary, fetch_arxiv, fetch_tweet, fetch_webpage};
@@ -15,8 +16,8 @@ use crate::text::detect_url_type;
 ///
 /// Dispatch by URL type:
 /// - `pdf` / `image` → download the binary directly.
-/// - `youtube` → returns [`IngestError::FetchFailed`]; `YouTube` ingestion
-///   requires the separate `graphify-transcribe` crate.
+/// - `youtube` → download audio via `yt-dlp` (delegates to
+///   `graphify-transcribe`).
 /// - `tweet` → fetch via Twitter's oEmbed API and render as Markdown.
 /// - `arxiv` → fetch the abstract page and render as a paper Markdown.
 /// - `webpage` (default) → render HTML to Markdown.
@@ -33,6 +34,23 @@ pub fn ingest(
     target_dir: &Path,
     author: Option<&str>,
     contributor: Option<&str>,
+) -> Result<PathBuf, IngestError> {
+    ingest_with(url, target_dir, author, contributor, &YtDlpCliRunner)
+}
+
+/// Like [`ingest`] but accepts an injected [`YtDlpRunner`] so tests can stub
+/// `YouTube` audio downloads without spawning `yt-dlp`.
+///
+/// # Errors
+///
+/// Returns [`IngestError`] on URL validation failure, fetch failure,
+/// transcription failure, or filesystem I/O failure.
+pub fn ingest_with(
+    url: &str,
+    target_dir: &Path,
+    author: Option<&str>,
+    contributor: Option<&str>,
+    yt_runner: &dyn YtDlpRunner,
 ) -> Result<PathBuf, IngestError> {
     std::fs::create_dir_all(target_dir)?;
     let url_type = detect_url_type(url);
@@ -56,11 +74,11 @@ pub fn ingest(
     }
 
     if url_type == "youtube" {
-        return Err(IngestError::FetchFailed {
-            url: url.to_string(),
-            source: SecurityError::Transport(
-                "youtube ingestion requires graphify-transcribe".to_string(),
-            ),
+        return download_audio_with(url, target_dir, yt_runner).map_err(|source| {
+            IngestError::Transcribe {
+                url: url.to_string(),
+                source,
+            }
         });
     }
 

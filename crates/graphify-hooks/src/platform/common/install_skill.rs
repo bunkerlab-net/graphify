@@ -141,7 +141,8 @@ fn skill_for(platform: &str, project: bool) -> Result<(&'static str, &'static st
         // `CodeBuddy` rides claude's skill bundle (#1136). The user-scope
         // CODEBUDDY.md registration is written by `install_platform_skill`.
         "codebuddy" => (SKILL_MD, ".codebuddy/skills/graphify/SKILL.md"),
-        "amp" => (SKILL_MD, ".amp/skills/graphify/SKILL.md"),
+        "amp" if project => (SKILL_MD, ".agents/skills/graphify/SKILL.md"),
+        "amp" => (SKILL_MD, ".config/agents/skills/graphify/SKILL.md"),
         "opencode" if project => (SKILL_OPENCODE_MD, ".opencode/skills/graphify/SKILL.md"),
         "opencode" => (
             SKILL_OPENCODE_MD,
@@ -156,6 +157,7 @@ fn skill_for(platform: &str, project: bool) -> Result<(&'static str, &'static st
         "hermes" => (SKILL_CLAW_MD, ".hermes/skills/graphify/SKILL.md"),
         "kiro" => (SKILL_KIRO_MD, ".kiro/skills/graphify/SKILL.md"),
         "pi" => (SKILL_PI_MD, ".pi/agent/skills/graphify/SKILL.md"),
+        "kimi" => (SKILL_MD, ".kimi/skills/graphify/SKILL.md"),
         // Devin user-scope skill lives under `~/.config/devin/...`, but the
         // home-relative prefix differs from `.devin/...` used at project
         // scope. The project-scope install (devin install --project) is
@@ -224,9 +226,26 @@ pub fn install_platform_skill_project(
         }
     }
 
+    // Agents-group platforms also get the always-on AGENTS.md section (and the
+    // codex hooks.json / opencode plugin) under the project, mirroring
+    // graphify-py `_project_install`, which calls `_agents_install` for these.
+    if is_agents_md_platform(platform) {
+        msgs.push(crate::platform::agents::agents_install(
+            project_dir,
+            platform,
+        )?);
+    }
+
     msgs.push(String::new());
     let scope_root = scope_root_for(rel);
-    msgs.push(format!("Don't forget to: git add {scope_root}"));
+    // Agents-group platforms also create AGENTS.md at the project root, so the
+    // git-add hint must name it too; staging only the scope root would miss it.
+    let git_add_targets = if is_agents_md_platform(platform) {
+        format!("{scope_root} AGENTS.md")
+    } else {
+        scope_root.to_string()
+    };
+    msgs.push(format!("Don't forget to: git add {git_add_targets}"));
     msgs.push(String::new());
     Ok(msgs.join("\n"))
 }
@@ -290,6 +309,70 @@ pub fn uninstall_platform_skill_project(
             }
         }
     }
+
+    // Mirror the project-install agents wiring: drop the AGENTS.md section (and
+    // the codex/opencode artefacts) for agents-group platforms.
+    if is_agents_md_platform(platform) {
+        msgs.push(crate::platform::agents::agents_uninstall(
+            project_dir,
+            platform,
+        )?);
+    }
+    Ok(msgs.join("\n"))
+}
+
+/// True for platforms whose project install also writes an always-on
+/// `AGENTS.md` section via [`crate::platform::agents::agents_install`]
+/// (mirrors graphify-py `_project_install`'s `aider`/`amp`/`codex`/… branch).
+fn is_agents_md_platform(platform: &str) -> bool {
+    matches!(
+        platform,
+        "aider" | "amp" | "codex" | "opencode" | "claw" | "droid" | "trae" | "trae-cn" | "hermes"
+    )
+}
+
+/// User-scope Amp install (mirrors graphify-py `_amp_install`).
+///
+/// Cleans the legacy `~/.amp/skills/graphify` directory older versions wrote,
+/// installs the skill into `~/.config/agents/skills` (an Amp search root,
+/// unlike the never-searched `~/.amp/skills`), and writes the always-on
+/// `AGENTS.md` section into `project_dir`.
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` on filesystem failures.
+pub fn amp_install(project_dir: &std::path::Path) -> Result<String, HooksError> {
+    let mut msgs: Vec<String> = Vec::new();
+    let legacy = dirs_home().join(".amp").join("skills").join("graphify");
+    if legacy.exists() && fs::remove_dir_all(&legacy).is_ok() {
+        msgs.push(format!("  legacy removed   ->  {}", legacy.display()));
+    }
+    let (skill_content, rel) = skill_for("amp", false)?;
+    let skill_dst = dirs_home().join(rel);
+    install_skill(skill_content, &skill_dst)?;
+    msgs.push(format!("  skill installed  ->  {}", skill_dst.display()));
+    msgs.push(crate::platform::agents::agents_install(project_dir, "amp")?);
+    Ok(msgs.join("\n"))
+}
+
+/// User-scope Amp uninstall (mirrors graphify-py `_amp_uninstall`): removes the
+/// `~/.config/agents/skills` skill and the project `AGENTS.md` section.
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` on filesystem failures.
+pub fn amp_uninstall(project_dir: &std::path::Path) -> Result<String, HooksError> {
+    let mut msgs: Vec<String> = Vec::new();
+    let (_skill_content, rel) = skill_for("amp", false)?;
+    let skill_dst = dirs_home().join(rel);
+    if skill_dst.exists() {
+        fs::remove_file(&skill_dst)?;
+        msgs.push("skill removed".to_string());
+    }
+    msgs.push(crate::platform::agents::agents_uninstall(
+        project_dir,
+        "amp",
+    )?);
     Ok(msgs.join("\n"))
 }
 

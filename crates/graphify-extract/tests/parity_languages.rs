@@ -32,6 +32,26 @@ fn assert_no_dangling_edges(result: &graphify_extract::FileResult) {
     }
 }
 
+/// Node id of the first node whose exact `label` matches, panicking with the
+/// label when absent so endpoint assertions fail loudly on a missing fixture node.
+fn php_node_id(result: &FileResult, label: &str) -> String {
+    result
+        .nodes
+        .iter()
+        .find(|n| n.label == label)
+        .unwrap_or_else(|| panic!("fixture has no node labeled {label:?}"))
+        .id
+        .clone()
+}
+
+/// True when a `source -[relation]-> target` edge exists (compared by node id).
+fn php_has_edge(result: &FileResult, source: &str, target: &str, relation: &str) -> bool {
+    result
+        .edges
+        .iter()
+        .any(|e| e.source == source && e.target == target && e.relation == relation)
+}
+
 #[test]
 fn pascal_extractor_produces_nodes() {
     let result = extract_pascal(&fixtures().join("sample.pas"));
@@ -521,6 +541,75 @@ fn php_extractor_produces_nodes() {
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no php nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// PHP static property access (`DefaultPalette::$primary`) → `uses_static_prop`.
+/// Mirrors `test_php_finds_static_property_access`.
+#[test]
+fn php_finds_static_property_access() {
+    let r = extract_php(&fixtures().join("sample_php_static_prop.php"));
+    let primary = php_node_id(&r, ".primary()");
+    let palette = php_node_id(&r, "DefaultPalette");
+    assert!(
+        php_has_edge(&r, &primary, &palette, "uses_static_prop"),
+        "ColorResolver::primary() should resolve DefaultPalette::$primary to a \
+         uses_static_prop edge into the owning class"
+    );
+}
+
+/// PHP `config('throttle.api.per_second')` → `uses_config` edge to `Throttle`.
+/// Mirrors `test_php_finds_config_helper_call`.
+#[test]
+fn php_finds_config_helper_call() {
+    let r = extract_php(&fixtures().join("sample_php_config.php"));
+    let per_second = php_node_id(&r, ".perSecond()");
+    let throttle = php_node_id(&r, "Throttle");
+    assert!(
+        php_has_edge(&r, &per_second, &throttle, "uses_config"),
+        "RateLimiter::perSecond() should resolve config('throttle.api.per_second') \
+         to a uses_config edge into the Throttle config class"
+    );
+}
+
+/// PHP `$this->app->bind(Foo::class, Bar::class)` → `bound_to` edge.
+/// Mirrors `test_php_finds_container_bind`.
+#[test]
+fn php_finds_container_bind() {
+    let r = extract_php(&fixtures().join("sample_php_container.php"));
+    let payment = php_node_id(&r, "PaymentGateway");
+    let stripe = php_node_id(&r, "StripeGateway");
+    let register = php_node_id(&r, ".register()");
+    assert!(
+        php_has_edge(&r, &payment, &stripe, "bound_to"),
+        "bind(PaymentGateway::class, StripeGateway::class) should bind the abstract \
+         to the concrete implementation"
+    );
+    // Each `::class` argument is a class-constant access → a references_constant
+    // edge from the enclosing method to the referenced class.
+    assert!(
+        php_has_edge(&r, &register, &payment, "references_constant"),
+        "register() should reference PaymentGateway via its ::class constant"
+    );
+    // The singleton() binding takes the same abstract→concrete shape.
+    let cashier = php_node_id(&r, "CashierGateway");
+    assert!(
+        php_has_edge(&r, &cashier, &stripe, "bound_to"),
+        "singleton(CashierGateway::class, StripeGateway::class) should also bind \
+         the abstract to the concrete implementation"
+    );
+}
+
+/// PHP `$listen = [Event::class => [Listener::class]]` → `listened_by` edges.
+/// Mirrors `test_php_finds_event_listeners`.
+#[test]
+fn php_finds_event_listeners() {
+    let r = extract_php(&fixtures().join("sample_php_listen.php"));
+    let user_registered = php_node_id(&r, "UserRegistered");
+    let welcome = php_node_id(&r, "SendWelcomeEmail");
+    assert!(
+        php_has_edge(&r, &user_registered, &welcome, "listened_by"),
+        "UserRegistered should map to a listened_by edge into SendWelcomeEmail"
+    );
 }
 
 #[test]

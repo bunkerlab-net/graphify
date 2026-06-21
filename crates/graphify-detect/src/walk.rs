@@ -33,7 +33,7 @@ enum FileDecision {
     /// File classifies directly as `ftype`; word count is deferred to Phase 2.
     Direct(FileType),
     /// Google Workspace shortcut (`.gdoc`/`.gsheet`/...) — needs conversion.
-    GoogleWorkspace(String, FileType),
+    GoogleWorkspace(FileType),
     /// Office document (`.docx`/`.xlsx`) — needs conversion.
     Office(FileType),
 }
@@ -78,17 +78,13 @@ fn classify_one(
         .map(str::to_lowercase)
         .unwrap_or_default();
     if GOOGLE_WORKSPACE_EXTENSIONS.contains(&ext_lower.as_str()) {
-        return FileDecision::GoogleWorkspace(ext_lower, ftype);
+        return FileDecision::GoogleWorkspace(ftype);
     }
     if ext_lower == "docx" || ext_lower == "xlsx" {
         return FileDecision::Office(ftype);
     }
     FileDecision::Direct(ftype)
 }
-
-/// Convertible Google Workspace extensions (matches
-/// `graphify_google::GOOGLE_WORKSPACE_EXTENSIONS`, with leading dots stripped).
-const GOOGLE_CONVERTIBLE_EXTS: &[&str] = &["gdoc", "gsheet", "gslides"];
 
 /// Word count above which a knowledge graph is recommended over a flat context window.
 pub const CORPUS_WARN_THRESHOLD: u64 = 50_000;
@@ -626,8 +622,8 @@ fn apply_file_decision(
                 .push(p.to_string_lossy().into_owned());
             ctx.to_count.push((p.to_path_buf(), ftype));
         }
-        FileDecision::GoogleWorkspace(ext_lower, ftype) => {
-            convert_google_workspace(ctx, p, &ext_lower, ftype, google_workspace);
+        FileDecision::GoogleWorkspace(ftype) => {
+            convert_google_workspace(ctx, p, ftype, google_workspace);
         }
         FileDecision::Office(ftype) => {
             convert_office(ctx, p, ftype);
@@ -709,13 +705,9 @@ impl ConvertCtx<'_> {
 }
 
 /// Convert a `.gdoc`/`.gsheet`/`.gslides` shortcut to a markdown sidecar.
-///
-/// Other Google Workspace types (`.gdraw`, `.gform`, etc.) have no Markdown
-/// export path and are recorded in `skipped_sensitive`.
 fn convert_google_workspace(
     ctx: &mut ConvertCtx<'_>,
     p: &Path,
-    ext_lower: &str,
     ftype: FileType,
     google_workspace: bool,
 ) {
@@ -723,13 +715,6 @@ fn convert_google_workspace(
         ctx.skipped_sensitive.push(format!(
             "{} [Google Workspace shortcut skipped - pass --google-workspace or set GRAPHIFY_GOOGLE_WORKSPACE=1]",
             p.to_string_lossy()
-        ));
-        return;
-    }
-    if !GOOGLE_CONVERTIBLE_EXTS.contains(&ext_lower) {
-        ctx.skipped_sensitive.push(format!(
-            "{} [Google Workspace shortcut type .{ext_lower} not exportable to Markdown]",
-            p.to_string_lossy(),
         ));
         return;
     }

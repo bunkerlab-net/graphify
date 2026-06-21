@@ -434,13 +434,13 @@ fn test_scripts_contain_python_detect() {
 use graphify_hooks::platform::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, CLAUDE_MD_MARKER, CLAUDE_MD_SECTION, CURSOR_RULE,
     GEMINI_MD_SECTION, KIRO_STEERING, OPENCODE_PLUGIN_JS, VSCODE_INSTRUCTIONS_SECTION,
-    agents_install, agents_uninstall, antigravity_install, antigravity_uninstall, claude_install,
-    claude_uninstall, codebuddy_install, codebuddy_uninstall, cursor_install, cursor_uninstall,
-    gemini_install, gemini_uninstall, install_claude_hook, install_codex_hook, install_gemini_hook,
-    install_opencode_plugin, install_platform_skill, install_platform_skill_project, kiro_install,
-    kiro_uninstall, replace_or_append_section, uninstall_claude_hook, uninstall_codex_hook,
-    uninstall_gemini_hook, uninstall_opencode_plugin, uninstall_platform_skill_project,
-    vscode_install, vscode_uninstall,
+    agents_install, agents_uninstall, amp_install, amp_uninstall, antigravity_install,
+    antigravity_uninstall, claude_install, claude_uninstall, codebuddy_install,
+    codebuddy_uninstall, cursor_install, cursor_uninstall, gemini_install, gemini_uninstall,
+    install_claude_hook, install_codex_hook, install_gemini_hook, install_opencode_plugin,
+    install_platform_skill, install_platform_skill_project, kiro_install, kiro_uninstall,
+    replace_or_append_section, uninstall_claude_hook, uninstall_codex_hook, uninstall_gemini_hook,
+    uninstall_opencode_plugin, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
 };
 
 // ---------------------------------------------------------------------------
@@ -1037,7 +1037,99 @@ fn test_install_opencode_project_uses_dot_opencode() {
 fn test_install_amp() {
     let dir = tempfile::tempdir().expect("tempdir");
     install_skill_to(dir.path(), "amp");
-    assert!(dir.path().join(".amp/skills/graphify/SKILL.md").exists());
+    assert!(
+        dir.path()
+            .join(".config/agents/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(home_env)]
+fn test_amp_user_install_lands_in_config_agents() {
+    // `graphify amp install` (user scope) writes the skill into an Amp search
+    // root (~/.config/agents/skills), cleans the legacy ~/.amp/skills dir, and
+    // writes the project AGENTS.md section. Mirrors graphify-py `_amp_install`.
+    let home = tempfile::tempdir().expect("home");
+    let proj = tempfile::tempdir().expect("proj");
+    let legacy = home.path().join(".amp/skills/graphify");
+    std::fs::create_dir_all(&legacy).expect("mk legacy");
+    std::fs::write(legacy.join("SKILL.md"), "old").expect("write legacy");
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    let result = amp_install(proj.path());
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    result.expect("amp install");
+    assert!(
+        home.path()
+            .join(".config/agents/skills/graphify/SKILL.md")
+            .exists(),
+        "skill must land in the Amp search root"
+    );
+    assert!(
+        !home.path().join(".amp/skills/graphify").exists(),
+        "legacy ~/.amp/skills/graphify must be cleaned up"
+    );
+    assert!(
+        proj.path().join("AGENTS.md").exists(),
+        "amp install writes the always-on AGENTS.md section"
+    );
+    // Uninstall removes the skill and the AGENTS.md section.
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    let un = amp_uninstall(proj.path());
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    un.expect("amp uninstall");
+    assert!(
+        !home
+            .path()
+            .join(".config/agents/skills/graphify/SKILL.md")
+            .exists(),
+        "uninstall removes the user skill"
+    );
+    assert!(
+        !proj.path().join("AGENTS.md").exists(),
+        "uninstall removes the AGENTS.md section"
+    );
+}
+
+#[test]
+fn test_amp_project_install_uses_dot_agents() {
+    // Project scope writes under `.agents/` (an Amp search root) plus AGENTS.md.
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_platform_skill_project("amp", dir.path()).expect("amp project install");
+    assert!(dir.path().join(".agents/skills/graphify/SKILL.md").exists());
+    assert!(dir.path().join("AGENTS.md").exists());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_install_kimi() {
+    // Kimi reuses claude's skill bundle and installs under `.kimi/skills`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "kimi");
+    assert!(dir.path().join(".kimi/skills/graphify/SKILL.md").exists());
+}
+
+#[test]
+fn test_codex_project_install_writes_skill_agents_and_hook() {
+    // Project-scope codex install lays down the skill, the AGENTS.md section,
+    // and the .codex/hooks.json PreToolUse hook (graphify-py `_project_install`).
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_platform_skill_project("codex", dir.path()).expect("codex project install");
+    assert!(dir.path().join(".codex/skills/graphify/SKILL.md").exists());
+    assert!(dir.path().join("AGENTS.md").exists());
+    assert!(dir.path().join(".codex/hooks.json").exists());
 }
 
 #[test]
