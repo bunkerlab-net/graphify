@@ -138,6 +138,7 @@ impl Drop for EnvGuard {
 }
 
 #[test]
+#[serial_test::serial(graphify_out_env)]
 fn noise_dir_flags_default_graphify_out() {
     assert!(graphify_detect::is_noise_dir("graphify-out", None));
 }

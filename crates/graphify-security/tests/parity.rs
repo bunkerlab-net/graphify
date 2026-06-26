@@ -267,6 +267,7 @@ impl Drop for EnvGuard {
 }
 
 #[test]
+#[serial_test::serial(graphify_out_env)]
 fn validate_graph_path_default_base_discovers_output_dir() {
     // With base omitted, the output dir is discovered by walking the path's
     // parents for the configured output-dir name (default "graphify-out").
