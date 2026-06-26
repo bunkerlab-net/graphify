@@ -87,7 +87,22 @@ pub(super) fn walk_calls(
             // real local symbol is a genuine call and must be kept. Only drop
             // built-ins when they DON'T resolve, so they can't become cross-file
             // god-nodes via the raw-call pass (#726).
-            let tgt_nid = ctx.label_to_nid.get(&callee.to_lowercase()).cloned();
+            // A capitalized-receiver Python member call (`ClassName.method()`)
+            // defers to receiver-based cross-file resolution: the bare method
+            // name can collide with an in-file node — even the calling method
+            // itself — which would match `tgt == caller` and silently drop the
+            // call. `resolve_python_member_calls` resolves it via the receiver
+            // (#1446). Gated to Python so Swift's own resolver is unaffected.
+            let defer_member = is_member_call
+                && ctx.config.lang_id == LangId::Python
+                && receiver
+                    .as_deref()
+                    .is_some_and(|r| r.chars().next().is_some_and(char::is_uppercase));
+            let tgt_nid = if defer_member {
+                None
+            } else {
+                ctx.label_to_nid.get(&callee.to_lowercase()).cloned()
+            };
             if let Some(tgt) = tgt_nid {
                 if tgt != caller_nid {
                     let pair = (caller_nid.to_string(), tgt.clone());
@@ -370,6 +385,16 @@ fn extract_callee(
                             func_node.child_by_field_name(config.call_accessor_field)
                     {
                         callee_name = Some(read_text_owned(attr, source));
+                    }
+                    // #1446: capture a simple-identifier receiver (`ClassName` in
+                    // `ClassName.method()`) so cross-file resolution can resolve
+                    // qualified Python class-method calls. Chained receivers
+                    // (`a.b.method()`) are skipped.
+                    if config.lang_id == LangId::Python
+                        && let Some(obj) = func_node.child_by_field_name("object")
+                        && obj.kind() == "identifier"
+                    {
+                        receiver = Some(read_text_owned(obj, source));
                     }
                 } else {
                     callee_name = Some(read_text_owned(func_node, source));

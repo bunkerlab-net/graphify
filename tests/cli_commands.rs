@@ -122,6 +122,39 @@ fn extract_runs_without_backend_writes_graph() {
 }
 
 #[test]
+fn extract_writes_to_graphify_out_env() {
+    // #1423: `graphify extract` honours GRAPHIFY_OUT for where it WRITES, not
+    // only where readers look. Code-only corpus, so no LLM backend is needed.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("m.py"),
+        "def a():\n    return b()\n\n\ndef b():\n    return 1\n",
+    )
+    .unwrap();
+    cli_no_backend()
+        .current_dir(dir.path())
+        .env("GRAPHIFY_OUT", "custom-out")
+        .arg("extract")
+        .arg(".")
+        .arg("--no-cluster")
+        .assert()
+        .success();
+
+    assert!(
+        dir.path().join("custom-out").join("graph.json").exists(),
+        "graph.json not written to the GRAPHIFY_OUT override"
+    );
+    assert!(
+        dir.path().join("custom-out").join("manifest.json").exists(),
+        "manifest.json not written to the GRAPHIFY_OUT override"
+    );
+    assert!(
+        !dir.path().join("graphify-out").exists(),
+        "extract ignored GRAPHIFY_OUT and wrote graphify-out/"
+    );
+}
+
+#[test]
 fn extract_mode_deep_prints_banner_and_succeeds() {
     let dir = tempfile::tempdir().unwrap();
     write_python_project(dir.path());
@@ -882,6 +915,32 @@ fn label_accepts_model_flag() {
     );
 }
 
+#[test]
+fn label_accepts_concurrency_flags() {
+    // #1390: `label --max-concurrency --batch-size` parse and thread through to
+    // the labeling path. With no backend the run degrades to placeholders,
+    // proving the flags are accepted end-to-end without error.
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+    cli_no_backend()
+        .arg("extract")
+        .arg(dir.path())
+        .arg("--no-cluster")
+        .assert()
+        .success();
+
+    cli_no_backend()
+        .arg("label")
+        .arg(dir.path())
+        .arg("--max-concurrency")
+        .arg("8")
+        .arg("--batch-size")
+        .arg("50")
+        .arg("--no-viz")
+        .assert()
+        .success();
+}
+
 /// #1347/#1350: a no-op incremental `extract --no-cluster` re-run must leave
 /// graph.json byte-identical. The first run persists `manifest.json` (parity with
 /// graphify-py `__main__.py:4492`), so the second run takes the incremental path;
@@ -933,4 +992,82 @@ fn extract_no_cluster_incremental_noop_preserves_existing_graph() {
         "no-op incremental run must not empty the graph"
     );
     assert_eq!(after, before, "no-op incremental run changed graph.json");
+}
+
+// ── reflect (#1441) ──────────────────────────────────────────────────────────
+
+#[test]
+fn reflect_end_to_end_writes_lessons() {
+    let dir = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "save-result",
+            "--question",
+            "how does auth work?",
+            "--answer",
+            "JWT",
+            "--nodes",
+            "AuthMiddleware",
+            "--outcome",
+            "useful",
+        ])
+        .assert()
+        .success();
+    cli()
+        .current_dir(dir.path())
+        .arg("reflect")
+        .assert()
+        .success()
+        .stdout(contains("Reflected 1 memories"));
+    let lessons = dir
+        .path()
+        .join("graphify-out")
+        .join("reflections")
+        .join("LESSONS.md");
+    assert!(lessons.exists());
+    assert!(
+        fs::read_to_string(&lessons)
+            .unwrap()
+            .contains("`AuthMiddleware`")
+    );
+}
+
+#[test]
+fn reflect_cold_start_writes_empty_lessons() {
+    let dir = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(dir.path())
+        .arg("reflect")
+        .assert()
+        .success()
+        .stdout(contains("Reflected 0 memories"));
+    let lessons = dir
+        .path()
+        .join("graphify-out")
+        .join("reflections")
+        .join("LESSONS.md");
+    assert!(
+        fs::read_to_string(&lessons)
+            .unwrap()
+            .contains("from 0 session memories")
+    );
+}
+
+#[test]
+fn save_result_rejects_bad_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "save-result",
+            "--question",
+            "q",
+            "--answer",
+            "a",
+            "--outcome",
+            "great",
+        ])
+        .assert()
+        .failure();
 }

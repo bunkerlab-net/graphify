@@ -8,7 +8,7 @@ use graphify_detect::{is_ignored, load_graphifyignore};
 
 use crate::constants::WATCHED_EXTENSIONS;
 use crate::error::WatchError;
-use crate::notify::{graphify_out, notify_only};
+use crate::notify::notify_only;
 use crate::rebuild;
 
 /// Re-run AST extraction + build + optional cluster + report for code
@@ -72,7 +72,7 @@ pub fn watch(watch_path: &Path, debounce: f64) -> Result<(), WatchError> {
     use notify_debouncer_full::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
     let debounce_dur = Duration::from_secs_f64(debounce);
-    let out_dir_name = graphify_out();
+    let out_dir_name = graphify_security::graphify_out_name();
 
     // Load .graphifyignore patterns ONCE at startup (mirrors gh-928 fix).
     let watch_root = watch_path

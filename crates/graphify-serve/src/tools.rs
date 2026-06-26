@@ -191,6 +191,25 @@ pub fn tool_get_neighbors(graph: &Graph, arguments: &serde_json::Map<String, Val
     lines.join("\n")
 }
 
+/// Header line for `get_community`: `"Community N — Name"` when the community
+/// has a real label, else the bare `"Community N"`.
+///
+/// Skips the name when it is just the `"Community N"` placeholder (written for
+/// unnamed communities) so the header never reads `"Community 12 — Community
+/// 12"`. The name is sanitised like every other LLM-derived field. Ports
+/// Python `_community_header` (#1448).
+#[must_use]
+pub fn community_header(cid: i64, community_name: Option<&str>) -> String {
+    let base = format!("Community {cid}");
+    if let Some(name) = community_name {
+        let clean = sanitize_label(Some(name));
+        if !clean.is_empty() && clean != base {
+            return format!("{base} — {clean}");
+        }
+    }
+    base
+}
+
 /// Execute the `get_community` tool.
 #[must_use]
 pub fn tool_get_community(
@@ -205,7 +224,12 @@ pub fn tool_get_community(
         Some(ns) if !ns.is_empty() => ns,
         _ => return format!("Community {cid} not found."),
     };
-    let mut lines = vec![format!("Community {cid} ({} nodes):", nodes.len())];
+    let community_name = graph
+        .node_data(&nodes[0])
+        .and_then(|d| d.get("community_name"))
+        .and_then(Value::as_str);
+    let header = community_header(cid, community_name);
+    let mut lines = vec![format!("{header} ({} nodes):", nodes.len())];
     for n in nodes {
         let empty = IndexMap::new();
         let d = graph.node_data(n).unwrap_or(&empty);

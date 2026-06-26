@@ -33,6 +33,18 @@ fn classify_powershell_manifest() {
     );
 }
 
+/// CUDA sources classify as code so `.cu`/`.cuh` route through the C++
+/// extractor (graphify-py: `.cu`/`.cuh` added to `CODE_EXTENSIONS`).
+#[test]
+fn classify_cuda_cu() {
+    assert_eq!(classify_file(Path::new("kernel.cu")), Some(FileType::Code));
+}
+
+#[test]
+fn classify_cuda_cuh() {
+    assert_eq!(classify_file(Path::new("kernel.cuh")), Some(FileType::Code));
+}
+
 /// #1377: package manifests route to the deterministic AST/code path, not the
 /// LLM document path — even when their extension (`.yml`/`.toml`/`.xml`) would
 /// otherwise classify as a document. A generic yaml stays a document. Mirrors

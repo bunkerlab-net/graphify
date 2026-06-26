@@ -11,14 +11,13 @@ use graphify_export::attach_hyperedges;
 use serde_json::Value;
 
 use crate::error::WatchError;
-use crate::graphify_out;
 use crate::rebuild::git::git_head;
 use crate::rebuild::helpers::report_root_label;
 use crate::rebuild::pipeline_helpers::{
     FinaliseArgs, build_phase, cluster_phase, compare_existing_graph, compare_existing_report,
-    compute_extract_targets, detect_phase, extract_phase, finalise_rebuild, load_or_default_labels,
-    merge_with_existing_graph, render_report_phase, resolve_project_root, run_analysis,
-    run_no_cluster_path, topology_unchanged, write_graph_tmp,
+    compute_extract_targets, compute_rebuilt_sources, detect_phase, extract_phase,
+    finalise_rebuild, load_or_default_labels, merge_with_existing_graph, render_report_phase,
+    resolve_project_root, run_analysis, run_no_cluster_path, topology_unchanged, write_graph_tmp,
 };
 use crate::rebuild::relativize::relativize_source_files;
 
@@ -30,6 +29,9 @@ use crate::rebuild::relativize::relativize_source_files;
 /// # Errors
 ///
 /// Propagates I/O and pipeline errors via `WatchError`.
+// Linear detect → extract → merge → build → cluster → finalise pipeline;
+// splitting the sequence across more helpers obscures the ordering it encodes.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn rebuild_code_inner(
     watch_path: &Path,
     changed_paths: Option<&[PathBuf]>,
@@ -41,7 +43,7 @@ pub(crate) fn rebuild_code_inner(
         .unwrap_or_else(|_| watch_path.to_path_buf());
     let project_root = resolve_project_root(watch_path, &watch_root);
     let report_root = report_root_label(watch_path);
-    let out = watch_path.join(graphify_out());
+    let out = watch_path.join(graphify_security::graphify_out());
 
     let (detected, code_files) = detect_phase(watch_path);
     if code_files.is_empty() {
@@ -56,6 +58,7 @@ pub(crate) fn rebuild_code_inner(
     };
     let extract_targets = targets.wanted;
     let deleted_paths = targets.deleted_paths;
+    let rebuilt_sources = compute_rebuilt_sources(&extract_targets, &deleted_paths, &project_root);
 
     let commit = git_head(&watch_root);
     let mut result = extract_phase(&extract_targets, &watch_root);
@@ -97,6 +100,7 @@ pub(crate) fn rebuild_code_inner(
             &out,
             force,
             had_explicit_deletions,
+            Some(&rebuilt_sources),
             t_post,
         );
     }
@@ -137,6 +141,7 @@ pub(crate) fn rebuild_code_inner(
         no_change,
         force,
         had_explicit_deletions,
+        rebuilt_sources: Some(&rebuilt_sources),
         graph_with_hyper: &graph_with_hyper,
         communities: &communities,
         labels: &labels,

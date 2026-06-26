@@ -18,12 +18,6 @@ pub const EXTRACTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 static CLEANED_AST_DIRS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Output directory name; defaults to `"graphify-out"` and respects the
-/// `GRAPHIFY_OUT` environment variable override.
-pub(crate) fn graphify_out() -> String {
-    std::env::var("GRAPHIFY_OUT").unwrap_or_else(|_| "graphify-out".to_string())
-}
-
 /// Resolve the absolute path to the graphify output directory relative to
 /// `root`.
 ///
@@ -34,7 +28,7 @@ pub(crate) fn graphify_out() -> String {
 /// downstream `fs::create_dir_all` call in [`cache_dir`] will surface
 /// the underlying I/O error if the path is unusable.
 pub(crate) fn out_base(root: &Path) -> PathBuf {
-    let out = PathBuf::from(graphify_out());
+    let out = graphify_security::graphify_out();
     if out.is_absolute() {
         out
     } else {

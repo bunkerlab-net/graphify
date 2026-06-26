@@ -16,6 +16,10 @@ pub(crate) struct LabelOptions<'a> {
     pub model: Option<&'a str>,
     /// `graphify label` always (re)names even when a labels file exists.
     pub force_relabel: bool,
+    /// Max community-label batches sent concurrently (#1390).
+    pub max_concurrency: usize,
+    /// Communities per LLM labeling call (#1390).
+    pub batch_size: usize,
 }
 
 /// Rerun community detection on an existing graph.json and regenerate the report.
@@ -177,6 +181,8 @@ pub(crate) fn cmd_cluster_only(
             opts.backend,
             opts.model,
             false, // quiet
+            opts.max_concurrency,
+            opts.batch_size,
         );
         labels
     };

@@ -28,8 +28,9 @@ pub fn validate_graph_path<P: AsRef<Path>>(
         let hint = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let mut found: Option<PathBuf> = None;
         let mut cur = Some(hint.as_path());
+        let out_name = crate::paths::graphify_out_name();
         while let Some(c) = cur {
-            if c.file_name().is_some_and(|n| n == "graphify-out") {
+            if c.file_name().is_some_and(|n| n == out_name.as_str()) {
                 found = Some(c.to_path_buf());
                 break;
             }
@@ -37,8 +38,8 @@ pub fn validate_graph_path<P: AsRef<Path>>(
         }
         found.unwrap_or_else(|| {
             std::env::current_dir().map_or_else(
-                |_| PathBuf::from("graphify-out"),
-                |cwd| cwd.join("graphify-out"),
+                |_| crate::paths::graphify_out(),
+                |cwd| cwd.join(crate::paths::graphify_out()),
             )
         })
     };

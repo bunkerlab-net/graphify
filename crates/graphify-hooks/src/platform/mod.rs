@@ -22,7 +22,9 @@ pub mod vscode;
 
 // Re-export the full public surface so callers can use `graphify_hooks::platform::*`
 // as they did when everything lived in a single file.
-pub use agents::{agents_install, agents_uninstall};
+pub use agents::{
+    agents_install, agents_platform_install, agents_platform_uninstall, agents_uninstall,
+};
 pub use antigravity::{antigravity_install, antigravity_uninstall};
 pub use claude::{claude_install, claude_uninstall, install_claude_hook, uninstall_claude_hook};
 pub use codebuddy::{
@@ -33,8 +35,9 @@ pub use common::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, ANTIGRAVITY_WORKFLOW, CLAUDE_MD_MARKER,
     CLAUDE_MD_SECTION, CURSOR_RULE, GEMINI_MD_SECTION, KIRO_STEERING, OPENCODE_PLUGIN_JS,
     SETTINGS_HOOK_MATCHER, VSCODE_INSTRUCTIONS_SECTION, amp_install, amp_uninstall,
-    install_platform_skill, install_platform_skill_project, replace_or_append_section,
-    resolve_graphify_exe, uninstall_all, uninstall_platform_skill_project,
+    hermes_skill_dst, install_platform_skill, install_platform_skill_project,
+    replace_or_append_section, resolve_graphify_exe, uninstall_all,
+    uninstall_platform_skill_project,
 };
 pub use copilot::{copilot_install, copilot_uninstall};
 pub use cursor::{cursor_install, cursor_uninstall};

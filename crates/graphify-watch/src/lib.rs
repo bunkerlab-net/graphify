@@ -21,7 +21,7 @@ mod watch_fn;
 pub use constants::WATCHED_EXTENSIONS;
 pub use error::WatchError;
 pub use lock::RebuildLock;
-pub use notify::{check_update, graphify_out, notify_only};
+pub use notify::{check_update, notify_only};
 pub use rebuild::{
     LockPolicy, PENDING_DRAIN_MAX_PASSES, PENDING_FILENAME, RebuildOptions, check_shrink,
     drain_pending, git_head, merge_changed_paths, node_community_map, queue_pending,

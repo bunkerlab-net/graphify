@@ -26,7 +26,6 @@ pub use shrink::check_shrink;
 use std::path::{Path, PathBuf};
 
 use crate::error::WatchError;
-use crate::graphify_out;
 use crate::lock::RebuildLock;
 
 use pipeline::rebuild_code_inner;
@@ -72,7 +71,7 @@ pub fn rebuild_code(
     changed_paths: Option<&[PathBuf]>,
     opts: RebuildOptions,
 ) -> Result<bool, WatchError> {
-    let out = watch_path.join(graphify_out());
+    let out = watch_path.join(graphify_security::graphify_out());
 
     match opts.lock {
         LockPolicy::None => {

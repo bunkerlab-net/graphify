@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use graphify_build::{Graph, build_from_json};
 use graphify_serve::graph::communities_from_graph;
 use graphify_serve::tools::{
-    tool_get_community, tool_get_neighbors, tool_get_node, tool_god_nodes, tool_graph_stats,
-    tool_query_graph, tool_shortest_path,
+    community_header, tool_get_community, tool_get_neighbors, tool_get_node, tool_god_nodes,
+    tool_graph_stats, tool_query_graph, tool_shortest_path,
 };
 use serde_json::{Map, Value, json};
 
@@ -169,6 +169,59 @@ fn tool_get_community_not_found() {
     let args = arg_map(&[("community_id", json!(99))]);
     let out = tool_get_community(&g, &communities, &args);
     assert!(out.contains("not found"));
+}
+
+#[test]
+fn tool_get_community_shows_community_name() {
+    // #1448: the header surfaces the community label, like get_node / query.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n1", "label": "alpha", "source_file": "alpha.py",
+                 "community": 0, "community_name": "Auth Layer", "file_type": "code"},
+                {"id": "n2", "label": "beta", "source_file": "beta.py",
+                 "community": 0, "community_name": "Auth Layer", "file_type": "code"},
+            ],
+            "edges": []
+        }),
+        false,
+        None,
+    )
+    .expect("test invariant");
+    let communities = communities_from_graph(&g);
+    let args = arg_map(&[("community_id", json!(0))]);
+    let out = tool_get_community(&g, &communities, &args);
+    assert!(out.contains("Community 0 — Auth Layer"), "got: {out}");
+}
+
+// ── community_header (#1448) ─────────────────────────────────────────────────
+
+#[test]
+fn community_header_shows_real_name() {
+    assert_eq!(
+        community_header(12, Some("Auth & Sessions")),
+        "Community 12 — Auth & Sessions"
+    );
+}
+
+#[test]
+fn community_header_skips_placeholder_name() {
+    // No "Community 12 — Community 12" doubling.
+    assert_eq!(community_header(12, Some("Community 12")), "Community 12");
+}
+
+#[test]
+fn community_header_falls_back_when_no_name() {
+    assert_eq!(community_header(7, None), "Community 7");
+    assert_eq!(community_header(7, Some("")), "Community 7");
+}
+
+#[test]
+fn community_header_sanitizes_name() {
+    let out = community_header(3, Some("Pay\u{0}ments\u{1b}[31m"));
+    assert!(out.starts_with("Community 3 — "), "got: {out}");
+    assert!(!out.contains('\u{0}'));
+    assert!(!out.contains('\u{1b}'));
 }
 
 // ── tool_god_nodes ──────────────────────────────────────────────────────────

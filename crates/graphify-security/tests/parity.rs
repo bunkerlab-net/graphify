@@ -1,5 +1,7 @@
 //! Parity tests against `graphify-py/tests/test_security.py`.
 #![allow(clippy::expect_used)]
+// `std::env::set_var` is unsafe in edition 2024 — test-only, serialised below.
+#![allow(unsafe_code)]
 
 use std::time::Duration;
 
@@ -237,6 +239,61 @@ fn validate_graph_path_raises_if_file_missing() {
     let err = validate_graph_path(base.join("missing.json"), Some(&base))
         .expect_err("missing file should fail");
     assert!(matches!(err, SecurityError::GraphFileMissing(_)));
+}
+
+/// RAII guard that sets an env var and restores it on drop.
+struct EnvGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: test-only, serialised via `#[serial_test::serial]`.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            // SAFETY: test-only cleanup.
+            Some(v) => unsafe { std::env::set_var(self.key, v) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+#[test]
+fn validate_graph_path_default_base_discovers_output_dir() {
+    // With base omitted, the output dir is discovered by walking the path's
+    // parents for the configured output-dir name (default "graphify-out").
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = tmp.path().join("graphify-out");
+    std::fs::create_dir(&base).expect("mkdir");
+    let graph = base.join("graph.json");
+    std::fs::write(&graph, "{}").expect("write");
+    let resolved =
+        validate_graph_path(&graph, None).expect("default base should discover graphify-out");
+    assert_eq!(resolved, graph.canonicalize().expect("canonicalize"));
+}
+
+#[test]
+#[serial_test::serial(graphify_out_env)]
+fn validate_graph_path_default_base_honours_graphify_out_override() {
+    // base=None discovery must honour GRAPHIFY_OUT, not the hardcoded literal,
+    // so a renamed output dir validates against the right base (#1423).
+    let _guard = EnvGuard::set("GRAPHIFY_OUT", "custom-out");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("custom-out");
+    std::fs::create_dir(&out).expect("mkdir");
+    let graph = out.join("graph.json");
+    std::fs::write(&graph, "{}").expect("write");
+    let resolved =
+        validate_graph_path(&graph, None).expect("override base should discover custom-out");
+    assert_eq!(resolved, graph.canonicalize().expect("canonicalize"));
 }
 
 // ---------------------------------------------------------------------------

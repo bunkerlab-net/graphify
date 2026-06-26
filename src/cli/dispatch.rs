@@ -8,6 +8,9 @@ use crate::cli;
 use crate::cli::args::Command;
 
 /// Dispatch a parsed [`Command`] to its handler function.
+// Exhaustive command-routing match; one arm per subcommand reads clearer flat
+// than split across helpers.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Validate { path } => cli::validate::cmd_validate(&path),
@@ -32,6 +35,7 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         Command::Path { from, to, graph } => cli::query::cmd_path(&from, &to, graph.as_deref()),
         Command::Explain { node, graph } => cli::query::cmd_explain(&node, graph.as_deref()),
         cmd @ Command::SaveResult { .. } => dispatch_save_result(cmd),
+        cmd @ Command::Reflect { .. } => dispatch_reflect(cmd),
         Command::CheckUpdate { path } => cli::watch::cmd_check_update(&path),
         cmd @ Command::Tree { .. } => dispatch_tree(cmd),
         cmd @ Command::Extract { .. } => dispatch_extract(cmd),
@@ -109,6 +113,10 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
         Command::TraeCn { cmd: c } => cli::install::cmd_platform("trae-cn", &c),
         Command::Hermes { cmd: c } => cli::install::cmd_platform("hermes", &c),
         Command::Devin { cmd: c } => cli::install::cmd_platform("devin", &c),
+        // `agents` and its `skills` alias share one amp-twin handler (#1432).
+        Command::Agents { cmd: c } | Command::Skills { cmd: c } => {
+            cli::install::cmd_agents_platform(&c)
+        }
     }
 }
 
@@ -146,6 +154,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         no_label,
         backend,
         model,
+        max_concurrency,
+        batch_size,
         force,
     ) = match cmd {
         Command::ClusterOnly {
@@ -158,6 +168,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             no_label,
             backend,
             model,
+            max_concurrency,
+            batch_size,
         } => (
             path,
             no_viz,
@@ -168,6 +180,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             no_label,
             backend,
             model,
+            max_concurrency,
+            batch_size,
             false,
         ),
         Command::Label {
@@ -179,6 +193,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             min_community_size,
             backend,
             model,
+            max_concurrency,
+            batch_size,
         } => (
             path,
             no_viz,
@@ -189,6 +205,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             false,
             backend,
             model,
+            max_concurrency,
+            batch_size,
             true,
         ),
         _ => unreachable!("dispatch_cluster_only invoked with wrong variant"),
@@ -205,6 +223,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             backend: backend.as_deref(),
             model: model.as_deref(),
             force_relabel: force,
+            max_concurrency,
+            batch_size,
         },
     )
 }
@@ -230,11 +250,47 @@ fn dispatch_save_result(cmd: Command) -> Result<()> {
         query_type,
         nodes,
         memory_dir,
+        outcome,
+        correction,
     } = cmd
     else {
         unreachable!("dispatch_save_result invoked with wrong variant")
     };
-    cli::save_result::cmd_save_result(&question, &answer, &query_type, &nodes, &memory_dir)
+    cli::save_result::cmd_save_result(
+        &question,
+        &answer,
+        &query_type,
+        &nodes,
+        &memory_dir,
+        outcome.as_deref(),
+        correction.as_deref(),
+    )
+}
+
+fn dispatch_reflect(cmd: Command) -> Result<()> {
+    let Command::Reflect {
+        memory_dir,
+        out,
+        graph,
+        analysis,
+        labels,
+        half_life_days,
+        min_corroboration,
+        if_stale,
+    } = cmd
+    else {
+        unreachable!("dispatch_reflect invoked with wrong variant")
+    };
+    cli::reflect::cmd_reflect(cli::reflect::ReflectArgs {
+        memory_dir,
+        out,
+        graph,
+        analysis,
+        labels,
+        half_life_days,
+        min_corroboration,
+        if_stale,
+    })
 }
 
 fn dispatch_tree(cmd: Command) -> Result<()> {

@@ -360,6 +360,84 @@ fn build_from_json_relative_source_file_unchanged() {
 }
 
 #[test]
+fn build_from_json_relativizes_hyperedge_source_file() {
+    // #1418: hyperedge source_file must be relativized like nodes and edges, so
+    // `to_json` — which writes `graph.hyperedges` verbatim and has no root —
+    // never leaks an absolute path from a semantic subagent.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = tmp.path().canonicalize().expect("canonicalize");
+    let abs_doc = base.join("docs").join("CLAUDE.md");
+    let abs_str = abs_doc.to_string_lossy().into_owned();
+    let ext = json!({
+        "nodes": [
+            {"id": "a", "label": "A", "file_type": "document", "source_file": abs_str.clone()},
+        ],
+        "edges": [],
+        "hyperedges": [
+            {"id": "arch", "label": "Architecture", "nodes": ["a"],
+             "relation": "participate_in", "confidence": "INFERRED",
+             "confidence_score": 0.75, "source_file": abs_str},
+        ],
+    });
+    let g = build_from_json(ext, false, Some(&base)).expect("build");
+    let he = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .expect("hyperedge present");
+    assert_eq!(
+        he.get("source_file").and_then(Value::as_str),
+        Some("docs/CLAUDE.md")
+    );
+    // Anchor: the node path is relativized the same way (the contract this mirrors).
+    assert_eq!(
+        g.node_data("a")
+            .and_then(|a| a.get("source_file"))
+            .and_then(Value::as_str),
+        Some("docs/CLAUDE.md")
+    );
+}
+
+#[test]
+fn build_from_json_skips_non_hashable_node_id() {
+    // A malformed LLM extraction can emit a list-valued id; build_from_json must
+    // skip it and still build the graph from the well-formed nodes.
+    let ext = json!({
+        "nodes": [
+            {"id": "a", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": ["x", "y"], "label": "B", "file_type": "code", "source_file": "b.py"},
+            {"label": "C", "file_type": "code", "source_file": "c.py"},
+        ],
+        "edges": [],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    let ids: std::collections::BTreeSet<String> = g.nodes().map(|(id, _)| id.clone()).collect();
+    assert_eq!(ids, ["a".to_string()].into_iter().collect());
+}
+
+#[test]
+fn build_from_json_skips_edge_with_non_hashable_endpoint() {
+    // A list-valued edge endpoint must be skipped; the well-formed edge survives.
+    let ext = json!({
+        "nodes": [
+            {"id": "a", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": "b", "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [
+            {"source": "a", "target": ["b", "c"], "relation": "calls",
+             "confidence": "INFERRED", "source_file": "a.py"},
+            {"source": "a", "target": "b", "relation": "imports",
+             "confidence": "EXTRACTED", "source_file": "a.py"},
+        ],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    assert_eq!(g.node_count(), 2);
+    assert_eq!(g.edge_count(), 1);
+    assert!(g.edge_data("a", "b").is_some());
+}
+
+#[test]
 fn build_merge_preserves_call_edge_direction() {
     // #760: build_merge must read source/target verbatim, not re-derive edge
     // endpoints from node insertion order (which flips directional `calls`).

@@ -34,7 +34,9 @@ use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
 use cache::extract_single_file;
 use java::{resolve_cross_file_java_imports, resolve_java_type_references};
 use js::{resolve_js_default_imports, resolve_js_reexport_imports};
-use python::{resolve_cross_file_python_imports, resolve_python_reexport_imports};
+use python::{
+    resolve_cross_file_python_imports, resolve_python_member_calls, resolve_python_reexport_imports,
+};
 use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -79,7 +81,7 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "java" => Some(extract_java),
         "groovy" | "gradle" => Some(extract_groovy),
         "c" | "h" => Some(extract_c),
-        "cpp" | "cc" | "cxx" | "hpp" => Some(extract_cpp),
+        "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" => Some(extract_cpp),
         "rb" => Some(extract_ruby),
         "cs" => Some(extract_csharp),
         "kt" | "kts" => Some(extract_kotlin),
@@ -582,6 +584,15 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         .collect();
     if !swift_paths.is_empty() {
         resolve_swift_member_calls(&swift_paths, &all_nodes, &mut all_edges, &all_raw_calls);
+    }
+
+    // Cross-file Python qualified class-method calls (#1446): same timing as the
+    // Swift pass — after the shared call pass (ids final), before relativisation.
+    let has_python = paths
+        .iter()
+        .any(|p| p.extension().is_some_and(|e| e == "py" || e == "pyi"));
+    if has_python {
+        resolve_python_member_calls(&all_nodes, &mut all_edges, &all_raw_calls);
     }
 
     // Relativise source_file fields

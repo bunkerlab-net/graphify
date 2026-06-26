@@ -4,7 +4,8 @@
 //! `_call_llm`; the Rust port injects the call via the `*_with` variants.
 #![allow(clippy::expect_used)]
 
-use std::cell::Cell;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use graphify_llm::{
     LabelOptions, generate_community_labels, generate_community_labels_with, label_communities,
@@ -62,7 +63,7 @@ fn cids_in_prompt(prompt: &str) -> Vec<i64> {
 fn label_communities_happy_path() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let captured: Cell<Option<(String, String)>> = Cell::new(None);
+    let captured: Mutex<Option<(String, String)>> = Mutex::new(None);
 
     let labels = label_communities_with(
         &communities,
@@ -71,7 +72,7 @@ fn label_communities_happy_path() {
         "gemini",
         LabelOptions::default(),
         |prompt, backend, _max, _model| {
-            captured.set(Some((prompt.to_string(), backend.to_string())));
+            *captured.lock().expect("lock") = Some((prompt.to_string(), backend.to_string()));
             Ok(r#"{"0": "Order Management", "1": "Payment Flow"}"#.to_string())
         },
     )
@@ -79,7 +80,7 @@ fn label_communities_happy_path() {
 
     assert_eq!(labels[&0], "Order Management");
     assert_eq!(labels[&1], "Payment Flow");
-    let (prompt, backend) = captured.take().expect("call invoked");
+    let (prompt, backend) = captured.lock().expect("lock").take().expect("call invoked");
     assert!(prompt.contains("place_order"));
     assert!(prompt.contains("StripeClient"));
     assert_eq!(backend, "gemini");
@@ -90,7 +91,7 @@ fn label_communities_passes_model_override() {
     // The model override threads through to the injected call (#b304331).
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let captured: Cell<Option<(String, Option<String>)>> = Cell::new(None);
+    let captured: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
 
     let opts = LabelOptions {
         model: Some("gemini-3.1-flash-lite"),
@@ -103,7 +104,8 @@ fn label_communities_passes_model_override() {
         "gemini",
         opts,
         |_prompt, backend, _max, model| {
-            captured.set(Some((backend.to_string(), model.map(str::to_string))));
+            *captured.lock().expect("lock") =
+                Some((backend.to_string(), model.map(str::to_string)));
             Ok(r#"{"0": "Order Management", "1": "Payment Flow"}"#.to_string())
         },
     )
@@ -111,7 +113,7 @@ fn label_communities_passes_model_override() {
 
     assert_eq!(labels[&0], "Order Management");
     assert_eq!(labels[&1], "Payment Flow");
-    let (backend, model) = captured.take().expect("call invoked");
+    let (backend, model) = captured.lock().expect("lock").take().expect("call invoked");
     assert_eq!(backend, "gemini");
     assert_eq!(model.as_deref(), Some("gemini-3.1-flash-lite"));
 }
@@ -217,6 +219,8 @@ fn generate_community_labels_degrades_on_error() {
         Some("gemini"),
         None,
         true,
+        4,
+        100,
         |_, _, _, _| Ok("not json".to_string()),
     );
     assert_eq!(source, "placeholder");
@@ -238,7 +242,7 @@ fn generate_community_labels_no_backend() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
     let (labels, source) =
-        generate_community_labels(&communities, &node_labels, &gods, None, None, true);
+        generate_community_labels(&communities, &node_labels, &gods, None, None, true, 4, 100);
     assert_eq!(source, "placeholder");
     assert_eq!(labels[&0], "Community 0");
     assert_eq!(labels[&1], "Community 1");
@@ -256,6 +260,8 @@ fn generate_community_labels_degrades_loud() {
         Some("gemini"),
         None,
         false,
+        4,
+        100,
         |_, _, _, _| Ok("not json".to_string()),
     );
     assert_eq!(source, "placeholder");
@@ -326,6 +332,8 @@ fn label_communities_real_path_via_custom_provider() {
         Some("labelprov"),
         None,
         true,
+        4,
+        100,
     );
     assert_eq!(source, "llm");
     assert_eq!(labels[&0], "Orders");
@@ -346,6 +354,8 @@ fn generate_community_labels_success() {
         Some("gemini"),
         None,
         true,
+        4,
+        100,
         |_, _, _, _| Ok(r#"{"0":"Orders","1":"Payments"}"#.to_string()),
     );
     assert_eq!(source, "llm");
@@ -379,7 +389,7 @@ fn empty_communities_returns_placeholders() {
     let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
     communities.insert(0, vec![]);
     let gods = IndexSet::new();
-    let called = Cell::new(false);
+    let called = AtomicBool::new(false);
     // community with no resolvable nodes -> no prompt line -> no backend call.
     let labels = label_communities_with(
         &communities,
@@ -388,13 +398,13 @@ fn empty_communities_returns_placeholders() {
         "gemini",
         LabelOptions::default(),
         |_, _, _, _| {
-            called.set(true);
+            called.store(true, Ordering::Relaxed);
             Ok("{}".to_string())
         },
     )
     .expect("labeling succeeds");
     assert_eq!(labels[&0], "Community 0");
-    assert!(!called.get());
+    assert!(!called.load(Ordering::Relaxed));
 }
 
 // ---------------------------------------------------------------------------
@@ -407,10 +417,11 @@ fn empty_communities_returns_placeholders() {
 fn label_communities_batches_when_over_batch_size() {
     let (node_labels, communities) = wide_graph(250);
     let gods = IndexSet::new();
-    let calls: std::cell::RefCell<Vec<usize>> = std::cell::RefCell::new(Vec::new());
+    let calls: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
     let opts = LabelOptions {
         batch_size: 100,
+        max_concurrency: 1,
         ..LabelOptions::default()
     };
     let labels = label_communities_with(
@@ -421,7 +432,7 @@ fn label_communities_batches_when_over_batch_size() {
         opts,
         |prompt, _backend, _max, _model| {
             let cids = cids_in_prompt(prompt);
-            calls.borrow_mut().push(cids.len());
+            calls.lock().expect("lock").push(cids.len());
             let body = cids
                 .iter()
                 .map(|c| format!("\"{c}\": \"Cluster {c}\""))
@@ -433,7 +444,7 @@ fn label_communities_batches_when_over_batch_size() {
     .expect("labeling succeeds");
 
     // 250 communities / 100 per batch -> 3 batches (100, 100, 50).
-    assert_eq!(*calls.borrow(), vec![100, 100, 50]);
+    assert_eq!(*calls.lock().expect("lock"), vec![100, 100, 50]);
     // Every community got a real name, none left as a placeholder.
     assert_eq!(labels.len(), 250);
     assert!(
@@ -446,10 +457,11 @@ fn label_communities_batches_when_over_batch_size() {
 fn label_communities_partial_batch_failure_keeps_successful_batches() {
     let (node_labels, communities) = wide_graph(150);
     let gods = IndexSet::new();
-    let n_calls = Cell::new(0u32);
+    let n_calls = AtomicU32::new(0);
 
     let opts = LabelOptions {
         batch_size: 50,
+        max_concurrency: 1,
         ..LabelOptions::default()
     };
     let labels = label_communities_with(
@@ -459,9 +471,9 @@ fn label_communities_partial_batch_failure_keeps_successful_batches() {
         "gemini",
         opts,
         |prompt, _backend, _max, _model| {
-            n_calls.set(n_calls.get() + 1);
+            n_calls.fetch_add(1, Ordering::Relaxed);
             let cids = cids_in_prompt(prompt);
-            if n_calls.get() == 2 {
+            if n_calls.load(Ordering::Relaxed) == 2 {
                 return Err(graphify_llm::LlmError::Http(
                     "simulated transient backend failure".to_string(),
                 ));
@@ -522,7 +534,7 @@ fn label_communities_max_communities_caps_total() {
     // Backwards compat: explicit max_communities still caps the total labeled.
     let (node_labels, communities) = wide_graph(150);
     let gods = IndexSet::new();
-    let captured: std::cell::RefCell<Vec<i64>> = std::cell::RefCell::new(Vec::new());
+    let captured: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
     let opts = LabelOptions {
         max_communities: Some(40),
@@ -537,7 +549,7 @@ fn label_communities_max_communities_caps_total() {
         opts,
         |prompt, _backend, _max, _model| {
             let cids = cids_in_prompt(prompt);
-            captured.borrow_mut().extend(&cids);
+            captured.lock().expect("lock").extend(&cids);
             let body = cids
                 .iter()
                 .map(|c| format!("\"{c}\": \"X{c}\""))
@@ -549,7 +561,7 @@ fn label_communities_max_communities_caps_total() {
     .expect("labeling succeeds");
 
     // Only 40 communities should have been sent to the backend.
-    assert_eq!(captured.borrow().len(), 40);
+    assert_eq!(captured.lock().expect("lock").len(), 40);
 }
 
 // ---------------------------------------------------------------------------
@@ -564,7 +576,7 @@ fn label_batch_recovers_via_split_on_invalid_json() {
     // community ends up labeled — none silently dropped.
     let (node_labels, communities) = wide_graph(4);
     let gods = IndexSet::new();
-    let n_calls = Cell::new(0u32);
+    let n_calls = AtomicU32::new(0);
     let labels = label_communities_with(
         &communities,
         &node_labels,
@@ -572,8 +584,8 @@ fn label_batch_recovers_via_split_on_invalid_json() {
         "gemini",
         LabelOptions::default(),
         |prompt, _backend, _max, _model| {
-            n_calls.set(n_calls.get() + 1);
-            if n_calls.get() == 1 {
+            n_calls.fetch_add(1, Ordering::Relaxed);
+            if n_calls.load(Ordering::Relaxed) == 1 {
                 // Broken JSON on the full batch triggers the split-and-retry.
                 return Ok("{this is not valid json, missing quotes".to_string());
             }
@@ -592,8 +604,164 @@ fn label_batch_recovers_via_split_on_invalid_json() {
         assert_eq!(labels[&cid], format!("Label {cid}"));
     }
     assert_eq!(
-        n_calls.get(),
+        n_calls.load(Ordering::Relaxed),
         3,
         "expected 1 initial call + 2 retry calls after split"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #1390: parallel labeling via --max-concurrency / --batch-size.
+// ---------------------------------------------------------------------------
+
+/// Label every community at the given concurrency with a deterministic mock.
+fn label_at_concurrency(
+    communities: &IndexMap<i64, Vec<String>>,
+    node_labels: &IndexMap<String, String>,
+    max_concurrency: usize,
+) -> IndexMap<i64, String> {
+    label_communities_with(
+        communities,
+        node_labels,
+        &IndexSet::new(),
+        "gemini",
+        LabelOptions {
+            batch_size: 1,
+            max_concurrency,
+            ..LabelOptions::default()
+        },
+        |prompt, _b, _m, _model| {
+            let body = cids_in_prompt(prompt)
+                .iter()
+                .map(|c| format!("\"{c}\": \"Cluster {c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds")
+}
+
+#[test]
+fn label_communities_parallel_matches_sequential() {
+    let (node_labels, communities) = wide_graph(12);
+    let seq = label_at_concurrency(&communities, &node_labels, 1);
+    let par = label_at_concurrency(&communities, &node_labels, 4);
+    assert_eq!(
+        seq, par,
+        "parallel labeling must produce the same map as serial"
+    );
+}
+
+#[test]
+fn label_communities_batch_size_controls_batch_count() {
+    let (node_labels, communities) = wide_graph(5);
+    let gods = IndexSet::new();
+    let sizes: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    // Pin serial so the recorded batch-size order is deterministic.
+    let opts = LabelOptions {
+        batch_size: 2,
+        max_concurrency: 1,
+        ..LabelOptions::default()
+    };
+    label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |prompt, _b, _m, _model| {
+            let cids = cids_in_prompt(prompt);
+            sizes.lock().expect("lock").push(cids.len());
+            let body = cids
+                .iter()
+                .map(|c| format!("\"{c}\": \"C{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds");
+    // 5 communities / batch size 2 -> batches of [2, 2, 1].
+    assert_eq!(*sizes.lock().expect("lock"), vec![2, 2, 1]);
+}
+
+#[test]
+fn label_communities_runs_batches_concurrently() {
+    let (node_labels, communities) = wide_graph(8);
+    let gods = IndexSet::new();
+    let current = AtomicUsize::new(0);
+    let peak = AtomicUsize::new(0);
+    let opts = LabelOptions {
+        batch_size: 1,
+        max_concurrency: 4,
+        ..LabelOptions::default()
+    };
+    label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        opts,
+        |prompt, _b, _m, _model| {
+            let now = current.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            current.fetch_sub(1, Ordering::SeqCst);
+            let body = cids_in_prompt(prompt)
+                .iter()
+                .map(|c| format!("\"{c}\": \"C{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds");
+    assert!(
+        peak.load(Ordering::SeqCst) > 1,
+        "batches did not run concurrently with max_concurrency=4"
+    );
+}
+
+#[test]
+#[serial]
+fn label_communities_forces_serial_for_ollama() {
+    // Ollama serves one request at a time; without the opt-in env switch the
+    // guard must pin labeling to a single worker (#1390).
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_OLLAMA_PARALLEL", "");
+    let (node_labels, communities) = wide_graph(8);
+    let gods = IndexSet::new();
+    let current = AtomicUsize::new(0);
+    let peak = AtomicUsize::new(0);
+    let opts = LabelOptions {
+        batch_size: 1,
+        max_concurrency: 4,
+        ..LabelOptions::default()
+    };
+    label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "ollama",
+        opts,
+        |prompt, _b, _m, _model| {
+            let now = current.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            current.fetch_sub(1, Ordering::SeqCst);
+            let body = cids_in_prompt(prompt)
+                .iter()
+                .map(|c| format!("\"{c}\": \"C{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{{{body}}}"))
+        },
+    )
+    .expect("labeling succeeds");
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        1,
+        "ollama labeling must run serially"
     );
 }

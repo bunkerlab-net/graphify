@@ -1217,6 +1217,30 @@ fn test_extraction_system_states_edge_direction_rule() {
     assert!(sys.contains("the function/method BEING CALLED. Never reverse this."));
 }
 
+/// The extraction prompt requests hyperedges with a populated schema example
+/// (not an empty array) and the guidance paragraph (#1418 follow-up).
+#[test]
+fn test_extraction_system_requests_hyperedges() {
+    let sys = graphify_llm::EXTRACTION_SYSTEM;
+    assert!(
+        !sys.contains("\"hyperedges\":[]"),
+        "schema must not show an empty hyperedges array"
+    );
+    assert!(
+        sys.contains("\"nodes\":[\"node_id1\""),
+        "schema must show a populated hyperedge example"
+    );
+    assert!(sys.contains("3 or more nodes"));
+    assert!(sys.to_lowercase().contains("hyperedge"));
+}
+
+#[test]
+fn test_extraction_system_hyperedge_guidance_text() {
+    assert!(
+        graphify_llm::EXTRACTION_SYSTEM.contains("3 or more nodes clearly participate together")
+    );
+}
+
 #[test]
 fn test_extraction_system_deep_appends_suffix() {
     let sys = graphify_llm::extraction_system(true);

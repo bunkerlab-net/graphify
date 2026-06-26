@@ -3,17 +3,7 @@
 
 use std::path::Path;
 
-use crate::constants::DEFAULT_GRAPHIFY_OUT;
 use crate::error::WatchError;
-
-/// Return the effective output directory name from the environment.
-///
-/// Reads `GRAPHIFY_OUT`, falling back to the compile-time default
-/// (`"graphify-out"`).
-#[must_use]
-pub fn graphify_out() -> String {
-    std::env::var("GRAPHIFY_OUT").unwrap_or_else(|_| DEFAULT_GRAPHIFY_OUT.to_string())
-}
 
 /// Write a `needs_update` flag file and print a notification.
 ///
@@ -26,7 +16,7 @@ pub fn graphify_out() -> String {
 ///
 /// Returns [`WatchError::Io`] if the flag file cannot be created.
 pub fn notify_only(watch_path: &Path) -> Result<(), WatchError> {
-    let out = watch_path.join(graphify_out());
+    let out = watch_path.join(graphify_security::graphify_out());
     let flag = out.join("needs_update");
     std::fs::create_dir_all(&out).map_err(WatchError::Io)?;
     std::fs::write(&flag, "1").map_err(WatchError::Io)?;
@@ -49,7 +39,9 @@ pub fn notify_only(watch_path: &Path) -> Result<(), WatchError> {
 /// Ports `check_update` from Python.
 #[must_use]
 pub fn check_update(watch_path: &Path) -> bool {
-    let flag = watch_path.join(graphify_out()).join("needs_update");
+    let flag = watch_path
+        .join(graphify_security::graphify_out())
+        .join("needs_update");
     if flag.exists() {
         println!(
             "[graphify check-update] Pending non-code changes in {}.",

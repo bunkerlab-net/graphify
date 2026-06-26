@@ -8,8 +8,10 @@ use std::fs;
 use std::path::Path;
 
 use super::codex::{install_codex_hook, uninstall_codex_hook};
+use super::common::fs::{dirs_home, remove_skill};
 use super::common::{
-    AGENTS_MD_SECTION, CLAUDE_MD_MARKER, remove_graphify_section, replace_or_append_section,
+    AGENTS_MD_SECTION, CLAUDE_MD_MARKER, install_platform_skill, remove_graphify_section,
+    replace_or_append_section,
 };
 use super::kilo::{install_kilo_plugin, uninstall_kilo_plugin};
 use super::opencode::{install_opencode_plugin, uninstall_opencode_plugin};
@@ -148,4 +150,41 @@ fn push_platform_extra_uninstall(
         _ => {}
     }
     Ok(())
+}
+
+/// `graphify agents install`: skill into `~/.agents/skills` PLUS the always-on
+/// `AGENTS.md` section. The amp-twin of the generic Agent-Skills target; the
+/// bare `graphify install --platform agents` path stays skill-only (#1432).
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` on filesystem failures or `HooksError::Json` on
+/// JSON serialisation failure.
+pub fn agents_platform_install(project_dir: &Path) -> Result<String, HooksError> {
+    let skill = install_platform_skill("agents")?;
+    let agents = agents_install(project_dir, "agents")?;
+    Ok(format!("{skill}\n{agents}"))
+}
+
+/// `graphify agents uninstall`: remove the `~/.agents/skills` skill and the
+/// project `AGENTS.md` section (#1432).
+///
+/// # Errors
+///
+/// Returns `HooksError::Io` on filesystem failures.
+pub fn agents_platform_uninstall(project_dir: &Path) -> Result<String, HooksError> {
+    let skill_dst = dirs_home()
+        .join(".agents")
+        .join("skills")
+        .join("graphify")
+        .join("SKILL.md");
+    let removed = skill_dst.exists();
+    remove_skill(&skill_dst);
+    let agents = agents_uninstall(project_dir, "agents")?;
+    let mut msgs = Vec::new();
+    if removed {
+        msgs.push("skill removed".to_string());
+    }
+    msgs.push(agents);
+    Ok(msgs.join("\n"))
 }

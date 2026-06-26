@@ -332,6 +332,48 @@ fn cpp_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+// ── CUDA (.cu/.cuh route through the C++ extractor) ──────────────────────────
+
+#[test]
+fn cuda_no_error() {
+    let r = extract_cpp(&fixtures().join("sample.cu"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+}
+
+#[test]
+fn cuda_finds_kernel_and_device_functions() {
+    let r = extract_cpp(&fixtures().join("sample.cu"));
+    let labels = labels(&r);
+    assert!(labels.iter().any(|l| l.contains("saxpy")), "{labels:?}"); // __global__ kernel
+    assert!(labels.iter().any(|l| l.contains("dot")), "{labels:?}"); // __device__ function
+}
+
+#[test]
+fn cuda_finds_struct() {
+    let r = extract_cpp(&fixtures().join("sample.cu"));
+    assert!(labels(&r).iter().any(|l| l.contains("Vec3")));
+}
+
+#[test]
+fn cuda_finds_includes() {
+    let r = extract_cpp(&fixtures().join("sample.cu"));
+    assert!(relations(&r).contains("imports"));
+}
+
+#[test]
+fn cuda_host_call_edges() {
+    let r = extract_cpp(&fixtures().join("sample.cu"));
+    let calls = calls(&r);
+    assert!(
+        calls.contains(&("host_norm()".to_string(), "dot()".to_string())),
+        "{calls:?}"
+    );
+    assert!(
+        calls.contains(&("main()".to_string(), "host_norm()".to_string())),
+        "{calls:?}"
+    );
+}
+
 #[test]
 fn csharp_extractor_produces_nodes() {
     let result = extract_csharp(&fixtures().join("sample.cs"));

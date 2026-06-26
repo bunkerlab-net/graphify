@@ -434,14 +434,56 @@ fn test_scripts_contain_python_detect() {
 use graphify_hooks::platform::{
     AGENTS_MD_SECTION, ANTIGRAVITY_RULES, CLAUDE_MD_MARKER, CLAUDE_MD_SECTION, CURSOR_RULE,
     GEMINI_MD_SECTION, KIRO_STEERING, OPENCODE_PLUGIN_JS, VSCODE_INSTRUCTIONS_SECTION,
-    agents_install, agents_uninstall, amp_install, amp_uninstall, antigravity_install,
-    antigravity_uninstall, claude_install, claude_uninstall, codebuddy_install,
-    codebuddy_uninstall, cursor_install, cursor_uninstall, gemini_install, gemini_uninstall,
-    install_claude_hook, install_codex_hook, install_gemini_hook, install_opencode_plugin,
-    install_platform_skill, install_platform_skill_project, kiro_install, kiro_uninstall,
-    replace_or_append_section, uninstall_claude_hook, uninstall_codex_hook, uninstall_gemini_hook,
-    uninstall_opencode_plugin, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
+    agents_install, agents_platform_install, agents_uninstall, amp_install, amp_uninstall,
+    antigravity_install, antigravity_uninstall, claude_install, claude_uninstall,
+    codebuddy_install, codebuddy_uninstall, cursor_install, cursor_uninstall, gemini_install,
+    gemini_uninstall, hermes_skill_dst, install_claude_hook, install_codex_hook,
+    install_gemini_hook, install_opencode_plugin, install_platform_skill,
+    install_platform_skill_project, kiro_install, kiro_uninstall, replace_or_append_section,
+    uninstall_claude_hook, uninstall_codex_hook, uninstall_gemini_hook, uninstall_opencode_plugin,
+    uninstall_platform_skill_project, vscode_install, vscode_uninstall,
 };
+
+// ── #1403: hermes skill destination (Windows %LOCALAPPDATA%) ─────────────────
+
+#[test]
+fn test_hermes_skill_destination_windows_uses_localappdata() {
+    // On Windows, Hermes scans %LOCALAPPDATA%\hermes\skills, not ~/.hermes.
+    let home = Path::new("/home/user");
+    let localappdata = Path::new("/tmp/AppDataLocal");
+    let dst = hermes_skill_dst(home, Some(localappdata), true);
+    assert_eq!(
+        dst,
+        Path::new("/tmp/AppDataLocal")
+            .join("hermes")
+            .join("skills")
+            .join("graphify")
+            .join("SKILL.md")
+    );
+}
+
+#[test]
+fn test_hermes_skill_destination_windows_falls_back_to_appdata_local() {
+    // LOCALAPPDATA unset on Windows -> <home>/AppData/Local.
+    let home = Path::new("/home/user");
+    let dst = hermes_skill_dst(home, None, true);
+    assert_eq!(
+        dst,
+        home.join("AppData")
+            .join("Local")
+            .join("hermes")
+            .join("skills")
+            .join("graphify")
+            .join("SKILL.md")
+    );
+}
+
+#[test]
+fn test_hermes_skill_destination_posix_uses_home() {
+    let home = Path::new("/home/user");
+    let dst = hermes_skill_dst(home, None, false);
+    assert!(dst.ends_with(".hermes/skills/graphify/SKILL.md"), "{dst:?}");
+}
 
 // ---------------------------------------------------------------------------
 // _replace_or_append_section (test_claude_md.py indirectly, test_install.py)
@@ -1017,6 +1059,79 @@ fn test_install_opencode() {
         dir.path()
             .join(".config/opencode/skills/graphify/SKILL.md")
             .exists()
+    );
+}
+
+// ── #1432: generic `agents` platform + `skills` alias ────────────────────────
+
+#[test]
+#[serial(home_env)]
+fn test_install_agents_user_global() {
+    // `--platform agents` lands the skill at ~/.agents/skills (skill-only).
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "agents");
+    assert!(dir.path().join(".agents/skills/graphify/SKILL.md").exists());
+    // Skill-only: no AGENTS.md from the bare install path.
+    assert!(!dir.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn test_install_agents_project_uses_dot_agents() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_platform_skill_project("agents", dir.path()).expect("test invariant");
+    assert!(dir.path().join(".agents/skills/graphify/SKILL.md").exists());
+}
+
+#[test]
+#[serial(home_env)]
+fn test_agents_subcommand_wires_skill_and_agents_md() {
+    // `graphify agents install` is the amp-twin: skill at ~/.agents/skills PLUS
+    // an AGENTS.md `## graphify` section. Running it twice stays idempotent.
+    let home = tempfile::tempdir().expect("tempdir");
+    let proj = tempfile::tempdir().expect("tempdir");
+    // SAFETY: test-only; serialised via `#[serial(home_env)]`.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    agents_platform_install(proj.path()).expect("test invariant");
+    agents_platform_install(proj.path()).expect("idempotent re-run");
+    // SAFETY: test-only cleanup.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
+    assert!(
+        home.path()
+            .join(".agents/skills/graphify/SKILL.md")
+            .exists()
+    );
+    let body = fs::read_to_string(proj.path().join("AGENTS.md")).expect("AGENTS.md");
+    assert!(body.contains("## graphify"));
+    assert_eq!(
+        body.matches("## graphify").count(),
+        1,
+        "AGENTS.md gained a duplicate graphify section"
+    );
+}
+
+#[test]
+fn test_opencode_plugin_reminder_has_no_backticks() {
+    // #1413: backticks or `$(` inside the echo reminder would trigger bash
+    // command substitution, corrupting tool output and silently running the very
+    // command we only suggest. The reminder must be plain prose.
+    let start = OPENCODE_PLUGIN_JS
+        .find("echo \"")
+        .expect("echo reminder present")
+        + "echo \"".len();
+    let rest = &OPENCODE_PLUGIN_JS[start..];
+    let end = rest.find('"').expect("echo reminder terminator");
+    let reminder = &rest[..end];
+    assert!(
+        !reminder.contains('`'),
+        "reminder has a backtick: {reminder}"
+    );
+    assert!(
+        !reminder.contains("$("),
+        "reminder has a $( construct: {reminder}"
     );
 }
 
@@ -2626,9 +2741,10 @@ fn hooks_use_cross_platform_detach() {
     }
 }
 
-/// Both rebuild bodies read `graphify-out/.graphify_root` and pass the
+/// Both rebuild bodies read `<output-dir>/.graphify_root` and pass the
 /// recovered root to `_rebuild_code`, so a scoped build is not silently
-/// expanded to the full repo (#1173).
+/// expanded to the full repo (#1173). The output dir is resolved from
+/// `GRAPHIFY_OUT` at hook-run time rather than hardcoded (#1423).
 #[test]
 fn rebuild_bodies_read_graphify_root() {
     for (name, script) in [
@@ -2636,8 +2752,12 @@ fn rebuild_bodies_read_graphify_root() {
         ("post-checkout", CHECKOUT_SCRIPT),
     ] {
         assert!(
-            script.contains("graphify-out/.graphify_root"),
+            script.contains(".graphify_root"),
             "{name} ignores .graphify_root"
+        );
+        assert!(
+            script.contains("GRAPHIFY_OUT"),
+            "{name} ignores the GRAPHIFY_OUT override (#1423)"
         );
         assert!(
             script.contains("_rebuild_code(_root"),
@@ -2646,6 +2766,10 @@ fn rebuild_bodies_read_graphify_root() {
         assert!(
             script.contains("read_text(encoding='utf-8')"),
             "{name} root read is not single-quoted (shell-quote-safe)"
+        );
+        assert!(
+            script.contains("from graphify.reflect import reflect"),
+            "{name} does not refresh the lessons doc post-rebuild (#1441)"
         );
     }
 }

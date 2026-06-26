@@ -51,6 +51,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   (`.razor`, `.cshtml`) for package, project-reference, target-framework, and `@code` extraction,
   Verilog/SystemVerilog (`.v`, `.sv`, `.svh`), BYOND DreamMaker
   (`.dm`, `.dme` source plus `.dmi` icon sheets, `.dmm` maps, and `.dmf` interface forms),
+  CUDA (`.cu`, `.cuh`) routed through the C++ extractor,
   and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var _names_ (values are never read).
@@ -75,7 +76,8 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 - **Structural introspection** — `graphify extract --cargo` adds `crate -> crate` dependency edges from `Cargo.toml`
   manifests; `--postgres <DSN>` adds a live PostgreSQL schema (requires the `postgres` build feature).
 - **LLM community naming** — `graphify label` (or `cluster-only`) auto-names graph communities with the configured
-  backend; degrades to `Community N` placeholders when no backend is available.
+  backend, fanning out batches in parallel (`--max-concurrency`, `--batch-size`); degrades to `Community N`
+  placeholders when no backend is available.
 - **AI-assistant integration** — drop-in installers for Claude Code, CodeBuddy, Codex, Amp, Cursor, Gemini CLI,
   GitHub Copilot, VS Code, OpenCode, Aider, Factory Droid, Trae, Hermes, Kiro, Kilo Code, Pi, Devin CLI,
   Google Antigravity, and more.
@@ -83,6 +85,9 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   (`--transport http`, requires the `http` build feature) so one shared process can host the graph for a team.
 - **Git hooks + merge driver** so two branches editing the same `graph.json` produce a union-merged result.
 - **Cross-repo global graph** — aggregate every project you care about into one `~/.graphify/global-graph.json`.
+- **Work memory** — `graphify save-result` records Q&A outcomes under `graphify-out/memory/`, and `graphify reflect`
+  aggregates them into a deterministic `reflections/LESSONS.md` lessons doc (refreshed automatically by the
+  post-commit/post-checkout hooks).
 - **Deterministic outputs** — same inputs on the same machine produce byte-identical JSON.
 
 ## Install
@@ -146,7 +151,7 @@ For development conventions (lint policy, porting rules, test layout, definition
 ```text
 graphify/
 ├── src/                       # graphify CLI binary
-├── crates/                    # 29 focused workspace crates
+├── crates/                    # 30 focused workspace crates
 │   ├── graphify-detect/       # filesystem walking + file-type detection
 │   ├── graphify-extract/      # tree-sitter / document / media extractors
 │   ├── graphify-build/        # graph construction
@@ -167,6 +172,7 @@ graphify/
 │   ├── graphify-multigraph-compat/  # runtime keyed-edge capability probe
 │   ├── graphify-scip/         # SCIP-style JSON ingest
 │   ├── graphify-semantic/     # LLM extraction fragment validator
+│   ├── graphify-reflect/      # work-memory reflection (LESSONS.md aggregator)
 │   └── ...                    # benchmark, cache, dedup, ingest, manifest, transcribe, validate, watch, google
 └── graphify-py/               # read-only git submodule — Python reference
 ```

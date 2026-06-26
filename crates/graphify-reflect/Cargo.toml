@@ -1,26 +1,23 @@
 [package]
-description = "Semantic cache for extraction results"
+description = "Deterministic work-memory reflection: aggregate graphify-out/memory/ outcomes into a lessons doc"
 edition.workspace = true
 license.workspace = true
-name = "graphify-cache"
+name = "graphify-reflect"
 publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-graphify-security = { workspace = true }
-hex = { workspace = true }
+chrono = { workspace = true }
 indexmap = { workspace = true }
-serde = { workspace = true }
+regex = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-serial_test = { workspace = true }
-walkdir = { workspace = true }
+graphify-ingest = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
