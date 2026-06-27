@@ -615,6 +615,7 @@ fn label_batch_recovers_via_split_on_invalid_json() {
 // ---------------------------------------------------------------------------
 
 /// Label every community at the given concurrency with a deterministic mock.
+#[must_use]
 fn label_at_concurrency(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,

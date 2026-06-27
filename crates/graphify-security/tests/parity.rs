@@ -254,6 +254,14 @@ impl EnvGuard {
         unsafe { std::env::set_var(key, value) };
         Self { key, prev }
     }
+
+    /// Clear `key` for the test's duration, restoring the prior value on drop.
+    fn unset(key: &'static str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: test-only, serialised via `#[serial_test::serial]`.
+        unsafe { std::env::remove_var(key) };
+        Self { key, prev }
+    }
 }
 
 impl Drop for EnvGuard {
@@ -271,6 +279,8 @@ impl Drop for EnvGuard {
 fn validate_graph_path_default_base_discovers_output_dir() {
     // With base omitted, the output dir is discovered by walking the path's
     // parents for the configured output-dir name (default "graphify-out").
+    // Clear any ambient GRAPHIFY_OUT so discovery resolves the default name.
+    let _guard = EnvGuard::unset("GRAPHIFY_OUT");
     let tmp = tempfile::tempdir().expect("tempdir");
     let base = tmp.path().join("graphify-out");
     std::fs::create_dir(&base).expect("mkdir");

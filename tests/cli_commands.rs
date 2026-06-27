@@ -1001,6 +1001,7 @@ fn reflect_end_to_end_writes_lessons() {
     let dir = tempfile::tempdir().unwrap();
     cli()
         .current_dir(dir.path())
+        .env_remove("GRAPHIFY_OUT")
         .args([
             "save-result",
             "--question",
@@ -1016,6 +1017,7 @@ fn reflect_end_to_end_writes_lessons() {
         .success();
     cli()
         .current_dir(dir.path())
+        .env_remove("GRAPHIFY_OUT")
         .arg("reflect")
         .assert()
         .success()
@@ -1038,6 +1040,7 @@ fn reflect_cold_start_writes_empty_lessons() {
     let dir = tempfile::tempdir().unwrap();
     cli()
         .current_dir(dir.path())
+        .env_remove("GRAPHIFY_OUT")
         .arg("reflect")
         .assert()
         .success()

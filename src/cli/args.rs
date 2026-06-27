@@ -237,10 +237,10 @@ pub(crate) enum Command {
         #[arg(long)]
         labels: Option<PathBuf>,
         /// Signal weight halves every N days.
-        #[arg(long = "half-life-days", default_value_t = 30.0)]
+        #[arg(long = "half-life-days", default_value_t = graphify_reflect::DEFAULT_HALF_LIFE_DAYS)]
         half_life_days: f64,
         /// Distinct useful results to promote a node to preferred.
-        #[arg(long = "min-corroboration", default_value_t = 2)]
+        #[arg(long = "min-corroboration", default_value_t = graphify_reflect::DEFAULT_MIN_CORROBORATION)]
         min_corroboration: usize,
         /// Skip when LESSONS.md is already newer than every input.
         #[arg(long = "if-stale")]
