@@ -2,6 +2,9 @@
 //!
 //! 1:1 ports of `graphify-py/tests/test_export.py`.
 
+// `.expect("...")` is the sanctioned style for `tests/parity.rs` (AGENTS.md
+// permits the file-top `expect_used` allow); a setup/build failure surfaces as
+// a clear test panic. Kept consistent with every other crate's `parity.rs`.
 #![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_build::build_from_json;

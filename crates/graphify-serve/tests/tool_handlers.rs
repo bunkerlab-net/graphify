@@ -1,5 +1,8 @@
 //! Coverage tests for the MCP tool handler functions.
 
+// Test setup uses `.expect("test invariant")`; AGENTS.md sanctions the file-top
+// `expect_used` allow for test files, so a build/setup failure surfaces as a
+// clear panic rather than threading `Result` through every handler test.
 #![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
