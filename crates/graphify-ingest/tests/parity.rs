@@ -212,8 +212,16 @@ fn html_to_markdown_strips_style() {
 fn test_file_created() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mem = tmp.path().join("memory");
-    let out = save_query_result("what is attention?", "Attention is...", &mem, "query", None)
-        .expect("save ok");
+    let out = save_query_result(
+        "what is attention?",
+        "Attention is...",
+        &mem,
+        "query",
+        None,
+        None,
+        None,
+    )
+    .expect("save ok");
     assert!(out.exists());
 }
 
@@ -226,6 +234,8 @@ fn test_filename_format() {
         "They share...",
         &mem,
         "query",
+        None,
+        None,
         None,
     )
     .expect("save ok");
@@ -253,6 +263,8 @@ fn test_frontmatter_question() {
         &mem,
         "query",
         None,
+        None,
+        None,
     )
     .expect("save ok");
     let content = std::fs::read_to_string(&out).expect("read");
@@ -264,7 +276,7 @@ fn test_frontmatter_question() {
 fn test_frontmatter_type() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mem = tmp.path().join("memory");
-    let out = save_query_result("q", "a", &mem, "path_query", None).expect("save ok");
+    let out = save_query_result("q", "a", &mem, "path_query", None, None, None).expect("save ok");
     let content = std::fs::read_to_string(&out).expect("read");
     assert!(content.contains("type: \"path_query\""));
 }
@@ -274,7 +286,8 @@ fn test_source_nodes_included() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mem = tmp.path().join("memory");
     let nodes = vec!["AttentionLayer".to_string(), "SoftmaxFunc".to_string()];
-    let out = save_query_result("q", "a", &mem, "query", Some(&nodes)).expect("save ok");
+    let out =
+        save_query_result("q", "a", &mem, "query", Some(&nodes), None, None).expect("save ok");
     let content = std::fs::read_to_string(&out).expect("read");
     assert!(content.contains("AttentionLayer"));
     assert!(content.contains("SoftmaxFunc"));
@@ -285,7 +298,8 @@ fn test_source_nodes_capped_at_10() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mem = tmp.path().join("memory");
     let nodes: Vec<String> = (0..20).map(|i| format!("Node{i}")).collect();
-    let out = save_query_result("q", "a", &mem, "query", Some(&nodes)).expect("save ok");
+    let out =
+        save_query_result("q", "a", &mem, "query", Some(&nodes), None, None).expect("save ok");
     let content = std::fs::read_to_string(&out).expect("read");
     // Only first 10 should appear in frontmatter source_nodes line
     let fm_line = content
@@ -300,7 +314,7 @@ fn test_memory_dir_created() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mem = tmp.path().join("deep").join("memory");
     assert!(!mem.exists());
-    save_query_result("q", "a", &mem, "query", None).expect("save ok");
+    save_query_result("q", "a", &mem, "query", None, None, None).expect("save ok");
     assert!(mem.exists());
 }
 
@@ -309,10 +323,68 @@ fn test_answer_in_body() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mem = tmp.path().join("memory");
     let answer = "The answer is forty-two.";
-    let out =
-        save_query_result("what is the answer?", answer, &mem, "query", None).expect("save ok");
+    let out = save_query_result(
+        "what is the answer?",
+        answer,
+        &mem,
+        "query",
+        None,
+        None,
+        None,
+    )
+    .expect("save ok");
     let content = std::fs::read_to_string(&out).expect("read");
     assert!(content.contains(answer));
+}
+
+#[test]
+fn test_outcome_in_frontmatter_and_body() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mem = tmp.path().join("memory");
+    let out =
+        save_query_result("q", "a", &mem, "query", None, Some("useful"), None).expect("save ok");
+    let content = std::fs::read_to_string(&out).expect("read");
+    assert!(content.contains("outcome: \"useful\""));
+    assert!(content.contains("## Outcome"));
+    assert!(content.contains("- Signal: useful"));
+}
+
+#[test]
+fn test_correction_in_frontmatter_and_body() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mem = tmp.path().join("memory");
+    let out = save_query_result(
+        "what hashes passwords?",
+        "MD5",
+        &mem,
+        "query",
+        None,
+        Some("corrected"),
+        Some("It's bcrypt, see PasswordHasher"),
+    )
+    .expect("save ok");
+    let content = std::fs::read_to_string(&out).expect("read");
+    assert!(content.contains("correction: \"It's bcrypt, see PasswordHasher\""));
+    assert!(content.contains("- Correction: It's bcrypt, see PasswordHasher"));
+}
+
+#[test]
+fn test_no_outcome_means_no_outcome_section() {
+    // Backward compatible: a result without an outcome looks exactly as before.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mem = tmp.path().join("memory");
+    let out = save_query_result("q", "a", &mem, "query", None, None, None).expect("save ok");
+    let content = std::fs::read_to_string(&out).expect("read");
+    assert!(!content.contains("outcome:"));
+    assert!(!content.contains("## Outcome"));
+}
+
+#[test]
+fn test_invalid_outcome_rejected() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mem = tmp.path().join("memory");
+    let result = save_query_result("q", "a", &mem, "query", None, Some("great"), None);
+    assert!(result.is_err(), "invalid outcome must be rejected");
 }
 
 // ---------------------------------------------------------------------------

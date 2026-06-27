@@ -2,17 +2,21 @@
 //!
 //! 1:1 ports of `graphify-py/tests/test_export.py`.
 
+// `.expect("...")` is the sanctioned style for `tests/parity.rs` (AGENTS.md
+// permits the file-top `expect_used` allow); a setup/build failure surfaces as
+// a clear test panic. Kept consistent with every other crate's `parity.rs`.
 #![allow(clippy::expect_used, unsafe_code)]
 
 use graphify_build::build_from_json;
 use graphify_cluster::cluster;
 use graphify_export::{
     attach_hyperedges, backup_if_protected, prune_dangling_edges, to_canvas, to_cypher, to_graphml,
-    to_html, to_json, to_svg,
+    to_html, to_json, to_obsidian, to_svg,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use serial_test::serial;
+use std::path::Path;
 use tempfile::tempdir;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -593,4 +597,98 @@ fn test_to_html_aggregated_remaps_hyperedges_to_communities() {
         !html.contains("intra only"),
         "single-community hyperedge should be dropped from the aggregated view"
     );
+}
+
+// ── #1409: punctuation-only Obsidian/Canvas filenames ─────────────────────────
+
+/// A 2-node graph where one node's label is all-punctuation (e.g. a `@/*`
+/// tsconfig paths key) and the other is a normal symbol.
+fn punct_graph(label: &str) -> graphify_build::Graph {
+    let val = json!({
+        "nodes": [
+            {"id": "n1", "label": label, "file_type": "code", "source_file": "tsconfig.json"},
+            {"id": "n2", "label": "AuthHandler", "file_type": "code", "source_file": "auth.ts"},
+        ],
+        "edges": [],
+    });
+    build_from_json(val, false, None).expect("build_from_json")
+}
+
+/// Recursively collect the file stems of every `*.md` under `dir`.
+fn collect_md_stems(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(collect_md_stems(&path));
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            out.push(stem.to_string());
+        }
+    }
+    out
+}
+
+fn has_word_char(s: &str) -> bool {
+    s.chars().any(|c| c.is_alphanumeric() || c == '_')
+}
+
+#[test]
+fn to_obsidian_never_emits_punctuation_only_filenames() {
+    // An all-punctuation label (e.g. `@/*`) must not produce a `@.md`-style
+    // filename; it falls back to `unnamed` (#1409).
+    let g = punct_graph("@/*");
+    let communities = cluster(&g, 1.0, None);
+    let tmp = tempdir().expect("tempdir");
+    let written = to_obsidian(&g, &communities, tmp.path(), None, None).expect("to_obsidian");
+    assert!(written > 0, "to_obsidian wrote no notes");
+    let stems = collect_md_stems(tmp.path());
+    assert!(!stems.is_empty(), "to_obsidian wrote no notes");
+    let bad: Vec<&String> = stems.iter().filter(|s| !has_word_char(s)).collect();
+    assert!(
+        bad.is_empty(),
+        "punctuation-only filenames emitted: {bad:?}"
+    );
+    assert!(
+        stems
+            .iter()
+            .any(|s| s == "unnamed" || s.starts_with("unnamed")),
+        "{stems:?}"
+    );
+}
+
+#[test]
+fn to_canvas_never_emits_punctuation_only_filenames() {
+    // Same guard on the canvas exporter's file-node names (#1409).
+    let g = punct_graph("@");
+    let communities = cluster(&g, 1.0, None);
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.canvas");
+    to_canvas(&g, &communities, &out, None, None).expect("to_canvas");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read canvas")).expect("json");
+    let nodes = data
+        .get("nodes")
+        .and_then(Value::as_array)
+        .expect("nodes array");
+    let file_nodes: Vec<&Value> = nodes
+        .iter()
+        .filter(|n| n.get("type").and_then(Value::as_str) == Some("file"))
+        .collect();
+    assert!(!file_nodes.is_empty(), "canvas has no file nodes");
+    for n in &file_nodes {
+        let file = n.get("file").and_then(Value::as_str).expect("file field");
+        let stem = Path::new(file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        assert!(
+            has_word_char(stem),
+            "punctuation-only canvas filename: {file}"
+        );
+    }
 }

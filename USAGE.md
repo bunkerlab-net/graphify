@@ -26,7 +26,8 @@ graphify-out/
 Optional output lands under `graphify-out/` only when you opt in: `wiki/`
 (`graphify export wiki`), `GRAPH_TREE.html` (`graphify tree`), `cypher.txt`
 (`graphify export neo4j`), `<YYYY-MM-DD>/` backups (created automatically when
-`graph.json` is overwritten), and `memory/` (Q&A saved by `graphify save-result`).
+`graph.json` is overwritten), `memory/` (Q&A saved by `graphify save-result`),
+and `reflections/LESSONS.md` (aggregated work-memory lessons from `graphify reflect`).
 
 This is the Rust reimplementation of the Python `graphify` reference; the CLI surface is 1:1 with `python -m graphify`.
 
@@ -117,7 +118,9 @@ and **Markdown links** (inline, reference-style, and `[[wikilinks]]`) as
 `references` edges, so a hub doc (`index.md`, a table of contents) connects to the
 documents it links instead of being an orphan (#1376). Swift `import` targets
 become shared `type=module` anchor nodes and cross-file member calls
-(`recv.method()`) resolve through the file's local type table (#1327, #1356).
+(`recv.method()`) resolve through the file's local type table (#1327, #1356);
+Python `ClassName.method()` calls resolve to the class-qualified method node
+across files (#1446). CUDA sources (`.cu`, `.cuh`) are extracted through the C++ pass.
 
 Optional LLM-driven semantic extraction is wired through `--backend`/`--model`/`--mode`/`--token-budget`/
 `--max-concurrency`/`--api-timeout`/`--max-workers` (see `graphify extract --help` and the
@@ -164,7 +167,8 @@ Rerun clustering on an existing `graph.json` and regenerate the report and HTML 
 parameters or when you only want to refresh `GRAPH_REPORT.md`.
 
 When no `.graphify_labels.json` exists yet, `cluster-only` auto-names communities with the configured LLM backend
-in a single batched call, falling back to `Community N` placeholders if no backend is configured or the call fails.
+in batched calls (fanned out in parallel — tune with `--max-concurrency` / `--batch-size`), falling back to
+`Community N` placeholders if no backend is configured or the call fails.
 An existing labels file is preserved (re-run `graphify label` to force a refresh).
 
 ```bash
@@ -173,6 +177,8 @@ graphify cluster-only . --no-viz                   # skip graph.html (saves time
 graphify cluster-only . --graph other/graph.json   # use a non-default graph location
 graphify cluster-only . --no-label                 # keep "Community N" placeholders (skip LLM naming)
 graphify cluster-only . --backend openai           # backend to use for naming (default: auto-detect)
+graphify cluster-only . --max-concurrency 8        # parallel LLM naming batches (default 4)
+graphify cluster-only . --batch-size 50            # communities per LLM call (default 100)
 ```
 
 ### `label <path>`
@@ -184,6 +190,8 @@ graphify cluster-only . --backend openai           # backend to use for naming (
 graphify label .                       # re-name with the auto-detected backend
 graphify label . --backend gemini      # force a specific backend
 graphify label . --no-viz              # skip graph.html regeneration
+graphify label . --max-concurrency 8   # parallel LLM naming batches (default 4)
+graphify label . --batch-size 50       # communities per LLM call (default 100)
 ```
 
 If no backend is configured (no API key), `label` degrades to `Community N` placeholders and prints a hint.
@@ -304,14 +312,37 @@ graphify explain "AuthMiddleware"
 Save a Q&A result back into `graphify-out/memory/` so it gets re-extracted into the graph on the next `update`
 (the feedback loop). Files under `graphify-out/memory/` are always detected: they bypass `.gitignore` /
 `.graphifyignore` filtering, so a broad ignore pattern (e.g. `*.md`) can't silently erase generated memory notes.
+Pass `--outcome useful|dead_end|corrected` (and `--correction "<what worked>"` for the `corrected` case) to record
+a work-memory signal that `graphify reflect` later aggregates into `LESSONS.md`. An out-of-set `--outcome` is rejected.
 
 ```bash
 graphify save-result \
     --question "how is auth scoped" \
     --answer   "AuthMiddleware checks tenant_id from JWT and binds it to the request context" \
     --type     query \
-    --nodes    AuthMiddleware request_context
+    --nodes    AuthMiddleware request_context \
+    --outcome  useful
 ```
+
+### `reflect`
+
+Aggregate the work-memory outcomes saved under `graphify-out/memory/` into a single deterministic
+`graphify-out/reflections/LESSONS.md`. Each `save-result --outcome` signal is time-decayed (a signal's weight
+halves every 30 days by default), and nodes are bucketed into **preferred** (corroborated by ≥2 useful sessions),
+**tentative** (seen once), and **contested** (mixed signals — the most recent verdict wins). Dead ends and
+corrections are listed so the next session avoids re-deriving them. When a `graph.json` is present, lessons are
+grouped by community.
+
+```bash
+graphify reflect                          # writes graphify-out/reflections/LESSONS.md
+graphify reflect --if-stale               # skip when LESSONS.md is already newer than every input
+graphify reflect --half-life-days 14      # signals decay twice as fast
+graphify reflect --min-corroboration 3    # require 3 useful sessions to promote a node to "preferred"
+graphify reflect --out custom/LESSONS.md  # write the lessons doc elsewhere
+```
+
+The post-commit / post-checkout hooks refresh `LESSONS.md` automatically after each rebuild when saved outcomes
+exist, so the lessons doc stays current without a manual run.
 
 ### `affected "<query>"`
 
@@ -564,12 +595,17 @@ available and is untouched by the project flag.
 graphify install --platform claude    # same as `graphify claude install`
 graphify install claude               # positional shorthand also accepted
 graphify install --platform kimi      # Kimi CLI → ~/.kimi/skills/graphify/SKILL.md (no dedicated subcommand)
+graphify install --platform agents    # cross-framework Agent-Skills → ~/.agents/skills/graphify/SKILL.md
+graphify agents install               # same target; `graphify skills install` is an accepted alias
+graphify agents install --project     # ./.agents/skills/graphify/SKILL.md + AGENTS.md section
 graphify uninstall                    # removes graphify from every detected platform
 graphify uninstall --purge            # also deletes graphify-out/
 ```
 
 The aggregate `install` is a convenience dispatcher to the per-platform installer; the aggregate `uninstall` scans
-every supported platform and removes the integration wherever it finds one.
+every supported platform and removes the integration wherever it finds one. The `agents` platform (aliased as
+`skills`) targets the cross-framework Agent-Skills location — `~/.agents/skills/graphify/SKILL.md` globally, or
+`./.agents/skills/graphify/SKILL.md` plus an `AGENTS.md` section under `--project`.
 
 ### `hook-check`
 
@@ -629,7 +665,7 @@ completes the feature.)
 
 | Variable                         | Effect                                                                                                                                              |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GRAPHIFY_OUT`                   | Override the output directory name (default `graphify-out`).                                                                                        |
+| `GRAPHIFY_OUT`                   | Override the output directory (default `graphify-out`); a relative name or an absolute path, honoured everywhere.                                   |
 | `GRAPHIFY_FORCE`                 | Same effect as `--force` on `update`.                                                                                                               |
 | `GRAPHIFY_VIZ_NODE_LIMIT`        | Cap nodes before HTML export is skipped (default 5000).                                                                                             |
 | `GRAPHIFY_GOOGLE_WORKSPACE`      | Truthy value enables `.gdoc/.gsheet/.gslides` export by default.                                                                                    |

@@ -2,6 +2,8 @@
 //!
 //! Mirrors `graphify-py/tests/test_detect.py` — `_is_sensitive` tests.
 #![allow(clippy::expect_used)]
+// `std::env::set_var` is unsafe in edition 2024 — test-only, serialised below.
+#![allow(unsafe_code)]
 
 use graphify_detect::is_sensitive;
 use std::path::Path;
@@ -108,4 +110,45 @@ fn sensitive_flags_dotfile_token() {
 #[test]
 fn sensitive_flags_plural_tokens_txt() {
     assert!(is_sensitive(Path::new("tokens.txt")));
+}
+
+/// RAII guard that sets an env var and restores it on drop.
+struct EnvGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: test-only, serialised via `#[serial_test::serial]`.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            // SAFETY: test-only cleanup.
+            Some(v) => unsafe { std::env::set_var(self.key, v) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+#[test]
+#[serial_test::serial(graphify_out_env)]
+fn noise_dir_flags_default_graphify_out() {
+    assert!(graphify_detect::is_noise_dir("graphify-out", None));
+}
+
+#[test]
+#[serial_test::serial(graphify_out_env)]
+fn noise_dir_honours_graphify_out_override() {
+    // A custom GRAPHIFY_OUT dir must be skipped so it is never re-ingested as
+    // source (#1423); a normal dir name is still walked.
+    let _guard = EnvGuard::set("GRAPHIFY_OUT", "custom-out");
+    assert!(graphify_detect::is_noise_dir("custom-out", None));
+    assert!(!graphify_detect::is_noise_dir("src", None));
 }

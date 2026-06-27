@@ -28,6 +28,7 @@ mod ip;
 mod label;
 mod metadata;
 mod path_guard;
+pub mod paths;
 #[doc(hidden)]
 pub mod test_support;
 mod url_guard;
@@ -44,4 +45,5 @@ pub use metadata::{
     sanitize_metadata_string, sanitize_metadata_value,
 };
 pub use path_guard::validate_graph_path;
+pub use paths::{DEFAULT_GRAPHIFY_OUT, default_graph_json, graphify_out, graphify_out_name};
 pub use url_guard::validate_url;

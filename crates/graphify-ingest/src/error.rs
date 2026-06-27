@@ -41,4 +41,13 @@ pub enum IngestError {
     /// filename plus `_1` through `_999`).
     #[error("ingest: could not find a free filename after 1000 attempts for {0:?}")]
     FilenameFull(PathBuf),
+
+    /// `save_query_result` was given an `outcome` outside the allowed set.
+    #[error(
+        "ingest: outcome must be one of [\"useful\", \"dead_end\", \"corrected\"], got {got:?}"
+    )]
+    InvalidOutcome {
+        /// The rejected outcome value.
+        got: String,
+    },
 }

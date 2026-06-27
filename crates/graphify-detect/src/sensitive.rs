@@ -260,7 +260,9 @@ pub static SKIP_FILES: std::sync::LazyLock<std::collections::HashSet<&'static st
 /// is treated as noise. Ports graphify-py #1023.
 #[must_use]
 pub fn is_noise_dir(name: &str, parent_name: Option<&str>) -> bool {
-    if SKIP_DIRS.contains(name) {
+    // `SKIP_DIRS` already includes the literal "graphify-out"; also skip a
+    // custom output dir so `GRAPHIFY_OUT` is never re-ingested as source (#1423).
+    if SKIP_DIRS.contains(name) || name == graphify_security::graphify_out_name() {
         return true;
     }
     if name.ends_with("_venv") || name.ends_with("_env") {

@@ -468,11 +468,12 @@ pub fn infer_project_name(graph_path: &Path, meta: &IndexMap<String, serde_json:
         return s.clone();
     }
     let resolved = std::fs::canonicalize(graph_path).unwrap_or_else(|_| graph_path.to_path_buf());
+    let out_name = graphify_security::graphify_out_name();
     if resolved
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
-        == Some("graphify-out")
+        == Some(out_name.as_str())
         && let Some(name) = resolved
             .parent()
             .and_then(|p| p.parent())
@@ -568,17 +569,18 @@ pub(super) fn resolve_graphify_paths(opts: &super::options::CallflowOptions) -> 
     } else if base.join("graph.json").exists() {
         base.clone()
     } else {
-        base.join("graphify-out")
+        base.join(graphify_security::graphify_out())
     };
 
-    let project_root = if graphify_out.file_name().and_then(|n| n.to_str()) == Some("graphify-out")
-    {
-        graphify_out
-            .parent()
-            .map_or_else(|| base.clone(), Path::to_path_buf)
-    } else {
-        base.clone()
-    };
+    let out_name = graphify_security::graphify_out_name();
+    let project_root =
+        if graphify_out.file_name().and_then(|n| n.to_str()) == Some(out_name.as_str()) {
+            graphify_out
+                .parent()
+                .map_or_else(|| base.clone(), Path::to_path_buf)
+        } else {
+            base.clone()
+        };
 
     let graph = opts
         .graph

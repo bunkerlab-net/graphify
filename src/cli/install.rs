@@ -9,18 +9,42 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 use graphify_hooks::platform::{
-    agents_install, agents_uninstall, amp_install, amp_uninstall, antigravity_install,
-    antigravity_uninstall, claude_install, claude_uninstall, codebuddy_install,
-    codebuddy_uninstall, copilot_install, copilot_uninstall, cursor_install, cursor_uninstall,
-    devin_install, devin_project_install, devin_project_uninstall, devin_uninstall, gemini_install,
-    gemini_uninstall, install_kilo_skill_and_command, install_platform_skill,
-    install_platform_skill_project, kilo_install, kilo_uninstall, kiro_install, kiro_uninstall,
-    pi_install, pi_uninstall, uninstall_all, uninstall_platform_skill_project, vscode_install,
-    vscode_uninstall,
+    agents_install, agents_platform_install, agents_platform_uninstall, agents_uninstall,
+    amp_install, amp_uninstall, antigravity_install, antigravity_uninstall, claude_install,
+    claude_uninstall, codebuddy_install, codebuddy_uninstall, copilot_install, copilot_uninstall,
+    cursor_install, cursor_uninstall, devin_install, devin_project_install,
+    devin_project_uninstall, devin_uninstall, gemini_install, gemini_uninstall,
+    install_kilo_skill_and_command, install_platform_skill, install_platform_skill_project,
+    kilo_install, kilo_uninstall, kiro_install, kiro_uninstall, pi_install, pi_uninstall,
+    uninstall_all, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
 
+/// Resolve a CLI platform alias to its canonical platform name. `skills` is the
+/// friendly alias for the generic `agents` platform (#1432). Mirrors Python
+/// `_canonical_platform`.
+#[must_use]
+pub(crate) fn canonical_platform(platform: &str) -> &str {
+    if platform == "skills" {
+        "agents"
+    } else {
+        platform
+    }
+}
+
+/// `graphify agents install|uninstall` (and the `skills` alias): the amp-twin
+/// of the generic Agent-Skills target — skill at `~/.agents/skills` plus the
+/// always-on `AGENTS.md` section (#1432).
+pub(crate) fn cmd_agents_platform(cmd: &PlatformCmd) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let msg = match cmd {
+        PlatformCmd::Install { .. } => agents_platform_install(&cwd)?,
+        PlatformCmd::Uninstall { .. } => agents_platform_uninstall(&cwd)?,
+    };
+    println!("{msg}");
+    Ok(())
+}
 /// Print the amber-brain banner shown at the top of `graphify install`.
 ///
 /// TTY-only (suppressed in CI logs and pipes) and best-effort — it never fails
@@ -60,6 +84,8 @@ fn print_banner() {
 /// under the current working directory instead of the user home
 /// directory. Mirrors the Python `--project` flag (#931).
 pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
+    // Resolve `skills` -> `agents` before routing (#1432).
+    let platform = canonical_platform(platform);
     print_banner();
     // Antigravity's project install lays down the full always-on layer
     // (skill + rules + workflow), not just the skill — matching graphify-py's

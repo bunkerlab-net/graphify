@@ -1,5 +1,6 @@
 //! Helper functions split out of [`super::pipeline::rebuild_code_inner`].
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use graphify_build::{Graph, build_from_json, dedupe_edges, dedupe_nodes, norm_source_file};
@@ -47,6 +48,32 @@ pub(crate) fn detect_phase(watch_path: &Path) -> (DetectResult, Vec<PathBuf>) {
         );
     }
     (detected, code_files)
+}
+
+/// The set of source files re-extracted this run, normalised to match the
+/// stored graph's `source_file` values. A net shrink is legitimate when every
+/// lost node belongs to one of these (or a deleted file) — see
+/// [`check_shrink`](crate::rebuild::shrink::check_shrink) (#1116).
+pub(crate) fn compute_rebuilt_sources(
+    extract_targets: &[PathBuf],
+    deleted_paths: &[String],
+    project_root: &Path,
+) -> HashSet<String> {
+    let root = project_root.to_string_lossy();
+    let mut sources: HashSet<String> = extract_targets
+        .iter()
+        .map(|p| {
+            let raw = p.to_string_lossy();
+            let normalized = norm_source_file(&raw, Some(&root));
+            if normalized.is_empty() {
+                raw.into_owned()
+            } else {
+                normalized
+            }
+        })
+        .collect();
+    sources.extend(deleted_paths.iter().cloned());
+    sources
 }
 
 /// `true` when `path` would have been pulled into the rebuild's `code_files`
@@ -452,6 +479,9 @@ pub(crate) fn merge_with_existing_graph(
 }
 
 /// Execute the `--no-cluster` shortcut: write `graph.json` only, no clustering or report.
+// One-shot `--no-cluster` shortcut threading the rebuild context; an args
+// struct would add indirection for a single call site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_no_cluster_path(
     result: &Value,
     existing_graph_path: &Path,
@@ -459,6 +489,7 @@ pub(crate) fn run_no_cluster_path(
     out: &Path,
     force: bool,
     had_explicit_deletions: bool,
+    rebuilt_sources: Option<&HashSet<String>>,
     t_post: std::time::Instant,
 ) -> Result<bool, WatchError> {
     // Dedupe nodes by id and parallel edges by (source, target, relation): the
@@ -501,6 +532,7 @@ pub(crate) fn run_no_cluster_path(
             &candidate_data,
             None,
             had_explicit_deletions,
+            rebuilt_sources,
         )?;
         std::fs::write(existing_graph_path, json_text(&candidate_data).as_bytes())
             .map_err(WatchError::Io)?;
@@ -731,6 +763,9 @@ pub(crate) struct CommitArgs<'a> {
     /// Skip the shrink guard when the caller has declared deletions — the
     /// smaller graph is expected and not a sign of silent corruption.
     pub had_explicit_deletions: bool,
+    /// Source files re-extracted this run; lets the shrink guard allow a
+    /// symbol removed from a rebuilt file (#1116).
+    pub rebuilt_sources: Option<&'a HashSet<String>>,
     /// The graph JSON that was on disk before this rebuild began.
     pub existing_graph_data: &'a Value,
     /// The newly built graph JSON to be committed.
@@ -764,6 +799,7 @@ pub(crate) fn commit_rebuild_outputs(args: &CommitArgs<'_>) -> Result<(), WatchE
         args.candidate_graph_data,
         Some(args.graph_tmp),
         args.had_explicit_deletions,
+        args.rebuilt_sources,
     )?;
     let _ = backup_if_protected(args.out);
     std::fs::rename(args.graph_tmp, args.existing_graph_path).map_err(WatchError::Io)?;
@@ -844,6 +880,9 @@ pub(crate) struct FinaliseArgs<'a> {
     /// Skip the shrink guard when the caller has declared deletions — see
     /// [`check_shrink`](crate::rebuild::shrink::check_shrink) for context.
     pub had_explicit_deletions: bool,
+    /// Source files re-extracted this run; lets the shrink guard allow a
+    /// symbol removed from a rebuilt file (#1116).
+    pub rebuilt_sources: Option<&'a HashSet<String>>,
     /// Final graph value including attached hyperedges.
     pub graph_with_hyper: &'a Graph,
     /// Community detection result mapping community ID → member node IDs.
@@ -885,6 +924,7 @@ pub(crate) fn finalise_rebuild(args: &FinaliseArgs<'_>) -> Result<(), WatchError
         commit_rebuild_outputs(&CommitArgs {
             force: args.force,
             had_explicit_deletions: args.had_explicit_deletions,
+            rebuilt_sources: args.rebuilt_sources,
             existing_graph_data: args.existing_graph_data,
             candidate_graph_data: args.candidate_graph_data,
             graph_tmp: args.graph_tmp,

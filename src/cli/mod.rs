@@ -22,6 +22,7 @@ pub(crate) mod merge_chunks;
 pub(crate) mod provider;
 pub(crate) mod prs;
 pub(crate) mod query;
+pub(crate) mod reflect;
 pub(crate) mod save_result;
 pub(crate) mod serve;
 pub(crate) mod tree;
@@ -57,16 +58,17 @@ pub(crate) fn run() -> Result<()> {
 
 /// Return the graphify output directory, honouring the `GRAPHIFY_OUT` env var.
 ///
-/// Python equivalent: `os.environ.get("GRAPHIFY_OUT", "graphify-out")` at
-/// `__main__.py:19`. Accepts a relative name ("graphify-out-feature") or an
-/// absolute path ("/shared/graphify-out").
+/// Thin re-export of [`graphify_security::graphify_out`] — the single source of
+/// truth for the output-dir override (Python `graphify.paths`). Accepts a
+/// relative name (`graphify-out-feature`) or an absolute path
+/// (`/shared/graphify-out`).
 pub(crate) fn graphify_out_dir() -> PathBuf {
-    PathBuf::from(std::env::var("GRAPHIFY_OUT").unwrap_or_else(|_| "graphify-out".to_owned()))
+    graphify_security::graphify_out()
 }
 
-/// Return the default graph.json path, honouring `GRAPHIFY_OUT`.
+/// Return the default `graph.json` path, honouring `GRAPHIFY_OUT`.
 pub(crate) fn default_graph_path() -> PathBuf {
-    graphify_out_dir().join("graph.json")
+    graphify_security::default_graph_json()
 }
 
 /// Load and parse `graph.json` into a [`graphify_build::Graph`].

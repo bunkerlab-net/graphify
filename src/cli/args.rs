@@ -126,6 +126,12 @@ pub(crate) enum Command {
         /// Model to use for community naming (default: backend default).
         #[arg(long)]
         model: Option<String>,
+        /// Max community-label batches sent concurrently (#1390).
+        #[arg(long = "max-concurrency", default_value_t = 4)]
+        max_concurrency: usize,
+        /// Communities per LLM labeling call (#1390).
+        #[arg(long = "batch-size", default_value_t = 100)]
+        batch_size: usize,
     },
 
     /// (Re)name communities with the configured LLM backend, regenerate report.
@@ -150,6 +156,12 @@ pub(crate) enum Command {
         /// Model to use for community naming (default: backend default).
         #[arg(long)]
         model: Option<String>,
+        /// Max community-label batches sent concurrently (#1390).
+        #[arg(long = "max-concurrency", default_value_t = 4)]
+        max_concurrency: usize,
+        /// Communities per LLM labeling call (#1390).
+        #[arg(long = "batch-size", default_value_t = 100)]
+        batch_size: usize,
     },
 
     /// Manage custom LLM providers (`graphify provider <add|list|show|remove>`).
@@ -199,6 +211,40 @@ pub(crate) enum Command {
         nodes: Vec<String>,
         #[arg(long = "memory-dir", default_value = "graphify-out/memory")]
         memory_dir: PathBuf,
+        /// Work-memory signal: useful | `dead_end` | corrected (#1441).
+        #[arg(long)]
+        outcome: Option<String>,
+        /// What the right answer was (pairs with `--outcome corrected`).
+        #[arg(long)]
+        correction: Option<String>,
+    },
+
+    /// Aggregate graphify-out/memory/ outcomes into a deterministic lessons doc.
+    Reflect {
+        /// Memory directory (default: `<GRAPHIFY_OUT>/memory`).
+        #[arg(long = "memory-dir")]
+        memory_dir: Option<PathBuf>,
+        /// Output lessons file (default: `<GRAPHIFY_OUT>/reflections/LESSONS.md`).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// graph.json for community grouping (default: auto-detect under `<GRAPHIFY_OUT>`).
+        #[arg(long)]
+        graph: Option<PathBuf>,
+        /// `.graphify_analysis.json` override (default: sibling of the graph).
+        #[arg(long)]
+        analysis: Option<PathBuf>,
+        /// `.graphify_labels.json` override (default: sibling of the graph).
+        #[arg(long)]
+        labels: Option<PathBuf>,
+        /// Signal weight halves every N days.
+        #[arg(long = "half-life-days", default_value_t = graphify_reflect::DEFAULT_HALF_LIFE_DAYS)]
+        half_life_days: f64,
+        /// Distinct useful results to promote a node to preferred.
+        #[arg(long = "min-corroboration", default_value_t = graphify_reflect::DEFAULT_MIN_CORROBORATION)]
+        min_corroboration: usize,
+        /// Skip when LESSONS.md is already newer than every input.
+        #[arg(long = "if-stale")]
+        if_stale: bool,
     },
 
     /// Check `needs_update` flag and notify if semantic re-extraction is pending.
@@ -534,6 +580,16 @@ pub(crate) enum Command {
     },
     /// Install or uninstall graphify integration for Devin CLI.
     Devin {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
+    /// Install or uninstall the generic cross-framework Agent-Skills integration.
+    Agents {
+        #[command(subcommand)]
+        cmd: PlatformCmd,
+    },
+    /// Alias for `agents` (the Agent-Skills ecosystem calls them "skills").
+    Skills {
         #[command(subcommand)]
         cmd: PlatformCmd,
     },

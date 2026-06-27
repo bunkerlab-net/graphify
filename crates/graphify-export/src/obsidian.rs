@@ -36,10 +36,14 @@ fn safe_name(label: &str) -> String {
     let cleaned = UNSAFE_CHARS_RE.replace_all(&cleaned, "");
     let cleaned = cleaned.trim().to_string();
     let cleaned = MD_EXT_RE.replace(&cleaned, "").into_owned();
-    if cleaned.is_empty() {
-        "unnamed".to_string()
-    } else {
+    // A stem of only punctuation (e.g. "@", "*", "#") survives the unsafe-char
+    // strip but is empty once a downstream tool re-slugs on word chars (qmd's
+    // handelize() reduces "@" -> "" and aborts `qmd update`). Require at least
+    // one word char; else fall back so we never emit a "@.md" name (#1409).
+    if cleaned.chars().any(|c| c.is_alphanumeric() || c == '_') {
         crate::util::cap_filename(&cleaned)
+    } else {
+        "unnamed".to_string()
     }
 }
 

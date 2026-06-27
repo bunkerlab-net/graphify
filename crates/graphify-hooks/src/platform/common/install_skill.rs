@@ -2,6 +2,7 @@
 //! a home-directory skill file (no project-local files).
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::HooksError;
 
@@ -11,6 +12,28 @@ use super::skills::{
     SKILL_DROID_MD, SKILL_KIRO_MD, SKILL_MD, SKILL_OPENCODE_MD, SKILL_PI_MD, SKILL_REGISTRATION,
     SKILL_TRAE_MD, SKILL_WINDOWS_MD,
 };
+
+/// Global-scope hermes skill destination. On Windows, Hermes scans
+/// `%LOCALAPPDATA%\hermes\skills`, not `~/.hermes`, falling back to
+/// `<home>/AppData/Local` when `LOCALAPPDATA` is unset (#1403). Off Windows it
+/// stays `<home>/.hermes/skills/graphify/SKILL.md`. Mirrors the hermes branch of
+/// Python `_platform_skill_destination`.
+#[must_use]
+pub fn hermes_skill_dst(home: &Path, localappdata: Option<&Path>, is_windows: bool) -> PathBuf {
+    if is_windows {
+        let base =
+            localappdata.map_or_else(|| home.join("AppData").join("Local"), Path::to_path_buf);
+        base.join("hermes")
+            .join("skills")
+            .join("graphify")
+            .join("SKILL.md")
+    } else {
+        home.join(".hermes")
+            .join("skills")
+            .join("graphify")
+            .join("SKILL.md")
+    }
+}
 
 /// Install a skill-only platform integration.
 ///
@@ -38,6 +61,14 @@ pub fn install_platform_skill(platform: &str) -> Result<String, HooksError> {
             Some(cfg_dir) => cfg_dir.join("skills").join("graphify").join("SKILL.md"),
             None => dirs_home().join(home_rel),
         }
+    } else if platform == "hermes" {
+        // Hermes scans %LOCALAPPDATA% on Windows rather than ~/.hermes (#1403).
+        let localappdata = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        hermes_skill_dst(
+            &dirs_home(),
+            localappdata.as_deref(),
+            cfg!(target_os = "windows"),
+        )
     } else {
         dirs_home().join(home_rel)
     };
@@ -164,7 +195,9 @@ fn skill_for(platform: &str, project: bool) -> Result<(&'static str, &'static st
         // handled by `devin_project_install`, which also writes
         // `.windsurf/rules/graphify.md`.
         "devin" => (SKILL_MD, ".config/devin/skills/graphify/SKILL.md"),
-        "antigravity" => (SKILL_MD, ".agents/skills/graphify/SKILL.md"),
+        // antigravity (global) and the generic `agents` platform (#1432) share the
+        // user-global ~/.agents/skills dir; project scope -> ./.agents/skills.
+        "antigravity" | "agents" => (SKILL_MD, ".agents/skills/graphify/SKILL.md"),
         "antigravity-windows" => (SKILL_WINDOWS_MD, ".agents/skills/graphify/SKILL.md"),
         other => return Err(HooksError::UnknownPlatform(other.to_string())),
     })

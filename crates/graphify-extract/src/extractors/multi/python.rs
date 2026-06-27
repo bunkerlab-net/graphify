@@ -5,7 +5,7 @@ use super::js::js_node_text;
 use super::{JsDefaultResolution, PARALLEL_THRESHOLD, relativise_under_root};
 use crate::ids::make_id1;
 use crate::import_handlers::make_edge;
-use crate::types::{Edge, FileResult, Node};
+use crate::types::{Edge, FileResult, Node, RawCall};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -525,4 +525,113 @@ pub(super) fn resolve_python_reexport_imports(
     let (import_edges, aliases) = resolver.consumer_edges(&pkg_reexports);
     edges.extend(import_edges);
     JsDefaultResolution { edges, aliases }
+}
+
+/// Resolve cross-file Python qualified class-method calls (`ClassName.method()`)
+/// to the class-qualified method node (#1446).
+///
+/// The shared cross-file call pass drops every `is_member_call` because a bare
+/// method name collides across the corpus and inflates god-nodes. That guard is
+/// right for *instance* calls (`obj.method()`) but misses *class-qualified*
+/// calls (`ClassName.method()`), where the receiver is an explicitly-named class
+/// — an exact, unambiguous reference. Using the receiver captured by the
+/// extractor, when it is a capitalized name resolving to exactly one class node
+/// that owns the called method, this emits an EXTRACTED `calls` edge. Purely
+/// additive, with a single-definition god-node guard. Mirrors Python
+/// `_resolve_python_member_calls`; runs after id-disambiguation.
+pub(super) fn resolve_python_member_calls(
+    all_nodes: &[Node],
+    all_edges: &mut Vec<Edge>,
+    all_raw_calls: &[RawCall],
+) {
+    let key = |s: &str| -> String {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_lowercase()
+    };
+
+    let node_by_id: HashMap<&str, &Node> = all_nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    // A class owns methods: it is the source of one or more `method` edges. Index
+    // class label -> owning class node ids (len != 1 is the god-node guard), and
+    // (class_node_id, method_key) -> method_node_id.
+    let mut class_def_nids: HashMap<String, Vec<String>> = HashMap::new();
+    let mut method_index: HashMap<(String, String), String> = HashMap::new();
+    for e in all_edges.iter() {
+        if e.relation != "method" {
+            continue;
+        }
+        if let Some(cnode) = node_by_id.get(e.source.as_str()) {
+            class_def_nids
+                .entry(key(cnode.label.as_str()))
+                .or_default()
+                .push(e.source.clone());
+        }
+        if let Some(tnode) = node_by_id.get(e.target.as_str()) {
+            method_index.insert(
+                (e.source.clone(), key(tnode.label.as_str())),
+                e.target.clone(),
+            );
+        }
+    }
+    if class_def_nids.is_empty() {
+        return;
+    }
+    // A class with N methods produced N entries; collapse to a unique set.
+    for nids in class_def_nids.values_mut() {
+        nids.sort();
+        nids.dedup();
+    }
+
+    let mut existing_pairs: HashSet<(String, String)> = all_edges
+        .iter()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+
+    let mut new_edges: Vec<Edge> = Vec::new();
+    for rc in all_raw_calls {
+        if !rc.is_member_call || rc.callee.is_empty() || rc.caller_nid.is_empty() {
+            continue;
+        }
+        // Only a capitalized receiver is treated as a class reference, so an
+        // instance/module (`self`, `obj`, `config`) never collides with a
+        // same-spelled class via the case-folding key.
+        let Some(receiver) = rc
+            .receiver
+            .as_deref()
+            .filter(|r| r.chars().next().is_some_and(char::is_uppercase))
+        else {
+            continue;
+        };
+        let class_nids = match class_def_nids.get(&key(receiver)) {
+            Some(nids) if nids.len() == 1 => nids,
+            _ => continue, // absent or ambiguous -> god-node guard
+        };
+        let Some(method_nid) = method_index.get(&(class_nids[0].clone(), key(&rc.callee))) else {
+            continue;
+        };
+        if *method_nid == rc.caller_nid
+            || existing_pairs.contains(&(rc.caller_nid.clone(), method_nid.clone()))
+        {
+            continue;
+        }
+        existing_pairs.insert((rc.caller_nid.clone(), method_nid.clone()));
+        // EXTRACTED: a qualified `ClassName.method()` is an explicit, unambiguous
+        // static reference, and the class resolved to exactly one definition that
+        // owns the method.
+        new_edges.push(Edge {
+            external: false,
+            source: rc.caller_nid.clone(),
+            target: method_nid.clone(),
+            relation: "calls".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            source_file: rc.source_file.clone(),
+            source_location: Some(rc.source_location.clone()),
+            weight: 1.0,
+            context: Some("call".to_string()),
+            confidence_score: Some(1.0),
+        });
+    }
+    all_edges.extend(new_edges);
 }

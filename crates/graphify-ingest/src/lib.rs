@@ -25,5 +25,5 @@ mod text;
 
 pub use error::IngestError;
 pub use ingest_fn::{ingest, ingest_with};
-pub use memory::save_query_result;
+pub use memory::{OUTCOMES, save_query_result};
 pub use text::{detect_url_type, html_to_markdown, safe_filename, yaml_str};

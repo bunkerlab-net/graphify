@@ -165,3 +165,61 @@ fn edge_must_be_object() {
     }));
     assert!(errors.iter().any(|e| e.contains("must be an object")));
 }
+
+#[test]
+fn non_hashable_node_id_reported_not_raised() {
+    // A list-valued id must be reported as an error, not crash the validator.
+    let data = json!({
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": ["x", "y"], "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [],
+    });
+    let errors = validate_extraction(&data);
+    assert!(errors.iter().any(|e| e.contains("non-hashable id")));
+}
+
+#[test]
+fn non_hashable_edge_endpoint_reported_not_raised() {
+    // A list-valued endpoint must be reported, not crash the membership test.
+    let data = json!({
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": "n2", "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [
+            {"source": "n1", "target": ["n2", "n3"], "relation": "calls",
+             "confidence": "INFERRED", "source_file": "a.py"},
+        ],
+    });
+    let errors = validate_extraction(&data);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("target") && e.contains("non-hashable"))
+    );
+}
+
+#[test]
+fn non_hashable_node_id_does_not_mask_valid_ids() {
+    // The valid node id must still be collected so a legitimately-dangling edge
+    // is still flagged even when a sibling node has a bad id.
+    let data = json!({
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": {"oops": 1}, "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [
+            {"source": "n1", "target": "ghost", "relation": "calls",
+             "confidence": "EXTRACTED", "source_file": "a.py"},
+        ],
+    });
+    let errors = validate_extraction(&data);
+    assert!(errors.iter().any(|e| e.contains("non-hashable id")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("target") && e.contains("ghost"))
+    );
+}

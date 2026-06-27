@@ -1,9 +1,4 @@
-//! File-extension constants used by the watcher and the output-dir
-//! environment-variable override.
-
-/// Default output sub-directory name, overridden by the `GRAPHIFY_OUT`
-/// environment variable.
-pub(crate) const DEFAULT_GRAPHIFY_OUT: &str = "graphify-out";
+//! File-extension constants used by the watcher.
 
 /// All extensions the watcher pays attention to (code + doc + paper +
 /// image).

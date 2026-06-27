@@ -521,3 +521,181 @@ fn default_import_call_resolves_to_default_exported_function() {
         "calls"
     ));
 }
+
+// ── #1446: qualified ClassName.method() call resolution ──────────────────────
+
+type NodeMap<'a> =
+    std::collections::HashMap<&'a str, &'a indexmap::IndexMap<String, serde_json::Value>>;
+
+fn index_nodes(nodes: &[indexmap::IndexMap<String, serde_json::Value>]) -> NodeMap<'_> {
+    nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(|id| (id, n)))
+        .collect()
+}
+
+/// `field` of the node referenced by `edge[endpoint]` (a source/target id), or "".
+fn endpoint_field(
+    idx: &NodeMap,
+    edge: &indexmap::IndexMap<String, serde_json::Value>,
+    endpoint: &str,
+    field: &str,
+) -> String {
+    edge.get(endpoint)
+        .and_then(|v| v.as_str())
+        .and_then(|id| idx.get(id))
+        .and_then(|n| n.get(field))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[test]
+fn python_qualified_class_method_call_resolves_extracted() {
+    // `ClassName.method()` across files resolves to the class-qualified method
+    // node with an EXTRACTED `calls` edge (#1446).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let actions = tmp.path().join("actions.py");
+    let viewset = tmp.path().join("viewset.py");
+    fs::write(
+        &actions,
+        "class TaskActions:\n    @staticmethod\n    def approve(pk):\n        return pk\n",
+    )
+    .expect("write actions");
+    fs::write(
+        &viewset,
+        "from actions import TaskActions\n\nclass TaskViewSet:\n    def handle(self, request):\n        return TaskActions.approve(request)\n",
+    )
+    .expect("write viewset");
+    let result = extract(&[viewset, actions], Some(tmp.path()));
+    let idx = index_nodes(&result.nodes);
+    let call_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && endpoint_field(&idx, e, "source", "label").contains("handle")
+                && endpoint_field(&idx, e, "target", "label").contains("approve")
+                && endpoint_field(&idx, e, "target", "source_file").contains("actions.py")
+        })
+        .collect();
+    assert_eq!(
+        call_edges.len(),
+        1,
+        "expected one handle->approve edge, got {call_edges:?}"
+    );
+    assert_eq!(
+        call_edges[0].get("confidence").and_then(|v| v.as_str()),
+        Some("EXTRACTED")
+    );
+}
+
+#[test]
+fn python_qualified_call_resolves_when_method_name_collides_with_caller() {
+    // A viewset action `approve()` delegates to a SERVICE action of the SAME
+    // name via `TaskActions.approve()`. The bare-name in-file lookup would match
+    // the caller's own node and silently drop the call; the qualified receiver
+    // must still resolve it cross-file (#1446).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let actions = tmp.path().join("actions.py");
+    let viewset = tmp.path().join("viewset.py");
+    fs::write(
+        &actions,
+        "class TaskActions:\n    @staticmethod\n    def approve(pk):\n        return pk\n",
+    )
+    .expect("write actions");
+    fs::write(
+        &viewset,
+        "from actions import TaskActions\n\nclass TaskViewSet:\n    def approve(self, request):\n        return TaskActions.approve(request)\n",
+    )
+    .expect("write viewset");
+    let result = extract(&[viewset, actions], Some(tmp.path()));
+    let idx = index_nodes(&result.nodes);
+    let cross: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && endpoint_field(&idx, e, "source", "source_file").contains("viewset.py")
+                && endpoint_field(&idx, e, "target", "source_file").contains("actions.py")
+                && endpoint_field(&idx, e, "target", "label").contains("approve")
+        })
+        .collect();
+    assert_eq!(
+        cross.len(),
+        1,
+        "expected viewset->service approve edge, got {cross:?}"
+    );
+    assert_eq!(
+        cross[0].get("confidence").and_then(|v| v.as_str()),
+        Some("EXTRACTED")
+    );
+}
+
+#[test]
+fn python_instance_member_call_not_overconnected() {
+    // A lowercase-receiver member call (`obj.run()`) must NOT resolve cross-file
+    // — the god-node guard stays intact (#1446).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let svc = tmp.path().join("svc.py");
+    let worker = tmp.path().join("worker.py");
+    fs::write(
+        &svc,
+        "class Service:\n    def run(self):\n        return 1\n",
+    )
+    .expect("write svc");
+    fs::write(
+        &worker,
+        "class Worker:\n    def go(self, obj):\n        return obj.run()\n",
+    )
+    .expect("write worker");
+    let result = extract(&[worker, svc], Some(tmp.path()));
+    let idx = index_nodes(&result.nodes);
+    let bad: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && endpoint_field(&idx, e, "source", "label").contains("go")
+                && endpoint_field(&idx, e, "target", "label").contains("run")
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "instance member call must not connect cross-file: {bad:?}"
+    );
+}
+
+#[test]
+fn python_qualified_call_ambiguous_class_bails() {
+    // When the class name is defined in 2+ files, the qualified call must not
+    // resolve — single-definition god-node guard (#1446).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("a.py");
+    let b = tmp.path().join("b.py");
+    let caller = tmp.path().join("caller.py");
+    fs::write(&a, "class Helper:\n    def do(self):\n        return 1\n").expect("write a");
+    fs::write(&b, "class Helper:\n    def do(self):\n        return 2\n").expect("write b");
+    fs::write(
+        &caller,
+        "from a import Helper\n\nclass C:\n    def f(self):\n        return Helper.do(self)\n",
+    )
+    .expect("write caller");
+    let result = extract(&[caller, a, b], Some(tmp.path()));
+    let idx = index_nodes(&result.nodes);
+    let resolved: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && endpoint_field(&idx, e, "source", "label")
+                    .trim_matches(|c| matches!(c, '(' | ')' | '.'))
+                    == "f"
+                && endpoint_field(&idx, e, "target", "label").contains("do")
+        })
+        .collect();
+    assert!(
+        resolved.is_empty(),
+        "ambiguous class name must not resolve: {resolved:?}"
+    );
+}

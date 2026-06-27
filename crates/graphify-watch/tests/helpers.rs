@@ -2,6 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
+use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
 
@@ -161,35 +162,35 @@ fn relativize_noop_on_non_object_payload() {
 fn check_shrink_allows_growth() {
     let existing = json!({"nodes": [{"id": "a"}]});
     let new = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
-    assert!(check_shrink(false, &existing, &new, None, false).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, false, None).is_ok());
 }
 
 #[test]
 fn check_shrink_allows_same() {
     let existing = json!({"nodes": [{"id": "a"}]});
     let new = json!({"nodes": [{"id": "b"}]});
-    assert!(check_shrink(false, &existing, &new, None, false).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, false, None).is_ok());
 }
 
 #[test]
 fn check_shrink_refuses_shrink() {
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(false, &existing, &new, None, false).is_err());
+    assert!(check_shrink(false, &existing, &new, None, false, None).is_err());
 }
 
 #[test]
 fn check_shrink_force_overrides() {
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(true, &existing, &new, None, false).is_ok());
+    assert!(check_shrink(true, &existing, &new, None, false, None).is_ok());
 }
 
 #[test]
 fn check_shrink_no_existing_passes() {
     let existing = json!({"nodes": []});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(false, &existing, &new, None, false).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, false, None).is_ok());
 }
 
 #[test]
@@ -199,7 +200,7 @@ fn check_shrink_cleans_up_tmp_file_on_failure() {
     fs::write(&tmp_path, "{}").expect("write fixture");
     let existing = json!({"nodes": [{"id": "a"}, {"id": "b"}]});
     let new = json!({"nodes": [{"id": "a"}]});
-    assert!(check_shrink(false, &existing, &new, Some(&tmp_path), false).is_err());
+    assert!(check_shrink(false, &existing, &new, Some(&tmp_path), false, None).is_err());
     assert!(!tmp_path.exists(), "tmp file should be cleaned up");
 }
 
@@ -208,7 +209,7 @@ fn check_shrink_allows_explicit_deletions() {
     let existing =
         json!({"nodes": (0..100).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
     let new = json!({"nodes": (0..80).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
-    assert!(check_shrink(false, &existing, &new, None, true).is_ok());
+    assert!(check_shrink(false, &existing, &new, None, true, None).is_ok());
 }
 
 #[test]
@@ -219,7 +220,7 @@ fn check_shrink_keeps_tmp_when_deletions_declared() {
     let existing =
         json!({"nodes": (0..100).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
     let new = json!({"nodes": (0..80).map(|i| json!({"id": format!("n{i}")})).collect::<Vec<_>>()});
-    assert!(check_shrink(false, &existing, &new, Some(&tmp_path), true).is_ok());
+    assert!(check_shrink(false, &existing, &new, Some(&tmp_path), true, None).is_ok());
     assert!(
         tmp_path.exists(),
         "tmp file must NOT be deleted when shrink is intentional — caller is about to swap it into place"
@@ -272,4 +273,34 @@ fn node_community_map_returns_empty_for_missing_nodes() {
     let graph = json!({});
     let map = node_community_map(&graph);
     assert!(map.is_empty());
+}
+
+#[test]
+fn check_shrink_allows_shrink_within_rebuilt_sources() {
+    // #1116: a symbol removed from a re-extracted file is a legitimate shrink —
+    // every lost node belongs to a rebuilt source, so the write proceeds.
+    let existing = json!({"nodes": [
+        {"id": "a", "source_file": "m.py"},
+        {"id": "b", "source_file": "m.py"},
+        {"id": "c", "source_file": "other.py"},
+    ], "links": []});
+    let new = json!({"nodes": [
+        {"id": "a", "source_file": "m.py"},
+        {"id": "c", "source_file": "other.py"},
+    ], "links": []});
+    let rebuilt: HashSet<String> = ["m.py".to_string()].into_iter().collect();
+    assert!(check_shrink(false, &existing, &new, None, false, Some(&rebuilt)).is_ok());
+}
+
+#[test]
+fn check_shrink_blocks_shrink_outside_rebuilt_sources() {
+    // A node lost from a file we did NOT re-extract (the failed-chunk signal) is
+    // still refused even with rebuilt_sources set.
+    let existing = json!({"nodes": [
+        {"id": "a", "source_file": "m.py"},
+        {"id": "z", "source_file": "untouched.py"},
+    ], "links": []});
+    let new = json!({"nodes": [{"id": "a", "source_file": "m.py"}], "links": []});
+    let rebuilt: HashSet<String> = ["m.py".to_string()].into_iter().collect();
+    assert!(check_shrink(false, &existing, &new, None, false, Some(&rebuilt)).is_err());
 }

@@ -429,8 +429,9 @@ pub fn detect(
     let include_patterns = load_graphifyinclude(&root);
     let graphifyignore_patterns = ignore_patterns.len();
 
-    let memory_dir = root.join("graphify-out").join("memory");
-    let converted_dir = root.join("graphify-out").join("converted");
+    let out_dir = root.join(graphify_security::graphify_out());
+    let memory_dir = out_dir.join("memory");
+    let converted_dir = out_dir.join("converted");
     let google_workspace = graphify_google::google_workspace_enabled(None);
 
     let ctx = WalkCtx {

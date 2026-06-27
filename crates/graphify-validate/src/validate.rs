@@ -63,8 +63,21 @@ pub fn validate_extraction(data: &Value) -> Vec<String> {
                             "Node {i} (id={id_repr}) has invalid file_type '{ft}' - must be one of {allowed:?}"
                         ));
                 }
-                if let Some(Value::String(id)) = node_obj.get("id") {
-                    node_ids.insert(id.clone());
+                match node_obj.get("id") {
+                    // A list/dict id is non-hashable in Python; report it rather
+                    // than crash on set construction (#1447). Numbers/bools/null
+                    // are hashable, so they are neither reported nor collected as
+                    // string ids.
+                    Some(id @ (Value::Array(_) | Value::Object(_))) => {
+                        errors.push(format!(
+                            "Node {i} has non-hashable id {} - id must be a string",
+                            repr(id)
+                        ));
+                    }
+                    Some(Value::String(id)) => {
+                        node_ids.insert(id.clone());
+                    }
+                    _ => {}
                 }
             }
         }
@@ -94,20 +107,25 @@ pub fn validate_extraction(data: &Value) -> Vec<String> {
                         "Edge {i} has invalid confidence '{conf}' - must be one of {allowed:?}"
                     ));
                 }
-                if !node_ids.is_empty() {
-                    if let Some(src) = edge_obj.get("source").and_then(Value::as_str)
-                        && !node_ids.contains(src)
-                    {
-                        errors.push(format!(
-                            "Edge {i} source '{src}' does not match any node id"
-                        ));
-                    }
-                    if let Some(tgt) = edge_obj.get("target").and_then(Value::as_str)
-                        && !node_ids.contains(tgt)
-                    {
-                        errors.push(format!(
-                            "Edge {i} target '{tgt}' does not match any node id"
-                        ));
+                for endpoint in ["source", "target"] {
+                    let Some(val) = edge_obj.get(endpoint) else {
+                        continue;
+                    };
+                    match val {
+                        // A list/dict endpoint is non-hashable in Python; report
+                        // it rather than crash the membership test (#1447).
+                        Value::Array(_) | Value::Object(_) => {
+                            errors.push(format!(
+                                "Edge {i} {endpoint} {} is non-hashable - must be a string",
+                                repr(val)
+                            ));
+                        }
+                        Value::String(s) if !node_ids.is_empty() && !node_ids.contains(s) => {
+                            errors.push(format!(
+                                "Edge {i} {endpoint} '{s}' does not match any node id"
+                            ));
+                        }
+                        _ => {}
                     }
                 }
             }

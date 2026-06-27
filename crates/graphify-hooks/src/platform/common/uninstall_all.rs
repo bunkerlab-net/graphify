@@ -42,6 +42,12 @@ pub fn uninstall_all(project_dir: &Path, purge: bool) -> Result<String, HooksErr
         uninstall_codex_hook(project_dir),
     ];
 
+    // The generic `agents` platform skill (#1432) lives at ~/.agents/skills
+    // (global) and ./.agents/skills (project); its AGENTS.md section is handled
+    // by the `agents_uninstall` step above. Remove both skill copies.
+    super::fs::remove_skill(&super::fs::dirs_home().join(".agents/skills/graphify/SKILL.md"));
+    super::fs::remove_skill(&project_dir.join(".agents/skills/graphify/SKILL.md"));
+
     for step in steps {
         match step {
             Ok(msg) if !msg.is_empty() => msgs.push(msg),

@@ -233,3 +233,94 @@ fn codebuddy_listed_in_help() {
         .success()
         .stdout(predicates::str::contains("codebuddy"));
 }
+
+// ── #1432: generic `agents` platform + `skills` alias ────────────────────────
+
+#[test]
+fn install_platform_agents_writes_skill_only() {
+    // `graphify install --platform agents` writes ~/.agents/skills, no AGENTS.md.
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("install")
+        .arg("--platform")
+        .arg("agents")
+        .assert()
+        .success();
+    assert!(
+        home.path()
+            .join(".agents/skills/graphify/SKILL.md")
+            .exists()
+    );
+    assert!(!project.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn install_platform_skills_alias_resolves_to_agents() {
+    // `--platform skills` is the friendly alias for `agents` (#1432).
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("install")
+        .arg("--platform")
+        .arg("skills")
+        .assert()
+        .success();
+    assert!(
+        home.path()
+            .join(".agents/skills/graphify/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+fn agents_install_writes_skill_and_agents_md() {
+    // `graphify agents install` is the amp-twin: skill + AGENTS.md.
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("agents")
+        .arg("install")
+        .assert()
+        .success();
+    assert!(
+        home.path()
+            .join(".agents/skills/graphify/SKILL.md")
+            .exists()
+    );
+    assert!(project.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn skills_install_aliases_agents_subcommand() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("skills")
+        .arg("install")
+        .assert()
+        .success();
+    assert!(
+        home.path()
+            .join(".agents/skills/graphify/SKILL.md")
+            .exists()
+    );
+    assert!(project.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn agents_uninstall_runs() {
+    uninstall_runs("agents");
+}

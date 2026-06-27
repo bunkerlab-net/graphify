@@ -25,6 +25,7 @@ members = [
   "crates/graphify-manifest",
   "crates/graphify-multigraph-compat",
   "crates/graphify-prs",
+  "crates/graphify-reflect",
   "crates/graphify-report",
   "crates/graphify-scip",
   "crates/graphify-security",
@@ -43,7 +44,7 @@ license = "Apache-2.0"
 publish = false
 repository = "https://github.com/bunkerlab-net/graphify"
 rust-version = "1.95"
-version = "0.8.44"
+version = "0.8.49"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -55,13 +56,10 @@ chrono = { version = "0.4", default-features = false, features = [
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 htmlescape = "0.3"
-idna = "1"
 ignore = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 mockito = "1"
-once_cell = "1"
 percent-encoding = "2"
-petgraph = { version = "0.8", features = ["serde-1"] }
 rayon = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -100,6 +98,7 @@ graphify-llm = { path = "crates/graphify-llm" }
 graphify-manifest = { path = "crates/graphify-manifest" }
 graphify-multigraph-compat = { path = "crates/graphify-multigraph-compat" }
 graphify-prs = { path = "crates/graphify-prs" }
+graphify-reflect = { path = "crates/graphify-reflect" }
 graphify-report = { path = "crates/graphify-report" }
 graphify-scip = { path = "crates/graphify-scip" }
 graphify-security = { path = "crates/graphify-security" }
@@ -137,6 +136,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 graphify-affected = { workspace = true }
 graphify-analyze = { workspace = true }
@@ -155,6 +155,7 @@ graphify-html = { workspace = true }
 graphify-ingest = { workspace = true }
 graphify-llm = { workspace = true }
 graphify-prs = { workspace = true }
+graphify-reflect = { workspace = true }
 graphify-report = { workspace = true }
 graphify-security = { workspace = true }
 graphify-serve = { workspace = true }

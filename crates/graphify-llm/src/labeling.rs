@@ -13,6 +13,7 @@
 //! of god-node ids (used only to bias which member labels are sampled first).
 
 use indexmap::{IndexMap, IndexSet};
+use rayon::prelude::*;
 use regex::Regex;
 
 use crate::LlmError;
@@ -37,6 +38,16 @@ pub const LABEL_BATCH_SIZE: usize = 100;
 /// parse failure, bounding cost. Mirrors Python `_label_batch_with_retry`.
 const LABEL_MAX_DEPTH: usize = 3;
 
+/// `true` when an env var opts a serial backend into parallel labeling (value
+/// trimmed to exactly `"1"`). Mirrors the Python `GRAPHIFY_*_PARALLEL` switches.
+fn env_parallel_opt_in(var: &str) -> bool {
+    std::env::var(var).is_ok_and(|v| v.trim() == "1")
+}
+
+/// `(batch_index, parsed-or-error)` produced by one labeling batch — collected
+/// from the worker pool, then merged in index order.
+type BatchOutcome = (usize, Result<IndexMap<i64, String>, LlmError>);
+
 /// Knobs for [`label_communities`] / [`label_communities_with`].
 ///
 /// Mirrors the keyword arguments of Python's `label_communities`: `model`,
@@ -53,6 +64,9 @@ pub struct LabelOptions<'a> {
     pub top_k: usize,
     /// Communities per LLM call.
     pub batch_size: usize,
+    /// Max batches labeled concurrently. Backends that serialise per process
+    /// (ollama, claude-cli) are pinned to 1 unless opted in via env (#1390).
+    pub max_concurrency: usize,
 }
 
 impl Default for LabelOptions<'_> {
@@ -62,6 +76,7 @@ impl Default for LabelOptions<'_> {
             max_communities: None,
             top_k: LABEL_TOP_K,
             batch_size: LABEL_BATCH_SIZE,
+            max_concurrency: 4,
         }
     }
 }
@@ -292,7 +307,7 @@ pub fn label_communities_with<F>(
     call: F,
 ) -> Result<IndexMap<i64, String>, LlmError>
 where
-    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError>,
+    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError> + Sync,
 {
     let mut labels = placeholder_community_labels(communities);
     let cap = opts.max_communities.unwrap_or_else(|| communities.len());
@@ -306,25 +321,65 @@ where
     let batch_size = opts.batch_size.max(1);
     let total = labeled_cids.len();
     let n_batches = total.div_ceil(batch_size);
-    let mut written = 0usize;
-    let mut first_error: Option<LlmError> = None;
 
-    for batch_idx in 0..n_batches {
+    // Backends that serialise per process must not fan out: ollama serves one
+    // request at a time per loaded model (parallel batches cause VRAM pressure
+    // and hollow replies) and claude-cli shells out to a single session that
+    // parallel subprocesses corrupt. Force serial unless opted in (#1390).
+    let mut max_concurrency = opts.max_concurrency;
+    if backend == "ollama" && !env_parallel_opt_in("GRAPHIFY_OLLAMA_PARALLEL") {
+        max_concurrency = 1;
+    }
+    if backend == "claude-cli" && !env_parallel_opt_in("GRAPHIFY_CLAUDE_CLI_PARALLEL") {
+        max_concurrency = 1;
+    }
+    let workers = max_concurrency.min(n_batches).max(1);
+
+    let run_batch = |batch_idx: usize| -> (usize, Result<IndexMap<i64, String>, LlmError>) {
         let start = batch_idx * batch_size;
         let end = (start + batch_size).min(total);
-        let batch_lines = &lines[start..end];
-        let batch_cids = &labeled_cids[start..end];
+        let parsed = label_batch_with_retry(
+            &labeled_cids[start..end],
+            &lines[start..end],
+            backend,
+            opts.model,
+            0,
+            &call,
+        );
+        (batch_idx, parsed)
+    };
 
-        match label_batch_with_retry(batch_cids, batch_lines, backend, opts.model, 0, &call) {
+    // Fan out batches across `workers` threads; merge on this thread so `labels`
+    // is never mutated concurrently. `workers == 1` keeps the sequential path.
+    let mut results: Vec<BatchOutcome> = if workers <= 1 {
+        (0..n_batches).map(&run_batch).collect()
+    } else {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .map_or_else(
+                |_| (0..n_batches).map(&run_batch).collect(),
+                |pool| pool.install(|| (0..n_batches).into_par_iter().map(&run_batch).collect()),
+            )
+    };
+    // Merge in batch order so the propagated error and stderr are deterministic.
+    results.sort_by_key(|(batch_idx, _)| *batch_idx);
+
+    let mut written = 0usize;
+    let mut first_error: Option<LlmError> = None;
+    for (batch_idx, parsed) in results {
+        match parsed {
             Ok(parsed) => {
                 written += parsed.len();
                 labels.extend(parsed);
             }
             Err(exc) => {
+                let start = batch_idx * batch_size;
+                let end = (start + batch_size).min(total);
                 eprintln!(
                     "[graphify label] batch {}/{n_batches} ({} communities) failed: {exc}",
                     batch_idx + 1,
-                    batch_cids.len(),
+                    end - start,
                 );
                 if first_error.is_none() {
                     first_error = Some(exc);
@@ -349,6 +404,9 @@ where
 /// Returns `(labels, source)` where `source` is `"llm"` or `"placeholder"`.
 /// Never errors.
 #[must_use]
+// Labeling entry point: graph data + backend auto-detect + tuning knobs; a
+// partial options-struct split would obscure the auto-detect/degrade flow.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_community_labels(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,
@@ -356,6 +414,8 @@ pub fn generate_community_labels(
     backend: Option<&str>,
     model: Option<&str>,
     quiet: bool,
+    max_concurrency: usize,
+    batch_size: usize,
 ) -> (IndexMap<i64, String>, &'static str) {
     generate_community_labels_with(
         communities,
@@ -364,6 +424,8 @@ pub fn generate_community_labels(
         backend,
         model,
         quiet,
+        max_concurrency,
+        batch_size,
         |prompt, b, max, m| call_llm_with_model(prompt, b, max as usize, m),
     )
 }
@@ -371,6 +433,8 @@ pub fn generate_community_labels(
 /// [`generate_community_labels`] with an injectable LLM call — `call(prompt,
 /// backend, max_tokens, model)`. Used by the public wrapper and by tests.
 #[must_use]
+// As `generate_community_labels`, plus the injectable `call` for testing.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_community_labels_with<F>(
     communities: &IndexMap<i64, Vec<String>>,
     node_labels: &IndexMap<String, String>,
@@ -378,10 +442,12 @@ pub fn generate_community_labels_with<F>(
     backend: Option<&str>,
     model: Option<&str>,
     quiet: bool,
+    max_concurrency: usize,
+    batch_size: usize,
     call: F,
 ) -> (IndexMap<i64, String>, &'static str)
 where
-    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError>,
+    F: Fn(&str, &str, u32, Option<&str>) -> Result<String, LlmError> + Sync,
 {
     let resolved = match backend {
         Some(b) if !b.is_empty() => Some(b.to_string()),
@@ -398,6 +464,8 @@ where
     };
     let opts = LabelOptions {
         model,
+        batch_size,
+        max_concurrency,
         ..LabelOptions::default()
     };
     match label_communities_with(communities, node_labels, gods, &backend, opts, call) {

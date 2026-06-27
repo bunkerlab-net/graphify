@@ -170,16 +170,31 @@ pub fn build_from_json(
         );
     }
 
-    if let Some(hyperedges) = extraction
-        .as_object()
-        .and_then(|o| o.get("hyperedges"))
-        .cloned()
-        && let Some(arr) = hyperedges.as_array()
+    if let Some(arr) = extraction
+        .as_object_mut()
+        .and_then(|o| o.get_mut("hyperedges"))
+        .and_then(Value::as_array_mut)
         && !arr.is_empty()
     {
+        // Relativize hyperedge source_file the same way nodes and edges are, so
+        // `to_json` — which writes `graph.hyperedges` verbatim and has no root —
+        // never leaks an absolute path from a semantic subagent (#1418).
+        for he in arr.iter_mut() {
+            let Some(map) = he.as_object_mut() else {
+                continue;
+            };
+            let Some(sf) = map.get("source_file").and_then(Value::as_str) else {
+                continue;
+            };
+            if sf.is_empty() {
+                continue;
+            }
+            let normalized = norm_source_file(sf, root_str.as_deref());
+            map.insert("source_file".to_string(), Value::String(normalized));
+        }
         graph
             .graph_attrs
-            .insert("hyperedges".to_string(), hyperedges);
+            .insert("hyperedges".to_string(), Value::Array(arr.clone()));
     }
 
     Ok(graph)

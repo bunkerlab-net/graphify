@@ -11,6 +11,14 @@ use std::path::{Path, PathBuf};
 
 use graphify_watch::{LockPolicy, RebuildOptions, rebuild_code};
 
+// GRAPHIFY_OUT isolation: these tests drive `rebuild_code` against per-test
+// tempdirs and read the default `graphify-out/` output dir. They deliberately
+// do not isolate `GRAPHIFY_OUT` — `cargo nextest` runs each test in its own
+// process, no test in this crate mutates `GRAPHIFY_OUT`, and `#[serial]` would
+// not guard against an ambient override (shared equally by every test here
+// that asserts on `graphify-out`). The `#[serial]` marks further down isolate
+// `set_current_dir`, not the environment.
+
 /// Parse `graph.json` at `path` and collect the given string field from every node.
 fn node_field_set(path: &Path, field: &str) -> std::collections::HashSet<String> {
     let value: serde_json::Value =
@@ -210,6 +218,52 @@ fn rebuild_code_evicts_nodes_from_deleted_files() {
         after.contains("login()"),
         "node from surviving file must be kept"
     );
+}
+
+#[test]
+fn rebuild_code_evicts_removed_symbol_from_surviving_file() {
+    // #1116: a symbol removed from a re-extracted (not deleted) file is a
+    // legitimate shrink — `graphify update` must refresh the graph WITHOUT
+    // --force, because every lost node belongs to a rebuilt source.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::write(
+        corpus.join("auth.py"),
+        "def login(): pass\ndef logout(): pass\ndef reset(): pass\n",
+    )
+    .expect("write auth.py");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(corpus, None, opts).expect("first rebuild"));
+
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let before = node_field_set(&graph_path, "label");
+    assert!(
+        before.contains("reset()"),
+        "reset should be present before the edit"
+    );
+
+    // Remove one function from the surviving file and re-run a full update.
+    fs::write(
+        corpus.join("auth.py"),
+        "def login(): pass\ndef logout(): pass\n",
+    )
+    .expect("rewrite auth.py");
+    assert!(
+        rebuild_code(corpus, None, opts).expect("second rebuild without --force"),
+        "shrink-guard must allow a symbol removed from a rebuilt source"
+    );
+
+    let after = node_field_set(&graph_path, "label");
+    assert!(
+        !after.contains("reset()"),
+        "removed symbol must be pruned without --force"
+    );
+    assert!(after.contains("login()"), "surviving symbol must be kept");
 }
 
 #[test]
