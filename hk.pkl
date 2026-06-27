@@ -9,9 +9,15 @@ local linters = new Mapping<String, Step> {
   // Lint Github Actions
   ["action_lint"] = Builtins.actionlint
   // Cargo clippy
-  ["cargo_clippy"] = Builtins.cargo_clippy
+  ["cargo_clippy"] = (Builtins.cargo_clippy) {
+    // Skipped under the `ci` profile; CI runs clippy as a dedicated step
+    profiles = List("!ci")
+  }
   // Cargo format
-  ["cargo_format"] = Builtins.cargo_fmt
+  ["cargo_format"] = (Builtins.cargo_fmt) {
+    // Skipped under the `ci` profile; CI runs `cargo fmt --check` as a dedicated step
+    profiles = List("!ci")
+  }
   // Detect accidentally committed private keys
   ["detect_private_key"] = Builtins.detect_private_key
   // Format TOML files
@@ -25,7 +31,10 @@ local linters = new Mapping<String, Step> {
   // Ensure all files end in a new line
   ["newlines"] = Builtins.newlines
   // No commit to protected branches
-  ["no_commit_protected_branch"] = Builtins.no_commit_to_branch
+  ["no_commit_protected_branch"] = (Builtins.no_commit_to_branch) {
+    // Skipped under the `ci` profile; CI legitimately runs on protected branches
+    profiles = List("!ci")
+  }
   // Format Pickle files
   ["pkl_format"] = Builtins.pkl_format
   // Lint Pickle files
