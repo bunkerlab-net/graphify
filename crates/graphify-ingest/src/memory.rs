@@ -40,6 +40,10 @@ pub fn save_query_result(
     outcome: Option<&str>,
     correction: Option<&str>,
 ) -> Result<PathBuf, IngestError> {
+    // Parity with graphify-py `save_query_result` (ingest.py): only `outcome`
+    // is validated against `OUTCOMES`. `correction` is accepted alongside any
+    // outcome (or none) — the aggregator simply ignores it for non-`corrected`
+    // docs — so no extra `correction`-requires-`corrected` guard is added here.
     if let Some(o) = outcome
         && !OUTCOMES.contains(&o)
     {

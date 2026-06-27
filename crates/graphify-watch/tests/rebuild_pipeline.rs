@@ -11,6 +11,14 @@ use std::path::{Path, PathBuf};
 
 use graphify_watch::{LockPolicy, RebuildOptions, rebuild_code};
 
+// GRAPHIFY_OUT isolation: these tests drive `rebuild_code` against per-test
+// tempdirs and read the default `graphify-out/` output dir. They deliberately
+// do not isolate `GRAPHIFY_OUT` — `cargo nextest` runs each test in its own
+// process, no test in this crate mutates `GRAPHIFY_OUT`, and `#[serial]` would
+// not guard against an ambient override (shared equally by every test here
+// that asserts on `graphify-out`). The `#[serial]` marks further down isolate
+// `set_current_dir`, not the environment.
+
 /// Parse `graph.json` at `path` and collect the given string field from every node.
 fn node_field_set(path: &Path, field: &str) -> std::collections::HashSet<String> {
     let value: serde_json::Value =
