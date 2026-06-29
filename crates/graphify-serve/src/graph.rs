@@ -759,21 +759,20 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     if term.is_empty() {
         return Vec::new();
     }
-    let query_basename = strip_diacritics(
-        std::path::Path::new(label)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(label),
-    )
-    .to_lowercase();
+    // Slash-normalize the query once (Windows `\` → `/`) so the basename (for
+    // the L1 file-node preference) and the full-path compare share one
+    // separator convention; otherwise `src\foo.rs` resolves the file but its
+    // basename keeps the backslash and misses the L1 preference (#1503).
+    let query_norm = strip_diacritics(label).to_lowercase().replace('\\', "/");
+    let query_basename = Path::new(&query_norm)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&query_norm)
+        .to_string();
     // Slash-normalized full path of the query, for exact source-path matching.
     // Trailing separators are trimmed so a path query keeps matching the file
     // (parity with the old tokenized compare, which dropped them) (#1503).
-    let query_path = strip_diacritics(label)
-        .to_lowercase()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string();
+    let query_path = query_norm.trim_end_matches('/').to_string();
     let mut source_exact: Vec<String> = Vec::new();
     let mut preferred: Vec<String> = Vec::new();
     let mut exact: Vec<String> = Vec::new();

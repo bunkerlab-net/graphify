@@ -306,6 +306,33 @@ fn test_find_node_source_file_path_prefers_file_level_node() {
 }
 
 #[test]
+fn test_find_node_source_file_path_backslash_prefers_file_level_node() {
+    // #1503: a Windows-style backslash path query must behave like its
+    // forward-slash twin — the basename is derived from slash-normalized
+    // separators, so the L1 file node still floats ahead of its symbols.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "example_route_get", "label": "GET()",
+                 "source_file": "app/api/example/route.ts", "source_location": "L42"},
+                {"id": "example_route", "label": "route.ts",
+                 "source_file": "app/api/example/route.ts", "source_location": "L1"},
+            ],
+            "edges": [],
+        }),
+        false,
+        None,
+    )
+    .expect("make graph");
+    let matches = find_node(&g, "app\\api\\example\\route.ts");
+    assert_eq!(
+        matches.first().map(String::as_str),
+        Some("app_api_example_route")
+    );
+    assert!(matches.iter().any(|m| m == "app_api_example_route_get"));
+}
+
+#[test]
 fn test_query_terms_strips_search_punctuation() {
     assert_eq!(
         query_terms("what calls extract?"),
