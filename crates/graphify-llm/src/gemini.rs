@@ -15,16 +15,25 @@ pub const ENV_KEY: &str = "GEMINI_API_KEY";
 pub const ENV_KEY_FALLBACK: &str = "GOOGLE_API_KEY";
 /// Model override env var.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_GEMINI_MODEL";
-/// Base URL override env var.
+/// Base URL override env var (test redirect).
 pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_GEMINI_BASE_URL";
+/// Upstream Gemini base-URL env var (#1458): points the backend at any
+/// OpenAI-compatible server, falling back to Google's official endpoint.
+pub const GEMINI_BASE_URL_ENV: &str = "GEMINI_BASE_URL";
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
-/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+/// Effective base URL: [`BASE_URL_ENV_KEY`] (test redirect) then
+/// [`GEMINI_BASE_URL_ENV`], else Google's official endpoint.
 #[must_use]
 pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV_KEY)
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(GEMINI_BASE_URL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
 

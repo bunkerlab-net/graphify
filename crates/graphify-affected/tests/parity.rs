@@ -333,3 +333,73 @@ fn affected_hit_struct_carries_expected_fields() {
     assert_eq!(hit.depth, 1);
     assert_eq!(hit.via_relation, "calls");
 }
+
+// Mirrors: test_resolve_seed_source_file_path_prefers_file_level_node (#1503)
+#[test]
+fn resolve_seed_source_file_path_prefers_file_level_node() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true, "multigraph": false, "graph": {},
+        "nodes": [
+            {"id": "example_route_get", "label": "GET()",
+             "source_file": "app/api/example/route.ts", "source_location": "L42"},
+            {"id": "example_route", "label": "route.ts",
+             "source_file": "app/api/example/route.ts", "source_location": "L1"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    // `load_graph` runs `build_from_json`, which re-keys non-AST nodes to the
+    // full repo-relative path id (#1504); the L1 file node `example_route` here
+    // becomes `app_api_example_route`. resolve_seed must still prefer it over the
+    // L42 symbol that shares the source_file (#1503).
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(
+        resolve_seed(&graph, "app/api/example/route.ts"),
+        Some("app_api_example_route".to_owned())
+    );
+}
+
+// Mirrors: test_resolve_seed_source_file_trailing_slash_parity (#1503)
+#[test]
+fn resolve_seed_source_file_trailing_slash_parity() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true, "multigraph": false, "graph": {},
+        "nodes": [
+            {"id": "get", "label": "GET()",
+             "source_file": "app/api/example/route.ts", "source_location": "L42"},
+            {"id": "file", "label": "route.ts",
+             "source_file": "app/api/example/route.ts", "source_location": "L1"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(
+        resolve_seed(&graph, "app/api/example/route.ts/"),
+        Some("file".to_owned())
+    );
+}
+
+// Mirrors: test_resolve_seed_source_file_ambiguous_no_file_node_returns_none (#1503)
+#[test]
+fn resolve_seed_source_file_ambiguous_no_file_node_returns_none() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("g.json");
+    let payload = json!({
+        "directed": true, "multigraph": false, "graph": {},
+        "nodes": [
+            {"id": "a", "label": "handle_a()",
+             "source_file": "pkg/handlers.py", "source_location": "L10"},
+            {"id": "b", "label": "handle_b()",
+             "source_file": "pkg/handlers.py", "source_location": "L20"},
+        ],
+        "links": [],
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load");
+    assert_eq!(resolve_seed(&graph, "pkg/handlers.py"), None);
+}

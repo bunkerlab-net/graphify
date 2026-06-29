@@ -12,16 +12,25 @@ pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 pub const ENV_KEY: &str = "DEEPSEEK_API_KEY";
 /// Model override env var.
 pub const MODEL_ENV_KEY: &str = "GRAPHIFY_DEEPSEEK_MODEL";
-/// Base URL override env var.
+/// Base URL override env var (test redirect).
 pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_DEEPSEEK_BASE_URL";
+/// Upstream `DeepSeek` base-URL env var (#1458): points the backend at any
+/// OpenAI-compatible server, falling back to `DeepSeek`'s official endpoint.
+pub const DEEPSEEK_BASE_URL_ENV: &str = "DEEPSEEK_BASE_URL";
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 
-/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+/// Effective base URL: [`BASE_URL_ENV_KEY`] (test redirect) then
+/// [`DEEPSEEK_BASE_URL_ENV`], else `DeepSeek`'s official endpoint.
 #[must_use]
 pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV_KEY)
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(DEEPSEEK_BASE_URL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
 

@@ -64,6 +64,7 @@ impl SlnxCtx<'_> {
                                     source_file: abs.clone(),
                                     source_location: None,
                                     metadata: None,
+                                    origin_file: None,
                                 });
                                 self.edges.push(Edge {
                                     external: false,
@@ -137,6 +138,7 @@ pub fn extract_slnx(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();

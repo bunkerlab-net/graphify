@@ -122,9 +122,17 @@ pub(super) struct GoRefCtx<'a> {
 }
 
 impl GoRefCtx<'_> {
-    /// Return the NID for a named type, creating a bare placeholder node when no
-    /// package-qualified node already exists. Mirrors Go's `ensure_named_node`.
-    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+    /// Return the NID for a named type, creating a SOURCELESS placeholder stub
+    /// when no package-qualified node already exists. Mirrors Go's
+    /// `ensure_named_node`.
+    ///
+    /// The stub carries no `source_file` so the corpus-level rewire can collapse
+    /// it onto the real definition; a sourced stub would bake the referencing
+    /// file's path (extension and all) into the id and block the rewire — the
+    /// phantom-duplicate-node bug (#1500/#1402). Unlike the generic-walker stub,
+    /// no `origin_file` is recorded: same-package Go refs resolve to the single
+    /// canonical type node rather than splitting per referencing file.
+    fn ensure_named_node(&mut self, name: &str) -> String {
         let nid1 = make_id(&[self.pkg_scope, name]);
         if self.seen_ids.contains(&nid1) {
             return nid1;
@@ -135,9 +143,10 @@ impl GoRefCtx<'_> {
                 id: nid2.clone(),
                 label: name.to_string(),
                 file_type: "code".to_string(),
-                source_file: self.str_path.to_string(),
-                source_location: Some(format!("L{line}")),
+                source_file: String::new(),
+                source_location: Some(String::new()),
                 metadata: None,
+                origin_file: None,
             });
         }
         nid2
@@ -203,7 +212,7 @@ pub(super) fn emit_go_method_refs(
                         } else {
                             "parameter_type"
                         };
-                        let tgt = rc.ensure_named_node(&ref_name, line);
+                        let tgt = rc.ensure_named_node(&ref_name);
                         if tgt != func_nid {
                             rc.push_ref(func_nid, &tgt, ctx, line);
                         }
@@ -267,7 +276,7 @@ fn emit_go_result_refs(
         } else {
             "return_type"
         };
-        let tgt = rc.ensure_named_node(&ref_name, line);
+        let tgt = rc.ensure_named_node(&ref_name);
         if tgt != func_nid {
             rc.push_ref(func_nid, &tgt, ctx, line);
         }
@@ -347,7 +356,7 @@ pub(super) fn emit_go_type_body_refs(
                     }
                 }
                 for (ref_name, is_generic) in refs {
-                    let tgt = rc.ensure_named_node(&ref_name, line);
+                    let tgt = rc.ensure_named_node(&ref_name);
                     if tgt == type_nid {
                         continue;
                     }
@@ -390,7 +399,7 @@ fn emit_go_struct_field_refs(rc: &mut GoRefCtx<'_>, field: tree_sitter::Node<'_>
     let mut refs: Vec<(String, bool)> = Vec::new();
     go_collect_type_refs(type_node, rc.source, false, &mut refs);
     for (ref_name, is_generic) in refs {
-        let tgt = rc.ensure_named_node(&ref_name, line);
+        let tgt = rc.ensure_named_node(&ref_name);
         if tgt == type_nid {
             continue;
         }

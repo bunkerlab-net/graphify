@@ -879,6 +879,57 @@ fn label_no_backend_keeps_placeholders() {
 }
 
 #[test]
+fn cluster_only_timing_emits_stage_lines() {
+    // #1490: `--timing` prints per-stage wall-clock lines plus a total to stderr.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+    cli_no_backend()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--graph")
+        .arg(&graph_path)
+        .arg("--no-viz")
+        .arg("--timing")
+        .assert()
+        .success()
+        .stderr(contains("[graphify timing]").and(contains("total:")));
+}
+
+#[test]
+fn label_missing_only_preserves_existing_labels() {
+    // #1481: `--missing-only` keeps curated community names and only (re)names
+    // unnamed / `Community N` placeholders. With no backend the placeholder
+    // community stays a placeholder, but the hand-written name must survive.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out).unwrap();
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+    fs::write(
+        out.join(".graphify_labels.json"),
+        r#"{"0":"Authentication","1":"Community 1"}"#,
+    )
+    .unwrap();
+    cli_no_backend()
+        .arg("label")
+        .arg(dir.path())
+        .arg("--graph")
+        .arg(&graph_path)
+        .arg("--no-viz")
+        .arg("--missing-only")
+        .assert()
+        .success();
+    let labels = fs::read_to_string(out.join(".graphify_labels.json")).unwrap();
+    assert!(
+        labels.contains("Authentication"),
+        "curated label must survive --missing-only: {labels}"
+    );
+}
+
+#[test]
 fn label_accepts_model_flag() {
     // `label --model` parses and threads through to the labeling path (#b304331).
     // With no backend key the run still degrades to placeholders, proving the

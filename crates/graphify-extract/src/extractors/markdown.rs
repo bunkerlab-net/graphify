@@ -74,6 +74,7 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
@@ -198,6 +199,7 @@ fn handle_heading(
             source_file: ctx.str_path.to_string(),
             source_location: Some(format!("L{line_num}")),
             metadata: None,
+            origin_file: None,
         });
     }
     while heading_stack.last().is_some_and(|(lvl, _)| *lvl >= level) {

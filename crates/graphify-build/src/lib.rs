@@ -28,6 +28,7 @@ mod file_type;
 mod global_ops;
 mod graph;
 mod ingest;
+mod migrate;
 mod normalize;
 
 pub use attrs::{EdgeAttrs, NodeAttrs};
@@ -38,4 +39,5 @@ pub use dedup_label::{deduplicate_by_label, norm_label};
 pub use error::BuildError;
 pub use global_ops::{prefix_graph_for_global, prune_repo_from_graph};
 pub use graph::{Edge, Graph, GraphKind};
+pub use migrate::graph_has_legacy_ids;
 pub use normalize::{norm_source_file, normalize_id};

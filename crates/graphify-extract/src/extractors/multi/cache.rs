@@ -1,7 +1,7 @@
 //! Per-file extraction cache helpers (thin wrappers around graphify-cache).
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
-use super::get_extractor;
+use super::{get_extractor, with_xaml_extract_root};
 use crate::types::{Edge, FileResult, Node, RawCall};
 use serde_json::Value;
 use std::path::Path;
@@ -147,7 +147,7 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
         };
     };
 
-    let result = extractor(path);
+    let result = with_xaml_extract_root(Some(effective_root), || extractor(path));
     if !bypass_cache && result.error.is_none() {
         let v = file_result_to_value(&result);
         // best-effort save; ignore failures

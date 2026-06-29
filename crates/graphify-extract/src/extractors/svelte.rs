@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::generic::extract_generic;
+use crate::generic::{extract_generic, extract_generic_with_source};
 use crate::ids::make_id1;
 use crate::lang_configs;
 use crate::tsconfig::{load_tsconfig_aliases, resolve_js_module_path};
@@ -217,6 +217,7 @@ fn add_import_edge(
             source_file: stub_source_file,
             source_location: None,
             metadata: None,
+            origin_file: None,
         });
         result.edges.push(Edge {
             external: false,
@@ -368,5 +369,99 @@ pub fn extract_astro(path: &Path) -> FileResult {
         }
     }
 
+    result
+}
+
+// ── extract_vue ─────────────────────────────────────────────────────────────
+
+#[allow(clippy::expect_used)] // literal pattern
+static VUE_SCRIPT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // The open-tag matcher skips over quoted attribute values so a `>` inside one
+    // (Vue 3.3+ generic components: `generic="T extends Record<string, unknown>"`)
+    // doesn't prematurely end the tag.
+    Regex::new(r#"(?i)(<script\b(?:"[^"]*"|'[^']*'|[^>"'])*>)([\s\S]*?)(</script\s*>)"#)
+        .expect("static vue script regex")
+});
+
+#[allow(clippy::expect_used)] // literal pattern
+static VUE_SCRIPT_LANG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\blang\s*=\s*['"]?([A-Za-z]+)['"]?"#).expect("static vue lang regex")
+});
+
+/// Blank every char outside `<script>` bodies (keeping `\r`/`\n` so line numbers
+/// stay accurate); returns `(masked_source, first_block_lang)`. Mirrors Python
+/// `_vue_mask_non_script`.
+fn vue_mask_non_script(src: &str) -> (String, Option<String>) {
+    fn blank(s: &str) -> String {
+        s.chars()
+            .map(|c| if matches!(c, '\r' | '\n') { c } else { ' ' })
+            .collect()
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut pos = 0usize;
+    let mut lang: Option<String> = None;
+    for caps in VUE_SCRIPT_RE.captures_iter(src) {
+        let Some(whole) = caps.get(0) else { continue };
+        let open = caps.get(1).map_or("", |m| m.as_str());
+        let body = caps.get(2).map_or("", |m| m.as_str());
+        let close = caps.get(3).map_or("", |m| m.as_str());
+        out.push_str(&blank(&src[pos..whole.start()])); // markup/style before block
+        out.push_str(&blank(open)); // <script …> open tag
+        out.push_str(body); // script body, verbatim
+        out.push_str(&blank(close)); // </script> close tag
+        pos = whole.end();
+        if lang.is_none()
+            && let Some(lm) = VUE_SCRIPT_LANG_RE.captures(open)
+        {
+            lang = lm.get(1).map(|m| m.as_str().to_lowercase());
+        }
+    }
+    out.push_str(&blank(&src[pos..]));
+    (out, lang)
+}
+
+/// Extract imports, symbols, and type refs from a `.vue` SFC (#1468).
+///
+/// Masks the non-`<script>` regions and parses the script with the grammar its
+/// `lang` implies (`tsx`→TSX, `js`/`jsx`→JS, `ts` or unset→TS, a superset of JS);
+/// a regex pass then recovers `import('…')` dynamic imports the AST doesn't edge.
+/// Mirrors Python `extract_vue`.
+#[must_use]
+pub fn extract_vue(path: &Path) -> FileResult {
+    let Ok(src) = std::fs::read_to_string(path) else {
+        return FileResult::default();
+    };
+    let (masked, lang) = vue_mask_non_script(&src);
+    let config = match lang.as_deref() {
+        Some("tsx") => &lang_configs::TYPESCRIPT_TSX,
+        Some("js" | "jsx") => &lang_configs::JAVASCRIPT,
+        _ => &lang_configs::TYPESCRIPT, // "ts" or unspecified — TS is a superset of JS
+    };
+    let mut result = extract_generic_with_source(path, config, masked.as_bytes());
+
+    // Dynamic `import('…')` calls aren't edged by the AST pass; recover by regex,
+    // mirroring extract_svelte/extract_astro.
+    let str_path = path.to_string_lossy().into_owned();
+    let file_node_id = make_id1(&str_path);
+    let mut existing_ids: HashSet<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
+    for cap in DYNAMIC_IMPORT_RE.captures_iter(&src) {
+        let raw = cap.get(1).map_or("", |m| m.as_str());
+        if raw.is_empty() {
+            continue;
+        }
+        let (node_id, stub_source_file) = resolve_import_id(raw, path);
+        add_import_edge(
+            &mut result,
+            &mut existing_ids,
+            SvelteImportEdge {
+                file_node_id: &file_node_id,
+                node_id,
+                raw,
+                stub_source_file,
+                relation: "dynamic_import",
+                str_path: &str_path,
+            },
+        );
+    }
     result
 }

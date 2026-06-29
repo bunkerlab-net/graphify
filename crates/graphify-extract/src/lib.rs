@@ -46,8 +46,8 @@ pub use extractors::{
     extract_package_manifest, extract_pascal, extract_php, extract_powershell,
     extract_powershell_manifest, extract_python, extract_razor, extract_ruby, extract_rust,
     extract_scala, extract_sln, extract_slnx, extract_sql, extract_sql_with_content,
-    extract_svelte, extract_swift, extract_terraform, extract_verilog, extract_zig,
-    is_mcp_config_path, resolve_cpp_path,
+    extract_svelte, extract_swift, extract_terraform, extract_verilog, extract_vue, extract_xaml,
+    extract_zig, is_mcp_config_path, resolve_cpp_path,
 };
 pub use ids::{file_node_id, file_stem, make_id, make_id1};
 pub use pg_introspect::{

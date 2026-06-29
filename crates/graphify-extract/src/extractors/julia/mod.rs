@@ -71,6 +71,7 @@ pub fn extract_julia(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();

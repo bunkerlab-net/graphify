@@ -78,6 +78,30 @@ fn call_openai_compat_happy_path() {
     assert_eq!(resp.nodes.len(), 1);
 }
 
+/// #1223: the chat-completion request must carry `stream: false` so SSE-default
+/// gateways return a single response. The mock only matches when the body
+/// contains `stream: false`; a missing field makes the mock 501 and the call
+/// fails, so a green call proves the field is present.
+#[test]
+fn call_openai_compat_forces_non_streaming() {
+    let _g = AllowPrivate::new();
+    let mut server = mockito::Server::new();
+    let body = json!({
+        "choices": [{"message": {"content": "{\"nodes\":[],\"edges\":[]}"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+    });
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::PartialJson(json!({"stream": false})))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(body.to_string())
+        .create();
+    let url = server.url();
+    let req = make_req(&url, "openai");
+    call_openai_compat(&req).expect("request body must carry stream:false");
+}
+
 // ── hollow response → reclassified as "length" ─────────────────────────────
 
 #[test]

@@ -30,7 +30,9 @@ pub(crate) static LANG_FAMILY: std::sync::LazyLock<IndexMap<&'static str, &'stat
         for ext in &[".java", ".kt", ".kts", ".scala"] {
             m.insert(*ext, "jvm");
         }
-        for ext in &[".c", ".h", ".cpp", ".cc", ".cxx", ".hpp"] {
+        for ext in &[
+            ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".cu", ".cuh", ".metal",
+        ] {
             m.insert(*ext, "c");
         }
         m.insert(".rb", "ruby");

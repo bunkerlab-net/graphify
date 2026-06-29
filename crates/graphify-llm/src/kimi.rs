@@ -14,16 +14,25 @@ use crate::{LlmBackend, LlmError, LlmResponse};
 pub const DEFAULT_MODEL: &str = "kimi-k2.6";
 /// API key env var.
 pub const ENV_KEY: &str = "MOONSHOT_API_KEY";
-/// Base URL override env var.
+/// Base URL override env var (test redirect).
 pub const BASE_URL_ENV_KEY: &str = "GRAPHIFY_KIMI_BASE_URL";
+/// Upstream Moonshot/Kimi base-URL env var (#1458): points the backend at any
+/// OpenAI-compatible server (`LiteLLM`, self-hosted proxy, …).
+pub const KIMI_BASE_URL_ENV: &str = "KIMI_BASE_URL";
 const DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 
-/// Effective base URL, honouring [`BASE_URL_ENV_KEY`] when set.
+/// Effective base URL: [`BASE_URL_ENV_KEY`] (test redirect) then
+/// [`KIMI_BASE_URL_ENV`], else Moonshot's official endpoint.
 #[must_use]
 pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV_KEY)
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var(KIMI_BASE_URL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
 
@@ -151,6 +160,9 @@ pub(crate) fn call_plain_openai_compat(req: &PlainOpenAiRequest<'_>) -> Result<S
         "model": req.model,
         "messages": messages,
         "max_completion_tokens": req.max_tokens,
+        // Force a single non-streamed response (#1223): this path feeds the
+        // `--dedup-llm` tiebreaker and is always read as `resp.choices[0]`.
+        "stream": false,
     });
     if let Some(t) = req.temperature {
         body["temperature"] = json!(t);

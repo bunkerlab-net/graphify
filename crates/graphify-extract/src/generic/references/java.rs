@@ -124,13 +124,14 @@ fn find_modifiers(method_node: Node<'_>) -> Option<Node<'_>> {
     }
 }
 
-/// Collect annotation names from a Java method's `modifiers` child.
+/// Collect annotation names from a Java declaration's `modifiers` child
+/// (a class, interface, record, or method) (#1487).
 ///
 /// `@Override @Deprecated public void foo()` yields `["Override", "Deprecated"]`.
 #[must_use]
-pub(crate) fn java_method_annotation_names(method_node: Node<'_>, source: &[u8]) -> Vec<String> {
+pub(crate) fn java_annotation_names(declaration_node: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
-    let Some(modifiers) = find_modifiers(method_node) else {
+    let Some(modifiers) = find_modifiers(declaration_node) else {
         return names;
     };
     let mut acur = modifiers.walk();

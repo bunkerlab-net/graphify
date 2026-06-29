@@ -48,6 +48,7 @@ pub fn extract_blade(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     });
 
     let add_node_edge = |nodes: &mut Vec<Node>,
@@ -64,6 +65,7 @@ pub fn extract_blade(path: &Path) -> FileResult {
                 source_file: str_path.clone(),
                 source_location: None,
                 metadata: None,
+                origin_file: None,
             });
         }
         edges.push(Edge {

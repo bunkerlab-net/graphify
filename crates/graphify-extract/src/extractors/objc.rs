@@ -11,6 +11,29 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
+/// Collect every `type_identifier` name under a property's type node, descending
+/// through `generic_specifier`/`type_name` so `NSArray<Product *>` yields both
+/// `NSArray` and the element type `Product` (#1475).
+fn collect_objc_type_names<'a>(
+    node: tree_sitter::Node<'_>,
+    source: &'a [u8],
+    out: &mut Vec<&'a str>,
+) {
+    if node.kind() == "type_identifier" {
+        out.push(read_text(node, source));
+        return;
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            collect_objc_type_names(cur.node(), source, out);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
 /// Extract interfaces, implementations, protocols, methods, and imports from `.m`/`.mm`/`.h` files.
 #[must_use]
 pub fn extract_objc(path: &Path) -> FileResult {
@@ -66,6 +89,7 @@ pub fn extract_objc(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();
@@ -150,6 +174,7 @@ impl ObjcWalkCtx<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         nid2
@@ -226,6 +251,30 @@ fn walk_objc(
                 }
             }
         }
+        "module_import" => {
+            // @import Foundation;  /  @import Foundation.NSString;
+            if let Some(path_node) = node.child_by_field_name("path") {
+                let module = read_text(path_node, source)
+                    .split('.')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !module.is_empty() {
+                    ctx.edges.push(Edge {
+                        external: false,
+                        source: ctx.file_nid.to_string(),
+                        target: make_id1(module),
+                        relation: "imports".to_string(),
+                        confidence: "EXTRACTED".to_string(),
+                        source_file: ctx.str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        weight: 1.0,
+                        context: Some("import".to_string()),
+                        confidence_score: None,
+                    });
+                }
+            }
+        }
         "class_interface" => {
             let identifiers: Vec<tree_sitter::Node<'_>> = {
                 let mut ids = vec![];
@@ -264,6 +313,7 @@ fn walk_objc(
                     source_file: ctx.str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             ctx.edges.push(Edge {
@@ -340,33 +390,45 @@ fn walk_objc(
                             }
                         }
                     } else if child.kind() == "property_declaration" {
-                        // @property type → references[field] from the class.
+                        // @property type → references[field] from the class. The
+                        // type is a direct type_identifier (`NSString *x`) or
+                        // wrapped in a generic_specifier (`NSArray<Product *> *xs`);
+                        // walk every type name, skipping the declarator (the field
+                        // name), so generic collections are no longer invisible.
                         let prop_line = child.start_position().row + 1;
                         let mut sc = child.walk();
                         if sc.goto_first_child() {
-                            'props: loop {
+                            loop {
                                 if sc.node().kind() == "struct_declaration" {
+                                    let mut seen_types: HashSet<&str> = HashSet::new();
                                     let mut dc = sc.node().walk();
                                     if dc.goto_first_child() {
                                         loop {
-                                            if dc.node().kind() == "type_identifier" {
-                                                let type_nid = ctx.ensure_named_node(
-                                                    read_text(dc.node(), source),
-                                                    prop_line,
-                                                );
-                                                ctx.edges.push(Edge {
-                                                    external: false,
-                                                    source: cls_nid.clone(),
-                                                    target: type_nid,
-                                                    relation: "references".to_string(),
-                                                    confidence: "EXTRACTED".to_string(),
-                                                    source_file: ctx.str_path.to_string(),
-                                                    source_location: Some(format!("L{prop_line}")),
-                                                    weight: 1.0,
-                                                    context: Some("field".to_string()),
-                                                    confidence_score: None,
-                                                });
-                                                break 'props;
+                                            let s = dc.node();
+                                            if !matches!(s.kind(), "struct_declarator" | ";") {
+                                                let mut names: Vec<&str> = Vec::new();
+                                                collect_objc_type_names(s, source, &mut names);
+                                                for tname in names {
+                                                    if !seen_types.insert(tname) {
+                                                        continue;
+                                                    }
+                                                    let type_nid =
+                                                        ctx.ensure_named_node(tname, prop_line);
+                                                    ctx.edges.push(Edge {
+                                                        external: false,
+                                                        source: cls_nid.clone(),
+                                                        target: type_nid,
+                                                        relation: "references".to_string(),
+                                                        confidence: "EXTRACTED".to_string(),
+                                                        source_file: ctx.str_path.to_string(),
+                                                        source_location: Some(format!(
+                                                            "L{prop_line}"
+                                                        )),
+                                                        weight: 1.0,
+                                                        context: Some("field".to_string()),
+                                                        confidence_score: None,
+                                                    });
+                                                }
                                             }
                                             if !dc.goto_next_sibling() {
                                                 break;
@@ -417,6 +479,7 @@ fn walk_objc(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                     ctx.edges.push(Edge {
                         external: false,
@@ -481,6 +544,7 @@ fn walk_objc(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -508,11 +572,21 @@ fn walk_objc(
         }
         "method_declaration" | "method_definition" => {
             let container = parent_nid.unwrap_or(ctx.file_nid);
+            // Class methods start with '+', instance methods with '-' (the grammar
+            // emits the sigil as a child). The selector is the concatenation of the
+            // direct identifier children: one for a simple selector, several for a
+            // compound one (-tableView:numberOfRowsInSection:) (#1475).
+            let mut prefix = "-";
+            let mut prefix_found = false;
             let mut parts: Vec<&str> = Vec::new();
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
-                    if cur.node().kind() == "identifier" {
+                    let kind = cur.node().kind();
+                    if !prefix_found && (kind == "+" || kind == "-") {
+                        prefix = kind;
+                        prefix_found = true;
+                    } else if kind == "identifier" {
                         parts.push(read_text(cur.node(), source));
                     }
                     if !cur.goto_next_sibling() {
@@ -520,16 +594,18 @@ fn walk_objc(
                     }
                 }
             }
-            if let Some(method_name) = parts.first().copied() {
-                let method_nid = make_id(&[container, method_name]);
+            if !parts.is_empty() {
+                let method_name = parts.concat();
+                let method_nid = make_id(&[container, &method_name]);
                 if ctx.seen_ids.insert(method_nid.clone()) {
                     ctx.nodes.push(Node {
                         id: method_nid.clone(),
-                        label: format!("-{method_name}"),
+                        label: format!("{prefix}{method_name}"),
                         file_type: "code".to_string(),
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -592,42 +668,25 @@ fn walk_calls_objc(
         return;
     }
     if node.kind() == "message_expression" {
+        // `[receiver sel]` and `[receiver kw1:a kw2:b]` both parse to a
+        // message_expression whose selector parts carry the field name "method"
+        // (one for a simple selector, several for a compound one); the receiver
+        // carries field name "receiver". Reconstruct the selector from every
+        // "method" child so self/super/ClassName receivers are never mistaken for
+        // a selector, and compound sends resolve too (#1475).
         let mut sel: Vec<&str> = Vec::new();
         let mut cur = node.walk();
         if cur.goto_first_child() {
             loop {
-                let child = cur.node();
-                if child.kind() == "selector" {
-                    sel.push(read_text(child, source));
-                } else if child.kind() == "keyword_argument_list" {
-                    let mut kc = child.walk();
-                    if kc.goto_first_child() {
-                        loop {
-                            if kc.node().kind() == "keyword_argument" {
-                                let mut sc = kc.node().walk();
-                                if sc.goto_first_child() {
-                                    loop {
-                                        if sc.node().kind() == "selector" {
-                                            sel.push(read_text(sc.node(), source));
-                                        }
-                                        if !sc.goto_next_sibling() {
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if !kc.goto_next_sibling() {
-                                break;
-                            }
-                        }
-                    }
+                if cur.field_name() == Some("method") && cur.node().kind() == "identifier" {
+                    sel.push(read_text(cur.node(), source));
                 }
                 if !cur.goto_next_sibling() {
                     break;
                 }
             }
         }
-        let method_name = sel.join("");
+        let method_name = sel.concat();
         if !method_name.is_empty() {
             // Match against all method nids by suffix
             let suffix_key = make_id1(&method_name);

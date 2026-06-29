@@ -19,6 +19,12 @@ pub struct Node {
     pub source_file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_location: Option<String>,
+    /// Referencing file for a SOURCELESS cross-file stub (#1462): the file whose
+    /// reference created this placeholder. Disambiguates same-label stubs from
+    /// different files during id-collision splitting, while `source_file` stays
+    /// empty so a real project definition can still be rewired onto it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_file: Option<String>,
     /// Optional extractor-specific metadata (e.g. MCP config nodes carry
     /// `{"mcp_kind": "mcp_server"}`). Omitted from output when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]

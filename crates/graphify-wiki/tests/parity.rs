@@ -1,7 +1,7 @@
 //! Parity tests against `graphify-py/tests/test_wiki.py`.
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use graphify_build::{Graph, GraphKind};
+use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_wiki::{GodNodeData, to_wiki};
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -190,8 +190,8 @@ fn test_index_links_all_communities() {
     let labels = labels();
     to_wiki(&g, &communities(), dir.path(), Some(&labels), None, None).expect("test invariant");
     let index = std::fs::read_to_string(dir.path().join("index.md")).expect("test invariant");
-    assert!(index.contains("[[Parsing Layer]]"));
-    assert!(index.contains("[[Rendering Layer]]"));
+    assert!(index.contains("[Parsing Layer](Parsing_Layer.md)"));
+    assert!(index.contains("[Rendering Layer](Rendering_Layer.md)"));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn test_index_lists_god_nodes() {
     )
     .expect("test invariant");
     let index = std::fs::read_to_string(dir.path().join("index.md")).expect("test invariant");
-    assert!(index.contains("[[parse]]"));
+    assert!(index.contains("[parse](parse.md)"));
     assert!(index.contains("2 connections"));
 }
 
@@ -223,7 +223,7 @@ fn test_community_article_has_cross_links() {
     let parsing =
         std::fs::read_to_string(dir.path().join("Parsing_Layer.md")).expect("test invariant");
     // n1 (parsing) references n3 (rendering) → cross-community link
-    assert!(parsing.contains("[[Rendering Layer]]"));
+    assert!(parsing.contains("[Rendering Layer](Rendering_Layer.md)"));
 }
 
 #[test]
@@ -274,7 +274,11 @@ fn test_god_node_article_has_connections() {
     )
     .expect("test invariant");
     let article = std::fs::read_to_string(dir.path().join("parse.md")).expect("test invariant");
-    assert!(article.contains("[[validate]]") || article.contains("[[render]]"));
+    // parse's neighbours (validate, render) have no article, so they show as
+    // plain text, not links.
+    assert!(article.contains("validate") && article.contains("render"));
+    assert!(!article.contains("[["));
+    assert!(!article.contains("](validate.md)") && !article.contains("](render.md)"));
 }
 
 #[test]
@@ -293,7 +297,7 @@ fn test_god_node_article_links_community() {
     )
     .expect("test invariant");
     let article = std::fs::read_to_string(dir.path().join("parse.md")).expect("test invariant");
-    assert!(article.contains("[[Parsing Layer]]"));
+    assert!(article.contains("[Parsing Layer](Parsing_Layer.md)"));
 }
 
 #[test]
@@ -336,7 +340,7 @@ fn test_article_navigation_footer() {
     to_wiki(&g, &communities(), dir.path(), Some(&labels), None, None).expect("test invariant");
     let article =
         std::fs::read_to_string(dir.path().join("Parsing_Layer.md")).expect("test invariant");
-    assert!(article.contains("[[index]]"));
+    assert!(article.contains("[index](index.md)"));
 }
 
 #[test]
@@ -412,7 +416,7 @@ fn test_cross_community_links_without_node_community_attrs() {
 
     to_wiki(&g, &comms, dir.path(), Some(&lbls), None, None).expect("test invariant");
     let article = std::fs::read_to_string(dir.path().join("Parsing.md")).expect("test invariant");
-    assert!(article.contains("[[Rendering]]"));
+    assert!(article.contains("[Rendering](Rendering.md)"));
 }
 
 #[test]
@@ -456,7 +460,7 @@ fn test_god_node_article_community_without_node_attr() {
 
     to_wiki(&g, &comms, dir.path(), Some(&lbls), None, Some(&gods)).expect("test invariant");
     let article = std::fs::read_to_string(dir.path().join("parse.md")).expect("test invariant");
-    assert!(article.contains("[[Core Logic]]"));
+    assert!(article.contains("[Core Logic](Core_Logic.md)"));
 }
 
 #[test]
@@ -563,4 +567,273 @@ fn test_community_article_handles_null_source_file() {
     let article = std::fs::read_to_string(dir.path().join("Parsing_Layer.md"))
         .expect("community article must exist");
     assert!(article.contains("parse") || article.contains("validate"));
+}
+
+// ── #1444 portable links + #1453 case-fold slug ──────────────────────────────
+
+/// Build a small graph from `(id, label, source_file)` nodes and
+/// `(src, tgt, relation, confidence)` edges.
+fn graph_from(nodes: &[(&str, &str, &str)], edges: &[(&str, &str, &str, &str)]) -> Graph {
+    let json = serde_json::json!({
+        "nodes": nodes.iter().map(|(id, label, sf)| serde_json::json!({
+            "id": id, "label": label, "file_type": "code", "source_file": sf})).collect::<Vec<_>>(),
+        "edges": edges.iter().map(|(s, t, r, c)| serde_json::json!({
+            "source": s, "target": t, "relation": r, "confidence": c, "weight": 1.0,
+            "source_file": "a.py"})).collect::<Vec<_>>(),
+    });
+    build_from_json(json, false, None).expect("build")
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(b);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `(display, decoded_target)` for each inline markdown link, skipping external
+/// URLs. Simple labels only (no escaped brackets), matching Python `_inline_links`.
+fn inline_links(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let Some(close_rel) = after.find("](") else {
+            break;
+        };
+        let display = &after[..close_rel];
+        let target_start = &after[close_rel + 2..];
+        let Some(paren) = target_start.find(')') else {
+            break;
+        };
+        let target = &target_start[..paren];
+        if !display.contains(']') && !target.contains("://") {
+            out.push((display.to_string(), percent_decode(target)));
+        }
+        rest = &target_start[paren + 1..];
+    }
+    out
+}
+
+fn md_articles(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .expect("read_dir")
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            (p.extension().and_then(|x| x.to_str()) == Some("md")
+                && p.file_name().and_then(|n| n.to_str()) != Some("index.md"))
+            .then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn test_to_wiki_case_only_distinct_labels_dont_overwrite() {
+    let g = graph_from(
+        &[("n1", "parse", "a.py"), ("n2", "render", "b.py")],
+        &[("n1", "n2", "calls", "EXTRACTED")],
+    );
+    let comms: IndexMap<i64, Vec<String>> =
+        IndexMap::from([(0, vec!["n1".to_string()]), (1, vec!["n2".to_string()])]);
+    let labels: IndexMap<i64, String> =
+        IndexMap::from([(0, "Parser".to_string()), (1, "parser".to_string())]);
+    let dir = tempdir().expect("tempdir");
+    let n = to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("wiki");
+    let articles = md_articles(dir.path());
+    assert_eq!(articles.len(), n);
+    assert_eq!(n, 2, "{articles:?}");
+    let lowered: std::collections::HashSet<String> =
+        articles.iter().map(|s| s.to_lowercase()).collect();
+    assert_eq!(lowered.len(), articles.len(), "{articles:?}");
+}
+
+#[test]
+fn test_to_wiki_god_node_label_case_collides_with_community() {
+    let g = graph_from(
+        &[("n1", "parse", "a.py"), ("n2", "run", "b.py")],
+        &[("n1", "n2", "calls", "EXTRACTED")],
+    );
+    let comms: IndexMap<i64, Vec<String>> =
+        IndexMap::from([(0, vec!["n1".to_string(), "n2".to_string()])]);
+    let labels: IndexMap<i64, String> = IndexMap::from([(0, "Parser".to_string())]);
+    let gods = [GodNodeData {
+        id: "n1".to_string(),
+        label: "parser".to_string(),
+        degree: 1,
+    }];
+    let dir = tempdir().expect("tempdir");
+    let n = to_wiki(&g, &comms, dir.path(), Some(&labels), None, Some(&gods)).expect("wiki");
+    let articles = md_articles(dir.path());
+    assert_eq!(articles.len(), n);
+    assert_eq!(n, 2, "{articles:?}");
+    let lowered: std::collections::HashSet<String> =
+        articles.iter().map(|s| s.to_lowercase()).collect();
+    assert_eq!(lowered.len(), articles.len(), "{articles:?}");
+}
+
+#[test]
+fn test_wiki_emits_no_obsidian_wikilinks() {
+    let g = make_graph();
+    let gods = god_nodes();
+    let dir = tempdir().expect("tempdir");
+    to_wiki(
+        &g,
+        &communities(),
+        dir.path(),
+        Some(&labels()),
+        Some(&cohesion()),
+        Some(&gods),
+    )
+    .expect("wiki");
+    for e in std::fs::read_dir(dir.path()).expect("read_dir").flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) == Some("md") {
+            assert!(
+                !std::fs::read_to_string(&p).unwrap().contains("[["),
+                "{:?}",
+                p.file_name()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_wiki_links_resolve_to_real_files() {
+    let g = make_graph();
+    let gods = god_nodes();
+    let dir = tempdir().expect("tempdir");
+    to_wiki(
+        &g,
+        &communities(),
+        dir.path(),
+        Some(&labels()),
+        Some(&cohesion()),
+        Some(&gods),
+    )
+    .expect("wiki");
+    let mut seen = false;
+    for e in std::fs::read_dir(dir.path()).expect("read_dir").flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("md") {
+            continue;
+        }
+        for (display, target) in inline_links(&std::fs::read_to_string(&p).unwrap()) {
+            seen = true;
+            assert!(
+                dir.path().join(&target).exists(),
+                "[{display}] -> {target} is dead"
+            );
+        }
+    }
+    assert!(seen, "expected inline markdown links");
+}
+
+#[test]
+fn test_wiki_link_display_keeps_label_but_target_is_filename() {
+    let g = make_graph();
+    let dir = tempdir().expect("tempdir");
+    to_wiki(&g, &communities(), dir.path(), Some(&labels()), None, None).expect("wiki");
+    let index = std::fs::read_to_string(dir.path().join("index.md")).expect("index");
+    assert!(index.contains("[Parsing Layer](Parsing_Layer.md)"));
+    assert!(!index.contains("Parsing Layer.md")); // the broken Obsidian-only target
+}
+
+#[test]
+fn test_wiki_special_characters_in_label_resolve() {
+    let g = graph_from(
+        &[("n1", "a", "a.py"), ("n2", "b", "b.py")],
+        &[("n1", "n2", "references", "INFERRED")],
+    );
+    let comms: IndexMap<i64, Vec<String>> =
+        IndexMap::from([(0, vec!["n1".to_string()]), (1, vec!["n2".to_string()])]);
+    let labels: IndexMap<i64, String> =
+        IndexMap::from([(0, "C# & Auth (v2)".to_string()), (1, "Other".to_string())]);
+    let dir = tempdir().expect("tempdir");
+    to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("wiki");
+    let article = std::fs::read_to_string(dir.path().join("Other.md")).expect("Other");
+    let targets: Vec<String> = inline_links(&article).into_iter().map(|(_, t)| t).collect();
+    assert!(
+        targets.contains(&"C#_&_Auth_(v2).md".to_string()),
+        "{targets:?}"
+    );
+    assert!(dir.path().join("C#_&_Auth_(v2).md").exists());
+    assert!(
+        article.contains("C%23_%26_Auth_%28v2%29.md"),
+        "raw target must be percent-encoded"
+    );
+}
+
+#[test]
+fn test_wiki_link_with_bracketed_label_resolves() {
+    let g = graph_from(
+        &[("n1", "a", "a.py"), ("n2", "b", "b.py")],
+        &[("n1", "n2", "references", "INFERRED")],
+    );
+    let comms: IndexMap<i64, Vec<String>> =
+        IndexMap::from([(0, vec!["n1".to_string()]), (1, vec!["n2".to_string()])]);
+    let labels: IndexMap<i64, String> =
+        IndexMap::from([(0, "Array[T] Models".to_string()), (1, "Other".to_string())]);
+    let dir = tempdir().expect("tempdir");
+    to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("wiki");
+    let article = std::fs::read_to_string(dir.path().join("Other.md")).expect("Other");
+    assert!(
+        article.contains(r"[Array\[T\] Models](Array%5BT%5D_Models.md)"),
+        "{article}"
+    );
+    assert!(dir.path().join("Array[T]_Models.md").exists());
+}
+
+#[test]
+fn test_wiki_links_to_nodes_without_articles_are_plain_text() {
+    let g = make_graph();
+    let gods = god_nodes();
+    let dir = tempdir().expect("tempdir");
+    to_wiki(
+        &g,
+        &communities(),
+        dir.path(),
+        Some(&labels()),
+        None,
+        Some(&gods),
+    )
+    .expect("wiki");
+    let article = std::fs::read_to_string(dir.path().join("parse.md")).expect("parse");
+    assert!(article.contains("- validate") && article.contains("- render"));
+    assert!(!article.contains("[[validate]]") && !article.contains("[[render]]"));
+    for (_, target) in inline_links(&article) {
+        assert!(target != "validate.md" && target != "render.md", "{target}");
+    }
+}
+
+#[test]
+fn test_wiki_links_use_collision_suffixed_slug() {
+    let g = graph_from(
+        &[("n1", "a", "a.py"), ("n2", "b", "b.py")],
+        &[("n1", "n2", "references", "INFERRED")],
+    );
+    let comms: IndexMap<i64, Vec<String>> =
+        IndexMap::from([(0, vec!["n1".to_string()]), (1, vec!["n2".to_string()])]);
+    let labels: IndexMap<i64, String> =
+        IndexMap::from([(0, "Parser".to_string()), (1, "parser".to_string())]);
+    let dir = tempdir().expect("tempdir");
+    to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("wiki");
+    let index = std::fs::read_to_string(dir.path().join("index.md")).expect("index");
+    let targets: Vec<String> = inline_links(&index).into_iter().map(|(_, t)| t).collect();
+    assert!(targets.contains(&"parser_2.md".to_string()), "{targets:?}");
+    for t in &targets {
+        assert!(dir.path().join(t).exists(), "{t}");
+    }
 }

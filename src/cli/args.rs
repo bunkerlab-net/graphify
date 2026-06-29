@@ -132,6 +132,13 @@ pub(crate) enum Command {
         /// Communities per LLM labeling call (#1390).
         #[arg(long = "batch-size", default_value_t = 100)]
         batch_size: usize,
+        /// Print per-stage wall-clock timings to stderr (#1490).
+        #[arg(long)]
+        timing: bool,
+        /// Only (re)name communities that are unnamed or hold a `Community N`
+        /// placeholder, preserving existing labels (#1481).
+        #[arg(long = "missing-only")]
+        missing_only: bool,
     },
 
     /// (Re)name communities with the configured LLM backend, regenerate report.
@@ -162,6 +169,13 @@ pub(crate) enum Command {
         /// Communities per LLM labeling call (#1390).
         #[arg(long = "batch-size", default_value_t = 100)]
         batch_size: usize,
+        /// Print per-stage wall-clock timings to stderr (#1490).
+        #[arg(long)]
+        timing: bool,
+        /// Only (re)name communities that are unnamed or hold a `Community N`
+        /// placeholder, preserving existing labels (#1481).
+        #[arg(long = "missing-only")]
+        missing_only: bool,
     },
 
     /// Manage custom LLM providers (`graphify provider <add|list|show|remove>`).
@@ -323,6 +337,9 @@ pub(crate) enum Command {
         /// Also extract schema from a live Postgres database at this DSN.
         #[arg(long, value_name = "DSN")]
         postgres: Option<String>,
+        /// Print per-stage wall-clock timings to stderr (#1490).
+        #[arg(long)]
+        timing: bool,
     },
 
     /// Export graph to various formats.

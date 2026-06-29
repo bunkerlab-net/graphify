@@ -241,6 +241,7 @@ pub fn extract_powershell_manifest(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     walk_psd1_manifest(tree.root_node(), &source, &file_nid, &str_path, &mut edges);

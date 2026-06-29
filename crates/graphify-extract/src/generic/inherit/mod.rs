@@ -29,12 +29,16 @@ pub(crate) use scala::*;
 pub(crate) use swift::*;
 pub(crate) use ts::*;
 
-/// Ensure a base-class node exists and return its NID.
+/// Ensure a base-class / type-reference node exists and return its NID.
+///
+/// The stub is SOURCELESS so a real definition can be rewired onto it (#1402);
+/// the referencing file is recorded as `origin_file` to disambiguate same-label
+/// stubs from different files when no project definition exists (#1462).
 pub(crate) fn emit_base_node(
     base: &str,
     _line: u32,
     stem: &str,
-    _str_path: &str,
+    str_path: &str,
     nodes: &mut Vec<GNode>,
     seen_ids: &mut HashSet<String>,
 ) -> String {
@@ -45,7 +49,7 @@ pub(crate) fn emit_base_node(
         return nid1;
     }
     let nid2 = make_id1(base);
-    if !seen_ids.contains(&nid2) {
+    if seen_ids.insert(nid2.clone()) {
         nodes.push(GNode {
             id: nid2.clone(),
             label: base.to_string(),
@@ -53,8 +57,8 @@ pub(crate) fn emit_base_node(
             source_file: String::new(),
             source_location: None,
             metadata: None,
+            origin_file: Some(str_path.to_string()),
         });
-        seen_ids.insert(nid2.clone());
     }
     nid2
 }

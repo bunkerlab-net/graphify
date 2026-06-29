@@ -145,6 +145,7 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
         source_file: str_path.clone(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();

@@ -127,6 +127,7 @@ impl ApexCtx<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
     }

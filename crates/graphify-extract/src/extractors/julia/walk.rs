@@ -77,6 +77,7 @@ impl JuliaWalkCtx<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         nid2
@@ -184,6 +185,7 @@ pub(super) fn walk_julia(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -270,6 +272,7 @@ pub(super) fn walk_julia(
                                 source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
+                                origin_file: None,
                             });
                         }
                         ctx.edges.push(Edge {
@@ -332,6 +335,7 @@ pub(super) fn walk_julia(
                                 source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
+                                origin_file: None,
                             });
                         }
                         ctx.edges.push(Edge {
@@ -401,6 +405,7 @@ pub(super) fn walk_julia(
                             source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             metadata: None,
+                            origin_file: None,
                         });
                     }
                     ctx.edges.push(Edge {
@@ -450,6 +455,7 @@ pub(super) fn walk_julia(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -504,6 +510,7 @@ pub(super) fn walk_julia(
                             source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             metadata: None,
+                            origin_file: None,
                         });
                     }
                     ctx.edges.push(Edge {
@@ -551,6 +558,7 @@ pub(super) fn walk_julia(
                             source_file: ctx.str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             metadata: None,
+                            origin_file: None,
                         });
                         ctx.edges.push(Edge {
                             external: false,
@@ -591,6 +599,7 @@ pub(super) fn walk_julia(
                                 source_file: ctx.str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
+                                origin_file: None,
                             });
                             ctx.edges.push(Edge {
                                 external: false,

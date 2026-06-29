@@ -17,6 +17,7 @@ fn n(id: &str, label: &str, source_file: &str) -> Node {
         source_file: source_file.to_string(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     }
 }
 

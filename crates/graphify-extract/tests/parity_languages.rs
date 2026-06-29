@@ -160,6 +160,153 @@ fn objc_protocols_and_categories() {
     );
 }
 
+/// Ports `test_languages.py::test_objc_resolves_self_method_calls` (#1475): the
+/// method-body call pass reads the selector from `method`-field identifiers.
+#[test]
+fn objc_resolves_self_method_calls() {
+    let result = extract_objc(&fixtures().join("sample.m"));
+    let nid2label: std::collections::HashMap<&str, &str> = result
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let calls: Vec<&str> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "calls")
+        .filter_map(|e| nid2label.get(e.target.as_str()).copied())
+        .collect();
+    assert!(calls.iter().any(|t| t.contains("speak")), "{calls:?}");
+}
+
+/// Ports `test_languages.py::test_objc_class_method_labeled_with_plus` (#1475).
+#[test]
+fn objc_class_method_labeled_with_plus() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("S.m");
+    std::fs::write(
+        &p,
+        "@implementation S\n+ (instancetype)shared { return nil; }\n- (void)go { }\n@end\n",
+    )
+    .expect("write");
+    let r = extract_objc(&p);
+    let labels: std::collections::HashSet<String> =
+        r.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(labels.contains("+shared"), "{labels:?}");
+    assert!(labels.contains("-go"), "{labels:?}");
+}
+
+/// Ports `test_languages.py::test_objc_compound_selector_call_resolves` (#1475).
+#[test]
+fn objc_compound_selector_call_resolves() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("V.m");
+    std::fs::write(
+        &p,
+        "@implementation V\n\
+         - (void)tableView:(id)tv numberOfRowsInSection:(int)s { }\n\
+         - (void)go { [self tableView:nil numberOfRowsInSection:0]; }\n\
+         @end\n",
+    )
+    .expect("write");
+    let r = extract_objc(&p);
+    let nid2label: std::collections::HashMap<&str, &str> = r
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let calls: Vec<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "calls")
+        .filter_map(|e| nid2label.get(e.target.as_str()).copied())
+        .collect();
+    assert!(
+        calls
+            .iter()
+            .any(|t| t.contains("tableViewnumberOfRowsInSection")),
+        "{calls:?}"
+    );
+}
+
+/// Ports `test_languages.py::test_objc_generic_property_type_extracted` (#1475).
+#[test]
+fn objc_generic_property_type_extracted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("M.h");
+    std::fs::write(
+        &p,
+        "@interface M : NSObject\n@property (strong) NSArray<Product *> *items;\n@end\n",
+    )
+    .expect("write");
+    let refs = edge_label_pairs(&extract_objc(&p), "references", Some("field"));
+    assert!(refs.contains(&("M".into(), "Product".into())), "{refs:?}");
+    assert!(refs.contains(&("M".into(), "NSArray".into())), "{refs:?}");
+}
+
+/// Ports `test_languages.py::test_objc_module_import_edge` (#1475).
+#[test]
+fn objc_module_import_edge() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let p = tmp.path().join("X.m");
+    std::fs::write(
+        &p,
+        "@import Foundation;\n@import UIKit.UIView;\n@implementation X\n@end\n",
+    )
+    .expect("write");
+    let r = extract_objc(&p);
+    let targets: std::collections::HashSet<&str> = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(
+        targets.contains(make_id(&["Foundation"]).as_str()),
+        "{targets:?}"
+    );
+    assert!(
+        targets.contains(make_id(&["UIKit"]).as_str()),
+        "{targets:?}"
+    );
+}
+
+/// Ports `test_languages.py::test_objc_header_dispatch_routes_objc_not_c` (#1475):
+/// an Objective-C `.h` (has `@interface`) routes to the Objective-C extractor; a
+/// plain C `.h` stays on the C extractor, so C/C++ headers are never hijacked by
+/// the sniff. `get_extractor` is private, so this asserts the routing observably
+/// via `extract`: only the Objective-C extractor emits the `@interface` class
+/// node, and only the C extractor emits the C function node.
+#[test]
+fn objc_header_dispatch_routes_objc_not_c() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let objc_h = tmp.path().join("AppDelegate.h");
+    std::fs::write(
+        &objc_h,
+        "@interface AppDelegate : NSObject <UIApplicationDelegate>\n@end\n",
+    )
+    .expect("write");
+    let c_h = tmp.path().join("util.h");
+    std::fs::write(&c_h, "int add(int a, int b) { return a + b; }\n").expect("write");
+
+    let objc_out = graphify_extract::extract(&[objc_h], Some(tmp.path()));
+    assert!(
+        objc_out
+            .nodes
+            .iter()
+            .any(|n| n.get("label").and_then(|v| v.as_str()) == Some("AppDelegate")),
+        "ObjC .h must route to the ObjC extractor (no AppDelegate interface node)"
+    );
+    let c_out = graphify_extract::extract(&[c_h], Some(tmp.path()));
+    assert!(
+        c_out.nodes.iter().any(|n| n
+            .get("label")
+            .and_then(|v| v.as_str())
+            .is_some_and(|l| l.contains("add"))),
+        "C .h must stay on the C extractor (no `add` function node)"
+    );
+}
+
 #[test]
 fn go_extractor_produces_nodes() {
     let result = extract_go(&fixtures().join("sample.go"));
@@ -374,6 +521,24 @@ fn cuda_host_call_edges() {
     );
 }
 
+/// Ports `test_languages.py::test_metal_no_error` (#1480): Metal Shading Language
+/// is C++14, so `.metal` routes through the C++ extractor (like CUDA `.cu`).
+#[test]
+fn metal_no_error() {
+    let r = extract_cpp(&fixtures().join("sample.metal"));
+    assert!(r.error.is_none(), "{:?}", r.error);
+}
+
+/// Ports `test_languages.py::test_metal_finds_kernel_function_and_struct` (#1480).
+#[test]
+fn metal_finds_kernel_function_and_struct() {
+    let r = extract_cpp(&fixtures().join("sample.metal"));
+    let labels = labels(&r);
+    assert!(labels.iter().any(|l| l.contains("Vec3")), "{labels:?}");
+    assert!(labels.iter().any(|l| l.contains("dot3")), "{labels:?}");
+    assert!(labels.iter().any(|l| l.contains("saxpy")), "{labels:?}");
+}
+
 #[test]
 fn csharp_extractor_produces_nodes() {
     let result = extract_csharp(&fixtures().join("sample.cs"));
@@ -545,6 +710,146 @@ fn java_parameter_return_generic_and_attribute_contexts() {
     );
 }
 
+/// Ports `test_languages.py::test_java_generic_parents_include_type_argument_references`
+/// (#1510): a generic parent emits the inherits/implements edge to the base AND a
+/// `generic_arg` reference for each type argument.
+#[test]
+fn java_generic_parents_include_type_argument_references() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source = tmp.path().join("GenericParents.java");
+    std::fs::write(
+        &source,
+        "class Dependency {}\n\
+         interface Event {}\n\
+         class Base<T> {}\n\
+         interface Handler<T> {}\n\
+         interface DerivedHandler extends Handler<Event> {}\n\
+         class Service extends Base<Dependency> implements Handler<Event> {}\n",
+    )
+    .expect("write");
+    let result = extract_java(&source);
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    let implements = edge_label_pairs(&result, "implements", None);
+    let refs = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        inherits.contains(&("Service".into(), "Base".into())),
+        "{inherits:?}"
+    );
+    assert!(
+        implements.contains(&("Service".into(), "Handler".into())),
+        "{implements:?}"
+    );
+    assert!(
+        refs.contains(&("Service".into(), "Dependency".into())),
+        "{refs:?}"
+    );
+    assert!(
+        refs.contains(&("Service".into(), "Event".into())),
+        "{refs:?}"
+    );
+    assert!(
+        inherits.contains(&("DerivedHandler".into(), "Handler".into())),
+        "{inherits:?}"
+    );
+    assert!(
+        refs.contains(&("DerivedHandler".into(), "Event".into())),
+        "{refs:?}"
+    );
+}
+
+/// Ports `test_languages.py::test_java_field_type_references_have_field_context` (#1485).
+#[test]
+fn java_field_type_references_have_field_context() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source = tmp.path().join("Fields.java");
+    std::fs::write(
+        &source,
+        "class PaymentGateway {}\n\
+         class Handler {}\n\
+         class CheckoutService {\n\
+         \x20   PaymentGateway gateway;\n\
+         \x20   List<Handler> handlers;\n\
+         }\n",
+    )
+    .expect("write");
+    let result = extract_java(&source);
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        fields.contains(&("CheckoutService".into(), "PaymentGateway".into())),
+        "{fields:?}"
+    );
+    assert!(
+        generics.contains(&("CheckoutService".into(), "Handler".into())),
+        "{generics:?}"
+    );
+}
+
+/// Ports `test_languages.py::test_java_type_annotations_have_attribute_context` (#1487).
+#[test]
+fn java_type_annotations_have_attribute_context() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source = tmp.path().join("TypeAnnotations.java");
+    std::fs::write(
+        &source,
+        "@Service\n@Entity(name = \"checkout\")\nclass CheckoutService {}\n",
+    )
+    .expect("write");
+    let result = extract_java(&source);
+    let refs = edge_label_pairs(&result, "references", Some("attribute"));
+    assert!(
+        refs.contains(&("CheckoutService".into(), "Service".into())),
+        "{refs:?}"
+    );
+    assert!(
+        refs.contains(&("CheckoutService".into(), "Entity".into())),
+        "{refs:?}"
+    );
+}
+
+/// Ports `test_languages.py::test_java_enum_and_annotation_declarations_are_type_nodes`
+/// (#1512): enum and `@interface` declarations become real type nodes.
+#[test]
+fn java_enum_and_annotation_declarations_are_type_nodes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source = tmp.path().join("TypeDeclarations.java");
+    std::fs::write(
+        &source,
+        "enum PaymentStatus { PENDING, PAID }\n\
+         @interface Audited {}\n\
+         class Order { PaymentStatus status; }\n\
+         @Audited class CheckoutService {}\n",
+    )
+    .expect("write");
+    let result = extract_java(&source);
+    let contains = edge_label_pairs(&result, "contains", None);
+    assert!(
+        contains.contains(&("TypeDeclarations.java".into(), "PaymentStatus".into())),
+        "{contains:?}"
+    );
+    assert!(
+        contains.contains(&("TypeDeclarations.java".into(), "Audited".into())),
+        "{contains:?}"
+    );
+    assert!(
+        edge_label_pairs(&result, "references", Some("field"))
+            .contains(&("Order".into(), "PaymentStatus".into()))
+    );
+    assert!(
+        edge_label_pairs(&result, "references", Some("attribute"))
+            .contains(&("CheckoutService".into(), "Audited".into()))
+    );
+    let sf = source.to_string_lossy();
+    for label in ["PaymentStatus", "Audited"] {
+        let def = result
+            .nodes
+            .iter()
+            .find(|n| n.label == label)
+            .unwrap_or_else(|| panic!("no def node for {label}"));
+        assert_eq!(def.source_file, sf, "{label} must be a source-backed def");
+    }
+}
+
 #[test]
 fn groovy_extractor_produces_nodes() {
     let result = extract_groovy(&fixtures().join("sample.groovy"));
@@ -680,8 +985,10 @@ fn dart_extractor_produces_nodes() {
 
 #[test]
 fn dart_child_node_ids_are_stem_based() {
-    // Child node IDs must be built from file_stem, not the absolute path, so
-    // graph.json stays machine-independent (graphify-py #999).
+    // Child node IDs share the file_stem prefix so file->symbol `contains` edges
+    // connect (graphify-py #999). The single-file extractor encodes the absolute
+    // path in the stem here; the multi-file post-pass canonicalises it to the
+    // repo-relative form, keeping graph.json machine-independent.
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("mydir");
     std::fs::create_dir_all(&dir).expect("mkdir");
@@ -689,9 +996,9 @@ fn dart_child_node_ids_are_stem_based() {
     std::fs::write(&src_file, b"class MyClass {}\nvoid myFunc() {}\n").expect("write");
 
     let result = extract_dart(&src_file);
-    let stem = file_stem(&src_file); // -> "mydir.sample"
-    let expected_class_nid = make_id(&[&stem, "MyClass"]); // -> "mydir_sample_myclass"
-    let expected_func_nid = make_id(&[&stem, "myFunc"]); // -> "mydir_sample_myfunc"
+    let stem = file_stem(&src_file);
+    let expected_class_nid = make_id(&[&stem, "MyClass"]);
+    let expected_func_nid = make_id(&[&stem, "myFunc"]);
 
     let node_ids: std::collections::HashSet<&str> =
         result.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -704,8 +1011,8 @@ fn dart_child_node_ids_are_stem_based() {
         "func nid {expected_func_nid} not in {node_ids:?}"
     );
 
-    // No child node ID should leak a path separator fragment.
-    let stem_prefix = stem.replace('.', "_");
+    // Every non-file child node ID must keep the file_stem prefix.
+    let stem_prefix = make_id(&[&stem]);
     let file_label = src_file
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())

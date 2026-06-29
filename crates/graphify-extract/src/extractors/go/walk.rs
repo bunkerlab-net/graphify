@@ -50,6 +50,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -115,6 +116,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             source_file: str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             metadata: None,
+                            origin_file: None,
                         });
                     }
                     let mnid = make_id(&[&parent_nid, method_name]);
@@ -126,6 +128,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             source_file: str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             metadata: None,
+                            origin_file: None,
                         });
                     }
                     edges.push(Edge {
@@ -151,6 +154,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             source_file: str_path.to_string(),
                             source_location: Some(format!("L{line}")),
                             metadata: None,
+                            origin_file: None,
                         });
                     }
                     edges.push(Edge {
@@ -200,6 +204,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                                 source_file: str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
+                                origin_file: None,
                             });
                         }
                         edges.push(Edge {

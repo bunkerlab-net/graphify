@@ -149,6 +149,12 @@ pub fn build_from_json(
         );
     }
 
+    // Deterministic semantic re-key (#1504/#1509): re-derive every non-AST node's
+    // id from its own `source_file` so a cached/LLM fragment carrying a
+    // pre-migration short id reconciles with the AST node instead of spawning a
+    // ghost / a re-bill. AST-origin nodes are already canonical and untouched.
+    crate::migrate::apply_semantic_rekey(&mut extraction, root_str.as_deref());
+
     let mut graph = Graph::new(kind);
     let t = std::time::Instant::now();
     add_nodes(&mut graph, &mut extraction, root_str.as_deref());

@@ -101,6 +101,11 @@ fn bare_name(label: &str) -> String {
 /// 5. Single substring (case-insensitive) match on label.
 #[must_use]
 pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
+    // A trailing path separator must not change a source-file match — serve's
+    // node finder tokenizes the path (which drops it), so strip it here for
+    // parity (#1503): `affected "src/x.ts/"` must resolve like `explain` does.
+    let stripped = query.trim_end_matches(['/', '\\']);
+    let query = if stripped.is_empty() { query } else { stripped };
     if graph.node_data(query).is_some() {
         return Some(query.to_string());
     }
@@ -147,6 +152,11 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
     if exact_source_matches.len() == 1 {
         return exact_source_matches.into_iter().next();
     }
+    // Many nodes share this source_file (the file node plus its symbols); prefer
+    // the file-level node so a path-shaped query lands on the file, not a symbol.
+    if let Some(preferred) = prefer_file_node(graph, &exact_source_matches, query) {
+        return Some(preferred);
+    }
 
     let contains_matches: Vec<String> = graph
         .nodes()
@@ -161,6 +171,47 @@ pub fn resolve_seed(graph: &Graph, query: &str) -> Option<String> {
         return contains_matches.into_iter().next();
     }
     None
+}
+
+/// Pick the file-level node when a `source_file` query matches many nodes
+/// (#1503): a lone `L1` node whose label is the query basename, else a lone
+/// `L1` node, else a lone basename match. `None` when still ambiguous.
+#[must_use]
+fn prefer_file_node(graph: &Graph, node_ids: &[String], query: &str) -> Option<String> {
+    let query_basename = normalize_label(
+        Path::new(query)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(query),
+    );
+    let is_l1 = |id: &String| {
+        graph
+            .node_data(id)
+            .and_then(|d| d.get("source_location"))
+            .and_then(Value::as_str)
+            == Some("L1")
+    };
+    let label_is_basename = |id: &String| {
+        graph
+            .node_data(id)
+            .and_then(|d| d.get("label"))
+            .and_then(Value::as_str)
+            .is_some_and(|l| normalize_label(l) == query_basename)
+    };
+    let single = |ids: Vec<&String>| -> Option<String> {
+        match ids.as_slice() {
+            [only] => Some((*only).clone()),
+            _ => None,
+        }
+    };
+    single(
+        node_ids
+            .iter()
+            .filter(|id| is_l1(id) && label_is_basename(id))
+            .collect(),
+    )
+    .or_else(|| single(node_ids.iter().filter(|id| is_l1(id)).collect()))
+    .or_else(|| single(node_ids.iter().filter(|id| label_is_basename(id)).collect()))
 }
 
 /// Reverse-BFS from `seed` along edges whose `relation` is in

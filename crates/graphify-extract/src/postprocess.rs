@@ -36,6 +36,19 @@ pub fn source_key(source_file: &str, root: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// Disambiguation source key for a node: its `source_file`, or its `origin_file`
+/// when sourceless (a cross-file reference stub). Mirrors Python
+/// `_node_disambiguation_source_key` (#1462) — same-label stubs from different
+/// referencing files split into distinct ids, while a real definition (which
+/// carries a `source_file`) can still be rewired onto a sourceless stub.
+fn node_disambiguation_source_key(node: &Node, root: &Path) -> String {
+    if node.source_file.is_empty() {
+        source_key(node.origin_file.as_deref().unwrap_or_default(), root)
+    } else {
+        source_key(&node.source_file, root)
+    }
+}
+
 /// Rewrite only node IDs that collide across two or more *distinct*
 /// source files, using the source path as the disambiguator.
 ///
@@ -76,14 +89,14 @@ pub fn disambiguate_colliding_node_ids(
     for (old_id, group) in &by_id {
         let source_keys: HashSet<String> = group
             .iter()
-            .map(|&idx| source_key(&nodes[idx].source_file, root))
+            .map(|&idx| node_disambiguation_source_key(&nodes[idx], root))
             .collect();
         if group.len() < 2 || source_keys.len() < 2 {
             continue;
         }
         ambiguous_ids.insert(old_id.clone());
         for &idx in group {
-            let sk = source_key(&nodes[idx].source_file, root);
+            let sk = node_disambiguation_source_key(&nodes[idx], root);
             if sk.is_empty() {
                 continue;
             }

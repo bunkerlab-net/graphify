@@ -52,6 +52,8 @@ pub(crate) struct ExtractOptions<'a> {
     pub cluster: ClusterOptions,
     pub global: GlobalOptions<'a>,
     pub introspect: IntrospectOptions<'a>,
+    /// Print per-stage wall-clock timings to stderr (#1490).
+    pub timing: bool,
 }
 
 /// Run the headless full extraction pipeline (AST + optional LLM semantic enrichment).
@@ -64,6 +66,9 @@ pub(crate) struct ExtractOptions<'a> {
 /// `conceptually_related_to`, etc.) that the AST extractor cannot infer.
 ///
 /// Ports `__main__.py:2397` (`elif cmd == "extract"`).
+// CLI entry point: linear orchestration (detect → AST → semantic → build →
+// cluster → analyze → export) reads clearer as one flow than split helpers.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let ExtractOptions {
         path,
@@ -74,6 +79,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         cluster,
         global,
         introspect,
+        timing,
     } = opts;
     let LlmOptions {
         backend,
@@ -108,14 +114,17 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     report_deep_mode(deep_mode, effective_backend.is_some());
 
     let start = std::time::Instant::now();
+    let mut stages = super::timer::StageTimer::new(timing);
     let out_dir = out.map_or_else(
         || path.join(graphify_out_dir()),
         std::path::Path::to_path_buf,
     );
 
     let detect = run_detect_phase(path, &out_dir, extra_excludes);
+    stages.mark("detect");
     let files = collect_extract_files(path, &detect);
     let extraction = run_ast_extract_phase(&files, path);
+    stages.mark("AST extract");
     let cfg = SemanticConfig {
         backend: effective_backend.as_deref(),
         model,
@@ -129,6 +138,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         sem_input_tokens,
         sem_output_tokens,
     } = run_semantic_phase(path, &files, &extraction, &cfg)?;
+    stages.mark("semantic extract");
 
     // Merge opt-in structural introspection (Cargo manifests / live PostgreSQL)
     // into the AST+semantic node/edge set before the graph is built. Order
@@ -145,10 +155,13 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         effective_backend.as_deref(),
         path,
     )?;
+    stages.mark("build");
     let graph_path = out_dir.join("graph.json");
     let communities = run_cluster_phase(&graph, no_cluster, resolution, exclude_hubs)?;
+    stages.mark("cluster");
     graphify_export::to_json(&graph, &communities, &graph_path, true, None, None)?;
     eprintln!("      wrote {}", graph_path.display());
+    stages.mark("export");
     persist_semantic_marker(&out_dir, sem_output_tokens)?;
 
     if no_cluster {
@@ -162,11 +175,13 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         if global {
             cmd_extract_global_add(&graph_path, as_tag, path);
         }
+        stages.total();
         eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
         return Ok(());
     }
 
     run_analysis_phase(&graph, &communities, path, &out_dir)?;
+    stages.mark("analyze");
     let labels = sync_labels_file(&out_dir, &communities)?;
     render_html_viz(&graph, &communities, &out_dir, &labels);
 
@@ -180,6 +195,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         sem_output_tokens,
     );
 
+    stages.total();
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
     Ok(())
 }

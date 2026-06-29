@@ -399,6 +399,7 @@ impl DartExtractor {
                 source_file,
                 source_location: None,
                 metadata: None,
+                origin_file: None,
             });
         }
     }
@@ -1039,6 +1040,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
             source_file: str_path,
             source_location: None,
             metadata: None,
+            origin_file: None,
         });
     }
 

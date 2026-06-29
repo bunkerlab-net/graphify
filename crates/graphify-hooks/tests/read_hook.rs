@@ -181,3 +181,79 @@ fn never_blocks() {
     assert!(!s.contains("\"permissionDecision\""));
     assert!(!s.contains("\"deny\""));
 }
+
+#[test]
+fn nudges_on_framework_source() {
+    // .astro/.vue/.svelte are real source types and must nudge (#1463).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    for path in [
+        "src/components/Hero.astro",
+        "src/App.vue",
+        "src/Card.svelte",
+    ] {
+        let out = run(&cmd, &json!({ "file_path": path }), tmp.path(), true);
+        assert!(
+            stdout_of(&out).contains("graphify query"),
+            "{path} should nudge"
+        );
+    }
+}
+
+#[test]
+fn astro_glob_nudges() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    let out = run(&cmd, &json!({"pattern": "**/*.astro"}), tmp.path(), true);
+    assert!(stdout_of(&out).contains("graphify query"));
+}
+
+#[test]
+fn silent_on_json_config() {
+    // Config files stay silent: `.json` must not match the `.js` extension (#1463).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    for path in ["package.json", "tsconfig.json", "data.geojson"] {
+        let out = run(&cmd, &json!({ "file_path": path }), tmp.path(), true);
+        assert_eq!(stdout_of(&out).trim(), "", "{path} should not nudge");
+    }
+}
+
+#[test]
+fn nudges_on_multi_dot_source() {
+    // The real trailing extension wins on multi-dot names (#1463):
+    // a.test.tsx -> .tsx, foo.min.js -> .js.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    for path in ["src/a.test.tsx", "lib/foo.min.js"] {
+        let out = run(&cmd, &json!({ "file_path": path }), tmp.path(), true);
+        assert!(
+            stdout_of(&out).contains("graphify query"),
+            "{path} should nudge"
+        );
+    }
+}
+
+#[test]
+fn windows_path_nudges() {
+    // Backslash paths split on the real final segment, then its extension (#1463).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    let out = run(
+        &cmd,
+        &json!({"file_path": r"src\components\app.py"}),
+        tmp.path(),
+        true,
+    );
+    assert!(stdout_of(&out).contains("graphify query"));
+}
+
+#[test]
+fn silent_when_extension_is_on_a_directory_segment() {
+    // An extension on a directory component, not the final segment, must not fire
+    // (#1463): my.ts/file -> tail is `file` (no dot) -> silent.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    let out = run(&cmd, &json!({"file_path": "my.ts/file"}), tmp.path(), true);
+    assert_eq!(stdout_of(&out).trim(), "");
+}

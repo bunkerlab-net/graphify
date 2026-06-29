@@ -25,6 +25,7 @@ pub(crate) mod query;
 pub(crate) mod reflect;
 pub(crate) mod save_result;
 pub(crate) mod serve;
+pub(crate) mod timer;
 pub(crate) mod tree;
 pub(crate) mod validate;
 pub(crate) mod watch;
@@ -82,6 +83,22 @@ pub(crate) fn load_graph(path: &std::path::Path) -> anyhow::Result<graphify_buil
     graphify_security::check_graph_file_size_cap(path)?;
     let contents = std::fs::read_to_string(path)?;
     let value: serde_json::Value = serde_json::from_str(&contents)?;
+    // #1504: nudge read-only consumers to rebuild a pre-migration graph, since
+    // they don't re-extract. Inspect the raw nodes before `build_from_json` moves
+    // `value`. Divergence from graphify-py (which wires this into `query` only):
+    // every consumer sharing `load_graph` (query/path/explain/export/tree/
+    // cluster-only) reads a legacy graph without re-extracting, so the rebuild
+    // advice applies equally. Only fires when legacy IDs are actually detected,
+    // so freshly-built graphs (and test fixtures) stay silent.
+    if let Some(nodes) = value.get("nodes").and_then(serde_json::Value::as_array)
+        && graphify_build::graph_has_legacy_ids(nodes, None)
+    {
+        eprintln!(
+            "[graphify] note: this graph uses the pre-#1504 node-ID scheme; \
+             rebuild with `graphify extract --force` to get path-qualified IDs \
+             (fixes same-name-file collisions)."
+        );
+    }
     let graph = graphify_build::build_from_json(value, true, None)?;
     Ok(graph)
 }

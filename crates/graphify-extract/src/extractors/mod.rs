@@ -218,7 +218,7 @@ pub use pascal::{
 };
 
 // ── Svelte / Astro ────────────────────────────────────────────────────────────
-pub use svelte::{extract_astro, extract_svelte};
+pub use svelte::{extract_astro, extract_svelte, extract_vue};
 
 // ── Dart ──────────────────────────────────────────────────────────────────────
 pub use dart::extract_dart;
@@ -236,4 +236,5 @@ pub use manifest_ingest::extract_package_manifest;
 pub use blade::extract_blade;
 
 // ── .NET (.sln / .slnx / .csproj / .razor) ─────────────────────────────────────
-pub use dotnet::{extract_csproj, extract_razor, extract_sln, extract_slnx};
+pub(crate) use dotnet::with_xaml_extract_root;
+pub use dotnet::{extract_csproj, extract_razor, extract_sln, extract_slnx, extract_xaml};

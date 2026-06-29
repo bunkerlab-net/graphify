@@ -6,6 +6,7 @@
 //! overview note per community, then writes `.obsidian/graph.json` with
 //! community colour groups.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use graphify_build::Graph;
@@ -112,7 +113,7 @@ fn community_reach(graph: &Graph, node_id: &str, node_community: &IndexMap<Strin
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-/// Write a single node note to the output directory.
+/// Build a single node note: returns `(filename, content)` (the caller writes it).
 fn write_node_note(
     node_id: &str,
     attrs: &indexmap::IndexMap<String, Value>,
@@ -120,8 +121,7 @@ fn write_node_note(
     node_community: &IndexMap<String, i64>,
     node_filename: &IndexMap<String, String>,
     community_labels: Option<&IndexMap<i64, String>>,
-    output_dir: &Path,
-) -> Result<(), ExportError> {
+) -> (String, String) {
     let label = attrs
         .get("label")
         .and_then(Value::as_str)
@@ -222,8 +222,7 @@ fn write_node_note(
     lines.push(inline_tags);
 
     let fname = format!("{}.md", node_filename[node_id]);
-    std::fs::write(output_dir.join(fname), lines.join("\n"))?;
-    Ok(())
+    (fname, lines.join("\n"))
 }
 
 /// Shared graph + per-vault context for community-note writes.
@@ -231,10 +230,10 @@ struct CommunityNoteCtx<'a> {
     graph: &'a Graph,
     node_community: &'a IndexMap<String, i64>,
     node_filename: &'a IndexMap<String, String>,
+    community_filename: &'a IndexMap<i64, String>,
     community_labels: Option<&'a IndexMap<i64, String>>,
     cohesion: Option<&'a IndexMap<i64, f64>>,
     inter_community: &'a IndexMap<i64, IndexMap<i64, usize>>,
-    output_dir: &'a Path,
 }
 
 /// Write a single community overview note.
@@ -243,15 +242,15 @@ fn write_community_note(
     ctx: &CommunityNoteCtx<'_>,
     cid: i64,
     members: &[String],
-) -> Result<(), ExportError> {
+) -> (String, String) {
     let CommunityNoteCtx {
         graph,
         node_community,
         node_filename,
+        community_filename,
         community_labels,
         cohesion,
         inter_community,
-        output_dir,
     } = *ctx;
     let community_name = community_labels
         .and_then(|cl| cl.get(&cid))
@@ -360,15 +359,18 @@ fn write_community_note(
         let mut cross_sorted: Vec<(i64, usize)> = cross.iter().map(|(&k, &v)| (k, v)).collect();
         cross_sorted.sort_by_key(|&(_, v)| std::cmp::Reverse(v));
         for (other_cid, edge_count) in cross_sorted {
-            let other_name = community_labels
-                .and_then(|cl| cl.get(&other_cid))
+            let other_fname = community_filename
+                .get(&other_cid)
                 .cloned()
-                .unwrap_or_else(|| format!("Community {other_cid}"));
-            let other_safe = safe_name(&other_name);
+                .unwrap_or_else(|| {
+                    let other_name = community_labels
+                        .and_then(|cl| cl.get(&other_cid))
+                        .cloned()
+                        .unwrap_or_else(|| format!("Community {other_cid}"));
+                    format!("_COMMUNITY_{}", safe_name(&other_name))
+                });
             let s = if edge_count == 1 { "" } else { "s" };
-            lines.push(format!(
-                "- {edge_count} edge{s} to [[_COMMUNITY_{other_safe}]]"
-            ));
+            lines.push(format!("- {edge_count} edge{s} to [[{other_fname}]]"));
         }
         lines.push(String::new());
     }
@@ -409,10 +411,8 @@ fn write_community_note(
         }
     }
 
-    let community_safe = safe_name(&community_name);
-    let fname = format!("_COMMUNITY_{community_safe}.md");
-    std::fs::write(output_dir.join(fname), lines.join("\n"))?;
-    Ok(())
+    let fname = format!("{}.md", community_filename[&cid]);
+    (fname, lines.join("\n"))
 }
 
 /// Export graph as an Obsidian vault.
@@ -433,6 +433,7 @@ fn write_community_note(
 /// # Errors
 ///
 /// Returns [`ExportError::Io`] on any file-system failure.
+#[allow(clippy::too_many_lines)] // manifest + dedup + parallel build + sequential write
 pub fn to_obsidian(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
@@ -441,35 +442,46 @@ pub fn to_obsidian(
     cohesion: Option<&IndexMap<i64, f64>>,
 ) -> Result<usize, ExportError> {
     std::fs::create_dir_all(output_dir)?;
-
     let node_community = node_community_map(communities);
 
-    // Build node_id → safe filename (deduplication via numeric suffix)
-    let mut node_filename: IndexMap<String, String> = IndexMap::new();
-    let mut seen_names: IndexMap<String, usize> = IndexMap::new();
-    for (node_id, attrs) in graph.nodes() {
-        let raw_label = attrs
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or(node_id);
-        let base = safe_name(raw_label);
-        let fname = if let Some(count) = seen_names.get_mut(&base) {
-            *count += 1;
-            format!("{base}_{count}")
-        } else {
-            seen_names.insert(base.clone(), 0);
-            base.clone()
-        };
-        node_filename.insert(node_id.clone(), fname);
+    // #1506: when pointed at an existing vault, never clobber the user's own notes
+    // or `.obsidian/` config. Track the files graphify owns in a manifest; a
+    // pre-existing file NOT in the manifest is the user's and is left untouched.
+    let manifest_path = output_dir.join(".graphify_obsidian_manifest.json");
+    let owned = read_owned_manifest(&manifest_path);
+
+    // #1453: case-fold filename dedup so labels differing only by case still get
+    // distinct files on case-insensitive filesystems (macOS/APFS, Windows/NTFS).
+    let node_filename = dedup_node_filenames(graph);
+
+    let community_name = |cid: i64| -> String {
+        community_labels
+            .and_then(|cl| cl.get(&cid))
+            .cloned()
+            .unwrap_or_else(|| format!("Community {cid}"))
+    };
+    // One case-folded-deduped filename per community, computed up front so the note
+    // written and every cross-reference resolve to the same file.
+    let mut community_filename: IndexMap<i64, String> = IndexMap::new();
+    let mut used_community: HashSet<String> = HashSet::new();
+    for &cid in communities.keys() {
+        let base = format!("_COMMUNITY_{}", safe_name(&community_name(cid)));
+        let mut candidate = base.clone();
+        let mut n = 1u32;
+        while used_community.contains(&candidate.to_lowercase()) {
+            candidate = format!("{base}_{n}");
+            n += 1;
+        }
+        used_community.insert(candidate.to_lowercase());
+        community_filename.insert(cid, candidate);
     }
 
-    // Write one .md per node — fully independent file writes, so fan out
-    // across Rayon. `?` is hoisted out via `collect::<Result<_, _>>()` so the
-    // first error short-circuits the parallel walk.
+    // Build note content in parallel (markdown generation is the heavy part); the
+    // writes happen sequentially under the ownership guard.
     let node_refs: Vec<(&String, &indexmap::IndexMap<String, Value>)> = graph.nodes().collect();
-    node_refs
+    let node_notes: Vec<(String, String)> = node_refs
         .par_iter()
-        .try_for_each(|(node_id, attrs)| -> Result<(), ExportError> {
+        .map(|(node_id, attrs)| {
             write_node_note(
                 node_id,
                 attrs,
@@ -477,11 +489,10 @@ pub fn to_obsidian(
                 &node_community,
                 &node_filename,
                 community_labels,
-                output_dir,
             )
-        })?;
+        })
+        .collect();
 
-    // Build inter-community edge counts
     let mut inter_community: IndexMap<i64, IndexMap<i64, usize>> =
         communities.keys().map(|&k| (k, IndexMap::new())).collect();
     for edge in graph.edges() {
@@ -503,29 +514,22 @@ pub fn to_obsidian(
         }
     }
 
-    // Write one _COMMUNITY_<name>.md per community. Per-community writes are
-    // independent files, safe to fan out across Rayon.
     let community_pairs: Vec<(&i64, &Vec<String>)> = communities.iter().collect();
-    let community_notes_written = community_pairs.len();
     let note_ctx = CommunityNoteCtx {
         graph,
         node_community: &node_community,
         node_filename: &node_filename,
+        community_filename: &community_filename,
         community_labels,
         cohesion,
         inter_community: &inter_community,
-        output_dir,
     };
-    community_pairs
+    let community_notes: Vec<(String, String)> = community_pairs
         .par_iter()
-        .try_for_each(|(cid, members)| -> Result<(), ExportError> {
-            write_community_note(&note_ctx, **cid, members)
-        })?;
+        .map(|(cid, members)| write_community_note(&note_ctx, **cid, members))
+        .collect();
 
-    // Write .obsidian/graph.json for community colour groups
-    let obsidian_dir = output_dir.join(".obsidian");
-    std::fs::create_dir_all(&obsidian_dir)?;
-
+    // `.obsidian/graph.json` content for community colour groups.
     let color_groups: Vec<serde_json::Value> = community_labels.map_or_else(Vec::new, |cl| {
         let mut sorted: Vec<(i64, &String)> = cl.iter().map(|(&k, v)| (k, v)).collect();
         sorted.sort_by_key(|(k, _)| *k);
@@ -545,12 +549,122 @@ pub fn to_obsidian(
             })
             .collect()
     });
+    let graph_json =
+        serde_json::to_string_pretty(&serde_json::json!({ "colorGroups": color_groups }))?;
 
-    let graph_config = serde_json::json!({ "colorGroups": color_groups });
-    std::fs::write(
-        obsidian_dir.join("graph.json"),
-        serde_json::to_string_pretty(&graph_config)?,
+    // Owned-write every file, refusing to overwrite a pre-existing file graphify
+    // didn't create. `.obsidian/` is created only when its graph.json is written.
+    let mut written: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut node_notes_written = 0usize;
+    for (rel, content) in &node_notes {
+        if owned_write(output_dir, rel, content, &owned, &mut written, &mut skipped)? {
+            node_notes_written += 1;
+        }
+    }
+    let mut community_notes_written = 0usize;
+    for (rel, content) in &community_notes {
+        if owned_write(output_dir, rel, content, &owned, &mut written, &mut skipped)? {
+            community_notes_written += 1;
+        }
+    }
+    owned_write(
+        output_dir,
+        ".obsidian/graph.json",
+        &graph_json,
+        &owned,
+        &mut written,
+        &mut skipped,
     )?;
 
-    Ok(graph.node_count() + community_notes_written)
+    // Persist the manifest of files graphify owns; warn (once, aggregated) about
+    // any pre-existing file we refused to overwrite.
+    written.sort();
+    written.dedup();
+    let manifest = serde_json::json!({ "files": written });
+    let _ = std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?);
+    if !skipped.is_empty() {
+        let shown = skipped
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if skipped.len() > 5 {
+            format!(" (+{} more)", skipped.len() - 5)
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "[graphify] WARNING: skipped {} pre-existing file(s) graphify did not create, to \
+             avoid overwriting your notes: {shown}{more}. Export into an empty directory (or the \
+             default graphify-out/obsidian) to get the full vault.",
+            skipped.len()
+        );
+    }
+    Ok(node_notes_written + community_notes_written)
+}
+
+/// Read the set of files graphify owns from the vault manifest (empty on first run).
+fn read_owned_manifest(path: &Path) -> HashSet<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| {
+            v.get("files").and_then(Value::as_array).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Map each node id to a unique note filename, folding case in the collision
+/// check (so case-only-different labels don't overwrite on case-insensitive
+/// filesystems) while emitting the original-case filename. The suffixed
+/// candidate is itself re-checked. Mirrors Python `_dedup_node_filenames` (#1453).
+pub(crate) fn dedup_node_filenames(graph: &Graph) -> IndexMap<String, String> {
+    let mut node_filename: IndexMap<String, String> = IndexMap::new();
+    let mut used: HashSet<String> = HashSet::new();
+    for (node_id, attrs) in graph.nodes() {
+        let raw_label = attrs
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or(node_id);
+        let base = safe_name(raw_label);
+        let mut candidate = base.clone();
+        let mut n = 1u32;
+        while used.contains(&candidate.to_lowercase()) {
+            candidate = format!("{base}_{n}");
+            n += 1;
+        }
+        used.insert(candidate.to_lowercase());
+        node_filename.insert(node_id.clone(), candidate);
+    }
+    node_filename
+}
+
+/// Write a graphify-owned file, refusing to overwrite a pre-existing file
+/// graphify didn't create (recorded in `skipped`); records writes in `written`.
+/// Returns `true` when the file was written. Mirrors Python `_owned_write` (#1506).
+fn owned_write(
+    output_dir: &Path,
+    rel: &str,
+    content: &str,
+    owned: &HashSet<String>,
+    written: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+) -> Result<bool, ExportError> {
+    let target = output_dir.join(rel);
+    if target.exists() && !owned.contains(rel) {
+        skipped.push(rel.to_string());
+        return Ok(false);
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, content)?;
+    written.push(rel.to_string());
+    Ok(true)
 }

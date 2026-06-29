@@ -164,11 +164,14 @@ pub static JAVA: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_java::LANGUAGE.into(),
     // `record_declaration` shares class_declaration's name/body/interfaces
     // fields, so a record becomes a first-class type node, not an isolated
-    // file (#1373).
+    // file (#1373). Enums and annotation declarations use the same contract
+    // (#1512).
     class_types: &[
         "class_declaration",
         "interface_declaration",
         "record_declaration",
+        "enum_declaration",
+        "annotation_type_declaration",
     ],
     function_types: &["method_declaration", "constructor_declaration"],
     import_types: &["import_declaration"],
@@ -301,7 +304,13 @@ pub static RUBY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 /// Pre-built [`LangConfig`] for C#, using tree-sitter-c-sharp.
 pub static CSHARP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_c_sharp::LANGUAGE.into(),
-    class_types: &["class_declaration", "interface_declaration"],
+    class_types: &[
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "struct_declaration",
+        "record_declaration",
+    ],
     function_types: &["method_declaration"],
     import_types: &["using_directive"],
     call_types: &["invocation_expression"],

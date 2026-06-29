@@ -116,33 +116,17 @@ pub fn to_canvas(
     Ok(())
 }
 
-/// Derive per-node filenames (same dedup logic as `to_obsidian`).
+/// Derive per-node filenames via the shared case-folded dedup, so canvas and
+/// obsidian can't drift (#1453).
 fn derive_node_filenames(graph: &Graph) -> IndexMap<String, String> {
-    let mut nf: IndexMap<String, String> = IndexMap::new();
-    let mut seen_names: IndexMap<String, usize> = IndexMap::new();
-    for (node_id, attrs) in graph.nodes() {
-        let raw_label = attrs
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or(node_id);
-        let base = safe_name(raw_label);
-        let fname = if let Some(count) = seen_names.get_mut(&base) {
-            *count += 1;
-            format!("{base}_{count}")
-        } else {
-            seen_names.insert(base.clone(), 0);
-            base.clone()
-        };
-        nf.insert(node_id.clone(), fname);
-    }
-    nf
+    crate::obsidian::dedup_node_filenames(graph)
 }
 
 /// Compute per-community `(x, y, width, height)` rectangles in a grid layout.
 fn compute_group_layout(
     communities: &IndexMap<i64, Vec<String>>,
     sorted_cids: &[i64],
-) -> IndexMap<i64, (usize, usize, usize, usize)> {
+) -> IndexMap<i64, (usize, usize, usize, usize, usize)> {
     let num_communities = communities.len();
     #[allow(
         clippy::cast_precision_loss,
@@ -160,7 +144,10 @@ fn compute_group_layout(
         1
     };
 
-    let group_sizes: IndexMap<i64, (usize, usize)> = sorted_cids
+    // inner_cols is the per-community grid width; the box dimensions AND the node
+    // placement loop both derive from it, so the cards fill the box instead of
+    // wrapping into a narrow strip in an over-wide box (#1452).
+    let group_sizes: IndexMap<i64, (usize, usize, usize)> = sorted_cids
         .iter()
         .map(|&cid| {
             let n = communities.get(&cid).map_or(0, Vec::len);
@@ -169,14 +156,15 @@ fn compute_group_layout(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss
             )]
-            let w = if n > 0 {
-                (220.0 * (n as f64).sqrt().ceil()) as usize
+            let inner_cols = ((n as f64).sqrt().ceil() as usize).max(1);
+            let w = (220 * inner_cols).max(600);
+            let h = if n > 0 {
+                100 * n.div_ceil(inner_cols) + 120
             } else {
                 0
             }
-            .max(600);
-            let h = if n > 0 { 100 * n.div_ceil(3) + 120 } else { 0 }.max(400);
-            (cid, (w, h))
+            .max(400);
+            (cid, (w, h, inner_cols))
         })
         .collect();
 
@@ -185,20 +173,20 @@ fn compute_group_layout(
     for (linear, &cid) in sorted_cids.iter().enumerate() {
         let col_idx = linear % cols;
         let row_idx = linear / cols;
-        let (w, h) = group_sizes[&cid];
+        let (w, h, _) = group_sizes[&cid];
         col_widths[col_idx] = col_widths[col_idx].max(w);
         row_heights[row_idx] = row_heights[row_idx].max(h);
     }
 
     let gap: usize = 80;
-    let mut group_layout: IndexMap<i64, (usize, usize, usize, usize)> = IndexMap::new();
+    let mut group_layout: IndexMap<i64, (usize, usize, usize, usize, usize)> = IndexMap::new();
     for (linear, &cid) in sorted_cids.iter().enumerate() {
         let col_idx = linear % cols;
         let row_idx = linear / cols;
         let gx = col_widths[..col_idx].iter().sum::<usize>() + col_idx * gap;
         let gy = row_heights[..row_idx].iter().sum::<usize>() + row_idx * gap;
-        let (gw, gh) = group_sizes[&cid];
-        group_layout.insert(cid, (gx, gy, gw, gh));
+        let (gw, gh, inner_cols) = group_sizes[&cid];
+        group_layout.insert(cid, (gx, gy, gw, gh, inner_cols));
     }
     group_layout
 }
@@ -216,7 +204,7 @@ fn emit_community_nodes(
     ctx: &CommunityEmit<'_>,
     cid: i64,
     idx: usize,
-    rect: (usize, usize, usize, usize),
+    rect: (usize, usize, usize, usize, usize),
     canvas_nodes: &mut Vec<Value>,
 ) {
     let CommunityEmit {
@@ -225,7 +213,7 @@ fn emit_community_nodes(
         community_labels,
         node_filenames,
     } = *ctx;
-    let (gx, gy, gw, gh) = rect;
+    let (gx, gy, gw, gh, inner_cols) = rect;
     let community_name = community_labels
         .and_then(|cl| cl.get(&cid))
         .cloned()
@@ -252,8 +240,8 @@ fn emit_community_nodes(
             .to_string()
     });
     for (m_idx, node_id) in sorted_members.iter().enumerate() {
-        let col = m_idx % 3;
-        let row = m_idx / 3;
+        let col = m_idx % inner_cols;
+        let row = m_idx / inner_cols;
         let nx_x = gx + 20 + col * (180 + 20);
         let nx_y = gy + 80 + row * (60 + 20);
         let fname = node_filenames.get(node_id).cloned().unwrap_or_else(|| {

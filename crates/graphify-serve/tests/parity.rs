@@ -278,6 +278,34 @@ fn test_find_node_matches_full_punctuated_unicode_label() {
 }
 
 #[test]
+fn test_find_node_source_file_path_prefers_file_level_node() {
+    // #1503: a source-file path query floats the L1 file node ahead of the
+    // symbols that share the file. `build_from_json` re-keys non-AST nodes to
+    // their full repo-relative path id (#1504): example_route ->
+    // app_api_example_route.
+    let g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "example_route_get", "label": "GET()",
+                 "source_file": "app/api/example/route.ts", "source_location": "L42"},
+                {"id": "example_route", "label": "route.ts",
+                 "source_file": "app/api/example/route.ts", "source_location": "L1"},
+            ],
+            "edges": [],
+        }),
+        false,
+        None,
+    )
+    .expect("make graph");
+    let matches = find_node(&g, "app/api/example/route.ts");
+    assert_eq!(
+        matches.first().map(String::as_str),
+        Some("app_api_example_route")
+    );
+    assert!(matches.iter().any(|m| m == "app_api_example_route_get"));
+}
+
+#[test]
 fn test_query_terms_strips_search_punctuation() {
     assert_eq!(
         query_terms("what calls extract?"),

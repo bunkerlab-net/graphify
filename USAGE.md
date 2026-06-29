@@ -98,6 +98,7 @@ graphify extract . --global --as my-repo # custom tag for --global
 graphify extract . --mode deep           # aggressive INFERRED-edge semantic extraction
 graphify extract . --cargo               # also add crate→crate dependency edges from Cargo.toml
 graphify extract . --postgres "$DSN"     # also add a live PostgreSQL schema (needs the `postgres` build feature)
+graphify extract . --timing              # print per-stage wall-clock timings to stderr (#1490)
 ```
 
 `--cargo` walks the Cargo workspace/package manifests and emits one `crate:<name>` node per internal package
@@ -179,6 +180,8 @@ graphify cluster-only . --no-label                 # keep "Community N" placehol
 graphify cluster-only . --backend openai           # backend to use for naming (default: auto-detect)
 graphify cluster-only . --max-concurrency 8        # parallel LLM naming batches (default 4)
 graphify cluster-only . --batch-size 50            # communities per LLM call (default 100)
+graphify cluster-only . --missing-only             # only (re)name unnamed / "Community N" placeholders, keep curated labels (#1481)
+graphify cluster-only . --timing                   # print per-stage wall-clock timings to stderr (#1490)
 ```
 
 ### `label <path>`
@@ -192,6 +195,8 @@ graphify label . --backend gemini      # force a specific backend
 graphify label . --no-viz              # skip graph.html regeneration
 graphify label . --max-concurrency 8   # parallel LLM naming batches (default 4)
 graphify label . --batch-size 50       # communities per LLM call (default 100)
+graphify label . --missing-only        # re-name only placeholder communities, preserve existing labels (#1481)
+graphify label . --timing              # print per-stage wall-clock timings to stderr (#1490)
 ```
 
 If no backend is configured (no API key), `label` degrades to `Community N` placeholders and prints a hint.
@@ -307,6 +312,9 @@ Plain-language explanation of a node and its neighbours.
 graphify explain "AuthMiddleware"
 ```
 
+Pass a node label, ID, or a source-file path. A full path (e.g. `app/api/route.ts`) resolves to that
+file's node — the file-level node, not a symbol inside it — and a trailing slash is tolerated (#1503).
+
 ### `save-result`
 
 Save a Q&A result back into `graphify-out/memory/` so it gets re-extracted into the graph on the next `update`
@@ -335,7 +343,7 @@ grouped by community.
 
 ```bash
 graphify reflect                          # writes graphify-out/reflections/LESSONS.md
-graphify reflect --if-stale               # skip when LESSONS.md is already newer than every input
+graphify reflect --if-stale               # skip when LESSONS.md is newer than the memory docs + graph.json and its analysis/labels sidecars (#1470)
 graphify reflect --half-life-days 14      # signals decay twice as fast
 graphify reflect --min-corroboration 3    # require 3 useful sessions to promote a node to "preferred"
 graphify reflect --out custom/LESSONS.md  # write the lessons doc elsewhere
@@ -349,6 +357,9 @@ exist, so the lessons doc stays current without a manual run.
 Reverse-traversal impact analysis: given a node label / ID / source-file substring, enumerate every node that
 depends on it (via `calls`, `imports`, `imports_from`, `re_exports`, `inherits`, etc.) up to a configurable depth.
 A fast pre-flight before refactors and bulk edits.
+
+A bare label or ID still works; a full source-file path resolves to that file's node (the file-level
+node, not a symbol inside it), matching `explain`, and a trailing slash is tolerated (#1503).
 
 ```bash
 graphify affected "AuthMiddleware"
@@ -417,6 +428,15 @@ is missing or empty — which happens after the watch / post-commit rebuild path
 that only refreshes `graph.json` + `GRAPH_REPORT.md` — exports reconstruct the
 community map from the per-node `community` attribute on `graph.json`. `export
 wiki` only bails out when both sources are empty.
+
+`export obsidian` only writes notes it owns — files it created in a prior run, tracked in a
+`graphify-out/obsidian/.graphify_obsidian_manifest.json` — so a hand-edited note in the vault is never
+clobbered (#1506). Note and canvas filenames are de-duplicated case-insensitively, so nodes that differ
+only by case don't overwrite each other on macOS/Windows filesystems (#1453), and the Obsidian Canvas
+lays each community's node cards out in a `ceil(sqrt(n))`-column grid (#1452). `export wiki` links
+between articles with portable relative Markdown links (`[label](slug.md)`) rather than `[[wikilinks]]`,
+so pages render correctly outside Obsidian (GitHub, GitLab, plain browsers), with slugs de-duplicated
+case-insensitively (#1444, #1453).
 
 ### Protected-graph backups
 
@@ -676,6 +696,9 @@ completes the feature.)
 | `OPENAI_MODEL`                   | Default model for the `openai` backend. `--model` and `GRAPHIFY_OPENAI_MODEL` still win.                                                            |
 | `ANTHROPIC_BASE_URL`             | Point the `claude` backend at a custom Anthropic-compatible endpoint (LiteLLM proxy, gateways). `GRAPHIFY_CLAUDE_BASE_URL` still wins.              |
 | `ANTHROPIC_MODEL`                | Default model for the `claude` backend. `--model` and `GRAPHIFY_CLAUDE_MODEL` still win.                                                            |
+| `KIMI_BASE_URL`                  | Point the `kimi` backend at any OpenAI-compatible server (Moonshot-compatible proxy). `GRAPHIFY_KIMI_BASE_URL` still wins (#1458).                  |
+| `GEMINI_BASE_URL`                | Point the `gemini` backend at any OpenAI-compatible server. `GRAPHIFY_GEMINI_BASE_URL` still wins (#1458).                                          |
+| `DEEPSEEK_BASE_URL`              | Point the `deepseek` backend at any OpenAI-compatible server. `GRAPHIFY_DEEPSEEK_BASE_URL` still wins (#1458).                                      |
 | `GRAPHIFY_CLUSTER_PROGRESS`      | Truthy value prints per-level cluster progress to stderr.                                                                                           |
 | `GRAPHIFY_CLUSTER_BACKEND`       | `leiden` (default) or `louvain` to force the fallback.                                                                                              |
 | `GRAPHIFY_ALLOW_LOCAL_PROVIDERS` | Opt in to loading a project-local `.graphify/providers.json` (ignored by default; see Custom providers).                                            |
@@ -715,9 +738,11 @@ present, otherwise auto-detection falls through to the next backend.
 Force a backend with `--backend`; override its default model with `--model`.
 
 The `openai` and `claude` backends additionally honour `OPENAI_BASE_URL` /
-`OPENAI_MODEL` and `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`, so they can target a
-self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio) or an
-Anthropic-compatible proxy/gateway (LiteLLM) without registering a custom provider
+`OPENAI_MODEL` and `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`; the `kimi`,
+`gemini`, and `deepseek` backends honour a bare `KIMI_BASE_URL` /
+`GEMINI_BASE_URL` / `DEEPSEEK_BASE_URL` (#1458). Any of these can target a
+self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio) or a
+vendor-compatible proxy/gateway (LiteLLM) without registering a custom provider
 (#1273). The `GRAPHIFY_*` overrides and `--model` still take precedence.
 
 #### Custom providers
@@ -756,6 +781,18 @@ across runs. Cluster IDs come from a deterministic community-detection pass at r
 by size descending with a lexicographic tiebreak on their sorted member list, so an identical grouping always receives
 identical integer community IDs run-to-run (no spurious "community churn" in a per-node cid diff). Two extractions of the
 same input on the same machine should produce byte-identical JSON.
+
+### Node IDs
+
+Each node's ID is its **full repo-relative path** with the extension dropped and path separators
+collapsed to `_`, optionally suffixed with the symbol name — e.g. `src/auth/session.py` →
+`src_auth_session`, and a `validate()` inside it → `src_auth_session_validate` (#1504). Using the whole
+path rather than just the filename stem keeps same-named files in different directories distinct. A
+`graph.json` written by an older graphify uses a shorter, parent-dir-only stem; loading one prints a
+one-line stderr note suggesting `graphify extract --force` to re-key to path-qualified IDs (the on-disk
+graph is read as-is, never silently rewritten). Cross-file type-reference stubs (a referenced type
+defined in another file) carry an `origin_file` attribute recording the referencing file, so same-label
+stubs from different files stay distinct during resolution (#1462).
 
 ---
 

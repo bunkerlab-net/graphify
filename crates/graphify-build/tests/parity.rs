@@ -9,8 +9,8 @@
 
 use graphify_build::{
     Graph, GraphKind, build, build_from_json, build_merge, build_merge_with_graph_cap,
-    dedupe_edges, dedupe_nodes, deduplicate_by_label, norm_label, prefix_graph_for_global,
-    prune_repo_from_graph,
+    dedupe_edges, dedupe_nodes, deduplicate_by_label, graph_has_legacy_ids, norm_label,
+    prefix_graph_for_global, prune_repo_from_graph,
 };
 use serde_json::{Value, json};
 
@@ -311,8 +311,9 @@ fn build_from_json_relativizes_absolute_source_file() {
                    "source_file": abs_str}],
     });
     let g = build_from_json(ext, false, Some(&root)).expect("build");
+    // #1504 re-keys the old short id ("overview_intro") to its full-path form.
     let sf = g
-        .node_data("overview_intro")
+        .node_data("docs_overview_intro")
         .and_then(|a| a.get("source_file"))
         .and_then(Value::as_str)
         .expect("sf");
@@ -334,8 +335,9 @@ fn build_relativizes_absolute_source_file() {
         "edges": [],
     });
     let g = build(&[ext], false, true, Some(&root)).expect("build");
+    // #1504 re-keys the old short id ("main_fn") to its full-path form.
     let sf = g
-        .node_data("main_fn")
+        .node_data("src_main_fn")
         .and_then(|a| a.get("source_file"))
         .and_then(Value::as_str)
         .expect("sf");
@@ -351,8 +353,9 @@ fn build_from_json_relative_source_file_unchanged() {
         "edges": [],
     });
     let g = build_from_json(ext, false, Some(tmp.path())).expect("build");
+    // source_file is untouched; the id is re-keyed to the full-path form (#1504).
     assert_eq!(
-        g.node_data("foo_bar")
+        g.node_data("src_foo_bar")
             .and_then(|a| a.get("source_file"))
             .and_then(Value::as_str),
         Some("src/foo.py")
@@ -1183,14 +1186,73 @@ fn build_merge_root_collapses_convention_drift() {
         "verbatim path + root must collapse to one node"
     );
     assert!(
-        !g_ok.contains_node("wiki_overview_stale"),
+        !g_ok.contains_node("docs_wiki_overview_stale"),
         "stale node for the re-extracted file must be dropped"
     );
     assert_eq!(
-        g_ok.node_data("wiki_overview_overview")
+        g_ok.node_data("docs_wiki_overview_overview")
             .and_then(|a| a.get("source_file"))
             .and_then(Value::as_str),
         Some("docs/wiki/overview.md"),
         "new chunk must be canonicalized to the stored relative base"
     );
+}
+
+// ── #1504 migration: legacy-id detection + re-key source_file contract ─────────
+
+#[test]
+fn graph_has_legacy_ids_detects_old_scheme() {
+    // The read-only-consumer nudge flags a pre-#1504 graph and leaves a canonical
+    // one alone. Mirrors test_build.py::test_graph_has_legacy_ids_detects_old_scheme.
+    let old = [
+        json!({"id": "api_readme", "source_file": "docs/v1/api/README.md",
+                      "type": "document", "source_location": "L1"}),
+    ];
+    let new = [
+        json!({"id": "docs_v1_api_readme", "source_file": "docs/v1/api/README.md",
+                      "type": "document", "source_location": "L1"}),
+    ];
+    assert!(graph_has_legacy_ids(&old, Some(".")));
+    assert!(!graph_has_legacy_ids(&new, Some(".")));
+    // sourceless / top-level file nodes don't false-positive.
+    assert!(!graph_has_legacy_ids(
+        &[json!({"id": "setup", "source_file": "setup.py", "source_location": "L1"})],
+        Some("."),
+    ));
+    assert!(!graph_has_legacy_ids(
+        &[json!({"id": "x", "label": "y"})],
+        Some(".")
+    ));
+    // A package/dir-scoped SYMBOL id (Go's _make_id(pkg_dir, name) -> "sub_thing")
+    // must NOT false-positive: it isn't file-level (no L1), so it's ignored even
+    // though "sub_thing" coincides with the old file-stem form of pkg/sub/thing.go.
+    let go_symbol = [json!({"id": "sub_thing", "source_file": "pkg/sub/thing.go",
+                           "type": "code", "source_location": "L3"})];
+    assert!(!graph_has_legacy_ids(&go_symbol, Some(".")));
+}
+
+#[test]
+fn semantic_rekey_migrates_relative_leaves_absolute() {
+    // Re-key contract (#1504): a relative source_file is migrated to the full-path
+    // stem; an absolute one with no resolvable root is left untouched so its
+    // on-disk path can't leak into IDs. Mirrors
+    // test_build.py::test_semantic_rekey_relative_vs_absolute_source_file, exercised
+    // through the observable build_from_json output.
+    let rel = json!({
+        "nodes": [{"id": "api_readme", "source_file": "docs/v1/api/README.md",
+                   "file_type": "document"}],
+        "edges": [],
+    });
+    let g = build_from_json(rel, false, Some(std::path::Path::new("."))).expect("build");
+    assert!(g.contains_node("docs_v1_api_readme"));
+    assert!(!g.contains_node("api_readme"));
+
+    let abs = json!({
+        "nodes": [{"id": "api_readme", "source_file": "/abs/docs/v1/api/README.md",
+                   "file_type": "document"}],
+        "edges": [],
+    });
+    let g2 = build_from_json(abs, false, None).expect("build");
+    assert!(g2.contains_node("api_readme"));
+    assert!(!g2.contains_node("abs_docs_v1_api_readme"));
 }

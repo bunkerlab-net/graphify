@@ -49,7 +49,13 @@ pub(crate) fn cmd_reflect(args: ReflectArgs) -> Result<()> {
         default_graph.exists().then_some(default_graph)
     });
 
-    if args.if_stale && graphify_reflect::lessons_fresh(&out_path, &memory_dir, graph.as_deref()) {
+    let graphs = graphify_reflect::GraphPaths {
+        graph: graph.as_deref(),
+        analysis: args.analysis.as_deref(),
+        labels: args.labels.as_deref(),
+    };
+
+    if args.if_stale && graphify_reflect::lessons_fresh(&out_path, &memory_dir, graphs) {
         println!(
             "Lessons already up to date -> {} (skipped; omit --if-stale to force)",
             out_path.display()
@@ -57,11 +63,6 @@ pub(crate) fn cmd_reflect(args: ReflectArgs) -> Result<()> {
         return Ok(());
     }
 
-    let graphs = graphify_reflect::GraphPaths {
-        graph: graph.as_deref(),
-        analysis: args.analysis.as_deref(),
-        labels: args.labels.as_deref(),
-    };
     let (path, agg) = graphify_reflect::reflect(
         &memory_dir,
         &out_path,

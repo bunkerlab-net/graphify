@@ -42,6 +42,7 @@ pub fn extract_dmf(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen: HashSet<String> = HashSet::from([file_nid.clone()]);
@@ -64,6 +65,7 @@ pub fn extract_dmf(path: &Path) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{line_idx}")),
                     metadata: None,
+                    origin_file: None,
                 });
                 edges.push(Edge {
                     source: file_nid.clone(),
@@ -96,6 +98,7 @@ pub fn extract_dmf(path: &Path) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{line_idx}")),
                     metadata: None,
+                    origin_file: None,
                 });
                 edges.push(Edge {
                     source: win,

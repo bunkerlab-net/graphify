@@ -13,6 +13,7 @@
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
 mod cache;
+mod csharp;
 mod java;
 mod js;
 mod python;
@@ -27,11 +28,13 @@ use crate::extractors::{
     extract_package_manifest, extract_pascal, extract_php, extract_powershell,
     extract_powershell_manifest, extract_python, extract_razor, extract_ruby, extract_rust,
     extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte, extract_swift,
-    extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
+    extract_terraform, extract_verilog, extract_vue, extract_xaml, extract_zig, is_mcp_config_path,
+    with_xaml_extract_root,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
 use cache::extract_single_file;
+use csharp::resolve_csharp_type_references;
 use java::{resolve_cross_file_java_imports, resolve_java_type_references};
 use js::{resolve_js_default_imports, resolve_js_reexport_imports};
 use python::{
@@ -48,6 +51,23 @@ const PARALLEL_THRESHOLD: usize = 20;
 // ── Dispatch table ────────────────────────────────────────────────────────────
 
 type ExtractFn = fn(&Path) -> FileResult;
+
+/// ObjC-only directives — illegal in C/C++, so finding one in a `.h` is a
+/// near-zero-false-positive signal the header is Objective-C (#1475). `@property`
+/// is excluded: it doubles as a Doxygen command and only ever appears inside an
+/// @interface/@protocol anyway, which the stronger directives already cover.
+const OBJC_HEADER_MARKERS: [&str; 4] = ["@interface", "@protocol", "@implementation", "@import"];
+
+/// Whether a `.h` file is Objective-C rather than C/C++ (#1475). Reads the first
+/// 256 KiB and sniffs for an ObjC-only directive; mirrors Python `_is_objc_header`.
+fn is_objc_header(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let head = &bytes[..bytes.len().min(256 * 1024)];
+    let text = String::from_utf8_lossy(head);
+    OBJC_HEADER_MARKERS.iter().any(|m| text.contains(m))
+}
 
 /// Return the per-language extractor function for a given file path, or `None` for unknown types.
 ///
@@ -73,15 +93,22 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         return Some(extract_package_manifest);
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    // `.h` is C/C++/ObjC-ambiguous; route Objective-C headers to extract_objc
+    // (the extension map below sends `.h` to extract_c, which can't read
+    // @interface/@protocol/@property/methods). Mirrors Python `_is_objc_header`.
+    if ext == "h" && is_objc_header(path) {
+        return Some(extract_objc);
+    }
     match ext {
         "py" => Some(extract_python),
-        "js" | "jsx" | "mjs" | "ts" | "tsx" | "vue" => Some(extract_js),
+        "js" | "jsx" | "mjs" | "ts" | "tsx" => Some(extract_js),
+        "vue" => Some(extract_vue),
         "go" => Some(extract_go),
         "rs" => Some(extract_rust),
         "java" => Some(extract_java),
         "groovy" | "gradle" => Some(extract_groovy),
         "c" | "h" => Some(extract_c),
-        "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" => Some(extract_cpp),
+        "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" | "metal" => Some(extract_cpp),
         "rb" => Some(extract_ruby),
         "cs" => Some(extract_csharp),
         "kt" | "kts" => Some(extract_kotlin),
@@ -119,6 +146,7 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "cls" | "trigger" => Some(extract_apex),
         "tf" | "tfvars" | "hcl" => Some(extract_terraform),
         "csproj" | "fsproj" | "vbproj" => Some(extract_csproj),
+        "xaml" => Some(extract_xaml),
         "razor" | "cshtml" => Some(extract_razor),
         _ => None,
     }
@@ -422,6 +450,18 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         .collect();
     if !java_type_paths.is_empty() {
         resolve_java_type_references(&java_type_paths, &mut all_nodes, &mut all_edges);
+    }
+
+    // Re-point dangling C# inherits/implements/references edges left on shadow
+    // stubs, using each file's `using` directives + enclosing namespace for
+    // exact disambiguation (#1466). Mirrors the Java pass above.
+    let cs_type_paths: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "cs"))
+        .cloned()
+        .collect();
+    if !cs_type_paths.is_empty() {
+        resolve_csharp_type_references(&cs_type_paths, &mut all_nodes, &mut all_edges);
     }
 
     // Collapse Swift `extension Foo` nodes onto the canonical `class Foo`

@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use graphify_ingest::save_query_result;
 use graphify_reflect::{
-    AggResult, MemoryDoc, aggregate_lessons, lessons_fresh, load_memory_docs, parse_memory_doc,
-    reflect, render_lessons_md,
+    AggResult, GraphPaths, MemoryDoc, aggregate_lessons, lessons_fresh, load_memory_docs,
+    parse_memory_doc, reflect, render_lessons_md,
 };
 use indexmap::IndexMap;
 
@@ -589,7 +589,11 @@ fn lessons_fresh_missing_output_is_not_fresh() {
     let mem = tmp.path().join("memory");
     std::fs::create_dir_all(&mem).unwrap();
     std::fs::write(mem.join("q.md"), "x").unwrap();
-    assert!(!lessons_fresh(&tmp.path().join("LESSONS.md"), &mem, None));
+    assert!(!lessons_fresh(
+        &tmp.path().join("LESSONS.md"),
+        &mem,
+        GraphPaths::default()
+    ));
 }
 
 #[test]
@@ -603,7 +607,7 @@ fn lessons_fresh_true_when_output_newer_than_inputs() {
     std::fs::write(&out, "y").unwrap();
     set_mtime(&doc, 1000);
     set_mtime(&out, 2000);
-    assert!(lessons_fresh(&out, &mem, None));
+    assert!(lessons_fresh(&out, &mem, GraphPaths::default()));
 }
 
 #[test]
@@ -617,7 +621,7 @@ fn lessons_fresh_false_when_memory_newer() {
     std::fs::write(&out, "y").unwrap();
     set_mtime(&out, 1000);
     set_mtime(&doc, 2000);
-    assert!(!lessons_fresh(&out, &mem, None));
+    assert!(!lessons_fresh(&out, &mem, GraphPaths::default()));
 }
 
 #[test]
@@ -634,7 +638,48 @@ fn lessons_fresh_false_when_graph_newer() {
     set_mtime(&doc, 1000);
     set_mtime(&out, 1500);
     set_mtime(&graph, 2000);
-    assert!(!lessons_fresh(&out, &mem, Some(&graph)));
+    assert!(!lessons_fresh(
+        &out,
+        &mem,
+        GraphPaths {
+            graph: Some(&graph),
+            ..Default::default()
+        }
+    ));
+}
+
+#[test]
+fn lessons_fresh_false_when_analysis_or_labels_newer() {
+    // #1470: the graph's `.graphify_analysis.json` / `.graphify_labels.json`
+    // sidecars feed the grouped doc, so a newer sidecar makes lessons stale even
+    // when graph.json itself is older than the output.
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = tmp.path().join("memory");
+    std::fs::create_dir_all(&mem).unwrap();
+    let doc = mem.join("q.md");
+    std::fs::write(&doc, "x").unwrap();
+    let out = tmp.path().join("LESSONS.md");
+    std::fs::write(&out, "y").unwrap();
+    let graph = tmp.path().join("graph.json");
+    std::fs::write(&graph, "{}").unwrap();
+    let analysis = tmp.path().join(".graphify_analysis.json");
+    std::fs::write(&analysis, "{}").unwrap();
+    let labels = tmp.path().join(".graphify_labels.json");
+    std::fs::write(&labels, "{}").unwrap();
+    set_mtime(&doc, 1000);
+    set_mtime(&graph, 1000);
+    set_mtime(&labels, 1000);
+    set_mtime(&out, 1500);
+    // Sidecar resolved as graph's sibling is newer than the output.
+    set_mtime(&analysis, 2000);
+    assert!(!lessons_fresh(
+        &out,
+        &mem,
+        GraphPaths {
+            graph: Some(&graph),
+            ..Default::default()
+        }
+    ));
 }
 
 /// Set a file's mtime to `secs` after the Unix epoch.

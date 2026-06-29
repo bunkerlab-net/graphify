@@ -32,7 +32,7 @@ fn language_family(ext: &str) -> Option<&'static str> {
         "rs" => Some("rs"),
         "java" | "kt" | "scala" | "groovy" => Some("jvm"),
         "c" | "h" => Some("c"),
-        "cc" | "cpp" | "hpp" => Some("cpp"),
+        "cc" | "cpp" | "hpp" | "cu" | "cuh" | "metal" => Some("cpp"),
         "rb" => Some("rb"),
         "php" => Some("php"),
         "cs" => Some("cs"),
@@ -302,6 +302,25 @@ fn build_norm_to_id(
     norm_to_id
 }
 
+/// Snapshot each node's `source_file` (id → path) so the cross-language `calls`
+/// INFERRED filter and the legacy-id alias index can resolve without
+/// re-borrowing `graph` inside the per-edge closure.
+fn snapshot_source_files(graph: &Graph) -> IndexMap<String, String> {
+    graph
+        .nodes()
+        .map(|(id, attrs)| {
+            (
+                id.clone(),
+                attrs
+                    .get("source_file")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
 /// Resolve an edge's `source_file`: keep an explicit truthy value, otherwise
 /// backfill from the source then target node (#1279). The result is relativised
 /// against `root_str`. Returns `None` only when the edge carries a non-string
@@ -334,23 +353,12 @@ pub(crate) fn add_edges(
         return;
     };
     let node_ids: IndexSet<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
-    let norm_to_id = build_norm_to_id(&node_ids, ghost_remap);
-    // Snapshot each node's `source_file` so the cross-language `calls`
-    // INFERRED filter can resolve language families without re-borrowing
-    // `graph` from inside the per-edge closure.
-    let node_source_files: IndexMap<String, String> = graph
-        .nodes()
-        .map(|(id, attrs)| {
-            (
-                id.clone(),
-                attrs
-                    .get("source_file")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-        })
-        .collect();
+    let mut norm_to_id = build_norm_to_id(&node_ids, ghost_remap);
+    let node_source_files = snapshot_source_files(graph);
+    // Pre-migration alias index (#1504): register each canonical node's OLD-stem
+    // id forms so a stale-id edge endpoint from an un-re-keyed fragment still
+    // resolves to the migrated node instead of dangling.
+    crate::migrate::register_legacy_id_aliases(&mut norm_to_id, &node_source_files);
 
     // Per-edge resolution is pure read-only work over `node_ids` and
     // `norm_to_id` — fan out across Rayon. We collect the resolved

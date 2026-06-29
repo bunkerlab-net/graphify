@@ -8,7 +8,7 @@ use indexmap::{IndexMap, IndexSet};
 use graphify_build::Graph;
 
 use crate::types::GodNodeData;
-use crate::util::{audit_trail_lines, cross_community_links, neighbors_of};
+use crate::util::{audit_trail_lines, cross_community_links, md_link, neighbors_of};
 
 /// Read-only inputs for [`community_article`].
 pub(crate) struct CommunityArticleArgs<'a> {
@@ -20,6 +20,7 @@ pub(crate) struct CommunityArticleArgs<'a> {
     pub cohesion: Option<f64>,
     pub node_community: &'a HashMap<String, i64>,
     pub deg_map: &'a HashMap<&'a str, usize>,
+    pub resolver: &'a HashMap<String, String>,
 }
 
 /// Render one community article as a Markdown string.
@@ -44,6 +45,7 @@ pub(crate) fn community_article(args: &CommunityArticleArgs<'_>) -> String {
         cohesion,
         node_community,
         deg_map,
+        resolver,
     } = *args;
     let mut sorted_nodes: Vec<&String> = nodes.iter().collect();
     sorted_nodes.sort_by(|a, b| {
@@ -129,7 +131,10 @@ pub(crate) fn community_article(args: &CommunityArticleArgs<'_>) -> String {
         lines.push("- No strong cross-community connections detected".to_string());
     } else {
         for (other_label, count) in cross.iter().take(12) {
-            lines.push(format!("- [[{other_label}]] ({count} shared connections)"));
+            lines.push(format!(
+                "- {} ({count} shared connections)",
+                md_link(other_label, resolver)
+            ));
         }
     }
     lines.push(String::new());
@@ -150,7 +155,10 @@ pub(crate) fn community_article(args: &CommunityArticleArgs<'_>) -> String {
 
     lines.push("---".to_string());
     lines.push(String::new());
-    lines.push("*Part of the graphify knowledge wiki. See [[index]] to navigate.*".to_string());
+    lines.push(format!(
+        "*Part of the graphify knowledge wiki. See {} to navigate.*",
+        md_link("index", resolver)
+    ));
 
     lines.join("\n")
 }
@@ -167,6 +175,7 @@ pub(crate) fn god_node_article(
     labels: &IndexMap<i64, String>,
     node_community: &HashMap<String, i64>,
     deg_map: &HashMap<&str, usize>,
+    resolver: &HashMap<String, String>,
 ) -> String {
     let attrs = graph.node_data(nid);
     let node_label = attrs
@@ -192,7 +201,7 @@ pub(crate) fn god_node_article(
     lines.push(String::new());
 
     if let Some(ref cn) = community_name {
-        lines.push(format!("**Community:** [[{cn}]]"));
+        lines.push(format!("**Community:** {}", md_link(cn, resolver)));
         lines.push(String::new());
     }
 
@@ -228,7 +237,7 @@ pub(crate) fn god_node_article(
         by_relation
             .entry(rel)
             .or_default()
-            .push(format!("[[{neighbor_label}]]{conf_str}"));
+            .push(format!("{}{conf_str}", md_link(neighbor_label, resolver)));
     }
 
     lines.push("## Connections by Relation".to_string());
@@ -245,7 +254,10 @@ pub(crate) fn god_node_article(
 
     lines.push("---".to_string());
     lines.push(String::new());
-    lines.push("*Part of the graphify knowledge wiki. See [[index]] to navigate.*".to_string());
+    lines.push(format!(
+        "*Part of the graphify knowledge wiki. See {} to navigate.*",
+        md_link("index", resolver)
+    ));
 
     lines.join("\n")
 }
@@ -262,6 +274,7 @@ pub(crate) fn index_md(
     god_nodes_data: &[GodNodeData],
     total_nodes: usize,
     total_edges: usize,
+    resolver: &HashMap<String, String>,
 ) -> String {
     let mut lines: Vec<String> = vec![
         "# Knowledge Graph Index".to_string(),
@@ -288,7 +301,11 @@ pub(crate) fn index_md(
             .get(&cid)
             .cloned()
             .unwrap_or_else(|| format!("Community {cid}"));
-        lines.push(format!("- [[{label}]] — {} nodes", nodes.len()));
+        lines.push(format!(
+            "- {} — {} nodes",
+            md_link(&label, resolver),
+            nodes.len()
+        ));
     }
     lines.push(String::new());
 
@@ -298,8 +315,9 @@ pub(crate) fn index_md(
         lines.push(String::new());
         for node in god_nodes_data {
             lines.push(format!(
-                "- [[{}]] — {} connections",
-                node.label, node.degree
+                "- {} — {} connections",
+                md_link(&node.label, resolver),
+                node.degree
             ));
         }
         lines.push(String::new());
