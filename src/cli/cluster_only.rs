@@ -146,10 +146,11 @@ pub(crate) fn cmd_cluster_only(
 
     // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
     // find community labels. Three paths, checked in this order:
-    //   1. labels file exists & not forced → load it (preserve user edits, fill
-    //      any gaps with placeholders). This runs whether or not `--no-label` is
-    //      set: an existing file already means no LLM call, so `--no-label` is a
-    //      harmless no-op here — crucially, it must NOT wipe hand-curated labels
+    //   1. labels file exists & not forced & we are NOT LLM-naming gaps — i.e.
+    //      not `--missing-only`, OR `--no-label` (which forbids any LLM call,
+    //      so `--no-label --missing-only` lands here too) → load it (preserve
+    //      user edits, fill any gaps with placeholders). Crucially this must
+    //      NOT wipe hand-curated labels
     //      to placeholders. A malformed/unreadable file is NOT overwritten — we
     //      warn and fall back to placeholders for this run so the file isn't
     //      silently clobbered (divergence from Python `__main__.py:2418-2448`,
@@ -161,7 +162,7 @@ pub(crate) fn cmd_cluster_only(
     let labels_path = graph_path.with_file_name(".graphify_labels.json");
     let mut skip_label_write = false;
     let labels: indexmap::IndexMap<i64, String> =
-        if labels_path.exists() && !opts.force_relabel && !opts.missing_only {
+        if labels_path.exists() && !opts.force_relabel && (!opts.missing_only || opts.no_label) {
             match read_existing_labels(&labels_path) {
                 Ok(mut existing) => {
                     for cid in communities.keys() {
