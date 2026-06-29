@@ -100,6 +100,7 @@ fn openai_plain_via_mock() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn openai_retries_rate_limited_request() {
     // A 429 must be retried (SDK max_retries parity, #1523): the first response is
     // a rate limit, the retry succeeds, so the call resolves instead of dropping
@@ -134,6 +135,7 @@ fn openai_retries_rate_limited_request() {
 }
 
 #[test]
+#[serial_test::serial(env)]
 fn openai_gives_up_when_retries_disabled() {
     // GRAPHIFY_MAX_RETRIES=0 disables retries: a 429 fails immediately.
     let mut server = mockito::Server::new();

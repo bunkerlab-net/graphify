@@ -324,7 +324,8 @@ Pass `--outcome useful|dead_end|corrected` (and `--correction "<what worked>"` f
 a work-memory signal that `graphify reflect` later aggregates into `LESSONS.md`. An out-of-set `--outcome` is rejected.
 
 The answer can be passed inline with `--answer "<text>"` or read from a file with `--answer-file <path>`; the
-latter avoids fragile shell quoting for long or multiline answers (#1502). Exactly one of the two is required.
+latter avoids fragile shell quoting for long or multiline answers (#1502). At least one is required, and
+`--answer-file` takes precedence when both are given.
 
 ```bash
 graphify save-result \

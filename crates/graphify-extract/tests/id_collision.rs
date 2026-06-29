@@ -74,9 +74,13 @@ fn non_colliding_path_id_is_not_salted() {
     let file_id = out
         .nodes
         .iter()
-        .find(|n| n.get("source_location").and_then(Value::as_str) == Some("L1"))
+        .find(|n| {
+            n.get("label")
+                .and_then(Value::as_str)
+                .is_some_and(|l| l.ends_with(".py"))
+        })
         .and_then(|n| n.get("id").and_then(Value::as_str))
-        .expect("file node with L1 source_location");
+        .expect("file node");
     assert_eq!(file_id, "src_auth_session");
     assert_eq!(
         file_id,

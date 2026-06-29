@@ -74,7 +74,11 @@ fn resolve_import_id(raw: &str, path: &Path) -> (String, String) {
         let aliases = load_tsconfig_aliases(path.parent().unwrap_or(path));
         let resolved_alias = resolve_tsconfig_alias(raw, &aliases);
         if let Some(alias_path) = resolved_alias {
-            let stub = alias_path.to_string_lossy().into_owned();
+            // Route the alias hit through `resolve_js_module_path` so a `.js`
+            // specifier backed by a `.ts` source resolves identically to the
+            // relative-import path before the id is hashed.
+            let resolved = resolve_js_module_path(&alias_path);
+            let stub = resolved.to_string_lossy().into_owned();
             (make_id1(&stub), stub)
         } else {
             // External module: use last segment

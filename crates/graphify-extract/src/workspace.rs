@@ -358,18 +358,31 @@ fn resolve_export_target(value: &Value) -> Option<String> {
 /// Guard against `exports` targets that escape the package directory (e.g.
 /// `"./evil": "../../../etc/passwd"`). `true` only when `package_dir/target`
 /// stays within `package_dir`. Mirrors Python `_contained_in_package`
-/// (`Path.resolve().is_relative_to(...)`): symlinks are followed when the
-/// candidate exists, with a lexical `..`-collapse fallback for a not-yet-created
-/// target so an escaping symlink can't slip through.
+/// (`Path.resolve().is_relative_to(...)`): a lexical `..`-collapse rejects the
+/// obvious escape, then the nearest existing ancestor is canonicalised so a
+/// symlink that crosses the package boundary can't slip through either.
 fn contained_in_package(target: &str, package_dir: &Path) -> bool {
     let Ok(pkg_canon) = package_dir.canonicalize() else {
         return false;
     };
-    let candidate = pkg_canon.join(target);
-    let resolved = candidate
-        .canonicalize()
-        .unwrap_or_else(|_| crate::tsconfig::normpath(&candidate));
-    resolved.starts_with(&pkg_canon)
+    let candidate = crate::tsconfig::normpath(&pkg_canon.join(target));
+    if !candidate.starts_with(&pkg_canon) {
+        return false;
+    }
+    // Canonicalise the nearest existing ancestor to follow any symlink on the
+    // path; a not-yet-created tail keeps the lexical result above.
+    let mut probe = candidate.as_path();
+    loop {
+        if std::fs::symlink_metadata(probe).is_ok() {
+            return probe
+                .canonicalize()
+                .is_ok_and(|resolved| resolved.starts_with(&pkg_canon));
+        }
+        let Some(parent) = probe.parent() else {
+            return false;
+        };
+        probe = parent;
+    }
 }
 
 /// Pick the most likely entry-point file for a workspace package.

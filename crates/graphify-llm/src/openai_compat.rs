@@ -385,8 +385,8 @@ pub fn resolve_max_retries() -> u32 {
     6
 }
 
-/// Run `send` (a `ureq` POST), retrying on a rate-limit (429) or transient (5xx)
-/// status up to [`resolve_max_retries`] times with exponential backoff. Mirrors
+/// Run `send` (a `ureq` POST), retrying on a rate-limited (429) response up to
+/// [`resolve_max_retries`] times with exponential backoff. Mirrors
 /// the SDK `max_retries` behaviour graphify-py relies on (#1523): a rate-limited
 /// request waits out the window instead of dropping the chunk.
 ///

@@ -586,3 +586,32 @@ fn workspace_subpath_export_default_consulted_last() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn tsconfig_alias_js_specifier_resolves_to_ts_source() -> TestResult {
+    // An aliased `.js` specifier backed by a `.ts` source must hash to the same
+    // file node as the real `.ts` file — the `.js`->`.ts` fallback applies to
+    // alias hits too, matching relative imports.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}"#,
+    )?;
+    write(&root.join("src/foo.ts"), "export const x = 1\n")?;
+    write(
+        &root.join("src/app.ts"),
+        "import { x } from '@/foo.js'\nconsole.log(x)\n",
+    )?;
+
+    let out = extract(
+        &[root.join("src/foo.ts"), root.join("src/app.ts")],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(&out, "src/app.ts", "src/foo.ts"),
+        "aliased `.js` specifier should resolve to the `.ts` source; edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}

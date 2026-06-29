@@ -459,7 +459,11 @@ pub fn resolve_js_import_target(raw: &str, str_path: &str) -> (String, Option<st
         .parent()
         .unwrap_or(std::path::Path::new("."));
     let aliases = load_tsconfig_aliases(start_dir);
-    if let Some(resolved) = crate::tsconfig::resolve_tsconfig_alias(raw, &aliases) {
+    if let Some(hit) = crate::tsconfig::resolve_tsconfig_alias(raw, &aliases) {
+        // Match the relative-import path: route the alias hit through
+        // `resolve_js_module_path` so a `.js` specifier backed by a `.ts`
+        // source hashes to the same id.
+        let resolved = crate::tsconfig::resolve_js_module_path(&hit);
         return (make_id1(&resolved.to_string_lossy()), Some(resolved));
     }
     // Try resolving against a pnpm workspace before falling back to the
