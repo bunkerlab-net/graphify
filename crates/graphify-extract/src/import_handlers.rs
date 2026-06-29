@@ -562,7 +562,7 @@ pub fn import_c(
 }
 
 /// Resolve a quoted C `#include` path relative to the including file, returning the canonical path if it exists.
-fn resolve_c_include_path(raw: &str, str_path: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_c_include_path(raw: &str, str_path: &str) -> Option<std::path::PathBuf> {
     if raw.is_empty() {
         return None;
     }

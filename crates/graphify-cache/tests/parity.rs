@@ -1,13 +1,14 @@
 //! Parity tests against `graphify-py/tests/test_cache.py`.
 #![allow(clippy::expect_used)]
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 use graphify_cache::{
     _reset_stat_index_for_tests, body_content, cache_dir, cache_dir_versioned, cached_files,
     clear_cache, ensure_atexit_flush_registered, file_hash, load_cached, load_cached_versioned,
-    save_cached, save_cached_versioned,
+    prune_semantic_cache, save_cached, save_cached_versioned,
 };
 use serde_json::{Value, json};
 use serial_test::serial;
@@ -606,4 +607,146 @@ fn dir_has_json(dir: &Path) -> bool {
         rd.flatten()
             .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
     })
+}
+
+#[test]
+#[serial]
+fn semantic_prune_removes_orphan_entries() {
+    // Changing a file's content leaves the old content-hash entry orphaned;
+    // pruning against the new live hash removes the stale entry, keeps the current.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# A\n\nContent A.\n");
+    let h_a = file_hash(&f, tmp.path()).expect("h_a");
+    save_cached(
+        &f,
+        &json!({"nodes": [{"id": "a"}], "edges": []}),
+        tmp.path(),
+        "semantic",
+    )
+    .expect("save a");
+
+    write_text(&f, "# B\n\nContent B.\n");
+    _reset_stat_index_for_tests();
+    bump_mtime(&f);
+    let h_b = file_hash(&f, tmp.path()).expect("h_b");
+    save_cached(
+        &f,
+        &json!({"nodes": [{"id": "b"}], "edges": []}),
+        tmp.path(),
+        "semantic",
+    )
+    .expect("save b");
+    assert_ne!(h_a, h_b, "content change must produce a new hash");
+
+    let semantic_dir = cache_dir(tmp.path(), "semantic").expect("cache_dir");
+    assert!(semantic_dir.join(format!("{h_a}.json")).exists());
+    assert!(semantic_dir.join(format!("{h_b}.json")).exists());
+
+    let pruned = prune_semantic_cache(tmp.path(), &HashSet::from([h_b.clone()]));
+    assert_eq!(pruned, 1);
+    assert!(!semantic_dir.join(format!("{h_a}.json")).exists());
+    assert!(semantic_dir.join(format!("{h_b}.json")).exists());
+}
+
+#[test]
+#[serial]
+fn semantic_prune_keeps_live_unchanged_entries() {
+    // Pruning against the FULL live set must keep every live entry — guards the
+    // trap of pruning against an incremental changed-subset.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut live_hashes: HashSet<String> = HashSet::new();
+    for i in 0..5 {
+        let f = tmp.path().join(format!("doc{i}.md"));
+        write_text(&f, &format!("# Doc {i}\n\nBody {i}.\n"));
+        save_cached(
+            &f,
+            &json!({"nodes": [{"id": i.to_string()}], "edges": []}),
+            tmp.path(),
+            "semantic",
+        )
+        .expect("save");
+        live_hashes.insert(file_hash(&f, tmp.path()).expect("hash"));
+    }
+    let semantic_dir = cache_dir(tmp.path(), "semantic").expect("cache_dir");
+    let count = || {
+        fs::read_dir(&semantic_dir)
+            .expect("read_dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count()
+    };
+    assert_eq!(count(), 5);
+    assert_eq!(prune_semantic_cache(tmp.path(), &live_hashes), 0);
+    assert_eq!(count(), 5);
+}
+
+#[test]
+#[serial]
+fn semantic_prune_handles_deleted_file() {
+    // An entry for a file that no longer exists (dropped from the live set) is pruned.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("gone.md");
+    write_text(&f, "# Gone\n\nWill be deleted.\n");
+    let h = file_hash(&f, tmp.path()).expect("hash");
+    save_cached(
+        &f,
+        &json!({"nodes": [{"id": "g"}], "edges": []}),
+        tmp.path(),
+        "semantic",
+    )
+    .expect("save");
+    let semantic_dir = cache_dir(tmp.path(), "semantic").expect("cache_dir");
+    assert!(semantic_dir.join(format!("{h}.json")).exists());
+
+    fs::remove_file(&f).expect("unlink");
+    let pruned = prune_semantic_cache(tmp.path(), &HashSet::new());
+    assert_eq!(pruned, 1);
+    assert!(!semantic_dir.join(format!("{h}.json")).exists());
+}
+
+#[test]
+#[serial]
+fn semantic_prune_ignores_ast_and_tmp() {
+    // Prune touches only cache/semantic/*.json: AST entries and atomic-write
+    // *.tmp temporaries are left untouched.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n\nBody.\n");
+    // AST entry (different subtree) must survive.
+    save_cached(
+        &f,
+        &json!({"nodes": [{"id": "ast"}], "edges": []}),
+        tmp.path(),
+        "ast",
+    )
+    .expect("save ast");
+    let ast_dir = cache_dir(tmp.path(), "ast").expect("ast dir");
+    let ast_json = |d: &Path| {
+        fs::read_dir(d)
+            .expect("read_dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count()
+    };
+    assert_eq!(ast_json(&ast_dir), 1);
+
+    // A semantic orphan .json (to be pruned) plus a .tmp temporary (to survive).
+    let semantic_dir = cache_dir(tmp.path(), "semantic").expect("semantic dir");
+    write_text(
+        &semantic_dir.join("deadbeef.json"),
+        "{\"nodes\": [], \"edges\": []}",
+    );
+    let tmp_entry = semantic_dir.join("deadbeef.tmp");
+    write_text(&tmp_entry, "partial");
+
+    let pruned = prune_semantic_cache(tmp.path(), &HashSet::new());
+    assert_eq!(pruned, 1);
+    assert!(!semantic_dir.join("deadbeef.json").exists());
+    assert!(tmp_entry.exists(), "*.tmp temporaries must not be swept");
+    assert_eq!(ast_json(&ast_dir), 1, "AST entries must not be touched");
 }

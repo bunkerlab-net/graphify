@@ -323,6 +323,9 @@ Save a Q&A result back into `graphify-out/memory/` so it gets re-extracted into 
 Pass `--outcome useful|dead_end|corrected` (and `--correction "<what worked>"` for the `corrected` case) to record
 a work-memory signal that `graphify reflect` later aggregates into `LESSONS.md`. An out-of-set `--outcome` is rejected.
 
+The answer can be passed inline with `--answer "<text>"` or read from a file with `--answer-file <path>`; the
+latter avoids fragile shell quoting for long or multiline answers (#1502). Exactly one of the two is required.
+
 ```bash
 graphify save-result \
     --question "how is auth scoped" \
@@ -703,6 +706,8 @@ completes the feature.)
 | `GRAPHIFY_CLUSTER_BACKEND`       | `leiden` (default) or `louvain` to force the fallback.                                                                                              |
 | `GRAPHIFY_ALLOW_LOCAL_PROVIDERS` | Opt in to loading a project-local `.graphify/providers.json` (ignored by default; see Custom providers).                                            |
 | `OLLAMA_BASE_URL`                | Ollama endpoint (default `http://localhost:11434/v1`); a link-local/cloud-metadata host is refused, a general non-loopback host warns.              |
+| `GRAPHIFY_API_TIMEOUT`           | LLM HTTP request timeout in seconds (default 600); bounds a runaway connection during semantic extraction.                                          |
+| `GRAPHIFY_MAX_RETRIES`           | Times a rate-limited (HTTP 429) LLM request is retried before its chunk is dropped (default 6); `0` disables retries (#1523).                       |
 
 ### LLM backends
 

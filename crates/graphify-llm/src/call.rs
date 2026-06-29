@@ -121,13 +121,15 @@ pub fn call_llm_with_model(
                 .timeout_global(Some(timeout))
                 .build()
                 .into();
-            let http_resp = agent
-                .post(&endpoint)
-                .header("x-api-key", &key)
-                .header("anthropic-version", "2023-06-01")
-                .header("Content-Type", "application/json")
-                .send_json(&body)
-                .map_err(|e| LlmError::Http(e.to_string()))?;
+            let http_resp = crate::openai_compat::send_json_with_retry(|| {
+                agent
+                    .post(&endpoint)
+                    .header("x-api-key", &key)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("Content-Type", "application/json")
+                    .send_json(&body)
+            })
+            .map_err(|e| LlmError::Http(e.to_string()))?;
             // Deserialize just enough to extract the text.
             let val: serde_json::Value = http_resp
                 .into_body()

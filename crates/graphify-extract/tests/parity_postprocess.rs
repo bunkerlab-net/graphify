@@ -45,6 +45,7 @@ fn raw(caller: &str, callee: &str, source_file: &str) -> RawCall {
         source_file: source_file.to_string(),
         source_location: String::new(),
         receiver: None,
+        receiver_type: None,
     }
 }
 

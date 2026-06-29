@@ -20,6 +20,7 @@ mod inherit;
 mod js_extra;
 mod names;
 pub(crate) mod references;
+mod ruby;
 pub(crate) mod walk;
 
 pub use config::{ImportHandlerFn, LangConfig, LangId, ResolveFnNameFn};
@@ -158,6 +159,19 @@ pub(crate) fn extract_generic_with_source(
     let mut raw_calls: Vec<RawCall> = Vec::new();
     let mut seen_ref_pairs: HashSet<(String, String, String)> = HashSet::new();
 
+    // Ruby: per-method `var -> ClassName` table from `var = Const.new` bindings,
+    // populated before walk_calls so member-call raw_calls carry a `receiver_type`
+    // for type-based cross-file resolution (#1499). Empty for non-Ruby files.
+    let ruby_var_types: HashMap<String, HashMap<String, Option<String>>> =
+        if config.lang_id == LangId::Ruby {
+            function_bodies
+                .iter()
+                .map(|(nid, body)| (nid.clone(), ruby::ruby_local_class_bindings(*body, source)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
     {
         let mut call_ctx = super::generic::calls::CallWalkCtx {
             config,
@@ -168,6 +182,7 @@ pub(crate) fn extract_generic_with_source(
             edges: &mut edges,
             raw_calls: &mut raw_calls,
             seen_ref_pairs: &mut seen_ref_pairs,
+            ruby_var_types: &ruby_var_types,
         };
         for (caller_nid, body_node) in &function_bodies {
             walk_calls(&mut call_ctx, *body_node, caller_nid, source);

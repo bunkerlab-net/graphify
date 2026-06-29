@@ -20,6 +20,19 @@ use serde_json::Value;
 static NON_ALNUM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9]+").expect("static label-key regex"));
 
+/// Header file suffixes (without the dot): a C/ObjC/C++ quoted include always
+/// targets the header, so an import edge dangling on a salted-away bare id is
+/// repointed to the header variant of the colliding id (#1475).
+const HEADER_SUFFIXES: [&str; 4] = ["h", "hpp", "hh", "hxx"];
+
+/// First 6 hex chars of the SHA-1 of `s` — an injective-enough salt to split
+/// node ids whose naive disambiguator still collides (#1522). Matches Python's
+/// `hashlib.sha1(...).hexdigest()[:6]`.
+fn sha1_hex6(s: &str) -> String {
+    use sha1::{Digest, Sha1};
+    hex::encode(Sha1::digest(s.as_bytes()))[..6].to_string()
+}
+
 /// Canonical form of `source_file` used for disambiguating colliding
 /// node IDs. Mirrors `_source_key` in the Python source.
 #[must_use]
@@ -48,6 +61,87 @@ fn node_disambiguation_source_key(node: &Node, root: &Path) -> String {
     } else {
         source_key(&node.source_file, root)
     }
+}
+
+/// Salt every node id in one collision group (`old_id` shared across distinct
+/// source files) with its source path, recording `(old_id, source_key) -> new_id`
+/// in `remap` and rewriting the node ids. When the naive salt
+/// `make_id(source_key, old_id)` itself collides (separator-vs-punctuation paths,
+/// #1522), a short sha1 of the raw source path is appended so the colliders split.
+fn salt_collision_group(
+    old_id: &str,
+    group: &[usize],
+    source_keys: &HashSet<String>,
+    nodes: &mut [Node],
+    root: &Path,
+    remap: &mut HashMap<(String, String), String>,
+) {
+    let mut naive: HashMap<String, String> = HashMap::new();
+    for sk in source_keys {
+        if !sk.is_empty() {
+            naive.insert(sk.clone(), make_id(&[sk, old_id]));
+        }
+    }
+    let mut naive_counts: HashMap<&str, usize> = HashMap::new();
+    for nid in naive.values() {
+        *naive_counts.entry(nid.as_str()).or_default() += 1;
+    }
+    let needs_hash: HashSet<String> = naive
+        .iter()
+        .filter(|(_, nid)| naive_counts.get(nid.as_str()).copied().unwrap_or(0) > 1)
+        .map(|(sk, _)| sk.clone())
+        .collect();
+    for &idx in group {
+        let sk = node_disambiguation_source_key(&nodes[idx], root);
+        if sk.is_empty() {
+            continue;
+        }
+        let new_id = if needs_hash.contains(&sk) {
+            make_id(&[&sk, old_id, &sha1_hex6(&sk)])
+        } else {
+            naive
+                .get(&sk)
+                .cloned()
+                .unwrap_or_else(|| make_id(&[&sk, old_id]))
+        };
+        remap.insert((old_id.to_string(), sk), new_id.clone());
+        if new_id != *old_id {
+            nodes[idx].id = new_id;
+        }
+    }
+}
+
+/// Build `old_id -> header-variant new_id` for colliding ids whose group includes
+/// a header file (`.h`/`.hpp`/…), so a quoted-include import edge dangling on the
+/// salted-away bare id is repointed to the header variant (#1475).
+fn build_header_remaps(
+    ambiguous_ids: &HashSet<String>,
+    by_id: &HashMap<String, Vec<usize>>,
+    nodes: &[Node],
+    root: &Path,
+    remap: &HashMap<(String, String), String>,
+) -> HashMap<String, String> {
+    let mut header_remaps: HashMap<String, String> = HashMap::new();
+    for old_id in ambiguous_ids {
+        let Some(group) = by_id.get(old_id) else {
+            continue;
+        };
+        for &idx in group {
+            let sk = node_disambiguation_source_key(&nodes[idx], root);
+            let is_header = Path::new(&sk)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| HEADER_SUFFIXES.contains(&e.to_lowercase().as_str()));
+            if !sk.is_empty()
+                && is_header
+                && let Some(new_id) = remap.get(&(old_id.clone(), sk))
+            {
+                header_remaps.insert(old_id.clone(), new_id.clone());
+                break;
+            }
+        }
+    }
+    header_remaps
 }
 
 /// Rewrite only node IDs that collide across two or more *distinct*
@@ -96,17 +190,7 @@ pub fn disambiguate_colliding_node_ids(
             continue;
         }
         ambiguous_ids.insert(old_id.clone());
-        for &idx in group {
-            let sk = node_disambiguation_source_key(&nodes[idx], root);
-            if sk.is_empty() {
-                continue;
-            }
-            let new_id = make_id(&[&sk, old_id]);
-            remap.insert((old_id.clone(), sk), new_id.clone());
-            if new_id != *old_id {
-                nodes[idx].id = new_id;
-            }
-        }
+        salt_collision_group(old_id, group, &source_keys, nodes, root, &mut remap);
     }
 
     if remap.is_empty() {
@@ -140,6 +224,8 @@ pub fn disambiguate_colliding_node_ids(
         }
     }
 
+    let header_remaps = build_header_remaps(&ambiguous_ids, &by_id, nodes, root, &remap);
+
     for edge in edges.iter_mut() {
         let edge_source_key = source_key(&edge.source_file, root);
         let source_key_tuple = (edge.source.clone(), edge_source_key.clone());
@@ -149,7 +235,15 @@ pub fn disambiguate_colliding_node_ids(
         } else if let Some(new_id) = unambiguous_remaps.get(&edge.source) {
             edge.source.clone_from(new_id);
         }
-        if let Some(new_id) = remap.get(&target_key_tuple) {
+        // imports/imports_from always target a header file, so they must resolve
+        // to the header variant BEFORE the same-source-file salt is considered.
+        // Keying the import target by the importer's own source file mis-points a
+        // `.m` importing its own `.h` back at itself (self-loop) (#1475).
+        if matches!(edge.relation.as_str(), "imports" | "imports_from")
+            && let Some(new_id) = header_remaps.get(&edge.target)
+        {
+            edge.target.clone_from(new_id);
+        } else if let Some(new_id) = remap.get(&target_key_tuple) {
             edge.target.clone_from(new_id);
         } else if let Some(new_id) = unambiguous_remaps.get(&edge.target) {
             edge.target.clone_from(new_id);

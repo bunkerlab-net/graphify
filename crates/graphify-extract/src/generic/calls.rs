@@ -34,6 +34,10 @@ pub(super) struct CallWalkCtx<'a> {
     pub edges: &'a mut Vec<Edge>,
     pub raw_calls: &'a mut Vec<RawCall>,
     pub seen_ref_pairs: &'a mut HashSet<(String, String, String)>,
+    /// Per-method `var -> ClassName` table from `var = Const.new` bindings, used
+    /// to attach `receiver_type` to Ruby member-call `raw_calls` so the cross-file
+    /// pass resolves `var.method` by type (#1499). Empty for non-Ruby files.
+    pub ruby_var_types: &'a HashMap<String, HashMap<String, Option<String>>>,
 }
 
 /// Stops descending into nested function definitions (`function_boundary_types`)
@@ -123,6 +127,18 @@ pub(super) fn walk_calls(
                     }
                 }
             } else if !crate::builtins::is_language_builtin_global(&callee) {
+                // Ruby: attach the receiver's inferred type from the method's
+                // local `var = Const.new` bindings, when unambiguously known (#1499).
+                let receiver_type = if ctx.config.lang_id == LangId::Ruby {
+                    receiver.as_deref().and_then(|r| {
+                        ctx.ruby_var_types
+                            .get(caller_nid)
+                            .and_then(|m| m.get(r).cloned())
+                            .flatten()
+                    })
+                } else {
+                    None
+                };
                 ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: callee.clone(),
@@ -130,6 +146,7 @@ pub(super) fn walk_calls(
                     source_file: ctx.str_path.to_string(),
                     source_location: format!("L{}", node.start_position().row + 1),
                     receiver,
+                    receiver_type,
                 });
             }
 
@@ -368,6 +385,22 @@ fn extract_callee(
                 let simple = raw.split('<').next().unwrap_or("").trim();
                 if !simple.is_empty() {
                     callee_name = Some(simple.rsplit('.').next().unwrap_or(simple).to_string());
+                }
+            }
+        }
+        LangId::Ruby => {
+            // Ruby's `call` node carries `receiver` and `method` as direct fields
+            // (no intermediate accessor node), so the generic accessor model
+            // doesn't apply. Read them directly and capture a simple receiver (`p`
+            // in `p.run`, `Processor` in `Processor.new`) so the cross-file pass
+            // can resolve member calls by the receiver's type (#1499).
+            if let Some(meth) = node.child_by_field_name("method") {
+                callee_name = Some(read_text_owned(meth, source));
+            }
+            if let Some(recv) = node.child_by_field_name("receiver") {
+                is_member_call = true;
+                if matches!(recv.kind(), "identifier" | "constant") {
+                    receiver = Some(read_text_owned(recv, source));
                 }
             }
         }

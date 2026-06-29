@@ -220,7 +220,11 @@ pub(crate) enum Command {
         #[arg(long)]
         question: String,
         #[arg(long)]
-        answer: String,
+        answer: Option<String>,
+        /// Read the answer from a file (alternative to `--answer`, for long or
+        /// multiline answers that are awkward to pass inline, #1502).
+        #[arg(long = "answer-file")]
+        answer_file: Option<PathBuf>,
         #[arg(long = "type", default_value = "query")]
         query_type: String,
         #[arg(long, num_args = 0..)]

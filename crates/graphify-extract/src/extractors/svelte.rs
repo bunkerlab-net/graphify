@@ -15,7 +15,7 @@ use regex::Regex;
 use crate::generic::{extract_generic, extract_generic_with_source};
 use crate::ids::make_id1;
 use crate::lang_configs;
-use crate::tsconfig::{load_tsconfig_aliases, resolve_js_module_path};
+use crate::tsconfig::{load_tsconfig_aliases, resolve_js_module_path, resolve_tsconfig_alias};
 use crate::types::{Edge, FileResult, Node};
 
 // ── Regex patterns ────────────────────────────────────────────────────────────
@@ -72,28 +72,7 @@ fn resolve_import_id(raw: &str, path: &Path) -> (String, String) {
     } else {
         // Check tsconfig aliases
         let aliases = load_tsconfig_aliases(path.parent().unwrap_or(path));
-        let mut resolved_alias: Option<std::path::PathBuf> = None;
-        for (alias_prefix, alias_base) in &aliases {
-            if raw == alias_prefix || raw.starts_with(&format!("{alias_prefix}/")) {
-                let rest = raw[alias_prefix.len()..].trim_start_matches('/');
-                let joined = std::path::Path::new(alias_base).join(rest);
-                let normalised =
-                    joined
-                        .components()
-                        .fold(std::path::PathBuf::new(), |mut acc, c| {
-                            match c {
-                                std::path::Component::ParentDir => {
-                                    acc.pop();
-                                }
-                                std::path::Component::CurDir => {}
-                                other => acc.push(other),
-                            }
-                            acc
-                        });
-                resolved_alias = Some(resolve_js_module_path(&normalised));
-                break;
-            }
-        }
+        let resolved_alias = resolve_tsconfig_alias(raw, &aliases);
         if let Some(alias_path) = resolved_alias {
             let stub = alias_path.to_string_lossy().into_owned();
             (make_id1(&stub), stub)
@@ -139,15 +118,7 @@ fn fixup_static_relative(raw: &str, path: &Path) -> (String, String) {
         (make_id1(&stub), stub)
     } else {
         let aliases = load_tsconfig_aliases(path.parent().unwrap_or(path));
-        let mut resolved_alias: Option<std::path::PathBuf> = None;
-        for (alias_prefix, alias_base) in &aliases {
-            if raw == alias_prefix || raw.starts_with(&format!("{alias_prefix}/")) {
-                let rest = raw[alias_prefix.len()..].trim_start_matches('/');
-                let joined = std::path::Path::new(alias_base).join(rest);
-                resolved_alias = Some(joined);
-                break;
-            }
-        }
+        let resolved_alias = resolve_tsconfig_alias(raw, &aliases);
         if let Some(alias_path) = resolved_alias {
             // Route the aliased path through `resolve_js_module_path` so the
             // same `.js` → `.ts` / `.jsx` → `.tsx` fallback used for

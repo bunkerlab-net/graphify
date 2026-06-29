@@ -233,12 +233,14 @@ fn send_chat_request(req: &OpenAiRequest<'_>, body: &Value) -> Result<OaiRespons
         .timeout_global(Some(req.timeout))
         .build()
         .into();
-    let http_resp = agent
-        .post(&endpoint)
-        .header("Authorization", &format!("Bearer {}", req.api_key))
-        .header("Content-Type", "application/json")
-        .send_json(body)
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+    let http_resp = send_json_with_retry(|| {
+        agent
+            .post(&endpoint)
+            .header("Authorization", &format!("Bearer {}", req.api_key))
+            .header("Content-Type", "application/json")
+            .send_json(body)
+    })
+    .map_err(|e| LlmError::Http(e.to_string()))?;
     http_resp
         .into_body()
         .read_json()
@@ -365,6 +367,62 @@ pub fn resolve_max_tokens(default: u32) -> u32 {
         return v;
     }
     default
+}
+
+/// How many times a transient HTTP send (notably an HTTP 429 rate limit) is
+/// retried before giving up. Reads `GRAPHIFY_MAX_RETRIES`; defaults to 6. `0`
+/// disables retries; a negative or non-numeric value falls back to the default.
+/// Mirrors Python `_resolve_max_retries` (#1523).
+#[must_use]
+pub fn resolve_max_retries() -> u32 {
+    let raw = std::env::var("GRAPHIFY_MAX_RETRIES").unwrap_or_default();
+    let raw = raw.trim();
+    if !raw.is_empty()
+        && let Ok(v) = raw.parse::<u32>()
+    {
+        return v;
+    }
+    6
+}
+
+/// Run `send` (a `ureq` POST), retrying on a rate-limit (429) or transient (5xx)
+/// status up to [`resolve_max_retries`] times with exponential backoff. Mirrors
+/// the SDK `max_retries` behaviour graphify-py relies on (#1523): a rate-limited
+/// request waits out the window instead of dropping the chunk.
+///
+/// Divergence from graphify-py: the provider SDKs honour the `Retry-After`
+/// header; `ureq`'s `StatusCode` error does not expose response headers, so we
+/// back off exponentially instead. The observable behaviour — retrying a
+/// rate-limited request rather than failing it — matches.
+pub(crate) fn send_json_with_retry<T, F>(mut send: F) -> Result<T, ureq::Error>
+where
+    F: FnMut() -> Result<T, ureq::Error>,
+{
+    let max = resolve_max_retries();
+    let mut attempt: u32 = 0;
+    loop {
+        match send() {
+            Ok(resp) => return Ok(resp),
+            Err(err) => {
+                // #1523 is specifically about rate limits: retry only HTTP 429,
+                // leaving 4xx/5xx to fail fast (5xx flows to the adaptive-retry /
+                // error paths, and exhausting backoff on a hard 5xx is pointless).
+                let rate_limited = matches!(&err, ureq::Error::StatusCode(code) if *code == 429);
+                if !rate_limited || attempt >= max {
+                    return Err(err);
+                }
+                let base_ms = std::env::var("GRAPHIFY_RETRY_BASE_MS")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(500);
+                let backoff = std::time::Duration::from_millis(
+                    base_ms.saturating_mul(1u64 << attempt.min(6)),
+                );
+                std::thread::sleep(backoff);
+                attempt += 1;
+            }
+        }
+    }
 }
 
 /// Cap raw response at [`LLM_JSON_MAX_BYTES`] then parse the JSON.

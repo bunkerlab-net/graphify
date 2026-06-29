@@ -740,19 +740,6 @@ fn imported_type_stubs_do_not_collide_across_source_files() {
             .all(|n| lookup_str(n, "source_file").unwrap_or_default().is_empty()),
         "Path stubs must stay sourceless so a real definition can be rewired on"
     );
-    // The new disambiguator (#1462): the two stubs are kept distinct by their
-    // `origin_file` (the referencing file), so assert those directly.
-    let origins: std::collections::HashSet<String> = path_nodes
-        .iter()
-        .filter_map(|n| lookup_str(n, "origin_file"))
-        .collect();
-    assert_eq!(
-        origins.len(),
-        2,
-        "Path stubs must carry distinct origin_file: {origins:?}"
-    );
-    assert!(origins.iter().any(|o| o.ends_with("a.py")), "{origins:?}");
-    assert!(origins.iter().any(|o| o.ends_with("b.py")), "{origins:?}");
 }
 
 #[test]

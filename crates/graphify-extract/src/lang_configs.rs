@@ -291,7 +291,7 @@ pub static RUBY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     call_accessor_node_types: &[],
     call_accessor_field: "",
     function_boundary_types: &["method", "singleton_method"],
-    lang_id: LangId::Other,
+    lang_id: LangId::Ruby,
     import_handler: None,
     resolve_function_name: None,
     helper_fn_names: &[],

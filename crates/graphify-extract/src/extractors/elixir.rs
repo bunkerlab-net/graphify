@@ -532,6 +532,7 @@ fn walk_calls_elixir(
                 source_file: str_path.to_string(),
                 source_location: format!("L{}", node.start_position().row + 1),
                 receiver: None,
+                receiver_type: None,
             });
         }
     }

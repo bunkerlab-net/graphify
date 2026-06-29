@@ -90,6 +90,7 @@ pub(super) fn walk_calls_rust(
                     source_file: ctx.str_path.to_string(),
                     source_location: format!("L{}", node.start_position().row + 1),
                     receiver: None,
+                    receiver_type: None,
                 });
             }
         }

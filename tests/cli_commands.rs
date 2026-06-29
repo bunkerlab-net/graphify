@@ -1166,3 +1166,50 @@ fn save_result_rejects_bad_outcome() {
         .assert()
         .failure();
 }
+
+#[test]
+fn save_result_reads_answer_from_file() {
+    // #1502: --answer-file lets callers pass a long/multiline answer via a file
+    // instead of a fragile inline arg (Windows/PowerShell quoting).
+    let dir = tempfile::tempdir().unwrap();
+    let ans = dir.path().join("answer.txt");
+    fs::write(&ans, "line one\nline two with a \"quote\"\n").unwrap();
+    cli()
+        .current_dir(dir.path())
+        .env_remove("GRAPHIFY_OUT")
+        .args([
+            "save-result",
+            "--question",
+            "how does auth work?",
+            "--answer-file",
+            ans.to_str().unwrap(),
+            "--outcome",
+            "useful",
+        ])
+        .assert()
+        .success();
+    let memory = dir.path().join("graphify-out").join("memory");
+    let docs: Vec<_> = fs::read_dir(&memory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+        .collect();
+    assert!(!docs.is_empty(), "save-result wrote no memory doc");
+    let body = fs::read_to_string(docs[0].path()).unwrap();
+    assert!(
+        body.contains("line one") && body.contains("line two"),
+        "{body}"
+    );
+}
+
+#[test]
+fn save_result_requires_answer_or_answer_file() {
+    // #1502: neither --answer nor --answer-file -> clean error, not a crash.
+    let dir = tempfile::tempdir().unwrap();
+    cli()
+        .current_dir(dir.path())
+        .args(["save-result", "--question", "q", "--outcome", "useful"])
+        .assert()
+        .failure()
+        .stderr(contains("--answer"));
+}

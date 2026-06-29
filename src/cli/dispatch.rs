@@ -259,6 +259,7 @@ fn dispatch_save_result(cmd: Command) -> Result<()> {
     let Command::SaveResult {
         question,
         answer,
+        answer_file,
         query_type,
         nodes,
         memory_dir,
@@ -267,6 +268,16 @@ fn dispatch_save_result(cmd: Command) -> Result<()> {
     } = cmd
     else {
         unreachable!("dispatch_save_result invoked with wrong variant")
+    };
+    // `--answer-file` lets callers pass a long/multiline answer via a file instead
+    // of a fragile inline arg (Windows/PowerShell quoting), #1502. It wins over
+    // `--answer`; with neither, fail with a message naming both flags.
+    let answer = match answer_file {
+        Some(path) => std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("--answer-file {}: {e}", path.display()))?
+            .trim()
+            .to_string(),
+        None => answer.ok_or_else(|| anyhow::anyhow!("--answer or --answer-file is required"))?,
     };
     cli::save_result::cmd_save_result(
         &question,

@@ -608,3 +608,63 @@ fn no_cluster_incremental_reextract_does_not_duplicate_edges() {
         "re-extracting an unchanged file must not duplicate edges (#1317)"
     );
 }
+
+#[test]
+fn rebuild_code_prunes_a_removed_imports_edge() {
+    // #1521: when an import is deleted from a file, a full `update` must prune the
+    // edge it produced — preserving it (keyed only on endpoint membership) left a
+    // stale edge that drove phantom circular-dependency findings.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    let pkg = corpus.join("pkg");
+    fs::create_dir_all(&pkg).expect("mkdir pkg");
+    fs::write(pkg.join("b.py"), "def helper():\n    return 1\n").expect("write b.py");
+    fs::write(
+        pkg.join("a.py"),
+        "from pkg.b import helper\ndef use():\n    return helper()\n",
+    )
+    .expect("write a.py");
+
+    let opts = RebuildOptions {
+        force: false,
+        no_cluster: true,
+        lock: LockPolicy::None,
+    };
+    assert!(rebuild_code(corpus, None, opts).expect("first rebuild"));
+
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let a_import_edges = |path: &Path| -> usize {
+        let v: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("read graph.json")).expect("parse");
+        v.get("links")
+            .or_else(|| v.get("edges"))
+            .and_then(|e| e.as_array())
+            .map_or(0, |edges| {
+                edges
+                    .iter()
+                    .filter(|e| {
+                        matches!(
+                            e.get("relation").and_then(|r| r.as_str()),
+                            Some("imports" | "imports_from")
+                        ) && e
+                            .get("source_file")
+                            .and_then(|s| s.as_str())
+                            .is_some_and(|s| s.ends_with("a.py"))
+                    })
+                    .count()
+            })
+    };
+    assert!(
+        a_import_edges(&graph_path) > 0,
+        "expected an import edge from a.py initially"
+    );
+
+    // Remove the import, then run a full update (changed_paths = None).
+    fs::write(pkg.join("a.py"), "def use():\n    return 1\n").expect("rewrite a.py");
+    assert!(rebuild_code(corpus, None, opts).expect("second rebuild"));
+    assert_eq!(
+        a_import_edges(&graph_path),
+        0,
+        "removed import's edge owned by a.py must be pruned"
+    );
+}
