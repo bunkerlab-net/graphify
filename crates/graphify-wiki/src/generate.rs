@@ -117,6 +117,12 @@ pub fn to_wiki(
     count += write_community_articles(&wiki_ctx, &filtered, cohesion, &community_slugs)?;
     count += write_god_node_articles(&wiki_ctx, &god_articles)?;
 
+    // Parity dispute (CodeRabbit): `index_md` gets the FULL `god_nodes_data`, not the
+    // filtered `god_articles` set — matching graphify-py `wiki.py:333`. A god
+    // node absent from the graph never entered `resolver` above, so `md_link`
+    // renders it as plain text, NOT a broken link (parity with `_md_link`,
+    // wiki.py:45-47). Filtering here would drop those plain-text catalog
+    // entries and diverge from byte-identical `index.md` output.
     let index = index_md(
         &filtered,
         labels,

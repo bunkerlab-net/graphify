@@ -578,6 +578,12 @@ fn walk_objc(
             // emits the sigil as a child). The selector is the concatenation of the
             // direct identifier children: one for a simple selector, several for a
             // compound one (-tableView:numberOfRowsInSection:) (#1475).
+            // Parity dispute (CodeRabbit): the colon-less join (graphify-py
+            // extract.py:9623, pinned by `objc_compound_selector_call_resolves`)
+            // is DELIBERATE despite a known collision risk — `setFoo:bar:` and
+            // `setFoobar:` collapse to one id. Preserving `:` would re-key every
+            // keyword selector through `make_id` and break byte-identical parity
+            // for all ObjC methods, so the rare collision is accepted.
             let mut prefix = "-";
             let mut prefix_found = false;
             let mut parts: Vec<&str> = Vec::new();
@@ -688,6 +694,9 @@ fn walk_calls_objc(
                 }
             }
         }
+        // Colon-less join, matching the declaration path and graphify-py
+        // extract.py:9657 — deliberate parity despite the same collision risk
+        // (see the `method_declaration` arm in `walk_objc`).
         let method_name = sel.concat();
         if !method_name.is_empty() {
             // Match against all method nids by suffix
