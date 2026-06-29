@@ -230,6 +230,14 @@ fn build_csharp_scopes(cs_paths: &[PathBuf]) -> Option<CsharpScopes> {
             &mut aliases,
         );
         // scope = dedup((own_ns or [global]) + usings + [global]).
+        // Parity dispute (CodeRabbit): a file with multiple `namespace` blocks
+        // merges ALL their names into one combined resolution scope, so a bare
+        // type declared in block A can in principle resolve via block B. graphify-py
+        // `extractors/csharp.py` has the identical imprecision (`scope =
+        // dict.fromkeys((own_ns or [""]) + usings + [""])` over an `own_ns` list
+        // gathered across every block). A per-block scope (or excluding `own_ns`
+        // when len > 1) would resolve fewer/different types than graphify-py and
+        // break byte-identical output, so we match it deliberately.
         let mut scope: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let base = if own_ns.is_empty() {

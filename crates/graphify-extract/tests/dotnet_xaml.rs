@@ -39,7 +39,10 @@ fn event_targets(r: &FileResult) -> HashSet<&str> {
 /// Recursively copy a directory tree (the fixtures' `xaml_viewmodel` project).
 fn copy_tree(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("mkdir");
-    for entry in std::fs::read_dir(src).expect("read_dir").flatten() {
+    // `.expect()` per entry rather than `.flatten()`: a read error must fail the
+    // test loudly, not silently skip a fixture file and copy an incomplete tree.
+    for entry in std::fs::read_dir(src).expect("read_dir") {
+        let entry = entry.expect("dir entry");
         let from = entry.path();
         let to = dst.join(entry.file_name());
         if from.is_dir() {
@@ -389,6 +392,14 @@ fn xaml_non_event_attribute_value_does_not_fabricate_event() {
             .is_none_or(|id| !targets.contains(id))
     );
     assert_eq!(targets.len(), 1);
+    // Raw count too: the dedup set above would still pass if the extractor
+    // fabricated a second event edge to the same handler (#1475).
+    let event_edge_count = r
+        .edges
+        .iter()
+        .filter(|e| e.relation == "references" && e.context.as_deref() == Some("event"))
+        .count();
+    assert_eq!(event_edge_count, 1, "duplicate event edges");
 }
 
 #[test]
@@ -413,7 +424,8 @@ fn xaml_viewmodel_with_non_utf8_codebehind_does_not_crash() {
 // ── ExtractOutput helpers (for the `extract()` pipeline tests) ────────────────
 
 fn collect(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read_dir").flatten() {
+    for entry in std::fs::read_dir(dir).expect("read_dir") {
+        let entry = entry.expect("dir entry");
         let p = entry.path();
         if p.is_dir() {
             collect(&p, ext, out);
@@ -440,4 +452,70 @@ fn view_model_target_labels(r: &ExtractOutput) -> Vec<String> {
         })
         .filter_map(|e| out_node_label(r, e.get("target").and_then(|v| v.as_str()).unwrap_or("")))
         .collect()
+}
+
+fn out_node_source_file(r: &ExtractOutput, id: &str) -> Option<String> {
+    r.nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(id))
+        .and_then(|n| {
+            n.get("source_file")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+}
+
+/// True when a `view_model` edge resolves to the real `MainViewModel.cs` class.
+fn resolves_to_main_viewmodel_cs(r: &ExtractOutput) -> bool {
+    r.edges.iter().any(|e| {
+        e.get("relation").and_then(|v| v.as_str()) == Some("references")
+            && e.get("context").and_then(|v| v.as_str()) == Some("view_model")
+            && out_node_source_file(r, e.get("target").and_then(|v| v.as_str()).unwrap_or(""))
+                .is_some_and(|sf| sf.ends_with("MainViewModel.cs"))
+    })
+}
+
+#[test]
+fn xaml_csharp_class_cache_cleared_between_extract_runs() {
+    // graphify-py clears `_XAML_CSHARP_CLASS_CACHE` at every `extract()` start
+    // (extract.py:13120); our cache is thread-local across a persistent rayon
+    // pool, so a repeated in-process run must still re-scan `.cs` ViewModels.
+    // Run 1 with `MainViewModel.cs` absent caches an empty scan; then restore the
+    // class AND make a harmless `.xaml` edit (busting the on-disk AST cache so the
+    // extractor — and thus the in-memory class cache — actually re-runs). A stale
+    // cache would keep serving run 1's empty scan and fail to resolve the class.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("xaml_viewmodel");
+    copy_tree(&fixtures().join("xaml_viewmodel"), &project);
+    let vm_cs = project.join("ViewModels/MainViewModel.cs");
+    std::fs::remove_file(&vm_cs).expect("rm MainViewModel.cs");
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect(&project, "xaml", &mut files);
+    collect(&project, "cs", &mut files);
+    let r1 = extract(&files, Some(&project));
+    assert!(
+        !resolves_to_main_viewmodel_cs(&r1),
+        "run 1 must not resolve a real MainViewModel.cs (class absent)"
+    );
+
+    // Restore the class and bust the `.xaml` disk cache (trailing comment is valid
+    // XML Misc, ignored by extraction) so run 2 re-extracts and hits the cache.
+    std::fs::write(
+        &vm_cs,
+        "namespace Demo { public class MainViewModel { } }\n",
+    )
+    .unwrap();
+    let xaml = project.join("Views/ExplicitMainWindow.xaml");
+    let src = std::fs::read_to_string(&xaml).unwrap();
+    std::fs::write(&xaml, format!("{src}\n<!-- cache-bust -->\n")).unwrap();
+
+    let mut files2: Vec<PathBuf> = Vec::new();
+    collect(&project, "xaml", &mut files2);
+    collect(&project, "cs", &mut files2);
+    let r2 = extract(&files2, Some(&project));
+    assert!(
+        resolves_to_main_viewmodel_cs(&r2),
+        "run 2 must re-scan and resolve the restored MainViewModel.cs (cache cleared)"
+    );
 }

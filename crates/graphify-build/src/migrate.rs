@@ -237,10 +237,15 @@ pub(crate) fn register_legacy_id_aliases(
         }
         let new_stem = make_id1(&file_stem(rel));
         let norm_nid = normalize_id(nid);
-        let suffix = norm_nid
-            .strip_prefix(&new_stem)
-            .map(str::to_string)
-            .unwrap_or_default(); // leading "_entity" or ""
+        let Some(suffix) = norm_nid.strip_prefix(&new_stem) else {
+            // `nid` isn't derived from this file's stem (e.g. a disambiguated id),
+            // so an empty-suffix fallback would register an `old_stem` alias that
+            // maps unrelated edges onto this node. Skip unless the stem matches.
+            continue;
+        };
+        if !suffix.is_empty() && !suffix.starts_with('_') {
+            continue;
+        }
         for old_stem in old_file_stems(rel) {
             if old_stem == new_stem {
                 continue;

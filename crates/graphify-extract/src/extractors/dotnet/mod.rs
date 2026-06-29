@@ -16,7 +16,7 @@ pub use razor::extract_razor;
 pub use sln::extract_sln;
 pub use slnx::extract_slnx;
 pub use xaml::extract_xaml;
-pub(crate) use xaml::with_xaml_extract_root;
+pub(crate) use xaml::{clear_xaml_csharp_class_cache, with_xaml_extract_root};
 
 use quick_xml::events::BytesStart;
 

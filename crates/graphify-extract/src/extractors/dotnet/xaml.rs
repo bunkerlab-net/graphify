@@ -15,10 +15,11 @@
 // naturally in prose; backticking every mention hurts readability here.
 #![allow(clippy::doc_markdown)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -36,9 +37,38 @@ thread_local! {
     /// `extract_xaml` is called directly (no surrounding pipeline).
     static XAML_ACTIVE_EXTRACT_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     /// Per-root cache of `ViewModel` class nodes, so a multi-`.xaml` project
-    /// scans its `.cs` files once. Cleared implicitly per thread / pipeline run.
+    /// scans its `.cs` files once per extraction run. Generation-gated: dropped
+    /// at the start of each `extract()` via [`clear_xaml_csharp_class_cache`],
+    /// mirroring graphify-py's `_XAML_CSHARP_CLASS_CACHE.clear()` so a repeated
+    /// in-process run re-scans `.cs` instead of reusing stale ViewModel members.
     static XAML_CSHARP_CLASS_CACHE: RefCell<HashMap<String, HashMap<String, Vec<Node>>>> =
         RefCell::new(HashMap::new());
+    /// Generation this thread's [`XAML_CSHARP_CLASS_CACHE`] was last synced to.
+    static XAML_CACHE_SEEN_GEN: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Bumped once per `extract()` run so the thread-local XAML caches on a
+/// persistent rayon worker pool drop their stale entries. Starts at 0; the
+/// first [`clear_xaml_csharp_class_cache`] makes it 1.
+static XAML_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Invalidate the per-run `ViewModel` class cache across all threads (lazily).
+/// Mirrors graphify-py clearing `_XAML_CSHARP_CLASS_CACHE` at the start of
+/// `extract()`; since our cache is thread-local across a persistent rayon pool,
+/// we bump a generation each worker re-checks before reusing its entries.
+pub(crate) fn clear_xaml_csharp_class_cache() {
+    XAML_CACHE_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Drop this thread's cached classes when a new `extract()` generation began.
+fn sync_xaml_cache_generation() {
+    let current = XAML_CACHE_GENERATION.load(Ordering::Relaxed);
+    XAML_CACHE_SEEN_GEN.with(|seen| {
+        if seen.get() != current {
+            XAML_CSHARP_CLASS_CACHE.with(|c| c.borrow_mut().clear());
+            seen.set(current);
+        }
+    });
 }
 
 /// Run `f` with the XAML extract-root boundary set to `root` (resolved), then
@@ -491,6 +521,7 @@ fn project_root(path: &Path) -> PathBuf {
 /// Mirrors Python `_xaml_csharp_class_nodes` (incl. `.graphifyignore` + noise
 /// dirs + the per-root cache).
 fn csharp_class_nodes(path: &Path) -> HashMap<String, Vec<Node>> {
+    sync_xaml_cache_generation();
     let root = project_root(path);
     let cache_key = active_extract_root().map(|_| {
         root.canonicalize()
@@ -547,7 +578,13 @@ fn collect_cs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.is_dir() {
+        // `entry.file_type()` does not follow symlinks, so a symlinked directory
+        // reports as neither file nor dir and is skipped — preventing an infinite
+        // loop on a symlink cycle while resolving ViewModels.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             let skip = p
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -555,7 +592,7 @@ fn collect_cs_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if !skip {
                 collect_cs_files(&p, out);
             }
-        } else if p.extension().and_then(|x| x.to_str()) == Some("cs") {
+        } else if file_type.is_file() && p.extension().and_then(|x| x.to_str()) == Some("cs") {
             out.push(p);
         }
     }
@@ -922,6 +959,12 @@ pub fn extract_xaml(path: &Path) -> FileResult {
                     &str_path,
                 );
             }
+            // Parity dispute (CodeRabbit): the direct `<Binding Path="X"/>` element
+            // form emits only a `concept` node + EXTRACTED edge — NOT the
+            // generated-member INFERRED edge. graphify-py's element branch
+            // (extract.py `elem_type == "Binding" and attr_local == "Path"`) is
+            // identical; the member edge is added only on the markup `{Binding
+            // Path=X}` form above. Adding it here would diverge.
             if elem_type == "Binding" && attr_local == "Path" {
                 let direct = value.trim();
                 if !direct.is_empty() && !direct.contains('{') && !direct.contains('}') {

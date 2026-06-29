@@ -180,6 +180,11 @@ pub(crate) fn ensure_named_node(
             label: name.to_string(),
             file_type: "code".to_string(),
             source_file: String::new(),
+            // Parity dispute (CodeRabbit): `Some("")`, NOT `None`. graphify-py
+            // emits `"source_location": ""` for these sourceless cross-file stubs
+            // (extract.py ensure_named_node), so `None` (skipped on serialize)
+            // would drop the field and break byte-identical JSON. The empty string
+            // is the sourceless marker (`!= "L1"`); `origin_file` carries provenance.
             source_location: Some(String::new()),
             metadata: None,
             origin_file: Some(str_path.to_string()),

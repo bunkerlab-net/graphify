@@ -20,16 +20,16 @@ mod python;
 mod swift;
 
 use crate::extractors::{
-    extract_apex, extract_astro, extract_bash, extract_blade, extract_c, extract_cpp,
-    extract_csharp, extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf,
-    extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy,
-    extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
-    extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
-    extract_package_manifest, extract_pascal, extract_php, extract_powershell,
-    extract_powershell_manifest, extract_python, extract_razor, extract_ruby, extract_rust,
-    extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte, extract_swift,
-    extract_terraform, extract_verilog, extract_vue, extract_xaml, extract_zig, is_mcp_config_path,
-    with_xaml_extract_root,
+    clear_xaml_csharp_class_cache, extract_apex, extract_astro, extract_bash, extract_blade,
+    extract_c, extract_cpp, extract_csharp, extract_csproj, extract_dart, extract_delphi_form,
+    extract_dm, extract_dmf, extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go,
+    extract_groovy, extract_java, extract_js, extract_json, extract_julia, extract_kotlin,
+    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown,
+    extract_mcp_config, extract_objc, extract_package_manifest, extract_pascal, extract_php,
+    extract_powershell, extract_powershell_manifest, extract_python, extract_razor, extract_ruby,
+    extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte,
+    extract_swift, extract_terraform, extract_verilog, extract_vue, extract_xaml, extract_zig,
+    is_mcp_config_path, with_xaml_extract_root,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
@@ -58,14 +58,20 @@ type ExtractFn = fn(&Path) -> FileResult;
 /// @interface/@protocol anyway, which the stronger directives already cover.
 const OBJC_HEADER_MARKERS: [&str; 4] = ["@interface", "@protocol", "@implementation", "@import"];
 
-/// Whether a `.h` file is Objective-C rather than C/C++ (#1475). Reads the first
-/// 256 KiB and sniffs for an ObjC-only directive; mirrors Python `_is_objc_header`.
+/// Whether a `.h` file is Objective-C rather than C/C++ (#1475). Sniffs the
+/// first 256 KiB for an ObjC-only directive; like Python `_is_objc_header` but
+/// reads only the inspected prefix rather than loading a whole (possibly huge,
+/// generated) header into memory.
 fn is_objc_header(path: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
+    use std::io::Read as _;
+    let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
-    let head = &bytes[..bytes.len().min(256 * 1024)];
-    let text = String::from_utf8_lossy(head);
+    let mut head = Vec::new();
+    if file.take(256 * 1024).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&head);
     OBJC_HEADER_MARKERS.iter().any(|m| text.contains(m))
 }
 
@@ -203,6 +209,9 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // (e.g. a new package added) or during `watch`; clear the cache so each run
     // re-scans. Mirrors Python `extract()`'s `_WORKSPACE_PACKAGE_CACHE.clear()`.
     crate::workspace::clear_workspace_cache();
+    // Mirror Python `extract()`'s `_XAML_CSHARP_CLASS_CACHE.clear()` so a repeated
+    // in-process run re-scans `.cs` ViewModels instead of serving stale members.
+    clear_xaml_csharp_class_cache();
 
     // Infer common root for ID relativisation
     let root: PathBuf = {

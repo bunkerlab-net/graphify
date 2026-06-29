@@ -119,6 +119,10 @@ fn value_to_file_result(v: &Value) -> FileResult {
 /// runs, so a cached result would serve a stale (unresolved) import edge.
 /// Mirrors Python `_JS_CACHE_BYPASS_SUFFIXES`.
 const JS_CACHE_BYPASS_SUFFIXES: [&str; 7] = ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte"];
+// Parity dispute (CodeRabbit): `.xaml` is deliberately absent here, matching
+// graphify-py's `_JS_CACHE_BYPASS_SUFFIXES`. A `.xaml` AST result is cached keyed
+// by the `.xaml` content, so a sibling `.cs` change can serve a stale ViewModel
+// resolution in both implementations; adding `.xaml` would diverge from graphify-py.
 
 /// Extract a single file, returning a cached result when available.
 ///

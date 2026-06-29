@@ -582,7 +582,9 @@ pub fn to_obsidian(
     written.sort();
     written.dedup();
     let manifest = serde_json::json!({ "files": written });
-    let _ = std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?);
+    // Propagate like the sibling note writes (and graphify-py's `.write_text`):
+    // a silently dropped manifest would let a later re-export clobber these notes.
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
     if !skipped.is_empty() {
         let shown = skipped
             .iter()

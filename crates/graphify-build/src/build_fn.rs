@@ -148,6 +148,11 @@ pub fn build_from_json(
             real_errors.len()
         );
     }
+    // Parity dispute (CodeRabbit): validation runs once here, BEFORE the semantic
+    // re-key below, matching graphify-py build.py. It is warnings-only (never
+    // aborts), and `add_nodes` dedups any id the re-key collapses (last write
+    // wins, like networkx), so a second post-rekey validation would only emit
+    // warnings graphify-py never prints.
 
     // Deterministic semantic re-key (#1504/#1509): re-derive every non-AST node's
     // id from its own `source_file` so a cached/LLM fragment carrying a

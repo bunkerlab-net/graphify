@@ -73,6 +73,11 @@ pub fn to_wiki(
     let mut used_slugs: IndexSet<String> = IndexSet::new();
     let mut resolver: HashMap<String, String> = HashMap::new();
     resolver.insert("index".to_string(), "index".to_string());
+    // Parity dispute (CodeRabbit): `index` is reserved in `resolver` only, NOT in
+    // `used_slugs` — matching graphify-py exactly (wiki.py: `resolver = {"index":
+    // "index"}` with an empty `used_slugs`). An article literally named "index"
+    // reuses the slug in both implementations; reserving it here would diverge
+    // from byte-identical wiki output, so we keep graphify-py's behaviour.
 
     let mut community_slugs: IndexMap<i64, String> = IndexMap::new();
     for &cid in filtered.keys() {
@@ -82,6 +87,10 @@ pub fn to_wiki(
             .unwrap_or_else(|| format!("Community {cid}"));
         let slug = make_unique_slug(&safe_filename(&label), &mut used_slugs);
         community_slugs.insert(cid, slug.clone());
+        // Parity dispute (CodeRabbit): the resolver is keyed by display label,
+        // mirroring graphify-py `resolver.setdefault(label, slug)`. Duplicate
+        // titles collapse to the first slug in both; keying by node id instead
+        // would diverge from graphify-py's byte-identical links.
         resolver.entry(label).or_insert(slug);
     }
     let mut god_articles: Vec<(String, String)> = Vec::new(); // (node_id, slug)

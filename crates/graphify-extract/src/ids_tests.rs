@@ -33,8 +33,8 @@ fn make_id_no_leading_trailing_underscores() {
 /// dropped); `make_id` collapses the separators to `_` later (#1504).
 #[test]
 fn file_stem_full_relative_path() {
-    let p = std::path::PathBuf::from("/project/auth/models.py");
-    assert_eq!(file_stem(&p), "/project/auth/models");
+    let p = std::path::PathBuf::from("auth/models.py");
+    assert_eq!(file_stem(&p), "auth/models");
 }
 
 /// A root-level file gets a bare stem (no directory prefix).

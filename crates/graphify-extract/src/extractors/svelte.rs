@@ -444,7 +444,9 @@ pub fn extract_vue(path: &Path) -> FileResult {
     let str_path = path.to_string_lossy().into_owned();
     let file_node_id = make_id1(&str_path);
     let mut existing_ids: HashSet<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
-    for cap in DYNAMIC_IMPORT_RE.captures_iter(&src) {
+    // Scan the masked source (not raw `src`): an `import('…')` inside `<template>`
+    // or `<style>` is not a real script dependency, so masking blanks it out.
+    for cap in DYNAMIC_IMPORT_RE.captures_iter(&masked) {
         let raw = cap.get(1).map_or("", |m| m.as_str());
         if raw.is_empty() {
             continue;

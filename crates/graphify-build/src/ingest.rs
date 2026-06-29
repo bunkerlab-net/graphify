@@ -32,7 +32,10 @@ fn language_family(ext: &str) -> Option<&'static str> {
         "rs" => Some("rs"),
         "java" | "kt" | "scala" | "groovy" => Some("jvm"),
         "c" | "h" => Some("c"),
-        "cc" | "cpp" | "hpp" | "cu" | "cuh" | "metal" => Some("cpp"),
+        // Divergence from graphify-py `build.py` (#1466): its family map omits
+        // `.cxx`, yet `.cxx` is extracted as C++ and is in `analyze`'s family map.
+        // Including it here keeps cross-language call filtering consistent.
+        "cc" | "cpp" | "cxx" | "hpp" | "cu" | "cuh" | "metal" => Some("cpp"),
         "rb" => Some("rb"),
         "php" => Some("php"),
         "cs" => Some("cs"),

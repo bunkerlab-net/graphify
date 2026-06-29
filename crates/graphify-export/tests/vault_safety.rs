@@ -1,7 +1,9 @@
 //! Parity tests for Obsidian vault safety (#1506), the canvas sqrt(n) grid
 //! (#1452), and case-fold filename dedup (#1453), ported from
 //! `graphify-py/tests/test_export.py`.
-// Parity test: single-char loop indices and by-value `json!` helpers read fine here.
+// Parity test (ports graphify-py test_export.py). Per AGENTS.md a file-top
+// `expect_used`/`unwrap_used` allow is acceptable for parity tests; the single-char
+// loop indices and by-value `json!` helpers also read naturally here.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -239,6 +241,11 @@ fn to_canvas_case_only_distinct_labels_get_distinct_files() {
         .filter(|c| c["type"] == "file")
         .map(|c| c["file"].as_str().unwrap().to_lowercase())
         .collect();
+    assert_eq!(
+        files.len(),
+        g.node_count(),
+        "a colliding card was dropped: {files:?}"
+    );
     let distinct: std::collections::HashSet<&String> = files.iter().collect();
     assert_eq!(distinct.len(), files.len(), "{files:?}");
 }
@@ -267,9 +274,9 @@ fn obsidian_canvas_filenames_agree() {
                 .into_owned()
         })
         .collect();
-    assert!(
-        canvas_stems.is_subset(&note_stems),
-        "{canvas_stems:?} not subset of {note_stems:?}"
+    assert_eq!(
+        canvas_stems, note_stems,
+        "{canvas_stems:?} != {note_stems:?}"
     );
 }
 

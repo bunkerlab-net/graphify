@@ -1247,8 +1247,22 @@ fn semantic_rekey_migrates_relative_leaves_absolute() {
     assert!(g.contains_node("docs_v1_api_readme"));
     assert!(!g.contains_node("api_readme"));
 
+    // A genuinely-absolute path (platform-native via canonicalize, so the test
+    // exercises `Path::is_absolute` on Windows too) is left un-rekeyed: its id
+    // can't be derived without leaking the temp prefix, so it stays as-is.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let abs_source = tmp
+        .path()
+        .canonicalize()
+        .expect("canonicalize tmp")
+        .join("docs")
+        .join("v1")
+        .join("api")
+        .join("README.md")
+        .to_string_lossy()
+        .into_owned();
     let abs = json!({
-        "nodes": [{"id": "api_readme", "source_file": "/abs/docs/v1/api/README.md",
+        "nodes": [{"id": "api_readme", "source_file": abs_source,
                    "file_type": "document"}],
         "edges": [],
     });

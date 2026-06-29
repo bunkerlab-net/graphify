@@ -236,5 +236,5 @@ pub use manifest_ingest::extract_package_manifest;
 pub use blade::extract_blade;
 
 // ── .NET (.sln / .slnx / .csproj / .razor) ─────────────────────────────────────
-pub(crate) use dotnet::with_xaml_extract_root;
+pub(crate) use dotnet::{clear_xaml_csharp_class_cache, with_xaml_extract_root};
 pub use dotnet::{extract_csproj, extract_razor, extract_sln, extract_slnx, extract_xaml};
