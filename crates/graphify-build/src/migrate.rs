@@ -31,6 +31,7 @@ const LEGACY_ID_SAMPLE: usize = 300;
 
 /// Build a stable node ID from one or more name parts — mirrors
 /// `graphify-extract::ids::make_id`.
+#[must_use]
 fn make_id(parts: &[&str]) -> String {
     let combined = parts
         .iter()
@@ -42,12 +43,14 @@ fn make_id(parts: &[&str]) -> String {
 }
 
 /// Single-part [`make_id`].
+#[must_use]
 fn make_id1(part: &str) -> String {
     make_id(&[part])
 }
 
 /// Full repo-relative path with the extension dropped, POSIX form — mirrors
 /// `graphify-extract::ids::file_stem`. `make_id` collapses the separators later.
+#[must_use]
 fn file_stem(path: &Path) -> String {
     path.with_extension("").to_string_lossy().replace('\\', "/")
 }
@@ -57,6 +60,7 @@ fn file_stem(path: &Path) -> String {
 /// the one-parent form (`parent.stem`, the old `_file_stem` rule) then the
 /// zero-parent form (`stem`, the old llm-prompt rule, #1509). Top-level files
 /// collapse both forms to one.
+#[must_use]
 fn old_file_stems(rel: &Path) -> Vec<String> {
     let parent = rel
         .parent()
@@ -102,6 +106,7 @@ fn node_rel_source(map: &serde_json::Map<String, Value>, root: Option<&str>) -> 
 /// code, never trusted from the fragment's own id. AST-origin nodes
 /// (`_origin == "ast"`) already carry canonical ids and are skipped. Returns a
 /// map of old id → new id.
+#[must_use]
 fn semantic_id_remap(nodes: &[Value], root: Option<&str>) -> IndexMap<String, String> {
     let mut remap: IndexMap<String, String> = IndexMap::new();
     for node in nodes {

@@ -115,14 +115,18 @@ fn value_to_file_result(v: &Value) -> FileResult {
 // ── Extract a single file (with cache) ───────────────────────────────────────
 
 /// File suffixes whose per-file AST extraction is never cached: their cross-file
-/// import resolution depends on sibling files that can appear or change between
-/// runs, so a cached result would serve a stale (unresolved) import edge.
-/// Mirrors Python `_JS_CACHE_BYPASS_SUFFIXES`.
-const JS_CACHE_BYPASS_SUFFIXES: [&str; 7] = ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte"];
-// Parity dispute (CodeRabbit): `.xaml` is deliberately absent here, matching
-// graphify-py's `_JS_CACHE_BYPASS_SUFFIXES`. A `.xaml` AST result is cached keyed
-// by the `.xaml` content, so a sibling `.cs` change can serve a stale ViewModel
-// resolution in both implementations; adding `.xaml` would diverge from graphify-py.
+/// resolution depends on sibling files that can appear or change between runs,
+/// so a cached result would serve a stale (unresolved) edge.
+///
+/// `js`/`jsx`/`mjs`/`ts`/`tsx`/`vue`/`svelte` mirror Python `_JS_CACHE_BYPASS_SUFFIXES`
+/// (sibling import resolution). `xaml` is a deliberate divergence from graphify-py
+/// (#1460/#1473): XAML `ViewModel` resolution scans sibling `.cs` code-behind, so a
+/// `.xaml` AST result keyed by `.xaml` content alone serves stale `ViewModel` members
+/// when a sibling `.cs` changes. The in-memory `clear_xaml_csharp_class_cache()` only
+/// covers staleness *within* one run; bypassing the on-disk cache covers it *across*
+/// runs too. graphify-py has the same disk-cache staleness bug here (it omits `.xaml`).
+const JS_CACHE_BYPASS_SUFFIXES: [&str; 8] =
+    ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte", "xaml"];
 
 /// Extract a single file, returning a cached result when available.
 ///

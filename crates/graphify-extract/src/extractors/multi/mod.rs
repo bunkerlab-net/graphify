@@ -644,13 +644,22 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         resolve_python_member_calls(&all_nodes, &mut all_edges, &all_raw_calls);
     }
 
-    // Relativise source_file fields
+    // Relativise source_file (and the #1462 origin_file) so persisted paths are
+    // portable across machines (#555). graphify-py relativizes only source_file
+    // (extract.py), leaking absolute origin_file paths into graph JSON — fix that
+    // determinism gap here too.
     for n in &mut all_nodes {
         let sf_path = PathBuf::from(&n.source_file);
         if sf_path.is_absolute()
             && let Some(rel) = relativise_under_root(&sf_path, &root)
         {
             n.source_file = rel.to_string_lossy().into_owned();
+        }
+        if let Some(of_path) = n.origin_file.as_deref().map(PathBuf::from)
+            && of_path.is_absolute()
+            && let Some(rel) = relativise_under_root(&of_path, &root)
+        {
+            n.origin_file = Some(rel.to_string_lossy().into_owned());
         }
     }
     for e in &mut all_edges {

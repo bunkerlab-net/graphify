@@ -766,6 +766,14 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
             .unwrap_or(label),
     )
     .to_lowercase();
+    // Slash-normalized full path of the query, for exact source-path matching.
+    // Trailing separators are trimmed so a path query keeps matching the file
+    // (parity with the old tokenized compare, which dropped them) (#1503).
+    let query_path = strip_diacritics(label)
+        .to_lowercase()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
     let mut source_exact: Vec<String> = Vec::new();
     let mut preferred: Vec<String> = Vec::new();
     let mut exact: Vec<String> = Vec::new();
@@ -778,14 +786,21 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
         let node_term = search_tokens(&get_norm_label(attrs)).join(" ");
         // `search_tokens` already lowercases, so pass `nid` directly.
         let nid_term = search_tokens(nid).join(" ");
-        let source_term = search_tokens(
+        // Match the source-file path on its slash-normalized full form, NOT
+        // tokenized. graphify-py compares tokenized source paths (serve.py
+        // `source_tokens`), which collapses distinct paths to the same tokens
+        // (`src/foo/bar.py` and `src/foo_bar.py` both → "src foo bar py"), so a
+        // path query could land on the wrong file. The full-path compare avoids
+        // that; tokenized matching stays for label/id below (divergence, #1503).
+        let source_path = strip_diacritics(
             attrs
                 .get("source_file")
                 .and_then(Value::as_str)
                 .unwrap_or(""),
         )
-        .join(" ");
-        if !source_term.is_empty() && term == source_term {
+        .to_lowercase()
+        .replace('\\', "/");
+        if !source_path.is_empty() && query_path == source_path {
             source_exact.push(nid.clone());
             if attrs.get("source_location").and_then(Value::as_str) == Some("L1")
                 && get_norm_label(attrs) == query_basename

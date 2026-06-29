@@ -157,10 +157,13 @@ struct ObjcWalkCtx<'a> {
 }
 
 impl ObjcWalkCtx<'_> {
-    /// Return the NID for a named type, creating a bare placeholder node when no
-    /// file-qualified node already exists. Mirrors Objective-C's
-    /// `ensure_named_node`.
-    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+    /// Return the NID for a named type, creating a SOURCELESS placeholder stub
+    /// when no file-qualified node exists. Mirrors Python objc `ensure_named_node`
+    /// (extract.py): the stub carries no `source_file` so a real cross-file
+    /// definition can be rewired onto it (#1402, the phantom-duplicate fix);
+    /// the referencing file is recorded as `origin_file` to disambiguate
+    /// same-label stubs (#1462), matching the generic `ensure_named_node`.
+    fn ensure_named_node(&mut self, name: &str) -> String {
         let nid1 = make_id(&[self.stem, name]);
         if self.seen_ids.contains(&nid1) {
             return nid1;
@@ -171,10 +174,10 @@ impl ObjcWalkCtx<'_> {
                 id: nid2.clone(),
                 label: name.to_string(),
                 file_type: "code".to_string(),
-                source_file: self.str_path.to_string(),
-                source_location: Some(format!("L{line}")),
+                source_file: String::new(),
+                source_location: Some(String::new()),
                 metadata: None,
-                origin_file: None,
+                origin_file: Some(self.str_path.to_string()),
             });
         }
         nid2
@@ -337,7 +340,7 @@ fn walk_objc(
                     if child.kind() == ":" {
                         colon_seen = true;
                     } else if colon_seen && child.kind() == "identifier" {
-                        let super_nid = ctx.ensure_named_node(read_text(child, source), line);
+                        let super_nid = ctx.ensure_named_node(read_text(child, source));
                         ctx.edges.push(Edge {
                             external: false,
                             source: cls_nid.clone(),
@@ -361,10 +364,10 @@ fn walk_objc(
                                     if tc.goto_first_child() {
                                         loop {
                                             if tc.node().kind() == "type_identifier" {
-                                                let proto_nid = ctx.ensure_named_node(
-                                                    read_text(tc.node(), source),
-                                                    line,
-                                                );
+                                                let proto_nid = ctx.ensure_named_node(read_text(
+                                                    tc.node(),
+                                                    source,
+                                                ));
                                                 ctx.edges.push(Edge {
                                                     external: false,
                                                     source: cls_nid.clone(),
@@ -412,8 +415,7 @@ fn walk_objc(
                                                     if !seen_types.insert(tname) {
                                                         continue;
                                                     }
-                                                    let type_nid =
-                                                        ctx.ensure_named_node(tname, prop_line);
+                                                    let type_nid = ctx.ensure_named_node(tname);
                                                     ctx.edges.push(Edge {
                                                         external: false,
                                                         source: cls_nid.clone(),

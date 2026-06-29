@@ -41,6 +41,7 @@ pub fn source_key(source_file: &str, root: &Path) -> String {
 /// `_node_disambiguation_source_key` (#1462) — same-label stubs from different
 /// referencing files split into distinct ids, while a real definition (which
 /// carries a `source_file`) can still be rewired onto a sourceless stub.
+#[must_use]
 fn node_disambiguation_source_key(node: &Node, root: &Path) -> String {
     if node.source_file.is_empty() {
         source_key(node.origin_file.as_deref().unwrap_or_default(), root)

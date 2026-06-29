@@ -1,15 +1,9 @@
 //! Parity tests for Obsidian vault safety (#1506), the canvas sqrt(n) grid
 //! (#1452), and case-fold filename dedup (#1453), ported from
 //! `graphify-py/tests/test_export.py`.
-// Parity test (ports graphify-py test_export.py). Per AGENTS.md a file-top
-// `expect_used`/`unwrap_used` allow is acceptable for parity tests; the single-char
-// loop indices and by-value `json!` helpers also read naturally here.
-#![allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::many_single_char_names,
-    clippy::needless_pass_by_value
-)]
+// The single-char loop indices and by-value `json!` helpers read naturally in
+// these fixtures.
+#![allow(clippy::many_single_char_names, clippy::needless_pass_by_value)]
 
 use std::path::Path;
 
@@ -19,6 +13,11 @@ use graphify_export::{to_canvas, to_obsidian};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+// Fixture builder: `expect` on a known-good in-test JSON literal is the clearest
+// failure signal here, so this one helper keeps the narrow allow.
+#[allow(clippy::expect_used)]
 fn build(nodes: Value, edges: Value) -> Graph {
     build_from_json(json!({ "nodes": nodes, "edges": edges }), false, None).expect("build")
 }
@@ -49,15 +48,18 @@ fn case_collision_graph() -> Graph {
 
 fn md_node_notes(dir: &Path) -> Vec<String> {
     fn walk(dir: &Path, out: &mut Vec<String>) {
-        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, out);
-            } else if p.extension().and_then(|x| x.to_str()) == Some("md") {
-                let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
-                if !stem.starts_with("_COMMUNITY") {
-                    out.push(stem);
-                }
+            } else if p.extension().and_then(|x| x.to_str()) == Some("md")
+                && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+                && !stem.starts_with("_COMMUNITY")
+            {
+                out.push(stem.to_string());
             }
         }
     }
@@ -67,7 +69,10 @@ fn md_node_notes(dir: &Path) -> Vec<String> {
 }
 
 #[test]
-fn to_canvas_node_grid_matches_box_columns() {
+// JSON navigation inside `.map`/`.find` closures can't use `?`, so this
+// assertion-dense canvas-grid test keeps the narrow allow.
+#[allow(clippy::unwrap_used)]
+fn to_canvas_node_grid_matches_box_columns() -> TestResult {
     // #1452: cards lay out in the ceil(sqrt(n))-column / ceil(n/cols)-row grid the
     // box is sized for. Covers a perfect square (25 -> 5x5) and a non-square (10).
     for n in [10usize, 25] {
@@ -80,10 +85,10 @@ fn to_canvas_node_grid_matches_box_columns() {
         let g = build(json!(nodes), json!([]));
         let communities: IndexMap<i64, Vec<String>> =
             IndexMap::from([(0, (0..n).map(|i| format!("n{i}")).collect())]);
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempfile::tempdir()?;
         let out = tmp.path().join("graph.canvas");
-        to_canvas(&g, &communities, &out, None, None).expect("canvas");
-        let data: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        to_canvas(&g, &communities, &out, None, None)?;
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(&out)?)?;
         let canvas_nodes = data["nodes"].as_array().unwrap();
         let group = canvas_nodes.iter().find(|c| c["type"] == "group").unwrap();
         let cards: Vec<&Value> = canvas_nodes
@@ -129,71 +134,68 @@ fn to_canvas_node_grid_matches_box_columns() {
             assert!(gy <= y && y + h <= gy + gh, "n={n} card y out of box");
         }
     }
+    Ok(())
 }
 
 #[test]
-fn to_obsidian_preserves_existing_user_notes_and_obsidian_config() {
+fn to_obsidian_preserves_existing_user_notes_and_obsidian_config() -> TestResult {
     let (g, communities) = two_node_graph();
     let labels: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempfile::tempdir()?;
     let vault = tmp.path();
-    std::fs::write(vault.join("Database.md"), "# MY NOTES\nkeep me\n").unwrap();
-    std::fs::create_dir(vault.join(".obsidian")).unwrap();
+    std::fs::write(vault.join("Database.md"), "# MY NOTES\nkeep me\n")?;
+    std::fs::create_dir(vault.join(".obsidian"))?;
     std::fs::write(
         vault.join(".obsidian/graph.json"),
         "{\"USER\":\"settings\"}",
-    )
-    .unwrap();
-    to_obsidian(&g, &communities, vault, Some(&labels), None).expect("obsidian");
-    assert!(
-        std::fs::read_to_string(vault.join("Database.md"))
-            .unwrap()
-            .contains("MY NOTES")
-    );
-    let cfg: Value =
-        serde_json::from_str(&std::fs::read_to_string(vault.join(".obsidian/graph.json")).unwrap())
-            .unwrap();
+    )?;
+    to_obsidian(&g, &communities, vault, Some(&labels), None)?;
+    assert!(std::fs::read_to_string(vault.join("Database.md"))?.contains("MY NOTES"));
+    let cfg: Value = serde_json::from_str(&std::fs::read_to_string(
+        vault.join(".obsidian/graph.json"),
+    )?)?;
     assert_eq!(cfg, json!({"USER": "settings"}));
     assert!(vault.join("Server.md").exists());
+    Ok(())
 }
 
 #[test]
-fn to_obsidian_empty_dir_writes_full_vault() {
+fn to_obsidian_empty_dir_writes_full_vault() -> TestResult {
     let (g, communities) = two_node_graph();
     let labels: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempfile::tempdir()?;
     let out = tmp.path().join("obsidian");
-    let n = to_obsidian(&g, &communities, &out, Some(&labels), None).expect("obsidian");
+    let n = to_obsidian(&g, &communities, &out, Some(&labels), None)?;
     assert!(out.join("Database.md").exists() && out.join("Server.md").exists());
     assert!(out.join(".obsidian/graph.json").exists());
     assert_eq!(n, 3); // 2 node notes + 1 community note
+    Ok(())
 }
 
 #[test]
-fn to_obsidian_rerun_updates_own_notes_but_not_user_files() {
+fn to_obsidian_rerun_updates_own_notes_but_not_user_files() -> TestResult {
     let (g, communities) = two_node_graph();
     let l1: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
     let l2: IndexMap<i64, String> = IndexMap::from([(0, "Backend2".to_string())]);
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempfile::tempdir()?;
     let out = tmp.path().join("obsidian");
-    to_obsidian(&g, &communities, &out, Some(&l1), None).expect("obsidian");
-    std::fs::write(out.join("UserNote.md"), "mine\n").unwrap();
-    to_obsidian(&g, &communities, &out, Some(&l2), None).expect("obsidian");
+    to_obsidian(&g, &communities, &out, Some(&l1), None)?;
+    std::fs::write(out.join("UserNote.md"), "mine\n")?;
+    to_obsidian(&g, &communities, &out, Some(&l2), None)?;
     assert!(out.join("Database.md").exists()); // graphify re-wrote its own
     assert_eq!(
-        std::fs::read_to_string(out.join("UserNote.md"))
-            .unwrap()
-            .trim(),
+        std::fs::read_to_string(out.join("UserNote.md"))?.trim(),
         "mine"
     );
+    Ok(())
 }
 
 #[test]
-fn to_obsidian_case_only_distinct_labels_dont_overwrite() {
+fn to_obsidian_case_only_distinct_labels_dont_overwrite() -> TestResult {
     let g = case_collision_graph();
     let communities = cluster(&g, 1.0, None);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    to_obsidian(&g, &communities, tmp.path(), None, None).expect("obsidian");
+    let tmp = tempfile::tempdir()?;
+    to_obsidian(&g, &communities, tmp.path(), None, None)?;
     let mut notes = md_node_notes(tmp.path());
     assert_eq!(notes.len(), g.node_count(), "{notes:?}");
     let lowered: std::collections::HashSet<String> =
@@ -204,10 +206,11 @@ fn to_obsidian_case_only_distinct_labels_dont_overwrite() {
         notes,
         vec!["References".to_string(), "references_1".to_string()]
     );
+    Ok(())
 }
 
 #[test]
-fn to_obsidian_generated_suffix_doesnt_overwrite_literal() {
+fn to_obsidian_generated_suffix_doesnt_overwrite_literal() -> TestResult {
     let g = build(
         json!([
             {"id": "a", "label": "dup", "file_type": "code", "source_file": "a.py"},
@@ -217,23 +220,26 @@ fn to_obsidian_generated_suffix_doesnt_overwrite_literal() {
         json!([]),
     );
     let communities = cluster(&g, 1.0, None);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    to_obsidian(&g, &communities, tmp.path(), None, None).expect("obsidian");
+    let tmp = tempfile::tempdir()?;
+    to_obsidian(&g, &communities, tmp.path(), None, None)?;
     let notes = md_node_notes(tmp.path());
     assert_eq!(notes.len(), 3, "{notes:?}");
     let lowered: std::collections::HashSet<String> =
         notes.iter().map(|s| s.to_lowercase()).collect();
     assert_eq!(lowered.len(), 3, "{notes:?}");
+    Ok(())
 }
 
 #[test]
-fn to_canvas_case_only_distinct_labels_get_distinct_files() {
+// `.map` closures over the canvas JSON can't use `?`, so this keeps the narrow allow.
+#[allow(clippy::unwrap_used)]
+fn to_canvas_case_only_distinct_labels_get_distinct_files() -> TestResult {
     let g = case_collision_graph();
     let communities = cluster(&g, 1.0, None);
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = tempfile::tempdir()?;
     let out = tmp.path().join("graph.canvas");
-    to_canvas(&g, &communities, &out, None, None).expect("canvas");
-    let data: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    to_canvas(&g, &communities, &out, None, None)?;
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&out)?)?;
     let files: Vec<String> = data["nodes"]
         .as_array()
         .unwrap()
@@ -248,19 +254,22 @@ fn to_canvas_case_only_distinct_labels_get_distinct_files() {
     );
     let distinct: std::collections::HashSet<&String> = files.iter().collect();
     assert_eq!(distinct.len(), files.len(), "{files:?}");
+    Ok(())
 }
 
 #[test]
-fn obsidian_canvas_filenames_agree() {
+// `.map` closures over the canvas JSON can't use `?`, so this keeps the narrow allow.
+#[allow(clippy::unwrap_used)]
+fn obsidian_canvas_filenames_agree() -> TestResult {
     let g = case_collision_graph();
     let communities = cluster(&g, 1.0, None);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    to_obsidian(&g, &communities, tmp.path(), None, None).expect("obsidian");
+    let tmp = tempfile::tempdir()?;
+    to_obsidian(&g, &communities, tmp.path(), None, None)?;
     let note_stems: std::collections::HashSet<String> =
         md_node_notes(tmp.path()).into_iter().collect();
     let out = tmp.path().join("graph.canvas");
-    to_canvas(&g, &communities, &out, None, None).expect("canvas");
-    let data: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    to_canvas(&g, &communities, &out, None, None)?;
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&out)?)?;
     let canvas_stems: std::collections::HashSet<String> = data["nodes"]
         .as_array()
         .unwrap()
@@ -278,10 +287,11 @@ fn obsidian_canvas_filenames_agree() {
         canvas_stems, note_stems,
         "{canvas_stems:?} != {note_stems:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn to_obsidian_community_notes_case_collision() {
+fn to_obsidian_community_notes_case_collision() -> TestResult {
     let g = build(
         json!([
             {"id": "n1", "label": "alpha", "file_type": "code", "source_file": "a.py"},
@@ -293,10 +303,9 @@ fn to_obsidian_community_notes_case_collision() {
         IndexMap::from([(0, vec!["n1".to_string()]), (1, vec!["n2".to_string()])]);
     let labels: IndexMap<i64, String> =
         IndexMap::from([(0, "API".to_string()), (1, "Api".to_string())]);
-    let tmp = tempfile::tempdir().expect("tempdir");
-    to_obsidian(&g, &communities, tmp.path(), Some(&labels), None).expect("obsidian");
-    let comm: Vec<String> = std::fs::read_dir(tmp.path())
-        .unwrap()
+    let tmp = tempfile::tempdir()?;
+    to_obsidian(&g, &communities, tmp.path(), Some(&labels), None)?;
+    let comm: Vec<String> = std::fs::read_dir(tmp.path())?
         .flatten()
         .filter_map(|e| {
             let stem = e.path().file_stem()?.to_string_lossy().into_owned();
@@ -307,4 +316,5 @@ fn to_obsidian_community_notes_case_collision() {
     let lowered: std::collections::HashSet<String> =
         comm.iter().map(|s| s.to_lowercase()).collect();
     assert_eq!(lowered.len(), comm.len(), "{comm:?}");
+    Ok(())
 }

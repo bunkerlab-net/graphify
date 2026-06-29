@@ -104,6 +104,12 @@ pub(crate) fn add_nodes(graph: &mut Graph, extraction: &mut Value, root_str: Opt
         if let Some(Value::String(sf)) = map.get_mut("source_file") {
             *sf = norm_source_file(sf, root_str);
         }
+        // Relativise origin_file too (#1462 stub provenance) so graph JSON stays
+        // machine-independent; graphify-py leaves it absolute (extract.py only
+        // relativizes source_file).
+        if let Some(Value::String(of)) = map.get_mut("origin_file") {
+            *of = norm_source_file(of, root_str);
+        }
         let mut attrs: IndexMap<String, Value> = IndexMap::new();
         for (k, v) in &*map {
             if k == "id" {
@@ -308,6 +314,7 @@ fn build_norm_to_id(
 /// Snapshot each node's `source_file` (id → path) so the cross-language `calls`
 /// INFERRED filter and the legacy-id alias index can resolve without
 /// re-borrowing `graph` inside the per-edge closure.
+#[must_use]
 fn snapshot_source_files(graph: &Graph) -> IndexMap<String, String> {
     graph
         .nodes()

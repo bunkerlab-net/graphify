@@ -650,6 +650,11 @@ pub(crate) fn dedup_node_filenames(graph: &Graph) -> IndexMap<String, String> {
 /// Write a graphify-owned file, refusing to overwrite a pre-existing file
 /// graphify didn't create (recorded in `skipped`); records writes in `written`.
 /// Returns `true` when the file was written. Mirrors Python `_owned_write` (#1506).
+///
+/// Hardens #1506 beyond graphify-py (whose `_owned_write` follows symlinks): a
+/// symlink at the target — or a symlinked directory component under `output_dir`
+/// — can escape the vault and clobber a file outside it (common when an Obsidian
+/// user symlinks notes). Such a path is skipped like a non-owned file.
 fn owned_write(
     output_dir: &Path,
     rel: &str,
@@ -659,7 +664,7 @@ fn owned_write(
     skipped: &mut Vec<String>,
 ) -> Result<bool, ExportError> {
     let target = output_dir.join(rel);
-    if target.exists() && !owned.contains(rel) {
+    if (target.exists() && !owned.contains(rel)) || writes_through_symlink(output_dir, rel) {
         skipped.push(rel.to_string());
         return Ok(false);
     }
@@ -669,4 +674,19 @@ fn owned_write(
     std::fs::write(&target, content)?;
     written.push(rel.to_string());
     Ok(true)
+}
+
+/// True when writing `rel` under `output_dir` would traverse a symlink — either
+/// the target itself or an existing intermediate component is a symlink. Used to
+/// refuse following a symlink that could escape the vault (#1506). `output_dir`
+/// itself is not checked: the caller chose it.
+fn writes_through_symlink(output_dir: &Path, rel: &str) -> bool {
+    let mut cur = output_dir.to_path_buf();
+    for comp in Path::new(rel).components() {
+        cur.push(comp);
+        if std::fs::symlink_metadata(&cur).is_ok_and(|md| md.file_type().is_symlink()) {
+            return true;
+        }
+    }
+    false
 }

@@ -181,25 +181,25 @@ fn objc_resolves_self_method_calls() {
 
 /// Ports `test_languages.py::test_objc_class_method_labeled_with_plus` (#1475).
 #[test]
-fn objc_class_method_labeled_with_plus() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn objc_class_method_labeled_with_plus() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let p = tmp.path().join("S.m");
     std::fs::write(
         &p,
         "@implementation S\n+ (instancetype)shared { return nil; }\n- (void)go { }\n@end\n",
-    )
-    .expect("write");
+    )?;
     let r = extract_objc(&p);
     let labels: std::collections::HashSet<String> =
         r.nodes.iter().map(|n| n.label.clone()).collect();
     assert!(labels.contains("+shared"), "{labels:?}");
     assert!(labels.contains("-go"), "{labels:?}");
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_objc_compound_selector_call_resolves` (#1475).
 #[test]
-fn objc_compound_selector_call_resolves() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn objc_compound_selector_call_resolves() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let p = tmp.path().join("V.m");
     std::fs::write(
         &p,
@@ -207,8 +207,7 @@ fn objc_compound_selector_call_resolves() {
          - (void)tableView:(id)tv numberOfRowsInSection:(int)s { }\n\
          - (void)go { [self tableView:nil numberOfRowsInSection:0]; }\n\
          @end\n",
-    )
-    .expect("write");
+    )?;
     let r = extract_objc(&p);
     let nid2label: std::collections::HashMap<&str, &str> = r
         .nodes
@@ -227,33 +226,33 @@ fn objc_compound_selector_call_resolves() {
             .any(|t| t.contains("tableViewnumberOfRowsInSection")),
         "{calls:?}"
     );
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_objc_generic_property_type_extracted` (#1475).
 #[test]
-fn objc_generic_property_type_extracted() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn objc_generic_property_type_extracted() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let p = tmp.path().join("M.h");
     std::fs::write(
         &p,
         "@interface M : NSObject\n@property (strong) NSArray<Product *> *items;\n@end\n",
-    )
-    .expect("write");
+    )?;
     let refs = edge_label_pairs(&extract_objc(&p), "references", Some("field"));
     assert!(refs.contains(&("M".into(), "Product".into())), "{refs:?}");
     assert!(refs.contains(&("M".into(), "NSArray".into())), "{refs:?}");
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_objc_module_import_edge` (#1475).
 #[test]
-fn objc_module_import_edge() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn objc_module_import_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let p = tmp.path().join("X.m");
     std::fs::write(
         &p,
         "@import Foundation;\n@import UIKit.UIView;\n@implementation X\n@end\n",
-    )
-    .expect("write");
+    )?;
     let r = extract_objc(&p);
     let targets: std::collections::HashSet<&str> = r
         .edges
@@ -269,6 +268,7 @@ fn objc_module_import_edge() {
         targets.contains(make_id(&["UIKit"]).as_str()),
         "{targets:?}"
     );
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_objc_header_dispatch_routes_objc_not_c` (#1475):
@@ -278,16 +278,15 @@ fn objc_module_import_edge() {
 /// via `extract`: only the Objective-C extractor emits the `@interface` class
 /// node, and only the C extractor emits the C function node.
 #[test]
-fn objc_header_dispatch_routes_objc_not_c() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn objc_header_dispatch_routes_objc_not_c() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let objc_h = tmp.path().join("AppDelegate.h");
     std::fs::write(
         &objc_h,
         "@interface AppDelegate : NSObject <UIApplicationDelegate>\n@end\n",
-    )
-    .expect("write");
+    )?;
     let c_h = tmp.path().join("util.h");
-    std::fs::write(&c_h, "int add(int a, int b) { return a + b; }\n").expect("write");
+    std::fs::write(&c_h, "int add(int a, int b) { return a + b; }\n")?;
 
     let objc_out = graphify_extract::extract(&[objc_h], Some(tmp.path()));
     assert!(
@@ -305,6 +304,7 @@ fn objc_header_dispatch_routes_objc_not_c() {
             .is_some_and(|l| l.contains("add"))),
         "C .h must stay on the C extractor (no `add` function node)"
     );
+    Ok(())
 }
 
 #[test]
@@ -714,8 +714,9 @@ fn java_parameter_return_generic_and_attribute_contexts() {
 /// (#1510): a generic parent emits the inherits/implements edge to the base AND a
 /// `generic_arg` reference for each type argument.
 #[test]
-fn java_generic_parents_include_type_argument_references() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn java_generic_parents_include_type_argument_references() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmp = tempfile::tempdir()?;
     let source = tmp.path().join("GenericParents.java");
     std::fs::write(
         &source,
@@ -725,8 +726,7 @@ fn java_generic_parents_include_type_argument_references() {
          interface Handler<T> {}\n\
          interface DerivedHandler extends Handler<Event> {}\n\
          class Service extends Base<Dependency> implements Handler<Event> {}\n",
-    )
-    .expect("write");
+    )?;
     let result = extract_java(&source);
     let inherits = edge_label_pairs(&result, "inherits", None);
     let implements = edge_label_pairs(&result, "implements", None);
@@ -755,12 +755,13 @@ fn java_generic_parents_include_type_argument_references() {
         refs.contains(&("DerivedHandler".into(), "Event".into())),
         "{refs:?}"
     );
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_java_field_type_references_have_field_context` (#1485).
 #[test]
-fn java_field_type_references_have_field_context() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn java_field_type_references_have_field_context() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let source = tmp.path().join("Fields.java");
     std::fs::write(
         &source,
@@ -770,8 +771,7 @@ fn java_field_type_references_have_field_context() {
          \x20   PaymentGateway gateway;\n\
          \x20   List<Handler> handlers;\n\
          }\n",
-    )
-    .expect("write");
+    )?;
     let result = extract_java(&source);
     let fields = edge_label_pairs(&result, "references", Some("field"));
     let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
@@ -783,18 +783,18 @@ fn java_field_type_references_have_field_context() {
         generics.contains(&("CheckoutService".into(), "Handler".into())),
         "{generics:?}"
     );
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_java_type_annotations_have_attribute_context` (#1487).
 #[test]
-fn java_type_annotations_have_attribute_context() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn java_type_annotations_have_attribute_context() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
     let source = tmp.path().join("TypeAnnotations.java");
     std::fs::write(
         &source,
         "@Service\n@Entity(name = \"checkout\")\nclass CheckoutService {}\n",
-    )
-    .expect("write");
+    )?;
     let result = extract_java(&source);
     let refs = edge_label_pairs(&result, "references", Some("attribute"));
     assert!(
@@ -805,13 +805,15 @@ fn java_type_annotations_have_attribute_context() {
         refs.contains(&("CheckoutService".into(), "Entity".into())),
         "{refs:?}"
     );
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_java_enum_and_annotation_declarations_are_type_nodes`
 /// (#1512): enum and `@interface` declarations become real type nodes.
 #[test]
-fn java_enum_and_annotation_declarations_are_type_nodes() {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn java_enum_and_annotation_declarations_are_type_nodes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmp = tempfile::tempdir()?;
     let source = tmp.path().join("TypeDeclarations.java");
     std::fs::write(
         &source,
@@ -819,8 +821,7 @@ fn java_enum_and_annotation_declarations_are_type_nodes() {
          @interface Audited {}\n\
          class Order { PaymentStatus status; }\n\
          @Audited class CheckoutService {}\n",
-    )
-    .expect("write");
+    )?;
     let result = extract_java(&source);
     let contains = edge_label_pairs(&result, "contains", None);
     assert!(
@@ -848,6 +849,7 @@ fn java_enum_and_annotation_declarations_are_type_nodes() {
             .unwrap_or_else(|| panic!("no def node for {label}"));
         assert_eq!(def.source_file, sf, "{label} must be a source-backed def");
     }
+    Ok(())
 }
 
 #[test]

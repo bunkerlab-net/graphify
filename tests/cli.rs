@@ -602,8 +602,8 @@ fn export_graphml_writes_file() {
 /// Ports `test_explain_cli.py::test_explain_source_file_path_prefers_file_level_node`
 /// (#1503): a source-file path resolves to the L1 file node, not a symbol in it.
 #[test]
-fn explain_source_file_path_prefers_file_level_node() {
-    let dir = tempfile::tempdir().unwrap();
+fn explain_source_file_path_prefers_file_level_node() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
     let graph_path = dir.path().join("graph.json");
     let graph = r#"{
         "directed": false, "multigraph": false, "graph": {},
@@ -615,7 +615,7 @@ fn explain_source_file_path_prefers_file_level_node() {
             {"source": "example_route", "target": "example_route_get", "relation": "contains", "confidence": "EXTRACTED"}
         ]
     }"#;
-    fs::write(&graph_path, graph).unwrap();
+    fs::write(&graph_path, graph)?;
     let assert = cli()
         .arg("explain")
         .arg("app/api/example/route.ts")
@@ -636,13 +636,14 @@ fn explain_source_file_path_prefers_file_level_node() {
         "got: {stdout}"
     );
     assert!(!stdout.contains("Node: GET()"), "got: {stdout}");
+    Ok(())
 }
 
 /// Ports `test_affected_cli.py::test_affected_cli_source_file_path_uses_file_level_node`
 /// (#1503): `affected <path>` seeds the L1 file node and reports its dependants.
 #[test]
-fn affected_source_file_path_uses_file_level_node() {
-    let dir = tempfile::tempdir().unwrap();
+fn affected_source_file_path_uses_file_level_node() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
     let graph_path = dir.path().join("graph.json");
     let graph = r#"{
         "directed": true, "multigraph": false, "graph": {},
@@ -655,7 +656,7 @@ fn affected_source_file_path_uses_file_level_node() {
             {"source": "consumer", "target": "example_route", "relation": "imports_from", "context": "import", "confidence": "EXTRACTED"}
         ]
     }"#;
-    fs::write(&graph_path, graph).unwrap();
+    fs::write(&graph_path, graph)?;
     let assert = cli()
         .arg("affected")
         .arg("app/api/example/route.ts")
@@ -671,4 +672,5 @@ fn affected_source_file_path_uses_file_level_node() {
     assert!(stdout.contains("consumer.ts"), "got: {stdout}");
     assert!(stdout.contains("imports_from"), "got: {stdout}");
     assert!(!stdout.contains("No unique node match"), "got: {stdout}");
+    Ok(())
 }

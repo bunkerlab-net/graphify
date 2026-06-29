@@ -67,7 +67,9 @@ pub(crate) struct ExtractOptions<'a> {
 ///
 /// Ports `__main__.py:2397` (`elif cmd == "extract"`).
 // CLI entry point: linear orchestration (detect → AST → semantic → build →
-// cluster → analyze → export) reads clearer as one flow than split helpers.
+// cluster → write graph.json → analyze → HTML viz) reads clearer as one flow
+// than split helpers. graph.json is written before the analysis phase so the
+// core artifact always lands even if analysis is skipped (--no-cluster).
 #[allow(clippy::too_many_lines)]
 pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     let ExtractOptions {

@@ -118,6 +118,13 @@ pub(super) fn resolve_csharp_type_references(
         let key = match ns_list.as_slice() {
             [] => Some(csharp_key("", &n.label)),
             [ns] => Some(csharp_key(ns, &n.label)),
+            // Multiple namespace blocks in one file (sibling OR nested, e.g.
+            // `namespace A { namespace B { class T } }`) are flattened to a name
+            // list that can't say which namespace a def belongs to, so registration
+            // is skipped — byte-identical to graphify-py `csharp.py` (`# len > 1:
+            // skip (deferred)`). Composing `A.B.T` here would resolve types
+            // graphify-py leaves dangling and break byte-identical output; deferred
+            // upstream pending source-range namespace tracking.
             _ => None,
         };
         if let Some(key) = key {

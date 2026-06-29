@@ -71,14 +71,24 @@ fn sync_xaml_cache_generation() {
     });
 }
 
+/// RAII guard that restores [`XAML_ACTIVE_EXTRACT_ROOT`] to its prior value on
+/// drop — including during unwind — so a panic can't leak the temporary root.
+struct XamlRootGuard(Option<PathBuf>);
+impl Drop for XamlRootGuard {
+    fn drop(&mut self) {
+        XAML_ACTIVE_EXTRACT_ROOT.with(|c| *c.borrow_mut() = self.0.take());
+    }
+}
+
 /// Run `f` with the XAML extract-root boundary set to `root` (resolved), then
-/// restore the previous value. Mirrors Python `_safe_extract_with_xaml_root`.
+/// restore the previous value — even if `f` unwinds. Mirrors Python
+/// `_safe_extract_with_xaml_root`'s `try/finally`: a panic in `f` must not leak
+/// the temporary root into later work on a reused rayon worker thread.
 pub(crate) fn with_xaml_extract_root<R>(root: Option<&Path>, f: impl FnOnce() -> R) -> R {
     let resolved = root.map(|r| r.canonicalize().unwrap_or_else(|_| r.to_path_buf()));
     let prev = XAML_ACTIVE_EXTRACT_ROOT.with(|c| c.replace(resolved));
-    let result = f();
-    XAML_ACTIVE_EXTRACT_ROOT.with(|c| *c.borrow_mut() = prev);
-    result
+    let _guard = XamlRootGuard(prev);
+    f()
 }
 
 fn active_extract_root() -> Option<PathBuf> {

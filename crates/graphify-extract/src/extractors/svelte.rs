@@ -391,6 +391,7 @@ static VUE_SCRIPT_LANG_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Blank every char outside `<script>` bodies (keeping `\r`/`\n` so line numbers
 /// stay accurate); returns `(masked_source, first_block_lang)`. Mirrors Python
 /// `_vue_mask_non_script`.
+#[must_use]
 fn vue_mask_non_script(src: &str) -> (String, Option<String>) {
     fn blank(s: &str) -> String {
         s.chars()

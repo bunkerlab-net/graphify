@@ -143,8 +143,10 @@ pub(crate) enum Command {
 
     /// (Re)name communities with the configured LLM backend, regenerate report.
     ///
-    /// Equivalent to `cluster-only` but always refreshes community names even
-    /// when a `.graphify_labels.json` already exists.
+    /// Equivalent to `cluster-only` but refreshes community names even when a
+    /// `.graphify_labels.json` already exists — unless `--missing-only` is set,
+    /// which renames only unnamed or `Community N` placeholder communities and
+    /// preserves the rest.
     Label {
         path: PathBuf,
         #[arg(long = "no-viz")]

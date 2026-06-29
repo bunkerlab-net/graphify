@@ -183,6 +183,20 @@ pub(crate) fn cmd_cluster_only(
             }
         } else if opts.no_label && !opts.force_relabel {
             graphify_llm::placeholder_community_labels(&communities)
+        } else if opts.missing_only
+            && labels_path.exists()
+            && read_existing_labels(&labels_path).is_err()
+        {
+            // Malformed-but-present labels file under `--missing-only`: preserve it
+            // (don't relabel + overwrite), matching the non-`--missing-only` path
+            // above. Degrade to placeholders for this run; the file is left intact.
+            eprintln!(
+                "      warning: could not read {} for --missing-only; using \
+                 placeholders and leaving the existing file untouched",
+                labels_path.display()
+            );
+            skip_label_write = true;
+            graphify_llm::placeholder_community_labels(&communities)
         } else {
             // LLM community naming (#1097). With `--missing-only` (#1481), load any
             // existing labels and name only the communities that are unnamed or hold

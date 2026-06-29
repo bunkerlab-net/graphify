@@ -369,18 +369,21 @@ fn resolve_seed_source_file_trailing_slash_parity() {
     let payload = json!({
         "directed": true, "multigraph": false, "graph": {},
         "nodes": [
-            {"id": "get", "label": "GET()",
+            {"id": "example_route_get", "label": "GET()",
              "source_file": "app/api/example/route.ts", "source_location": "L42"},
-            {"id": "file", "label": "route.ts",
+            {"id": "example_route", "label": "route.ts",
              "source_file": "app/api/example/route.ts", "source_location": "L1"},
         ],
         "links": [],
     });
     fs::write(&path, payload.to_string()).expect("write");
+    // `load_graph` re-keys the L1 file node to its full repo-relative path id
+    // (#1504): `example_route` → `app_api_example_route`. The trailing slash must
+    // not change the match — resolve_seed still prefers that re-keyed file node.
     let graph = load_graph(&path).expect("load");
     assert_eq!(
         resolve_seed(&graph, "app/api/example/route.ts/"),
-        Some("file".to_owned())
+        Some("app_api_example_route".to_owned())
     );
 }
 
