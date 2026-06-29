@@ -274,7 +274,6 @@ pub(crate) fn cmd_cluster_only(
         )?;
         eprintln!("      wrote {}", labels_path.display());
     }
-    stages.mark("export");
 
     let html_path = graph_path.with_file_name("graph.html");
     if no_viz {
@@ -299,6 +298,10 @@ pub(crate) fn cmd_cluster_only(
             }
         }
     }
+
+    // Mark `export` after the HTML render so the stage spans it, matching
+    // graphify-py `__main__.py:3555` (`to_html(...)` then `stages.mark("export")`).
+    stages.mark("export");
     stages.total();
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
     Ok(())

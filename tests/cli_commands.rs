@@ -895,7 +895,7 @@ fn cluster_only_timing_emits_stage_lines() -> Result<(), Box<dyn std::error::Err
         .arg("--timing")
         .assert()
         .success()
-        .stderr(contains("[graphify timing]").and(contains("total:")));
+        .stderr(contains("[graphify timing] label:").and(contains("total:")));
     Ok(())
 }
 
@@ -922,10 +922,12 @@ fn label_missing_only_preserves_existing_labels() -> Result<(), Box<dyn std::err
         .arg("--missing-only")
         .assert()
         .success();
-    let labels = fs::read_to_string(out.join(".graphify_labels.json"))?;
-    assert!(
-        labels.contains("Authentication"),
-        "curated label must survive --missing-only: {labels}"
+    let labels: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join(".graphify_labels.json"))?)?;
+    assert_eq!(
+        labels["0"].as_str(),
+        Some("Authentication"),
+        "community 0 must keep its curated label under --missing-only: {labels}"
     );
     Ok(())
 }
@@ -957,10 +959,12 @@ fn cluster_only_no_label_missing_only_preserves_existing_labels()
         .arg("--missing-only")
         .assert()
         .success();
-    let labels = fs::read_to_string(out.join(".graphify_labels.json"))?;
-    assert!(
-        labels.contains("Authentication"),
-        "curated label must survive --no-label --missing-only: {labels}"
+    let labels: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join(".graphify_labels.json"))?)?;
+    assert_eq!(
+        labels["0"].as_str(),
+        Some("Authentication"),
+        "community 0 must keep its curated label under --no-label --missing-only: {labels}"
     );
     Ok(())
 }
