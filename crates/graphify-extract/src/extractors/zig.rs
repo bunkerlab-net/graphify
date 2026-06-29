@@ -70,6 +70,7 @@ pub fn extract_zig(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();
@@ -191,6 +192,7 @@ fn walk_zig(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -247,6 +249,7 @@ fn walk_zig(
                                 source_file: str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
+                                origin_file: None,
                             });
                         }
                         edges.push(Edge {
@@ -283,6 +286,7 @@ fn walk_zig(
                                 source_file: str_path.to_string(),
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
+                                origin_file: None,
                             });
                         }
                         edges.push(Edge {

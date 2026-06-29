@@ -53,8 +53,8 @@ fn emit_function_reference_edges(
 ) {
     use super::references::{
         PHP_TYPE_NODE_KINDS, RefRole, c_collect_type_refs, cpp_collect_type_refs,
-        csharp_attribute_names, csharp_collect_type_refs, java_collect_type_refs,
-        java_method_annotation_names, kotlin_collect_type_refs, kotlin_function_return_type_node,
+        csharp_attribute_names, csharp_collect_type_refs, java_annotation_names,
+        java_collect_type_refs, kotlin_collect_type_refs, kotlin_function_return_type_node,
         php_collect_type_refs, php_method_return_type_node, python_collect_param_refs,
         python_collect_type_refs, scala_collect_type_refs, swift_collect_type_refs,
         ts_collect_type_refs,
@@ -174,7 +174,7 @@ fn emit_function_reference_edges(
                     emit_ref(ctx, &name, role.into_context("return_type"));
                 }
             }
-            for anno_name in java_method_annotation_names(node, source) {
+            for anno_name in java_annotation_names(node, source) {
                 emit_ref(ctx, &anno_name, "attribute");
             }
         }
@@ -367,8 +367,7 @@ fn emit_member_type_refs(
     let mut refs: Vec<(String, super::references::RefRole)> = Vec::new();
     collect(type_node, source, false, &mut refs);
     for (name, role) in refs {
-        let target =
-            ensure_named_node(&name, line, ctx.stem, ctx.str_path, ctx.nodes, ctx.seen_ids);
+        let target = ensure_named_node(&name, ctx.stem, ctx.str_path, ctx.nodes, ctx.seen_ids);
         if target != parent_nid {
             add_edge(
                 parent_nid,
@@ -460,6 +459,7 @@ pub(super) fn walk<'tree>(
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: Some(metadata),
+                origin_file: None,
             });
         }
         // `export_statement` may also wrap a declaration body
@@ -528,6 +528,7 @@ pub(super) fn walk<'tree>(
                                     source_file: String::new(),
                                     source_location: None,
                                     metadata: None,
+                                    origin_file: Some(str_path.to_string()),
                                 });
                                 ctx.seen_ids.insert(bn.clone());
                             }
@@ -557,6 +558,21 @@ pub(super) fn walk<'tree>(
         // Java extends/implements
         if config.lang_id == LangId::Java {
             emit_java_inheritance(ctx, node, source, &class_nid, t, line);
+            // Type-level annotations (`@Service`, `@Entity`) -> references (#1487).
+            for anno_name in super::references::java_annotation_names(node, source) {
+                let tgt = ensure_named_node(&anno_name, stem, str_path, ctx.nodes, ctx.seen_ids);
+                if tgt != class_nid {
+                    add_edge(
+                        &class_nid,
+                        &tgt,
+                        "references",
+                        line,
+                        str_path,
+                        Some("attribute"),
+                        ctx.edges,
+                    );
+                }
+            }
         }
 
         // C++ base_class_clause
@@ -627,7 +643,7 @@ pub(super) fn walk<'tree>(
             && !type_name.is_empty()
         {
             let line = node.start_position().row as u32 + 1;
-            let tgt = ensure_named_node(&type_name, line, stem, str_path, ctx.nodes, ctx.seen_ids);
+            let tgt = ensure_named_node(&type_name, stem, str_path, ctx.nodes, ctx.seen_ids);
             let e = Edge {
                 external: false,
                 source: parent.to_string(),
@@ -641,6 +657,27 @@ pub(super) fn walk<'tree>(
                 confidence_score: None,
             };
             ctx.edges.push(e);
+        }
+        return;
+    }
+
+    // ── Java field_declaration ────────────────────────────────────────────────
+    if config.lang_id == LangId::Java
+        && t == "field_declaration"
+        && let Some(parent) = parent_class_nid
+    {
+        // Field types (incl. the `generic_arg` element of `List<Handler>`) ->
+        // references; primitives are skipped by `java_collect_type_refs` (#1485).
+        if let Some(type_node) = node.child_by_field_name("type") {
+            let line = node.start_position().row as u32 + 1;
+            emit_member_type_refs(
+                ctx,
+                type_node,
+                parent,
+                line,
+                source,
+                super::references::java_collect_type_refs,
+            );
         }
         return;
     }

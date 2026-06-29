@@ -699,3 +699,120 @@ fn python_qualified_call_ambiguous_class_bails() {
         "ambiguous class name must not resolve: {resolved:?}"
     );
 }
+
+#[test]
+fn imported_type_stubs_do_not_collide_across_source_files() {
+    // #1462: imported stdlib/type stubs with the same label are distinct uses
+    // when there is no single project definition to rewire onto. They need the
+    // referencing file as a disambiguator while still keeping `source_file` empty
+    // so a real project definition can still be rewired by #1402. Mirrors
+    // test_extract.py::test_imported_type_stubs_do_not_collide_across_source_files.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pkg = tmp.path().join("pkg");
+    fs::create_dir_all(&pkg).expect("create_dir_all");
+    fs::write(
+        pkg.join("a.py"),
+        "from pathlib import Path\ndef use_a(p: Path):\n    return p\n",
+    )
+    .expect("test invariant");
+    fs::write(
+        pkg.join("b.py"),
+        "from pathlib import Path\ndef use_b(p: Path):\n    return p\n",
+    )
+    .expect("test invariant");
+
+    let result = extract(&[pkg.join("a.py"), pkg.join("b.py")], Some(tmp.path()));
+    let path_nodes: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| lookup_str(n, "label").as_deref() == Some("Path"))
+        .collect();
+
+    assert_eq!(path_nodes.len(), 2, "expected two distinct Path stubs");
+    let ids: std::collections::HashSet<_> = path_nodes
+        .iter()
+        .filter_map(|n| lookup_str(n, "id"))
+        .collect();
+    assert_eq!(ids.len(), 2, "Path stubs must have distinct ids");
+    assert!(
+        path_nodes
+            .iter()
+            .all(|n| lookup_str(n, "source_file").unwrap_or_default().is_empty()),
+        "Path stubs must stay sourceless so a real definition can be rewired on"
+    );
+    // The new disambiguator (#1462): the two stubs are kept distinct by their
+    // `origin_file` (the referencing file), so assert those directly.
+    let origins: std::collections::HashSet<String> = path_nodes
+        .iter()
+        .filter_map(|n| lookup_str(n, "origin_file"))
+        .collect();
+    assert_eq!(
+        origins.len(),
+        2,
+        "Path stubs must carry distinct origin_file: {origins:?}"
+    );
+    assert!(origins.iter().any(|o| o.ends_with("a.py")), "{origins:?}");
+    assert!(origins.iter().any(|o| o.ends_with("b.py")), "{origins:?}");
+}
+
+#[test]
+fn go_cross_file_type_refs_resolve_to_single_node() {
+    // #1500: same-package Go references to a type defined once must resolve to the
+    // single canonical node, not 1+N phantom duplicates with the referencing
+    // file's path baked into the id. Mirrors
+    // test_extract.py::test_go_cross_file_type_refs_resolve_to_single_node.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pkg = tmp.path().join("pkg");
+    fs::create_dir_all(&pkg).expect("create_dir_all");
+    fs::write(
+        pkg.join("thing.go"),
+        "package pkg\n\ntype Thing struct{}\n\nfunc (t Thing) Run() int { return 1 }\n",
+    )
+    .expect("test invariant");
+    fs::write(
+        pkg.join("a.go"),
+        "package pkg\n\nfunc UseA(obj Thing) Thing { return obj }\n",
+    )
+    .expect("test invariant");
+    fs::write(
+        pkg.join("b.go"),
+        "package pkg\n\nfunc UseB(obj Thing) Thing { return obj }\n",
+    )
+    .expect("test invariant");
+
+    let result = extract(
+        &[pkg.join("thing.go"), pkg.join("a.go"), pkg.join("b.go")],
+        Some(tmp.path()),
+    );
+    let thing_ids: Vec<String> = result
+        .nodes
+        .iter()
+        .filter(|n| lookup_str(n, "label").as_deref() == Some("Thing"))
+        .filter_map(|n| lookup_str(n, "id"))
+        .collect();
+
+    assert_eq!(
+        thing_ids.len(),
+        1,
+        "expected one canonical Thing node, got {thing_ids:?}"
+    );
+    // The phantom signature is the referencing file's path (with .go extension)
+    // baked into the id — must not appear.
+    assert!(
+        !thing_ids[0].contains("_go"),
+        "phantom path-in-id: {}",
+        thing_ids[0]
+    );
+    // Stronger than the substring guard: the surviving node must be the real
+    // definition from thing.go, not a stub keyed off a referencing file (a.go/b.go).
+    let thing_source = result
+        .nodes
+        .iter()
+        .find(|n| lookup_str(n, "label").as_deref() == Some("Thing"))
+        .and_then(|n| lookup_str(n, "source_file"))
+        .unwrap_or_default();
+    assert!(
+        thing_source.ends_with("thing.go"),
+        "Thing must be the thing.go definition, got {thing_source:?}"
+    );
+}

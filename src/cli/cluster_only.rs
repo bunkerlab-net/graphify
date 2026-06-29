@@ -7,6 +7,9 @@ use crate::cli::{build_analysis, load_graph};
 
 /// Community-labelling knobs for [`cmd_cluster_only`].
 #[derive(Clone, Copy, Default)]
+// Each field is an independent CLI flag (one `--flag` apiece); grouping them
+// into enums would be artificial — this is the options-bag the lint exempts.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct LabelOptions<'a> {
     /// Keep `Community N` placeholders instead of LLM-naming (the `--no-label` flag).
     pub no_label: bool,
@@ -20,6 +23,11 @@ pub(crate) struct LabelOptions<'a> {
     pub max_concurrency: usize,
     /// Communities per LLM labeling call (#1390).
     pub batch_size: usize,
+    /// Print per-stage wall-clock timings to stderr (#1490).
+    pub timing: bool,
+    /// Only (re)name communities that are unnamed or hold a `Community N`
+    /// placeholder, preserving existing labels (#1481).
+    pub missing_only: bool,
 }
 
 /// Rerun community detection on an existing graph.json and regenerate the report.
@@ -41,6 +49,7 @@ pub(crate) fn cmd_cluster_only(
     opts: LabelOptions<'_>,
 ) -> Result<()> {
     let start = std::time::Instant::now();
+    let mut stages = super::timer::StageTimer::new(opts.timing);
     let graph_path = graph.map_or_else(
         || path.join(crate::cli::graphify_out_dir()).join("graph.json"),
         std::path::Path::to_path_buf,
@@ -52,6 +61,7 @@ pub(crate) fn cmd_cluster_only(
         g.node_count(),
         g.edge_count()
     );
+    stages.mark("load");
 
     let hub_desc = exclude_hubs
         .map(|p| format!(", exclude-hubs={p}"))
@@ -81,6 +91,7 @@ pub(crate) fn cmd_cluster_only(
         communities.len(),
         cluster_start.elapsed().as_secs_f64()
     );
+    stages.mark("cluster");
 
     // Mirror the watch/update path (#822, #1028): map new community IDs back to
     // the prior ones by node overlap so an existing .graphify_labels.json keeps
@@ -131,13 +142,15 @@ pub(crate) fn cmd_cluster_only(
     let analysis_path = graph_path.with_file_name(".graphify_analysis.json");
     std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
     eprintln!("      wrote {}", analysis_path.display());
+    stages.mark("analyze");
 
     // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
     // find community labels. Three paths, checked in this order:
-    //   1. labels file exists & not forced → load it (preserve user edits, fill
-    //      any gaps with placeholders). This runs whether or not `--no-label` is
-    //      set: an existing file already means no LLM call, so `--no-label` is a
-    //      harmless no-op here — crucially, it must NOT wipe hand-curated labels
+    //   1. labels file exists & not forced & we are NOT LLM-naming gaps — i.e.
+    //      not `--missing-only`, OR `--no-label` (which forbids any LLM call,
+    //      so `--no-label --missing-only` lands here too) → load it (preserve
+    //      user edits, fill any gaps with placeholders). Crucially this must
+    //      NOT wipe hand-curated labels
     //      to placeholders. A malformed/unreadable file is NOT overwritten — we
     //      warn and fall back to placeholders for this run so the file isn't
     //      silently clobbered (divergence from Python `__main__.py:2418-2448`,
@@ -148,44 +161,96 @@ pub(crate) fn cmd_cluster_only(
     //      to placeholders on no-backend/error.
     let labels_path = graph_path.with_file_name(".graphify_labels.json");
     let mut skip_label_write = false;
-    let labels: indexmap::IndexMap<i64, String> = if labels_path.exists() && !opts.force_relabel {
-        match read_existing_labels(&labels_path) {
-            Ok(mut existing) => {
-                for cid in communities.keys() {
+    let labels: indexmap::IndexMap<i64, String> =
+        if labels_path.exists() && !opts.force_relabel && (!opts.missing_only || opts.no_label) {
+            match read_existing_labels(&labels_path) {
+                Ok(mut existing) => {
+                    for cid in communities.keys() {
+                        existing
+                            .entry(*cid)
+                            .or_insert_with(|| format!("Community {cid}"));
+                    }
                     existing
+                }
+                Err(e) => {
+                    eprintln!(
+                        "      warning: could not read {} ({e}); using placeholders and \
+                     leaving the existing file untouched",
+                        labels_path.display()
+                    );
+                    skip_label_write = true;
+                    graphify_llm::placeholder_community_labels(&communities)
+                }
+            }
+        } else if opts.no_label && !opts.force_relabel {
+            graphify_llm::placeholder_community_labels(&communities)
+        } else if opts.missing_only
+            && labels_path.exists()
+            && read_existing_labels(&labels_path).is_err()
+        {
+            // Malformed-but-present labels file under `--missing-only`: preserve it
+            // (don't relabel + overwrite), matching the non-`--missing-only` path
+            // above. Degrade to placeholders for this run; the file is left intact.
+            eprintln!(
+                "      warning: could not read {} for --missing-only; using \
+                 placeholders and leaving the existing file untouched",
+                labels_path.display()
+            );
+            skip_label_write = true;
+            graphify_llm::placeholder_community_labels(&communities)
+        } else {
+            // LLM community naming (#1097). With `--missing-only` (#1481), load any
+            // existing labels and name only the communities that are unnamed or hold
+            // a `Community N` placeholder, preserving the rest.
+            let existing: indexmap::IndexMap<i64, String> = if opts.missing_only {
+                read_existing_labels(&labels_path).unwrap_or_default()
+            } else {
+                indexmap::IndexMap::new()
+            };
+            let to_label: indexmap::IndexMap<i64, Vec<String>> = if opts.missing_only {
+                communities
+                    .iter()
+                    .filter(|(cid, _)| {
+                        existing
+                            .get(*cid)
+                            .is_none_or(|name| is_placeholder_label(name))
+                    })
+                    .map(|(&cid, members)| (cid, members.clone()))
+                    .collect()
+            } else {
+                communities.clone()
+            };
+            if to_label.is_empty() {
+                eprintln!("      all communities already named (--missing-only)");
+                existing
+            } else {
+                eprintln!("Labeling communities...");
+                let node_labels = node_label_map(&g);
+                let gods = god_node_ids(&g);
+                let (mut labels, _source) = graphify_llm::generate_community_labels(
+                    &to_label,
+                    &node_labels,
+                    &gods,
+                    opts.backend,
+                    opts.model,
+                    false, // quiet
+                    opts.max_concurrency,
+                    opts.batch_size,
+                );
+                // Keep existing good labels for communities we skipped, then backfill
+                // any still-missing community with a placeholder.
+                for (cid, name) in existing {
+                    labels.entry(cid).or_insert(name);
+                }
+                for cid in communities.keys() {
+                    labels
                         .entry(*cid)
                         .or_insert_with(|| format!("Community {cid}"));
                 }
-                existing
+                labels
             }
-            Err(e) => {
-                eprintln!(
-                    "      warning: could not read {} ({e}); using placeholders and \
-                     leaving the existing file untouched",
-                    labels_path.display()
-                );
-                skip_label_write = true;
-                graphify_llm::placeholder_community_labels(&communities)
-            }
-        }
-    } else if opts.no_label && !opts.force_relabel {
-        graphify_llm::placeholder_community_labels(&communities)
-    } else {
-        eprintln!("Labeling communities...");
-        let node_labels = node_label_map(&g);
-        let gods = god_node_ids(&g);
-        let (labels, _source) = graphify_llm::generate_community_labels(
-            &communities,
-            &node_labels,
-            &gods,
-            opts.backend,
-            opts.model,
-            false, // quiet
-            opts.max_concurrency,
-            opts.batch_size,
-        );
-        labels
-    };
+        };
+    stages.mark("label");
 
     // Refresh graph.json so node community attrs match the new partition and
     // carry the human community_name labels resolved above. Mirrors Python
@@ -233,8 +298,23 @@ pub(crate) fn cmd_cluster_only(
             }
         }
     }
+
+    // Mark `export` after the HTML render so the stage spans it, matching
+    // graphify-py `__main__.py:3555` (`to_html(...)` then `stages.mark("export")`).
+    stages.mark("export");
+    stages.total();
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
     Ok(())
+}
+
+/// True when a community label is absent or still a `Community N` placeholder,
+/// so `--missing-only` (#1481) should (re)name it.
+#[must_use]
+fn is_placeholder_label(name: &str) -> bool {
+    name.strip_prefix("Community ")
+        .map_or(name.is_empty(), |rest| {
+            !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// Read an existing `.graphify_labels.json` into a `cid → name` map.

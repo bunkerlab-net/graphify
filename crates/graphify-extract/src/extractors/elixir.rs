@@ -103,6 +103,7 @@ pub fn extract_elixir(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();
@@ -271,6 +272,7 @@ fn walk_elixir(
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             edges.push(Edge {
@@ -341,6 +343,7 @@ fn walk_elixir(
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             let relation = if parent_module_nid.is_some() {

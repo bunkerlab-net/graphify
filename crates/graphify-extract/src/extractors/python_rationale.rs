@@ -70,6 +70,7 @@ pub(super) fn extract_python_rationale(path: &Path, result: &mut FileResult) {
                 source_file: str_path.clone(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         edges.push(Edge {

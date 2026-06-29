@@ -29,15 +29,15 @@ fn make_id_no_leading_trailing_underscores() {
     assert!(!result.ends_with('_'));
 }
 
-/// A file under a subdirectory is qualified by its parent directory name so
-/// `auth/models.py` and `models.py` produce distinct stems.
+/// A file under a subdirectory keeps its full repo-relative path (extension
+/// dropped); `make_id` collapses the separators to `_` later (#1504).
 #[test]
-fn file_stem_qualifies_with_parent() {
-    let p = std::path::PathBuf::from("/project/auth/models.py");
-    assert_eq!(file_stem(&p), "auth.models");
+fn file_stem_full_relative_path() {
+    let p = std::path::PathBuf::from("auth/models.py");
+    assert_eq!(file_stem(&p), "auth/models");
 }
 
-/// A root-level file gets no parent prefix.
+/// A root-level file gets a bare stem (no directory prefix).
 #[test]
 fn file_stem_root_level() {
     let p = std::path::PathBuf::from("models.py");

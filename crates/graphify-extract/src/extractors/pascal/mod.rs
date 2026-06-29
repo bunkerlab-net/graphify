@@ -448,6 +448,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
     };
@@ -573,6 +574,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{line}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             edges.push(make_edge(

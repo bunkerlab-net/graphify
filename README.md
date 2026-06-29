@@ -47,11 +47,14 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
 
 - **26+ languages**, parsed with tree-sitter: Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, C#, Ruby, PHP,
   Swift, Kotlin, Scala, Bash, Lua, Elixir, Haskell, OCaml, Zig, Solidity, R, Julia, HTML, CSS, SQL, …
-  Also reads .NET project files (`.sln`, `.csproj`, `.fsproj`, `.vbproj`) and Razor components
+  Vue / Svelte / Astro single-file components (`.vue`, `.svelte`, `.astro`) are parsed through their `<script>` blocks (#1468).
+  Also reads .NET project files (`.sln`, `.csproj`, `.fsproj`, `.vbproj`), Razor components
   (`.razor`, `.cshtml`) for package, project-reference, target-framework, and `@code` extraction,
+  and WPF/UWP XAML (`.xaml`) for `x:Class`, named controls, `{Binding}` paths, and ViewModel /
+  code-behind resolution (#1460),
   Verilog/SystemVerilog (`.v`, `.sv`, `.svh`), BYOND DreamMaker
   (`.dm`, `.dme` source plus `.dmi` icon sheets, `.dmm` maps, and `.dmf` interface forms),
-  CUDA (`.cu`, `.cuh`) routed through the C++ extractor,
+  CUDA (`.cu`, `.cuh`) and Metal (`.metal`) routed through the C++ extractor (#1480),
   and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var _names_ (values are never read).

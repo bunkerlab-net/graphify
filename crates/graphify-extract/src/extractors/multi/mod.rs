@@ -13,25 +13,28 @@
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
 mod cache;
+mod csharp;
 mod java;
 mod js;
 mod python;
 mod swift;
 
 use crate::extractors::{
-    extract_apex, extract_astro, extract_bash, extract_blade, extract_c, extract_cpp,
-    extract_csharp, extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf,
-    extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go, extract_groovy,
-    extract_java, extract_js, extract_json, extract_julia, extract_kotlin, extract_lazarus_form,
-    extract_lazarus_package, extract_lua, extract_markdown, extract_mcp_config, extract_objc,
-    extract_package_manifest, extract_pascal, extract_php, extract_powershell,
-    extract_powershell_manifest, extract_python, extract_razor, extract_ruby, extract_rust,
-    extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte, extract_swift,
-    extract_terraform, extract_verilog, extract_zig, is_mcp_config_path,
+    clear_xaml_csharp_class_cache, extract_apex, extract_astro, extract_bash, extract_blade,
+    extract_c, extract_cpp, extract_csharp, extract_csproj, extract_dart, extract_delphi_form,
+    extract_dm, extract_dmf, extract_dmi, extract_dmm, extract_elixir, extract_fortran, extract_go,
+    extract_groovy, extract_java, extract_js, extract_json, extract_julia, extract_kotlin,
+    extract_lazarus_form, extract_lazarus_package, extract_lua, extract_markdown,
+    extract_mcp_config, extract_objc, extract_package_manifest, extract_pascal, extract_php,
+    extract_powershell, extract_powershell_manifest, extract_python, extract_razor, extract_ruby,
+    extract_rust, extract_scala, extract_sln, extract_slnx, extract_sql, extract_svelte,
+    extract_swift, extract_terraform, extract_verilog, extract_vue, extract_xaml, extract_zig,
+    is_mcp_config_path, with_xaml_extract_root,
 };
 use crate::ids::make_id1;
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
 use cache::extract_single_file;
+use csharp::resolve_csharp_type_references;
 use java::{resolve_cross_file_java_imports, resolve_java_type_references};
 use js::{resolve_js_default_imports, resolve_js_reexport_imports};
 use python::{
@@ -48,6 +51,29 @@ const PARALLEL_THRESHOLD: usize = 20;
 // ── Dispatch table ────────────────────────────────────────────────────────────
 
 type ExtractFn = fn(&Path) -> FileResult;
+
+/// ObjC-only directives — illegal in C/C++, so finding one in a `.h` is a
+/// near-zero-false-positive signal the header is Objective-C (#1475). `@property`
+/// is excluded: it doubles as a Doxygen command and only ever appears inside an
+/// @interface/@protocol anyway, which the stronger directives already cover.
+const OBJC_HEADER_MARKERS: [&str; 4] = ["@interface", "@protocol", "@implementation", "@import"];
+
+/// Whether a `.h` file is Objective-C rather than C/C++ (#1475). Sniffs the
+/// first 256 KiB for an ObjC-only directive; like Python `_is_objc_header` but
+/// reads only the inspected prefix rather than loading a whole (possibly huge,
+/// generated) header into memory.
+fn is_objc_header(path: &Path) -> bool {
+    use std::io::Read as _;
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = Vec::new();
+    if file.take(256 * 1024).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&head);
+    OBJC_HEADER_MARKERS.iter().any(|m| text.contains(m))
+}
 
 /// Return the per-language extractor function for a given file path, or `None` for unknown types.
 ///
@@ -73,15 +99,22 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         return Some(extract_package_manifest);
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    // `.h` is C/C++/ObjC-ambiguous; route Objective-C headers to extract_objc
+    // (the extension map below sends `.h` to extract_c, which can't read
+    // @interface/@protocol/@property/methods). Mirrors Python `_is_objc_header`.
+    if ext == "h" && is_objc_header(path) {
+        return Some(extract_objc);
+    }
     match ext {
         "py" => Some(extract_python),
-        "js" | "jsx" | "mjs" | "ts" | "tsx" | "vue" => Some(extract_js),
+        "js" | "jsx" | "mjs" | "ts" | "tsx" => Some(extract_js),
+        "vue" => Some(extract_vue),
         "go" => Some(extract_go),
         "rs" => Some(extract_rust),
         "java" => Some(extract_java),
         "groovy" | "gradle" => Some(extract_groovy),
         "c" | "h" => Some(extract_c),
-        "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" => Some(extract_cpp),
+        "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" | "metal" => Some(extract_cpp),
         "rb" => Some(extract_ruby),
         "cs" => Some(extract_csharp),
         "kt" | "kts" => Some(extract_kotlin),
@@ -119,6 +152,7 @@ fn get_extractor(path: &Path) -> Option<ExtractFn> {
         "cls" | "trigger" => Some(extract_apex),
         "tf" | "tfvars" | "hcl" => Some(extract_terraform),
         "csproj" | "fsproj" | "vbproj" => Some(extract_csproj),
+        "xaml" => Some(extract_xaml),
         "razor" | "cshtml" => Some(extract_razor),
         _ => None,
     }
@@ -175,6 +209,9 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // (e.g. a new package added) or during `watch`; clear the cache so each run
     // re-scans. Mirrors Python `extract()`'s `_WORKSPACE_PACKAGE_CACHE.clear()`.
     crate::workspace::clear_workspace_cache();
+    // Mirror Python `extract()`'s `_XAML_CSHARP_CLASS_CACHE.clear()` so a repeated
+    // in-process run re-scans `.cs` ViewModels instead of serving stale members.
+    clear_xaml_csharp_class_cache();
 
     // Infer common root for ID relativisation
     let root: PathBuf = {
@@ -424,6 +461,18 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         resolve_java_type_references(&java_type_paths, &mut all_nodes, &mut all_edges);
     }
 
+    // Re-point dangling C# inherits/implements/references edges left on shadow
+    // stubs, using each file's `using` directives + enclosing namespace for
+    // exact disambiguation (#1466). Mirrors the Java pass above.
+    let cs_type_paths: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "cs"))
+        .cloned()
+        .collect();
+    if !cs_type_paths.is_empty() {
+        resolve_csharp_type_references(&cs_type_paths, &mut all_nodes, &mut all_edges);
+    }
+
     // Collapse Swift `extension Foo` nodes onto the canonical `class Foo`
     // declaration. Mirrors `_merge_swift_extensions` in graphify-py.
     crate::postprocess::merge_swift_extensions(paths, &mut all_nodes, &mut all_edges);
@@ -595,13 +644,22 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         resolve_python_member_calls(&all_nodes, &mut all_edges, &all_raw_calls);
     }
 
-    // Relativise source_file fields
+    // Relativise source_file (and the #1462 origin_file) so persisted paths are
+    // portable across machines (#555). graphify-py relativizes only source_file
+    // (extract.py), leaking absolute origin_file paths into graph JSON — fix that
+    // determinism gap here too.
     for n in &mut all_nodes {
         let sf_path = PathBuf::from(&n.source_file);
         if sf_path.is_absolute()
             && let Some(rel) = relativise_under_root(&sf_path, &root)
         {
             n.source_file = rel.to_string_lossy().into_owned();
+        }
+        if let Some(of_path) = n.origin_file.as_deref().map(PathBuf::from)
+            && of_path.is_absolute()
+            && let Some(rel) = relativise_under_root(&of_path, &root)
+        {
+            n.origin_file = Some(rel.to_string_lossy().into_owned());
         }
     }
     for e in &mut all_edges {

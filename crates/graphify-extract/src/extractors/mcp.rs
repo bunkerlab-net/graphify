@@ -187,6 +187,7 @@ impl McpBuilder {
             source_file: self.source_file.clone(),
             source_location: Some("L1".to_string()),
             metadata: Some(metadata),
+            origin_file: None,
         });
     }
 

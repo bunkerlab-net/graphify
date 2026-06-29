@@ -46,6 +46,7 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             source_file: str_path.to_string(),
             source_location: Some("L1".to_string()),
             metadata: None,
+            origin_file: None,
         }
     };
 

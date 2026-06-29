@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -67,27 +67,71 @@ pub fn to_wiki(
         .collect();
     let deg_map = build_degree_map(graph);
 
-    let mut count = 0usize;
+    // First pass: assign every article its slug before rendering any body, so the
+    // bodies can link to one another via the resolver (#1444). A link's target is
+    // the on-disk slug, which differs from the label, so it must be known up front.
     let mut used_slugs: IndexSet<String> = IndexSet::new();
+    let mut resolver: HashMap<String, String> = HashMap::new();
+    resolver.insert("index".to_string(), "index".to_string());
+    // Parity dispute (CodeRabbit): `index` is reserved in `resolver` only, NOT in
+    // `used_slugs` — matching graphify-py exactly (wiki.py: `resolver = {"index":
+    // "index"}` with an empty `used_slugs`). An article literally named "index"
+    // reuses the slug in both implementations; reserving it here would diverge
+    // from byte-identical wiki output, so we keep graphify-py's behaviour.
+
+    let mut community_slugs: IndexMap<i64, String> = IndexMap::new();
+    for &cid in filtered.keys() {
+        let label = labels
+            .get(&cid)
+            .cloned()
+            .unwrap_or_else(|| format!("Community {cid}"));
+        let slug = make_unique_slug(&safe_filename(&label), &mut used_slugs);
+        community_slugs.insert(cid, slug.clone());
+        // Parity dispute (CodeRabbit): the resolver is keyed by display label,
+        // mirroring graphify-py `resolver.setdefault(label, slug)`. Duplicate
+        // titles collapse to the first slug in both; keying by node id instead
+        // would diverge from graphify-py's byte-identical links.
+        resolver.entry(label).or_insert(slug);
+    }
+    let mut god_articles: Vec<(String, String)> = Vec::new(); // (node_id, slug)
+    for node_data in god_nodes_data {
+        if graph.contains_node(&node_data.id) {
+            let slug = make_unique_slug(&safe_filename(&node_data.label), &mut used_slugs);
+            resolver
+                .entry(node_data.label.clone())
+                .or_insert(slug.clone());
+            god_articles.push((node_data.id.clone(), slug));
+        }
+    }
+
+    // Second pass: render and write each article with the full resolver in hand.
+    let mut count = 0usize;
     let wiki_ctx = WikiCtx {
         graph,
         labels,
         node_community: &node_community,
         deg_map: &deg_map,
+        resolver: &resolver,
         output_dir,
     };
-    count += write_community_articles(&wiki_ctx, &filtered, cohesion, &mut used_slugs)?;
-    count += write_god_node_articles(&wiki_ctx, god_nodes_data, &mut used_slugs)?;
+    count += write_community_articles(&wiki_ctx, &filtered, cohesion, &community_slugs)?;
+    count += write_god_node_articles(&wiki_ctx, &god_articles)?;
 
+    // Parity dispute (CodeRabbit): `index_md` gets the FULL `god_nodes_data`, not the
+    // filtered `god_articles` set — matching graphify-py `wiki.py:333`. A god
+    // node absent from the graph never entered `resolver` above, so `md_link`
+    // renders it as plain text, NOT a broken link (parity with `_md_link`,
+    // wiki.py:45-47). Filtering here would drop those plain-text catalog
+    // entries and diverge from byte-identical `index.md` output.
     let index = index_md(
         &filtered,
         labels,
         god_nodes_data,
         graph.node_count(),
         graph.edge_count(),
+        &resolver,
     );
-    let index_path: PathBuf = output_dir.join("index.md");
-    std::fs::write(&index_path, index.as_bytes())?;
+    std::fs::write(output_dir.join("index.md"), index.as_bytes())?;
 
     Ok(count)
 }
@@ -139,15 +183,18 @@ fn clear_existing_md_files(output_dir: &Path) -> Result<(), WikiError> {
     Ok(())
 }
 
-/// Generate a fresh, deduplicated filename slug.
+/// Generate a fresh, deduplicated filename slug, folding case in the collision
+/// check so two labels differing only by case (`Parser` vs `parser`) get distinct
+/// files on case-insensitive filesystems while keeping the original-case slug
+/// (#1453).
 fn make_unique_slug(base: &str, used_slugs: &mut IndexSet<String>) -> String {
     let mut slug = base.to_string();
     let mut n = 2usize;
-    while used_slugs.contains(&slug) {
+    while used_slugs.contains(&slug.to_lowercase()) {
         slug = format!("{base}_{n}");
         n += 1;
     }
-    used_slugs.insert(slug.clone());
+    used_slugs.insert(slug.to_lowercase());
     slug
 }
 
@@ -157,6 +204,7 @@ struct WikiCtx<'a> {
     labels: &'a IndexMap<i64, String>,
     node_community: &'a HashMap<String, i64>,
     deg_map: &'a HashMap<&'a str, usize>,
+    resolver: &'a HashMap<String, String>,
     output_dir: &'a Path,
 }
 
@@ -164,7 +212,7 @@ fn write_community_articles(
     ctx: &WikiCtx<'_>,
     filtered: &IndexMap<i64, Vec<String>>,
     cohesion: &IndexMap<i64, f64>,
-    used_slugs: &mut IndexSet<String>,
+    community_slugs: &IndexMap<i64, String>,
 ) -> Result<usize, WikiError> {
     let mut count = 0usize;
     for (&cid, nodes) in filtered {
@@ -182,10 +230,13 @@ fn write_community_articles(
             cohesion: cohesion.get(&cid).copied(),
             node_community: ctx.node_community,
             deg_map: ctx.deg_map,
+            resolver: ctx.resolver,
         });
-        let slug = make_unique_slug(&safe_filename(&label), used_slugs);
-        let path: PathBuf = ctx.output_dir.join(format!("{slug}.md"));
-        std::fs::write(&path, article.as_bytes())?;
+        let slug = &community_slugs[&cid];
+        std::fs::write(
+            ctx.output_dir.join(format!("{slug}.md")),
+            article.as_bytes(),
+        )?;
         count += 1;
     }
     Ok(count)
@@ -193,24 +244,21 @@ fn write_community_articles(
 
 fn write_god_node_articles(
     ctx: &WikiCtx<'_>,
-    god_nodes_data: &[GodNodeData],
-    used_slugs: &mut IndexSet<String>,
+    god_articles: &[(String, String)],
 ) -> Result<usize, WikiError> {
-    let mut count = 0usize;
-    for node_data in god_nodes_data {
-        if ctx.graph.contains_node(&node_data.id) {
-            let article = god_node_article(
-                ctx.graph,
-                &node_data.id,
-                ctx.labels,
-                ctx.node_community,
-                ctx.deg_map,
-            );
-            let slug = make_unique_slug(&safe_filename(&node_data.label), used_slugs);
-            let path: PathBuf = ctx.output_dir.join(format!("{slug}.md"));
-            std::fs::write(&path, article.as_bytes())?;
-            count += 1;
-        }
+    for (nid, slug) in god_articles {
+        let article = god_node_article(
+            ctx.graph,
+            nid,
+            ctx.labels,
+            ctx.node_community,
+            ctx.deg_map,
+            ctx.resolver,
+        );
+        std::fs::write(
+            ctx.output_dir.join(format!("{slug}.md")),
+            article.as_bytes(),
+        )?;
     }
-    Ok(count)
+    Ok(god_articles.len())
 }

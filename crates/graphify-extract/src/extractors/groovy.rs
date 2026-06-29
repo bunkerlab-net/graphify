@@ -100,6 +100,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
             source_file: str_path.clone(),
             source_location: Some("L1".to_string()),
             metadata: None,
+            origin_file: None,
         });
         seen_ids.insert(file_nid.clone());
     }
@@ -120,6 +121,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{lineno}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             edges.push(Edge {
@@ -155,6 +157,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{lineno}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             edges.push(Edge {
@@ -186,6 +189,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                         source_file: str_path.clone(),
                         source_location: Some(format!("L{lineno}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {

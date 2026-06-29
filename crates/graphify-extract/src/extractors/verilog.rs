@@ -115,6 +115,7 @@ pub fn extract_verilog(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();
@@ -176,6 +177,7 @@ fn push_node_once(ctx: &mut VerilogWalkCtx<'_>, nid: &str, label: &str, line: us
             source_file: ctx.str_path.to_string(),
             source_location: Some(format!("L{line}")),
             metadata: None,
+            origin_file: None,
         });
     }
 }
@@ -524,6 +526,7 @@ impl SvAug<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         self.label_to_nid.insert(label.to_string(), nid.to_string());

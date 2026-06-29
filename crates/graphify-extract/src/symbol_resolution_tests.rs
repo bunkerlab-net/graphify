@@ -17,6 +17,7 @@ fn n(id: &str, label: &str, file_type: &str) -> Node {
         source_file: "src.py".to_string(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     }
 }
 

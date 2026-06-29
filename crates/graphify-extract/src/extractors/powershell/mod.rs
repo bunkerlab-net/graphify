@@ -104,6 +104,7 @@ pub fn extract_powershell(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();
@@ -239,7 +240,13 @@ struct PsRefCtx<'a> {
 }
 
 impl PsRefCtx<'_> {
-    fn ensure_named_node(&mut self, name: &str, line: usize) -> String {
+    /// Return the NID for a named type, creating a SOURCELESS placeholder stub
+    /// when no file-qualified node exists. Mirrors Python powershell
+    /// `ensure_named_node` (extract.py): the stub carries no `source_file` so a
+    /// real cross-file definition can be rewired onto it (#1402); the referencing
+    /// file is recorded as `origin_file` to disambiguate same-label stubs (#1462),
+    /// matching the generic `ensure_named_node`.
+    fn ensure_named_node(&mut self, name: &str) -> String {
         let nid1 = make_id(&[self.stem, name]);
         if self.seen_ids.contains(&nid1) {
             return nid1;
@@ -250,9 +257,10 @@ impl PsRefCtx<'_> {
                 id: nid2.clone(),
                 label: name.to_string(),
                 file_type: "code".to_string(),
-                source_file: self.str_path.to_string(),
-                source_location: Some(format!("L{line}")),
+                source_file: String::new(),
+                source_location: Some(String::new()),
                 metadata: None,
+                origin_file: Some(self.str_path.to_string()),
             });
         }
         nid2
@@ -385,6 +393,7 @@ fn walk_ps(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -440,6 +449,7 @@ fn walk_ps(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -478,7 +488,7 @@ fn walk_ps(
                     edges: &mut *edges,
                     seen_ids: &mut *seen_ids,
                 };
-                let target = rc.ensure_named_node(&type_name, line);
+                let target = rc.ensure_named_node(&type_name);
                 if target != parent {
                     rc.push_ref(parent, &target, "field", line);
                 }
@@ -529,6 +539,7 @@ fn walk_ps(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -556,7 +567,7 @@ fn walk_ps(
                         seen_ids: &mut *seen_ids,
                     };
                     if let Some(rt) = return_type_name {
-                        let target = rc.ensure_named_node(&rt, line);
+                        let target = rc.ensure_named_node(&rt);
                         if target != method_nid {
                             rc.push_ref(&method_nid, &target, "return_type", line);
                         }
@@ -572,7 +583,7 @@ fn walk_ps(
                                     )
                                 {
                                     let p_line = pc.node().start_position().row + 1;
-                                    let target = rc.ensure_named_node(&pn, p_line);
+                                    let target = rc.ensure_named_node(&pn);
                                     if target != method_nid {
                                         rc.push_ref(&method_nid, &target, "parameter_type", p_line);
                                     }

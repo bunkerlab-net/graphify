@@ -44,12 +44,13 @@ pub const DEFAULT_MIN_CORROBORATION: usize = 2;
 pub(crate) const UNCATEGORIZED: &str = "Uncategorized";
 
 /// `true` if `out_path` exists and is at least as new as every input that feeds
-/// it (the memory docs, and the graph when one is used).
+/// it (the memory docs, and `graph.json` plus its `.graphify_analysis.json` /
+/// `.graphify_labels.json` sidecars when a graph is used, #1470).
 ///
 /// Lets `graphify reflect --if-stale` skip a redundant run. A missing output is
 /// never fresh (it must be built). Mtime-based and best-effort.
 #[must_use]
-pub fn lessons_fresh(out_path: &Path, memory_dir: &Path, graph_path: Option<&Path>) -> bool {
+pub fn lessons_fresh(out_path: &Path, memory_dir: &Path, graphs: GraphPaths<'_>) -> bool {
     let Ok(out_mtime) = std::fs::metadata(out_path).and_then(|m| m.modified()) else {
         return false; // missing/unreadable -> must build
     };
@@ -67,10 +68,22 @@ pub fn lessons_fresh(out_path: &Path, memory_dir: &Path, graph_path: Option<&Pat
             }
         }
     }
-    if let Some(gp) = graph_path
-        && let Ok(mtime) = std::fs::metadata(gp).and_then(|m| m.modified())
-    {
-        newest = newest.max(mtime);
+    // The graph and its sidecars all feed the grouped lessons doc, so any one of
+    // them being newer than the output makes the doc stale (#1470).
+    if let Some(graph) = graphs.graph {
+        let analysis = graphs.analysis.map_or_else(
+            || sibling(graph, ".graphify_analysis.json"),
+            Path::to_path_buf,
+        );
+        let labels = graphs.labels.map_or_else(
+            || sibling(graph, ".graphify_labels.json"),
+            Path::to_path_buf,
+        );
+        for input in [graph.to_path_buf(), analysis, labels] {
+            if let Ok(mtime) = std::fs::metadata(&input).and_then(|m| m.modified()) {
+                newest = newest.max(mtime);
+            }
+        }
     }
     out_mtime >= newest
 }

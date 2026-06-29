@@ -65,7 +65,7 @@ pub(crate) fn emit_kotlin_inheritance(
                     }
                     for (ref_name, _role) in refs {
                         let target = crate::generic::walk::ensure_named_node(
-                            &ref_name, line, stem, str_path, nodes, seen_ids,
+                            &ref_name, stem, str_path, nodes, seen_ids,
                         );
                         add_edge(
                             class_nid,

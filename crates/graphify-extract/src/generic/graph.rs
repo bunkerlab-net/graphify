@@ -33,6 +33,7 @@ pub(crate) fn add_node(
             source_file: str_path.to_string(),
             source_location: Some(format!("L{line}")),
             metadata: None,
+            origin_file: None,
         });
     }
 }
@@ -149,15 +150,20 @@ pub(crate) fn find_body<'tree>(node: Node<'tree>, config: &LangConfig) -> Option
 
 // ── ensure_named_node ─────────────────────────────────────────────────────────
 
-/// Return the NID for a named entity, creating a placeholder node if needed.
+/// Return the NID for a named entity, creating a SOURCELESS placeholder stub if
+/// needed.
 ///
 /// First checks for a file-qualified ID (`<stem>_<name>`); if already seen,
-/// returns that ID. Otherwise ensures the bare-name node exists (creating it
-/// when absent) and returns the bare NID. Used for cross-file type references
-/// in C# `field_declaration` processing.
+/// returns that ID. Otherwise ensures a bare-name stub exists (creating it when
+/// absent) and returns the bare NID. Used for cross-file type references
+/// (Java/C#/Kotlin/Scala/Swift inheritance + field types).
+///
+/// The stub is SOURCELESS (`source_file` empty) so a real project definition
+/// carrying a `source_file` can still be rewired onto it (#1402); the
+/// referencing file is recorded as `origin_file` purely to disambiguate
+/// same-label stubs from different files during id-collision splitting (#1462).
 pub(crate) fn ensure_named_node(
     name: &str,
-    line: u32,
     stem: &str,
     str_path: &str,
     nodes: &mut Vec<GNode>,
@@ -168,8 +174,21 @@ pub(crate) fn ensure_named_node(
         return nid1;
     }
     let nid2 = make_id1(name);
-    if !seen_ids.contains(&nid2) {
-        add_node(&nid2, name, line, str_path, nodes, seen_ids);
+    if seen_ids.insert(nid2.clone()) {
+        nodes.push(GNode {
+            id: nid2.clone(),
+            label: name.to_string(),
+            file_type: "code".to_string(),
+            source_file: String::new(),
+            // Parity dispute (CodeRabbit): `Some("")`, NOT `None`. graphify-py
+            // emits `"source_location": ""` for these sourceless cross-file stubs
+            // (extract.py ensure_named_node), so `None` (skipped on serialize)
+            // would drop the field and break byte-identical JSON. The empty string
+            // is the sourceless marker (`!= "L1"`); `origin_file` carries provenance.
+            source_location: Some(String::new()),
+            metadata: None,
+            origin_file: Some(str_path.to_string()),
+        });
     }
     nid2
 }

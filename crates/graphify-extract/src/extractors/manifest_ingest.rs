@@ -128,6 +128,7 @@ pub fn extract_package_manifest(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: Some(metadata),
+        origin_file: None,
     };
 
     let mut edges: Vec<Edge> = Vec::new();

@@ -40,7 +40,6 @@ use walk::{add_node, walk};
 /// Extract nodes and edges from `path` using the given language configuration.
 ///
 /// Mirrors Python `_extract_generic(path, config)`.
-#[allow(clippy::too_many_lines)] // single-pass tree-sitter walker — splitting hurts flow
 #[must_use]
 pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     let source = match std::fs::read(path) {
@@ -49,7 +48,19 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             return FileResult::error(format!("io error reading {}: {e}", path.display()));
         }
     };
+    extract_generic_with_source(path, config, &source)
+}
 
+/// [`extract_generic`] parsing `source` instead of reading `path`, while still
+/// keying nodes/edges off `path`. Lets container formats (e.g. Vue SFCs) mask the
+/// wrapper and parse just the embedded `<script>`. Mirrors Python
+/// `_extract_generic(..., source_override=...)`.
+#[allow(clippy::too_many_lines)] // single-pass tree-sitter walker — splitting hurts flow
+pub(crate) fn extract_generic_with_source(
+    path: &Path,
+    config: &LangConfig,
+    source: &[u8],
+) -> FileResult {
     let mut parser = Parser::new();
     if let Err(e) = parser.set_language(&config.language) {
         return FileResult::error(format!(
@@ -58,7 +69,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
         ));
     }
 
-    let Some(tree) = parser.parse(&source, None) else {
+    let Some(tree) = parser.parse(source, None) else {
         return FileResult::error(format!("tree-sitter parse failed for {}", path.display()));
     };
 
@@ -90,7 +101,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     // Pre-scan C# files for declared interface names so the inheritance pass can
     // split `inherits` from `implements`. Empty for every other language.
     let csharp_interface_names: HashSet<String> = if config.lang_id == config::LangId::CSharp {
-        inherit::csharp_pre_scan_interfaces(root, &source)
+        inherit::csharp_pre_scan_interfaces(root, source)
     } else {
         HashSet::new()
     };
@@ -99,7 +110,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
     // (base class) from `implements` (protocol conformance). Empty otherwise.
     let (swift_protocol_names, swift_class_names): (HashSet<String>, HashSet<String>) =
         if config.lang_id == config::LangId::Swift {
-            inherit::swift_pre_scan(root, &source)
+            inherit::swift_pre_scan(root, source)
         } else {
             (HashSet::new(), HashSet::new())
         };
@@ -122,7 +133,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
         };
         loop {
             let child = cur.node();
-            walk(&mut walk_ctx, child, None, &source);
+            walk(&mut walk_ctx, child, None, source);
             if !cur.goto_next_sibling() {
                 break;
             }
@@ -159,7 +170,7 @@ pub fn extract_generic(path: &Path, config: &LangConfig) -> FileResult {
             seen_ref_pairs: &mut seen_ref_pairs,
         };
         for (caller_nid, body_node) in &function_bodies {
-            walk_calls(&mut call_ctx, *body_node, caller_nid, &source);
+            walk_calls(&mut call_ctx, *body_node, caller_nid, source);
         }
     }
 

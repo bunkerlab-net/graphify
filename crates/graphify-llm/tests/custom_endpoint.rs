@@ -7,7 +7,7 @@
 //! scrubs the relevant vars under `#[serial(env)]`.
 #![allow(clippy::expect_used, unsafe_code)]
 
-use graphify_llm::{backend_config, claude, openai};
+use graphify_llm::{backend_config, claude, deepseek, gemini, kimi, openai};
 use serial_test::serial;
 
 mod common;
@@ -118,4 +118,62 @@ fn openai_compat_backends_resolve_full_output_cap() {
     }
     // The openai backend's own default-max-tokens helper agrees.
     assert_eq!(openai::default_max_tokens(), 16_384);
+}
+
+// ── kimi / gemini / deepseek bare *_BASE_URL env overrides (#1458) ────────────
+
+#[test]
+#[serial(env)]
+fn kimi_base_url_honors_bare_env() {
+    let mut g = EnvGuard::new();
+    g.unset("GRAPHIFY_KIMI_BASE_URL")
+        .set("KIMI_BASE_URL", "https://proxy.example/kimi/v1");
+    assert_eq!(kimi::base_url(), "https://proxy.example/kimi/v1");
+}
+
+#[test]
+#[serial(env)]
+fn gemini_base_url_honors_bare_env() {
+    let mut g = EnvGuard::new();
+    g.unset("GRAPHIFY_GEMINI_BASE_URL")
+        .set("GEMINI_BASE_URL", "https://proxy.example/gemini");
+    assert_eq!(gemini::base_url(), "https://proxy.example/gemini");
+}
+
+#[test]
+#[serial(env)]
+fn deepseek_base_url_honors_bare_env() {
+    let mut g = EnvGuard::new();
+    g.unset("GRAPHIFY_DEEPSEEK_BASE_URL")
+        .set("DEEPSEEK_BASE_URL", "https://proxy.example/deepseek");
+    assert_eq!(deepseek::base_url(), "https://proxy.example/deepseek");
+}
+
+#[test]
+#[serial(env)]
+fn kimi_gemini_deepseek_defaults_without_env() {
+    let mut g = EnvGuard::new();
+    g.unset("GRAPHIFY_KIMI_BASE_URL")
+        .unset("KIMI_BASE_URL")
+        .unset("GRAPHIFY_GEMINI_BASE_URL")
+        .unset("GEMINI_BASE_URL")
+        .unset("GRAPHIFY_DEEPSEEK_BASE_URL")
+        .unset("DEEPSEEK_BASE_URL");
+    assert_eq!(kimi::base_url(), "https://api.moonshot.ai/v1");
+    assert_eq!(
+        gemini::base_url(),
+        "https://generativelanguage.googleapis.com/v1beta/openai/"
+    );
+    assert_eq!(deepseek::base_url(), "https://api.deepseek.com");
+}
+
+#[test]
+#[serial(env)]
+fn graphify_kimi_base_url_wins_over_bare() {
+    // The GRAPHIFY_-prefixed test-redirect var takes priority over the bare one,
+    // mirroring the openai precedence.
+    let mut g = EnvGuard::new();
+    g.set("KIMI_BASE_URL", "https://upstream/kimi/v1")
+        .set("GRAPHIFY_KIMI_BASE_URL", "https://redirect/kimi/v1");
+    assert_eq!(kimi::base_url(), "https://redirect/kimi/v1");
 }

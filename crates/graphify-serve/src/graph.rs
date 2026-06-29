@@ -98,6 +98,18 @@ pub fn load_graph(graph_path: &str) -> Result<Graph, ServeError> {
         obj.insert("directed".to_string(), Value::Bool(true));
     }
 
+    // #1504: nudge once when the on-disk graph still uses the pre-path-qualified
+    // node-ID scheme, so an MCP session sees the same advice as the CLI. Inspect
+    // the raw nodes before `build_from_json` moves `data`; silent on fresh graphs.
+    if let Some(nodes) = data.get("nodes").and_then(Value::as_array)
+        && graphify_build::graph_has_legacy_ids(nodes, None)
+    {
+        eprintln!(
+            "[graphify] note: this graph uses the pre-#1504 node-ID scheme; \
+             rebuild with `graphify extract --force` for path-qualified IDs."
+        );
+    }
+
     graphify_build::build_from_json(data, true, None).map_err(|e| ServeError::Io(format!("{e}")))
 }
 
@@ -727,9 +739,13 @@ pub fn subgraph_to_text<S: BuildHasher>(
 
 // ── Find node ─────────────────────────────────────────────────────────────────
 
-/// Return node IDs whose label or ID matches search term (diacritic-insensitive).
+/// Return node IDs whose source-file path, label, or ID matches the search term
+/// (diacritic-insensitive).
 ///
-/// Ordered: exact, prefix, substring.
+/// Ordered: exact source-file path, then exact (label/ID), prefix, substring.
+/// When a source-file path matches several nodes (a file node plus the symbols
+/// inside it), the L1 file node whose basename equals the query basename is
+/// floated to the front so a path query lands on the file, not a symbol (#1503).
 ///
 /// Both the query and the node label/ID are run through [`search_tokens`] so
 /// punctuated names (`foo.bar`, `foo()`, `pkg::Type`) match a tokenised query.
@@ -743,6 +759,22 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     if term.is_empty() {
         return Vec::new();
     }
+    // Slash-normalize the query once (Windows `\` → `/`) so the basename (for
+    // the L1 file-node preference) and the full-path compare share one
+    // separator convention; otherwise `src\foo.rs` resolves the file but its
+    // basename keeps the backslash and misses the L1 preference (#1503).
+    let query_norm = strip_diacritics(label).to_lowercase().replace('\\', "/");
+    let query_basename = Path::new(&query_norm)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&query_norm)
+        .to_string();
+    // Slash-normalized full path of the query, for exact source-path matching.
+    // Trailing separators are trimmed so a path query keeps matching the file
+    // (parity with the old tokenized compare, which dropped them) (#1503).
+    let query_path = query_norm.trim_end_matches('/').to_string();
+    let mut source_exact: Vec<String> = Vec::new();
+    let mut preferred: Vec<String> = Vec::new();
     let mut exact: Vec<String> = Vec::new();
     let mut prefix: Vec<String> = Vec::new();
     let mut substring: Vec<String> = Vec::new();
@@ -753,7 +785,28 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
         let node_term = search_tokens(&get_norm_label(attrs)).join(" ");
         // `search_tokens` already lowercases, so pass `nid` directly.
         let nid_term = search_tokens(nid).join(" ");
-        if term == node_term || term == nid_term {
+        // Match the source-file path on its slash-normalized full form, NOT
+        // tokenized. graphify-py compares tokenized source paths (serve.py
+        // `source_tokens`), which collapses distinct paths to the same tokens
+        // (`src/foo/bar.py` and `src/foo_bar.py` both → "src foo bar py"), so a
+        // path query could land on the wrong file. The full-path compare avoids
+        // that; tokenized matching stays for label/id below (divergence, #1503).
+        let source_path = strip_diacritics(
+            attrs
+                .get("source_file")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        )
+        .to_lowercase()
+        .replace('\\', "/");
+        if !source_path.is_empty() && query_path == source_path {
+            source_exact.push(nid.clone());
+            if attrs.get("source_location").and_then(Value::as_str) == Some("L1")
+                && get_norm_label(attrs) == query_basename
+            {
+                preferred.push(nid.clone());
+            }
+        } else if term == node_term || term == nid_term {
             exact.push(nid.clone());
         } else if node_term.starts_with(&term) || nid_term.starts_with(&term) {
             prefix.push(nid.clone());
@@ -761,9 +814,22 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
             substring.push(nid.clone());
         }
     }
-    exact.extend(prefix);
-    exact.extend(substring);
-    exact
+
+    if let [only] = preferred.as_slice() {
+        let mut reordered = vec![only.clone()];
+        reordered.extend(
+            source_exact
+                .iter()
+                .filter(|n| n.as_str() != only.as_str())
+                .cloned(),
+        );
+        source_exact = reordered;
+    }
+
+    source_exact.extend(exact);
+    source_exact.extend(prefix);
+    source_exact.extend(substring);
+    source_exact
 }
 
 // ── Shortest path ─────────────────────────────────────────────────────────────

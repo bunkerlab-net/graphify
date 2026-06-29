@@ -50,6 +50,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -81,6 +82,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
                 source_file: abs_proj.clone(),
                 source_location: None,
                 metadata: None,
+                origin_file: None,
             });
             edges.push(Edge {
                 external: false,

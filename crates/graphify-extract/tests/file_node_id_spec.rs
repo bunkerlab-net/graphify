@@ -42,7 +42,8 @@ fn write(path: &Path, text: &str) -> TestResult {
 
 #[test]
 fn file_node_id_uses_parent_dir_and_stem_no_extension() -> TestResult {
-    // match/script/pipeline_step.py -> file node id 'script_pipeline_step'.
+    // match/script/pipeline_step.py -> file node id 'match_script_pipeline_step'
+    // (full repo-relative path, #1504).
     let tmp = tempdir()?;
     let root = tmp.path().canonicalize()?;
     let f = root.join("match").join("script").join("pipeline_step.py");
@@ -52,8 +53,8 @@ fn file_node_id_uses_parent_dir_and_stem_no_extension() -> TestResult {
     let ids = node_ids(&result.nodes);
 
     assert!(
-        ids.contains("script_pipeline_step"),
-        "expected spec-format file id 'script_pipeline_step', got {ids:?}"
+        ids.contains("match_script_pipeline_step"),
+        "expected full-path file id 'match_script_pipeline_step', got {ids:?}"
     );
     // The old buggy full-path-with-extension id must be gone.
     assert!(!ids.contains("match_script_pipeline_step_py"));
@@ -157,8 +158,8 @@ fn symbol_and_file_ids_share_the_same_stem() -> TestResult {
     let result = extract(&[f], Some(&root));
     let ids = node_ids(&result.nodes);
 
-    assert!(ids.contains("script_pipeline_step")); // file node
-    assert!(ids.contains("script_pipeline_step_stage")); // class symbol shares stem
+    assert!(ids.contains("match_script_pipeline_step")); // file node
+    assert!(ids.contains("match_script_pipeline_step_stage")); // class symbol shares stem
 
     // The file -> class 'contains' edge must reference the real file node id.
     let contains: Vec<_> = result
@@ -166,7 +167,8 @@ fn symbol_and_file_ids_share_the_same_stem() -> TestResult {
         .iter()
         .filter(|e| {
             e.get("relation").and_then(Value::as_str) == Some("contains")
-                && e.get("target").and_then(Value::as_str) == Some("script_pipeline_step_stage")
+                && e.get("target").and_then(Value::as_str)
+                    == Some("match_script_pipeline_step_stage")
         })
         .collect();
     assert!(
@@ -175,7 +177,7 @@ fn symbol_and_file_ids_share_the_same_stem() -> TestResult {
     );
     assert_eq!(
         contains[0].get("source").and_then(Value::as_str),
-        Some("script_pipeline_step"),
+        Some("match_script_pipeline_step"),
     );
     Ok(())
 }

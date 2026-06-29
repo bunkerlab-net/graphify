@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use graphify_ingest::save_query_result;
 use graphify_reflect::{
-    AggResult, MemoryDoc, aggregate_lessons, lessons_fresh, load_memory_docs, parse_memory_doc,
-    reflect, render_lessons_md,
+    AggResult, GraphPaths, MemoryDoc, aggregate_lessons, lessons_fresh, load_memory_docs,
+    parse_memory_doc, reflect, render_lessons_md,
 };
 use indexmap::IndexMap;
 
@@ -583,58 +583,116 @@ fn second_session_benefits_from_the_first() {
 
 // --- lessons_fresh -------------------------------------------------------------
 
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
 #[test]
-fn lessons_fresh_missing_output_is_not_fresh() {
-    let tmp = tempfile::tempdir().unwrap();
+fn lessons_fresh_missing_output_is_not_fresh() -> TestResult {
+    let tmp = tempfile::tempdir()?;
     let mem = tmp.path().join("memory");
-    std::fs::create_dir_all(&mem).unwrap();
-    std::fs::write(mem.join("q.md"), "x").unwrap();
-    assert!(!lessons_fresh(&tmp.path().join("LESSONS.md"), &mem, None));
+    std::fs::create_dir_all(&mem)?;
+    std::fs::write(mem.join("q.md"), "x")?;
+    assert!(!lessons_fresh(
+        &tmp.path().join("LESSONS.md"),
+        &mem,
+        GraphPaths::default()
+    ));
+    Ok(())
 }
 
 #[test]
-fn lessons_fresh_true_when_output_newer_than_inputs() {
-    let tmp = tempfile::tempdir().unwrap();
+fn lessons_fresh_true_when_output_newer_than_inputs() -> TestResult {
+    let tmp = tempfile::tempdir()?;
     let mem = tmp.path().join("memory");
-    std::fs::create_dir_all(&mem).unwrap();
+    std::fs::create_dir_all(&mem)?;
     let doc = mem.join("q.md");
-    std::fs::write(&doc, "x").unwrap();
+    std::fs::write(&doc, "x")?;
     let out = tmp.path().join("LESSONS.md");
-    std::fs::write(&out, "y").unwrap();
+    std::fs::write(&out, "y")?;
     set_mtime(&doc, 1000);
     set_mtime(&out, 2000);
-    assert!(lessons_fresh(&out, &mem, None));
+    assert!(lessons_fresh(&out, &mem, GraphPaths::default()));
+    Ok(())
 }
 
 #[test]
-fn lessons_fresh_false_when_memory_newer() {
-    let tmp = tempfile::tempdir().unwrap();
+fn lessons_fresh_false_when_memory_newer() -> TestResult {
+    let tmp = tempfile::tempdir()?;
     let mem = tmp.path().join("memory");
-    std::fs::create_dir_all(&mem).unwrap();
+    std::fs::create_dir_all(&mem)?;
     let doc = mem.join("q.md");
-    std::fs::write(&doc, "x").unwrap();
+    std::fs::write(&doc, "x")?;
     let out = tmp.path().join("LESSONS.md");
-    std::fs::write(&out, "y").unwrap();
+    std::fs::write(&out, "y")?;
     set_mtime(&out, 1000);
     set_mtime(&doc, 2000);
-    assert!(!lessons_fresh(&out, &mem, None));
+    assert!(!lessons_fresh(&out, &mem, GraphPaths::default()));
+    Ok(())
 }
 
 #[test]
-fn lessons_fresh_false_when_graph_newer() {
-    let tmp = tempfile::tempdir().unwrap();
+fn lessons_fresh_false_when_graph_newer() -> TestResult {
+    let tmp = tempfile::tempdir()?;
     let mem = tmp.path().join("memory");
-    std::fs::create_dir_all(&mem).unwrap();
+    std::fs::create_dir_all(&mem)?;
     let doc = mem.join("q.md");
-    std::fs::write(&doc, "x").unwrap();
+    std::fs::write(&doc, "x")?;
     let out = tmp.path().join("LESSONS.md");
-    std::fs::write(&out, "y").unwrap();
+    std::fs::write(&out, "y")?;
     let graph = tmp.path().join("graph.json");
-    std::fs::write(&graph, "{}").unwrap();
+    std::fs::write(&graph, "{}")?;
     set_mtime(&doc, 1000);
     set_mtime(&out, 1500);
     set_mtime(&graph, 2000);
-    assert!(!lessons_fresh(&out, &mem, Some(&graph)));
+    assert!(!lessons_fresh(
+        &out,
+        &mem,
+        GraphPaths {
+            graph: Some(&graph),
+            ..Default::default()
+        }
+    ));
+    Ok(())
+}
+
+/// A graph sidecar (`.graphify_analysis.json` / `.graphify_labels.json`) newer
+/// than the output makes lessons stale even when graph.json itself is older
+/// (#1470). Exercises BOTH sidecars (mirrors the Python parametrized test).
+fn assert_stale_when_sidecar_newer(sidecar_name: &str) -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let mem = tmp.path().join("memory");
+    std::fs::create_dir_all(&mem)?;
+    let doc = mem.join("q.md");
+    std::fs::write(&doc, "x")?;
+    let out = tmp.path().join("LESSONS.md");
+    std::fs::write(&out, "y")?;
+    let graph = tmp.path().join("graph.json");
+    std::fs::write(&graph, "{}")?;
+    let sidecar = tmp.path().join(sidecar_name);
+    std::fs::write(&sidecar, "{}")?;
+    set_mtime(&doc, 1000);
+    set_mtime(&graph, 1000);
+    set_mtime(&out, 1500);
+    // The sidecar (resolved as graph's sibling) is newer than the output.
+    set_mtime(&sidecar, 2000);
+    assert!(!lessons_fresh(
+        &out,
+        &mem,
+        GraphPaths {
+            graph: Some(&graph),
+            ..Default::default()
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn lessons_fresh_false_when_analysis_newer() -> TestResult {
+    assert_stale_when_sidecar_newer(".graphify_analysis.json")
+}
+
+#[test]
+fn lessons_fresh_false_when_labels_newer() -> TestResult {
+    assert_stale_when_sidecar_newer(".graphify_labels.json")
 }
 
 /// Set a file's mtime to `secs` after the Unix epoch.

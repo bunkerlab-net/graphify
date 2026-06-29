@@ -54,6 +54,7 @@ impl TfCtx<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
             self.edges.push(Edge {
                 external: false,
@@ -281,6 +282,7 @@ pub fn extract_terraform(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::from([file_nid.clone()]);

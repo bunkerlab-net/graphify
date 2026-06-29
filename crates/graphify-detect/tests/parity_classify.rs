@@ -45,6 +45,27 @@ fn classify_cuda_cuh() {
     assert_eq!(classify_file(Path::new("kernel.cuh")), Some(FileType::Code));
 }
 
+/// #1480: Metal Shading Language is C++14, so `.metal` classifies as code and
+/// routes through the C++ extractor (graphify-py: `.metal` added to
+/// `CODE_EXTENSIONS`).
+#[test]
+fn classify_metal() {
+    assert_eq!(
+        classify_file(Path::new("shader.metal")),
+        Some(FileType::Code)
+    );
+}
+
+/// #1460: `.xaml` (WPF/XAML) classifies as code so it routes to the XAML
+/// extractor (graphify-py: `.xaml` added to `CODE_EXTENSIONS`).
+#[test]
+fn classify_xaml() {
+    assert_eq!(
+        classify_file(Path::new("MainWindow.xaml")),
+        Some(FileType::Code)
+    );
+}
+
 /// #1377: package manifests route to the deterministic AST/code path, not the
 /// LLM document path — even when their extension (`.yml`/`.toml`/`.xml`) would
 /// otherwise classify as a document. A generic yaml stays a document. Mirrors

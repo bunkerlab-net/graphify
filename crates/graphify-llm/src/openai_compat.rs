@@ -190,6 +190,10 @@ fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
         "model": req.model,
         "messages": req.messages,
         "max_completion_tokens": req.max_completion_tokens,
+        // Force a single non-streamed response: some OpenAI-compatible gateways
+        // default to SSE streaming when `stream` is omitted, but the result is
+        // always read as a single response (#1223).
+        "stream": false,
     });
     if let Some(t) = resolve_temperature(req.temperature, req.model) {
         body["temperature"] = json!(t);

@@ -48,6 +48,7 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{ln}")),
                 metadata: None,
+                origin_file: None,
             });
             edges.push(Edge {
                 external: false,

@@ -1116,15 +1116,23 @@ fn extract_bash_skip_builtins_in_calls() {
     let builtins = [
         "echo", "cd", "set", "export", "local", "mkdir", "if", "then",
     ];
-    let call_targets: std::collections::HashSet<&str> = result
+    // Match on the target node's LABEL (the symbol), not the id: the full-path
+    // node id now embeds the fixture's directory path (which contains "graphify"
+    // → the "if" substring), so a substring scan would false-positive (#1504).
+    let label_by_id: std::collections::HashMap<&str, &str> = result
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let call_target_labels: std::collections::HashSet<&str> = result
         .edges
         .iter()
         .filter(|e| e.relation == "calls")
-        .map(|e| e.target.as_str())
+        .filter_map(|e| label_by_id.get(e.target.as_str()).copied())
         .collect();
     for b in &builtins {
         assert!(
-            !call_targets.iter().any(|t| t.contains(b)),
+            !call_target_labels.contains(b),
             "Builtin '{b}' appeared as calls target"
         );
     }

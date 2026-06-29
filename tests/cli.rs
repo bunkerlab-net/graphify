@@ -598,3 +598,79 @@ fn export_graphml_writes_file() {
         .success();
     assert!(dir.path().join("graph.graphml").exists());
 }
+
+/// Ports `test_explain_cli.py::test_explain_source_file_path_prefers_file_level_node`
+/// (#1503): a source-file path resolves to the L1 file node, not a symbol in it.
+#[test]
+fn explain_source_file_path_prefers_file_level_node() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let graph_path = dir.path().join("graph.json");
+    let graph = r#"{
+        "directed": false, "multigraph": false, "graph": {},
+        "nodes": [
+            {"id": "example_route_get", "label": "GET()", "source_file": "app/api/example/route.ts", "source_location": "L42", "community": 0},
+            {"id": "example_route", "label": "route.ts", "source_file": "app/api/example/route.ts", "source_location": "L1", "community": 0}
+        ],
+        "links": [
+            {"source": "example_route", "target": "example_route_get", "relation": "contains", "confidence": "EXTRACTED"}
+        ]
+    }"#;
+    fs::write(&graph_path, graph)?;
+    let assert = cli()
+        .arg("explain")
+        .arg("app/api/example/route.ts")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(stdout.contains("Node: route.ts"), "got: {stdout}");
+    // build_from_json re-keys the L1 file node to its full repo-relative path id
+    // (#1504): example_route -> app_api_example_route.
+    assert!(
+        stdout.contains("ID:        app_api_example_route"),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Source:    app/api/example/route.ts L1"),
+        "got: {stdout}"
+    );
+    assert!(!stdout.contains("Node: GET()"), "got: {stdout}");
+    Ok(())
+}
+
+/// Ports `test_affected_cli.py::test_affected_cli_source_file_path_uses_file_level_node`
+/// (#1503): `affected <path>` seeds the L1 file node and reports its dependants.
+#[test]
+fn affected_source_file_path_uses_file_level_node() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let graph_path = dir.path().join("graph.json");
+    let graph = r#"{
+        "directed": true, "multigraph": false, "graph": {},
+        "nodes": [
+            {"id": "example_route_get", "label": "GET()", "source_file": "app/api/example/route.ts", "source_location": "L42"},
+            {"id": "example_route", "label": "route.ts", "source_file": "app/api/example/route.ts", "source_location": "L1"},
+            {"id": "consumer", "label": "consumer.ts", "source_file": "app/consumer.ts", "source_location": "L1"}
+        ],
+        "links": [
+            {"source": "consumer", "target": "example_route", "relation": "imports_from", "context": "import", "confidence": "EXTRACTED"}
+        ]
+    }"#;
+    fs::write(&graph_path, graph)?;
+    let assert = cli()
+        .arg("affected")
+        .arg("app/api/example/route.ts")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("Affected nodes for route.ts"),
+        "got: {stdout}"
+    );
+    assert!(stdout.contains("consumer.ts"), "got: {stdout}");
+    assert!(stdout.contains("imports_from"), "got: {stdout}");
+    assert!(!stdout.contains("No unique node match"), "got: {stdout}");
+    Ok(())
+}

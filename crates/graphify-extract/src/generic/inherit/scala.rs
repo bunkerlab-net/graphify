@@ -52,7 +52,7 @@ pub(crate) fn emit_scala_inheritance(
         for (idx, (base_name, base_line)) in bases.into_iter().enumerate() {
             let rel = if idx == 0 { "inherits" } else { "mixes_in" };
             let base_nid = crate::generic::walk::ensure_named_node(
-                &base_name, base_line, stem, str_path, nodes, seen_ids,
+                &base_name, stem, str_path, nodes, seen_ids,
             );
             if base_nid != class_nid {
                 add_edge(class_nid, &base_nid, rel, base_line, str_path, None, edges);
@@ -77,7 +77,7 @@ pub(crate) fn emit_scala_inheritance(
             for (ref_name, role) in refs {
                 let context = role.into_context("field");
                 let target = crate::generic::walk::ensure_named_node(
-                    &ref_name, cp_line, stem, str_path, nodes, seen_ids,
+                    &ref_name, stem, str_path, nodes, seen_ids,
                 );
                 if target != class_nid {
                     add_edge(

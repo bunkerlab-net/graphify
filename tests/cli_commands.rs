@@ -879,11 +879,102 @@ fn label_no_backend_keeps_placeholders() {
 }
 
 #[test]
-fn label_accepts_model_flag() {
+fn cluster_only_timing_emits_stage_lines() -> Result<(), Box<dyn std::error::Error>> {
+    // #1490: `--timing` prints per-stage wall-clock lines plus a total to stderr.
+    let dir = tempfile::tempdir()?;
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out)?;
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+    cli_no_backend()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--graph")
+        .arg(&graph_path)
+        .arg("--no-viz")
+        .arg("--timing")
+        .assert()
+        .success()
+        .stderr(contains("[graphify timing] label:").and(contains("total:")));
+    Ok(())
+}
+
+#[test]
+fn label_missing_only_preserves_existing_labels() -> Result<(), Box<dyn std::error::Error>> {
+    // #1481: `--missing-only` keeps curated community names and only (re)names
+    // unnamed / `Community N` placeholders. With no backend the placeholder
+    // community stays a placeholder, but the hand-written name must survive.
+    let dir = tempfile::tempdir()?;
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out)?;
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+    fs::write(
+        out.join(".graphify_labels.json"),
+        r#"{"0":"Authentication","1":"Community 1"}"#,
+    )?;
+    cli_no_backend()
+        .arg("label")
+        .arg(dir.path())
+        .arg("--graph")
+        .arg(&graph_path)
+        .arg("--no-viz")
+        .arg("--missing-only")
+        .assert()
+        .success();
+    let labels: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join(".graphify_labels.json"))?)?;
+    assert_eq!(
+        labels["0"].as_str(),
+        Some("Authentication"),
+        "community 0 must keep its curated label under --missing-only: {labels}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cluster_only_no_label_missing_only_preserves_existing_labels()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Regression: `cluster-only --no-label --missing-only` must NOT wipe
+    // hand-curated labels. `--no-label` forbids any LLM call, so existing names
+    // are preserved (only true gaps fall back to placeholders). Previously the
+    // `--no-label` branch placeholdered every community, clobbering the curated
+    // file whenever `--missing-only` was also set.
+    let dir = tempfile::tempdir()?;
+    let out = dir.path().join("graphify-out");
+    fs::create_dir_all(&out)?;
+    let graph_path = out.join("graph.json");
+    write_graph_json(&graph_path);
+    fs::write(
+        out.join(".graphify_labels.json"),
+        r#"{"0":"Authentication","1":"Community 1"}"#,
+    )?;
+    cli_no_backend()
+        .arg("cluster-only")
+        .arg(dir.path())
+        .arg("--graph")
+        .arg(&graph_path)
+        .arg("--no-viz")
+        .arg("--no-label")
+        .arg("--missing-only")
+        .assert()
+        .success();
+    let labels: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join(".graphify_labels.json"))?)?;
+    assert_eq!(
+        labels["0"].as_str(),
+        Some("Authentication"),
+        "community 0 must keep its curated label under --no-label --missing-only: {labels}"
+    );
+    Ok(())
+}
+
+#[test]
+fn label_accepts_model_flag() -> Result<(), Box<dyn std::error::Error>> {
     // `label --model` parses and threads through to the labeling path (#b304331).
     // With no backend key the run still degrades to placeholders, proving the
     // flag is accepted end-to-end without error.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir()?;
     write_python_project(dir.path());
     cli_no_backend()
         .arg("extract")
@@ -907,20 +998,20 @@ fn label_accepts_model_flag() {
         dir.path()
             .join("graphify-out")
             .join(".graphify_labels.json"),
-    )
-    .unwrap();
+    )?;
     assert!(
         labels.contains("Community"),
         "expected placeholder labels: {labels}"
     );
+    Ok(())
 }
 
 #[test]
-fn label_accepts_concurrency_flags() {
+fn label_accepts_concurrency_flags() -> Result<(), Box<dyn std::error::Error>> {
     // #1390: `label --max-concurrency --batch-size` parse and thread through to
     // the labeling path. With no backend the run degrades to placeholders,
     // proving the flags are accepted end-to-end without error.
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir()?;
     write_python_project(dir.path());
     cli_no_backend()
         .arg("extract")
@@ -939,6 +1030,7 @@ fn label_accepts_concurrency_flags() {
         .arg("--no-viz")
         .assert()
         .success();
+    Ok(())
 }
 
 /// #1347/#1350: a no-op incremental `extract --no-cluster` re-run must leave

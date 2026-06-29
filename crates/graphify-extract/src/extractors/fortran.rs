@@ -129,6 +129,7 @@ pub fn extract_fortran(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     let root = tree.root_node();
@@ -232,6 +233,7 @@ impl FortranRefCtx<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         nid2
@@ -371,6 +373,7 @@ fn walk_fortran(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -427,6 +430,7 @@ fn walk_fortran(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -482,6 +486,7 @@ fn walk_fortran(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -547,6 +552,7 @@ fn walk_fortran(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -597,6 +603,7 @@ fn walk_fortran(
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -644,6 +651,7 @@ fn walk_fortran(
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
                     metadata: None,
+                    origin_file: None,
                 });
                 edges.push(Edge {
                     external: false,

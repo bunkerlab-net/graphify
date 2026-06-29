@@ -156,6 +156,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
         model,
         max_concurrency,
         batch_size,
+        timing,
+        missing_only,
         force,
     ) = match cmd {
         Command::ClusterOnly {
@@ -170,6 +172,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             model,
             max_concurrency,
             batch_size,
+            timing,
+            missing_only,
         } => (
             path,
             no_viz,
@@ -182,6 +186,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             model,
             max_concurrency,
             batch_size,
+            timing,
+            missing_only,
             false,
         ),
         Command::Label {
@@ -195,6 +201,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             model,
             max_concurrency,
             batch_size,
+            timing,
+            missing_only,
         } => (
             path,
             no_viz,
@@ -207,6 +215,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             model,
             max_concurrency,
             batch_size,
+            timing,
+            missing_only,
             true,
         ),
         _ => unreachable!("dispatch_cluster_only invoked with wrong variant"),
@@ -225,6 +235,8 @@ fn dispatch_cluster_only(cmd: Command) -> Result<()> {
             force_relabel: force,
             max_concurrency,
             batch_size,
+            timing,
+            missing_only,
         },
     )
 }
@@ -336,6 +348,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         dedup_llm,
         cargo,
         postgres,
+        timing,
     } = cmd
     else {
         unreachable!("dispatch_extract invoked with wrong variant")
@@ -369,6 +382,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
             cargo,
             postgres: postgres.as_deref(),
         },
+        timing,
     })
 }
 

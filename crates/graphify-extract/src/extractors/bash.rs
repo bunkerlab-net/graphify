@@ -68,6 +68,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
 
     // Synthesise a `bash_entrypoint` node attached to the file via a
@@ -83,6 +84,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: Some("L1".to_string()),
         metadata: None,
+        origin_file: None,
     });
     edges.push(Edge {
         external: false,
@@ -224,6 +226,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 edges.push(Edge {
@@ -381,6 +384,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                         source_file: str_path.to_string(),
                                         source_location: Some(format!("L{line}")),
                                         metadata: None,
+                                        origin_file: None,
                                     });
                                 }
                                 edges.push(Edge {

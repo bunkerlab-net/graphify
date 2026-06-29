@@ -75,6 +75,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
         source_file: str_path.clone(),
         source_location: None,
         metadata: None,
+        origin_file: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -98,6 +99,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                 source_file: str_path.clone(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         edges.push(Edge {
@@ -181,6 +183,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{i}")),
                     metadata: None,
+                    origin_file: None,
                 });
                 edges.push(Edge {
                     external: false,
@@ -253,6 +256,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     source_file: str_path.clone(),
                     source_location: Some(format!("L{method_line}")),
                     metadata: None,
+                    origin_file: None,
                 });
             }
             edges.push(Edge {

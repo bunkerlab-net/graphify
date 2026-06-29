@@ -1,7 +1,7 @@
 //! Per-file extraction cache helpers (thin wrappers around graphify-cache).
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
-use super::get_extractor;
+use super::{get_extractor, with_xaml_extract_root};
 use crate::types::{Edge, FileResult, Node, RawCall};
 use serde_json::Value;
 use std::path::Path;
@@ -115,10 +115,18 @@ fn value_to_file_result(v: &Value) -> FileResult {
 // ── Extract a single file (with cache) ───────────────────────────────────────
 
 /// File suffixes whose per-file AST extraction is never cached: their cross-file
-/// import resolution depends on sibling files that can appear or change between
-/// runs, so a cached result would serve a stale (unresolved) import edge.
-/// Mirrors Python `_JS_CACHE_BYPASS_SUFFIXES`.
-const JS_CACHE_BYPASS_SUFFIXES: [&str; 7] = ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte"];
+/// resolution depends on sibling files that can appear or change between runs,
+/// so a cached result would serve a stale (unresolved) edge.
+///
+/// `js`/`jsx`/`mjs`/`ts`/`tsx`/`vue`/`svelte` mirror Python `_JS_CACHE_BYPASS_SUFFIXES`
+/// (sibling import resolution). `xaml` is a deliberate divergence from graphify-py
+/// (#1460/#1473): XAML `ViewModel` resolution scans sibling `.cs` code-behind, so a
+/// `.xaml` AST result keyed by `.xaml` content alone serves stale `ViewModel` members
+/// when a sibling `.cs` changes. The in-memory `clear_xaml_csharp_class_cache()` only
+/// covers staleness *within* one run; bypassing the on-disk cache covers it *across*
+/// runs too. graphify-py has the same disk-cache staleness bug here (it omits `.xaml`).
+const JS_CACHE_BYPASS_SUFFIXES: [&str; 8] =
+    ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte", "xaml"];
 
 /// Extract a single file, returning a cached result when available.
 ///
@@ -147,7 +155,7 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
         };
     };
 
-    let result = extractor(path);
+    let result = with_xaml_extract_root(Some(effective_root), || extractor(path));
     if !bypass_cache && result.error.is_none() {
         let v = file_result_to_value(&result);
         // best-effort save; ignore failures

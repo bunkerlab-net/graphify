@@ -148,6 +148,17 @@ pub fn build_from_json(
             real_errors.len()
         );
     }
+    // Parity dispute (CodeRabbit): validation runs once here, BEFORE the semantic
+    // re-key below, matching graphify-py build.py. It is warnings-only (never
+    // aborts), and `add_nodes` dedups any id the re-key collapses (last write
+    // wins, like networkx), so a second post-rekey validation would only emit
+    // warnings graphify-py never prints.
+
+    // Deterministic semantic re-key (#1504/#1509): re-derive every non-AST node's
+    // id from its own `source_file` so a cached/LLM fragment carrying a
+    // pre-migration short id reconciles with the AST node instead of spawning a
+    // ghost / a re-bill. AST-origin nodes are already canonical and untouched.
+    crate::migrate::apply_semantic_rekey(&mut extraction, root_str.as_deref());
 
     let mut graph = Graph::new(kind);
     let t = std::time::Instant::now();

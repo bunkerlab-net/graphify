@@ -61,6 +61,7 @@ pub(super) fn walk_rust(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -95,6 +96,7 @@ pub(super) fn walk_rust(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -131,6 +133,7 @@ pub(super) fn walk_rust(
                         source_file: ctx.str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         metadata: None,
+                        origin_file: None,
                     });
                 }
                 impl_nid = Some(nid);
@@ -221,6 +224,7 @@ impl RustWalkCtx<'_> {
                 source_file: self.str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
         nid2

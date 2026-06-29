@@ -42,6 +42,7 @@ fn parse_form_text(text: &str, path: &Path) -> FileResult {
                 source_file: str_path.to_string(),
                 source_location: Some(format!("L{line}")),
                 metadata: None,
+                origin_file: None,
             });
         }
     };

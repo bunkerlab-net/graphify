@@ -34,6 +34,40 @@ pub(crate) fn safe_filename(name: &str) -> String {
     }
 }
 
+/// Percent-encode a target URL the way Python's `urllib.parse.quote` does (its
+/// default safe set is `/` plus unreserved chars), so spaces, `&`, parentheses,
+/// and `#` survive intact in every `CommonMark` renderer (GitHub, GitLab, VS
+/// Code preview, a plain browser) and Obsidian alike.
+#[must_use]
+pub(crate) fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'~' | b'/') {
+            out.push(b as char);
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
+/// Render a link to another wiki article as a portable relative markdown link
+/// `[text](slug.md)` (URL-encoded target), or plain escaped text when the label
+/// has no article. Mirrors Python `_md_link` (#1444): the old `[[wikilink]]`
+/// form only resolved inside Obsidian, because the on-disk filename (the slug)
+/// differs from the label.
+#[must_use]
+pub(crate) fn md_link(label: &str, resolver: &HashMap<String, String>) -> String {
+    let text = label.replace('[', "\\[").replace(']', "\\]");
+    match resolver.get(label) {
+        None => text,
+        Some(slug) => format!("[{text}]({})", percent_encode(&format!("{slug}.md"))),
+    }
+}
+
 /// Compute per-node degree (number of incident edges, undirected).
 ///
 /// Self-loops contribute one to the source's degree only, matching the Python

@@ -29,29 +29,26 @@ pub fn make_id1(part: &str) -> String {
     make_id(&[part])
 }
 
-/// Return a stem qualified with the parent directory name to avoid ID
-/// collisions when multiple files share the same filename in different
-/// directories. Mirrors Python `_file_stem(path)`.
+/// Return the file's full repo-relative path with the extension dropped, as a
+/// POSIX string (forward slashes). [`make_id`] later collapses the separators to
+/// underscores, so same-named files in different directories get distinct IDs
+/// instead of colliding into one last-writer-wins node (#1504):
+///
+/// - `docs/v1/api/README.md` → `docs/v1/api/README` → `docs_v1_api_readme`
+/// - `docs/v2/api/README.md` → `docs/v2/api/README` → `docs_v2_api_readme`
+///
+/// Top-level files keep a bare stem (`setup.py` → `setup`). When passed an
+/// absolute path the whole path is encoded; the `extract()` id-remap post-pass
+/// (see [`crate::extractors::multi`]) re-derives the canonical repo-relative
+/// form from `source_file`, so the on-disk location can't leak into persisted
+/// IDs (#502). Mirrors Python `_file_stem(path)`.
 #[must_use]
 pub fn file_stem(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy())
-        .unwrap_or_default();
-    let parent_name = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if !parent_name.is_empty() && parent_name != "." {
-        format!("{parent_name}.{stem}")
-    } else {
-        stem.into_owned()
-    }
+    path.with_extension("").to_string_lossy().replace('\\', "/")
 }
 
-/// File-level node ID matching the skill.md spec: `{parent_dir}_{stem}` — one
-/// parent directory level, no extension.
+/// File-level node ID: the full repo-relative path joined with `_`, extension
+/// dropped (`src/auth/session.py` → `src_auth_session`).
 ///
 /// `rel_path` MUST be relative to the project root so top-level files collapse
 /// to a bare stem (`setup.py` → `setup`) instead of picking up the root
