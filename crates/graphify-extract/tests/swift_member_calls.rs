@@ -258,3 +258,66 @@ fn swift_unknown_receiver_emits_no_edge() {
         "unknown receiver should not resolve: {edges:?}"
     );
 }
+
+#[test]
+fn swift_uppercase_local_does_not_shadow_a_real_type_receiver() {
+    // Regression: the file's local type table is file-wide, not scope-aware. An
+    // upper-cased local binding (here a parameter `SessionType: OtherType`) must
+    // NOT demote a genuine `SessionType.staticMethod()` to an INFERRED call on
+    // OtherType — an upper-cased receiver is resolved as the named type
+    // (EXTRACTED), ignoring the table. A table-first resolver would mis-resolve it
+    // to OtherType.staticMethod.
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("src");
+    let mut files = vec![
+        write_file(
+            &base,
+            "Core/SessionType.swift",
+            "enum SessionType {\n    static func staticMethod() {}\n}\n",
+        ),
+        write_file(
+            &base,
+            "Core/OtherType.swift",
+            "class OtherType {\n    func staticMethod() {}\n}\n",
+        ),
+        write_file(
+            &base,
+            "Views/Poller.swift",
+            "class Poller {\n\
+             \x20   func bind(SessionType: OtherType) {}\n\n\
+             \x20   func go() {\n\
+             \x20       SessionType.staticMethod()\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ];
+    files.sort();
+    let res = extract(&files, Some(&tmp.path().join("cache")));
+    let edge = res
+        .edges
+        .iter()
+        .find(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && label_of(&res, e.get("source").and_then(|v| v.as_str()).unwrap_or("")) == ".go()"
+                && label_of(&res, e.get("target").and_then(|v| v.as_str()).unwrap_or(""))
+                    == ".staticMethod()"
+        })
+        .expect("go() should call a staticMethod");
+    assert_eq!(
+        edge.get("confidence").and_then(|v| v.as_str()),
+        Some("EXTRACTED"),
+        "an upper-cased receiver is type-qualified, not table-resolved"
+    );
+    // ...and it must target SessionType's method, not OtherType's.
+    let tgt_id = edge.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    let tgt_sf = res
+        .nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(tgt_id))
+        .and_then(|n| n.get("source_file").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    assert!(
+        tgt_sf.contains("SessionType"),
+        "must resolve to SessionType.staticMethod, got source_file {tgt_sf}"
+    );
+}

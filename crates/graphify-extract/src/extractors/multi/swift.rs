@@ -171,21 +171,23 @@ pub(super) fn resolve_swift_member_calls(
         let Some(receiver) = rc.receiver.as_deref() else {
             continue;
         };
-        // A receiver bound as a local (property/parameter) in this file resolves
-        // via its inferred type and is INFERRED — even when the local's name is
-        // upper-cased, which would otherwise look type-qualified. Only a receiver
-        // with NO local binding is treated as a bare type name
-        // (`Type.staticMethod()`), which is EXTRACTED because the type is named
-        // explicitly in source (#1533). Divergence from graphify-py
-        // (extract.py:9553), which keys solely on receiver casing and so mis-marks
-        // an upper-cased local as EXTRACTED.
-        let local_type = type_table_by_file
+        // An upper-cased receiver is named as a type in source
+        // (`Type.staticMethod()`, `Singleton.shared.x()`) and is EXTRACTED. A
+        // lower-cased receiver is a local; resolve its type via the file's local
+        // table and mark the call INFERRED (#1533). The table is file-wide, not
+        // scope-aware, so it is consulted ONLY for lower-cased receivers: using it
+        // to override an upper-cased (conventionally a type) receiver could wrongly
+        // demote a genuine `Type.staticMethod()` to INFERRED when the same name is
+        // a local in another scope of the file. Keys on casing like graphify-py
+        // (extract.py:9553).
+        let type_qualified = receiver.chars().next().is_some_and(char::is_uppercase);
+        let type_name = if type_qualified {
+            receiver.to_string()
+        } else if let Some(t) = type_table_by_file
             .get(&rc.source_file)
-            .and_then(|tbl| tbl.get(receiver));
-        let (type_name, type_qualified) = if let Some(t) = local_type {
-            (t.clone(), false)
-        } else if receiver.chars().next().is_some_and(char::is_uppercase) {
-            (receiver.to_string(), true)
+            .and_then(|tbl| tbl.get(receiver))
+        {
+            t.clone()
         } else {
             continue;
         };
