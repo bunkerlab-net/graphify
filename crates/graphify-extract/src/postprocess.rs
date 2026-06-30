@@ -25,6 +25,15 @@ static NON_ALNUM: LazyLock<Regex> =
 /// repointed to the header variant of the colliding id (#1475).
 const HEADER_SUFFIXES: [&str; 4] = ["h", "hpp", "hh", "hxx"];
 
+/// C-family source/header suffixes (without the dot). Only an importer whose own
+/// file is C-family emits `#include` edges that should resolve to a header
+/// variant; restricting the header remap to these importers stops a non-C
+/// `imports_from` edge whose target merely collides with a header id from being
+/// silently mis-pointed at the header (#1475). graphify-py omits this guard.
+const C_FAMILY_SUFFIXES: [&str; 11] = [
+    "c", "cc", "cpp", "cxx", "c++", "h", "hpp", "hh", "hxx", "m", "mm",
+];
+
 /// First 6 hex chars of the SHA-1 of `s` — an injective-enough salt to split
 /// node ids whose naive disambiguator still collides (#1522). Matches Python's
 /// `hashlib.sha1(...).hexdigest()[:6]`.
@@ -74,6 +83,7 @@ fn salt_collision_group(
     source_keys: &HashSet<String>,
     nodes: &mut [Node],
     root: &Path,
+    occupied: &HashSet<String>,
     remap: &mut HashMap<(String, String), String>,
 ) {
     let mut naive: HashMap<String, String> = HashMap::new();
@@ -96,14 +106,27 @@ fn salt_collision_group(
         if sk.is_empty() {
             continue;
         }
-        let new_id = if needs_hash.contains(&sk) {
+        let naive_id = naive
+            .get(&sk)
+            .cloned()
+            .unwrap_or_else(|| make_id(&[&sk, old_id]));
+        // Divergence from graphify-py (#1522): the reference only de-dupes within
+        // the group. Hash when the naive id collides in-group OR with an id
+        // surviving OUTSIDE this group (a salted `src_a_foo` can clash with a real
+        // node already named that). `occupied` holds surviving non-ambiguous ids,
+        // so this never over-hashes against an ambiguous id about to be rewritten.
+        let mut new_id = if needs_hash.contains(&sk) || occupied.contains(&naive_id) {
             make_id(&[&sk, old_id, &sha1_hex6(&sk)])
         } else {
-            naive
-                .get(&sk)
-                .cloned()
-                .unwrap_or_else(|| make_id(&[&sk, old_id]))
+            naive_id
         };
+        // If even the hashed candidate is occupied, widen with a numeric suffix
+        // until the id is globally unique (terminates: `occupied` is finite).
+        let mut bump = 1u32;
+        while occupied.contains(&new_id) {
+            new_id = make_id(&[&sk, old_id, &sha1_hex6(&sk), &bump.to_string()]);
+            bump += 1;
+        }
         remap.insert((old_id.to_string(), sk), new_id.clone());
         if new_id != *old_id {
             nodes[idx].id = new_id;
@@ -112,8 +135,12 @@ fn salt_collision_group(
 }
 
 /// Build `old_id -> header-variant new_id` for colliding ids whose group includes
-/// a header file (`.h`/`.hpp`/…), so a quoted-include import edge dangling on the
-/// salted-away bare id is repointed to the header variant (#1475).
+/// exactly one header file (`.h`/`.hpp`/…), so a quoted-include import edge
+/// dangling on the salted-away bare id is repointed to the header variant
+/// (#1475). Divergence from graphify-py: the reference picks the *first* header
+/// in node order, which is arbitrary when a group holds two same-stem headers
+/// (e.g. `foo.h` and `foo.hpp`); we only remap when the header target is
+/// unambiguous and otherwise leave the edge to the normal per-source-file remap.
 fn build_header_remaps(
     ambiguous_ids: &HashSet<String>,
     by_id: &HashMap<String, Vec<usize>>,
@@ -126,6 +153,7 @@ fn build_header_remaps(
         let Some(group) = by_id.get(old_id) else {
             continue;
         };
+        let mut header_ids: HashSet<String> = HashSet::new();
         for &idx in group {
             let sk = node_disambiguation_source_key(&nodes[idx], root);
             let is_header = Path::new(&sk)
@@ -136,9 +164,15 @@ fn build_header_remaps(
                 && is_header
                 && let Some(new_id) = remap.get(&(old_id.clone(), sk))
             {
-                header_remaps.insert(old_id.clone(), new_id.clone());
-                break;
+                header_ids.insert(new_id.clone());
             }
+        }
+        // Only remap when exactly one header variant exists; multiple headers
+        // make the import target ambiguous, so we leave it untouched.
+        if header_ids.len() == 1
+            && let Some(new_id) = header_ids.into_iter().next()
+        {
+            header_remaps.insert(old_id.clone(), new_id);
         }
     }
     header_remaps
@@ -179,20 +213,53 @@ pub fn disambiguate_colliding_node_ids(
         }
     }
 
-    let mut remap: HashMap<(String, String), String> = HashMap::new();
     let mut ambiguous_ids: HashSet<String> = HashSet::new();
     for (old_id, group) in &by_id {
         let source_keys: HashSet<String> = group
             .iter()
             .map(|&idx| node_disambiguation_source_key(&nodes[idx], root))
             .collect();
-        if group.len() < 2 || source_keys.len() < 2 {
-            continue;
+        if group.len() >= 2 && source_keys.len() >= 2 {
+            ambiguous_ids.insert(old_id.clone());
         }
-        ambiguous_ids.insert(old_id.clone());
-        salt_collision_group(old_id, group, &source_keys, nodes, root, &mut remap);
     }
 
+    // Ids that survive disambiguation: a salted id must not collide with one of
+    // these. A non-ambiguous id always survives; an ambiguous id survives only
+    // when one of its nodes has an empty disambiguation source key, since
+    // `salt_collision_group` skips those and leaves the bare id intact. Built
+    // before salting, so the guard never targets an ambiguous id that is itself
+    // fully rewritten (which would cause needless over-hashing).
+    let occupied: HashSet<String> = by_id
+        .iter()
+        .filter(|(id, group)| {
+            !ambiguous_ids.contains(*id)
+                || group
+                    .iter()
+                    .any(|&idx| node_disambiguation_source_key(&nodes[idx], root).is_empty())
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    let mut remap: HashMap<(String, String), String> = HashMap::new();
+    for old_id in &ambiguous_ids {
+        let Some(group) = by_id.get(old_id) else {
+            continue;
+        };
+        let source_keys: HashSet<String> = group
+            .iter()
+            .map(|&idx| node_disambiguation_source_key(&nodes[idx], root))
+            .collect();
+        salt_collision_group(
+            old_id,
+            group,
+            &source_keys,
+            nodes,
+            root,
+            &occupied,
+            &mut remap,
+        );
+    }
     if remap.is_empty() {
         return;
     }
@@ -226,6 +293,29 @@ pub fn disambiguate_colliding_node_ids(
 
     let header_remaps = build_header_remaps(&ambiguous_ids, &by_id, nodes, root, &remap);
 
+    rewrite_edge_endpoints(edges, &remap, &unambiguous_remaps, &header_remaps, root);
+
+    for call in raw_calls.iter_mut() {
+        let call_source_key = source_key(&call.source_file, root);
+        let caller_tuple = (call.caller_nid.clone(), call_source_key);
+        if let Some(new_id) = remap.get(&caller_tuple) {
+            call.caller_nid.clone_from(new_id);
+        } else if let Some(new_id) = unambiguous_remaps.get(&call.caller_nid) {
+            call.caller_nid.clone_from(new_id);
+        }
+    }
+}
+
+/// Rewrite edge endpoints onto disambiguated node ids. Source endpoints take the
+/// per-source-file salt remap then the single-candidate remap; target endpoints
+/// additionally resolve a C-family `#include` to the header variant first (#1475).
+fn rewrite_edge_endpoints(
+    edges: &mut [Edge],
+    remap: &HashMap<(String, String), String>,
+    unambiguous_remaps: &HashMap<String, String>,
+    header_remaps: &HashMap<String, String>,
+    root: &Path,
+) {
     for edge in edges.iter_mut() {
         let edge_source_key = source_key(&edge.source_file, root);
         let source_key_tuple = (edge.source.clone(), edge_source_key.clone());
@@ -235,11 +325,19 @@ pub fn disambiguate_colliding_node_ids(
         } else if let Some(new_id) = unambiguous_remaps.get(&edge.source) {
             edge.source.clone_from(new_id);
         }
-        // imports/imports_from always target a header file, so they must resolve
-        // to the header variant BEFORE the same-source-file salt is considered.
-        // Keying the import target by the importer's own source file mis-points a
-        // `.m` importing its own `.h` back at itself (self-loop) (#1475).
-        if matches!(edge.relation.as_str(), "imports" | "imports_from")
+        // A C-family `#include "foo.h"` whose bare id was salted away resolves to
+        // the header variant BEFORE the same-source-file salt is considered, so a
+        // `.m` including its own `.h` points at the header, not back at itself.
+        // Restrict to C-family importers: a non-C `imports_from` whose target
+        // merely collides with a header id must NOT be rewritten to the header
+        // (#1475). graphify-py applies this to every imports/imports_from edge and
+        // can mis-target non-C imports — fixed here per the parity-bug rule.
+        let importer_is_c_family = Path::new(&edge.source_file)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| C_FAMILY_SUFFIXES.contains(&e.to_lowercase().as_str()));
+        if importer_is_c_family
+            && matches!(edge.relation.as_str(), "imports" | "imports_from")
             && let Some(new_id) = header_remaps.get(&edge.target)
         {
             edge.target.clone_from(new_id);
@@ -247,16 +345,6 @@ pub fn disambiguate_colliding_node_ids(
             edge.target.clone_from(new_id);
         } else if let Some(new_id) = unambiguous_remaps.get(&edge.target) {
             edge.target.clone_from(new_id);
-        }
-    }
-
-    for call in raw_calls.iter_mut() {
-        let call_source_key = source_key(&call.source_file, root);
-        let caller_tuple = (call.caller_nid.clone(), call_source_key);
-        if let Some(new_id) = remap.get(&caller_tuple) {
-            call.caller_nid.clone_from(new_id);
-        } else if let Some(new_id) = unambiguous_remaps.get(&call.caller_nid) {
-            call.caller_nid.clone_from(new_id);
         }
     }
 }
