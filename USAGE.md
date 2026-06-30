@@ -709,6 +709,7 @@ completes the feature.)
 | `OLLAMA_BASE_URL`                | Ollama endpoint (default `http://localhost:11434/v1`); a link-local/cloud-metadata host is refused, a general non-loopback host warns.              |
 | `GRAPHIFY_API_TIMEOUT`           | LLM HTTP request timeout in seconds (default 600); bounds a runaway connection during semantic extraction.                                          |
 | `GRAPHIFY_MAX_RETRIES`           | Times a rate-limited (HTTP 429) LLM request is retried before its chunk is dropped (default 6); `0` disables retries (#1523).                       |
+| `GRAPHIFY_RETRY_BASE_MS`         | Base backoff delay in milliseconds for the 429 retry path; the wait grows exponentially per attempt (default 500). `0` disables the sleep (#1523).  |
 
 ### LLM backends
 

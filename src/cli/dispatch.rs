@@ -271,12 +271,13 @@ fn dispatch_save_result(cmd: Command) -> Result<()> {
     };
     // `--answer-file` lets callers pass a long/multiline answer via a file instead
     // of a fragile inline arg (Windows/PowerShell quoting), #1502. It wins over
-    // `--answer`; with neither, fail with a message naming both flags.
+    // `--answer`; with neither, fail with a message naming both flags. The file
+    // content is preserved exactly (indentation, trailing newlines) to match
+    // inline `--answer`, which is unstripped — diverging from graphify-py
+    // (__main__.py:2982), which `.strip()`s the file.
     let answer = match answer_file {
         Some(path) => std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("--answer-file {}: {e}", path.display()))?
-            .trim()
-            .to_string(),
+            .map_err(|e| anyhow::anyhow!("--answer-file {}: {e}", path.display()))?,
         None => answer.ok_or_else(|| anyhow::anyhow!("--answer or --answer-file is required"))?,
     };
     cli::save_result::cmd_save_result(

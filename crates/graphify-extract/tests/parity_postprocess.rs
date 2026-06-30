@@ -201,3 +201,27 @@ fn salted_id_does_not_collide_with_existing_node() {
         "all node ids must be distinct: {ids:?}"
     );
 }
+
+#[test]
+fn salted_ids_unique_across_colliding_groups() {
+    // Two distinct old ids that normalise to the same salted form under the same
+    // source key (`foo-bar`/`foo_bar` both -> `shared_rb_foo_bar`): a live
+    // minted-set keeps the two `shared.rb` nodes from reusing one id. Without it
+    // the second group reassigns the first group's salted id.
+    let mut nodes = vec![
+        n("foo-bar", "FooBar", "shared.rb"), // group "foo-bar"
+        n("foo-bar", "FooBar", "a.rb"),      // makes "foo-bar" ambiguous
+        n("foo_bar", "FooBar", "shared.rb"), // group "foo_bar"
+        n("foo_bar", "FooBar", "b.rb"),      // makes "foo_bar" ambiguous
+    ];
+    let mut edges: Vec<Edge> = Vec::new();
+    let mut raw_calls: Vec<RawCall> = Vec::new();
+    disambiguate_colliding_node_ids(&mut nodes, &mut edges, &mut raw_calls, Path::new("."));
+    let ids: Vec<&str> = nodes.iter().map(|nd| nd.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        ids.len(),
+        "all node ids must be distinct: {ids:?}"
+    );
+}

@@ -330,4 +330,6 @@ fn resolve_max_retries_default_and_env() {
     assert_eq!(resolve_max_retries(), 0, "disable is allowed");
     g.set("GRAPHIFY_MAX_RETRIES", "bogus");
     assert_eq!(resolve_max_retries(), 6, "invalid -> default");
+    g.set("GRAPHIFY_MAX_RETRIES", "-1");
+    assert_eq!(resolve_max_retries(), 6, "negative -> default");
 }

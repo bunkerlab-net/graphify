@@ -595,9 +595,16 @@ fn prune_semantic_cache_safe(root: &std::path::Path, sem_paths: &[String]) {
     let live: std::collections::HashSet<String> = sem_paths
         .iter()
         .filter_map(|p| {
-            let fp = std::path::Path::new(p);
+            // Resolve a relative path against `root` exactly as
+            // `check_semantic_cache` does (semantic.rs), so the live-set hashes
+            // key the same entries the cache lookup did; otherwise a relative CLI
+            // input would hash differently here and prune a valid entry.
+            let mut fp = std::path::PathBuf::from(p);
+            if !fp.is_absolute() {
+                fp = root.join(&fp);
+            }
             fp.is_file()
-                .then(|| graphify_cache::file_hash(fp, root).ok())
+                .then(|| graphify_cache::file_hash(&fp, root).ok())
                 .flatten()
         })
         .collect();

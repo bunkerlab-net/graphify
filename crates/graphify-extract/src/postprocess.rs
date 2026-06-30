@@ -83,7 +83,7 @@ fn salt_collision_group(
     source_keys: &HashSet<String>,
     nodes: &mut [Node],
     root: &Path,
-    occupied: &HashSet<String>,
+    taken: &mut HashSet<String>,
     remap: &mut HashMap<(String, String), String>,
 ) {
     let mut naive: HashMap<String, String> = HashMap::new();
@@ -106,27 +106,39 @@ fn salt_collision_group(
         if sk.is_empty() {
             continue;
         }
-        let naive_id = naive
-            .get(&sk)
-            .cloned()
-            .unwrap_or_else(|| make_id(&[&sk, old_id]));
-        // Divergence from graphify-py (#1522): the reference only de-dupes within
-        // the group. Hash when the naive id collides in-group OR with an id
-        // surviving OUTSIDE this group (a salted `src_a_foo` can clash with a real
-        // node already named that). `occupied` holds surviving non-ambiguous ids,
-        // so this never over-hashes against an ambiguous id about to be rewritten.
-        let mut new_id = if needs_hash.contains(&sk) || occupied.contains(&naive_id) {
-            make_id(&[&sk, old_id, &sha1_hex6(&sk)])
+        // Same-file same-id nodes share a `(old_id, sk)` key and must collapse to
+        // one disambiguated id; if a prior node in this group already minted it,
+        // reuse it rather than minting (and bumping) a second id, which would
+        // split them and corrupt the remap.
+        let new_id = if let Some(existing) = remap.get(&(old_id.to_string(), sk.clone())) {
+            existing.clone()
         } else {
-            naive_id
+            let naive_id = naive
+                .get(&sk)
+                .cloned()
+                .unwrap_or_else(|| make_id(&[&sk, old_id]));
+            // Divergence from graphify-py (#1522): the reference only de-dupes
+            // within the group. Hash when the naive id collides in-group or with
+            // an id already claimed — a surviving non-ambiguous id (a salted
+            // `src_a_foo` can clash with a real node already named that) or one
+            // minted earlier in this pass. `taken` is seeded with surviving ids
+            // (never an ambiguous id about to be rewritten), so this never
+            // over-hashes.
+            let mut candidate = if needs_hash.contains(&sk) || taken.contains(&naive_id) {
+                make_id(&[&sk, old_id, &sha1_hex6(&sk)])
+            } else {
+                naive_id
+            };
+            // If the hashed candidate is also taken, widen with a numeric suffix
+            // until globally unique (terminates: `taken` is finite).
+            let mut bump = 1u32;
+            while taken.contains(&candidate) {
+                candidate = make_id(&[&sk, old_id, &sha1_hex6(&sk), &bump.to_string()]);
+                bump += 1;
+            }
+            taken.insert(candidate.clone());
+            candidate
         };
-        // If even the hashed candidate is occupied, widen with a numeric suffix
-        // until the id is globally unique (terminates: `occupied` is finite).
-        let mut bump = 1u32;
-        while occupied.contains(&new_id) {
-            new_id = make_id(&[&sk, old_id, &sha1_hex6(&sk), &bump.to_string()]);
-            bump += 1;
-        }
         remap.insert((old_id.to_string(), sk), new_id.clone());
         if new_id != *old_id {
             nodes[idx].id = new_id;
@@ -224,13 +236,15 @@ pub fn disambiguate_colliding_node_ids(
         }
     }
 
-    // Ids that survive disambiguation: a salted id must not collide with one of
-    // these. A non-ambiguous id always survives; an ambiguous id survives only
-    // when one of its nodes has an empty disambiguation source key, since
-    // `salt_collision_group` skips those and leaves the bare id intact. Built
-    // before salting, so the guard never targets an ambiguous id that is itself
-    // fully rewritten (which would cause needless over-hashing).
-    let occupied: HashSet<String> = by_id
+    // Ids already claimed, which a salted id must avoid: every surviving id plus
+    // every id minted during this pass. A non-ambiguous id always survives; an
+    // ambiguous id survives only when one of its nodes has an empty disambiguation
+    // source key (`salt_collision_group` skips those, leaving the bare id intact).
+    // Seeded before salting, so it never holds an ambiguous id about to be
+    // rewritten (which would needlessly over-hash); `salt_collision_group` adds
+    // each minted id so a later group can't reuse an earlier group's salted form
+    // (possible when two old ids normalise to the same salted id).
+    let mut taken: HashSet<String> = by_id
         .iter()
         .filter(|(id, group)| {
             !ambiguous_ids.contains(*id)
@@ -242,7 +256,11 @@ pub fn disambiguate_colliding_node_ids(
         .collect();
 
     let mut remap: HashMap<(String, String), String> = HashMap::new();
-    for old_id in &ambiguous_ids {
+    // Iterate in sorted order so the `taken`-set resolution is deterministic
+    // regardless of `ambiguous_ids` hash order.
+    let mut ambiguous_sorted: Vec<&String> = ambiguous_ids.iter().collect();
+    ambiguous_sorted.sort();
+    for old_id in ambiguous_sorted {
         let Some(group) = by_id.get(old_id) else {
             continue;
         };
@@ -256,7 +274,7 @@ pub fn disambiguate_colliding_node_ids(
             &source_keys,
             nodes,
             root,
-            &occupied,
+            &mut taken,
             &mut remap,
         );
     }

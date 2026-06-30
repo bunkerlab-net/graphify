@@ -139,10 +139,11 @@ fn openai_retries_rate_limited_request() {
 fn openai_gives_up_when_retries_disabled() {
     // GRAPHIFY_MAX_RETRIES=0 disables retries: a 429 fails immediately.
     let mut server = mockito::Server::new();
-    let _rl = server
+    let rl = server
         .mock("POST", "/chat/completions")
         .with_status(429)
         .with_body("rate limited")
+        .expect(1)
         .create();
 
     let mut g = allow_private();
@@ -160,6 +161,7 @@ fn openai_gives_up_when_retries_disabled() {
         .is_err(),
         "with retries disabled, a 429 must fail"
     );
+    rl.assert(); // exactly one request: GRAPHIFY_MAX_RETRIES=0 means no retry
 }
 
 // ── gemini ─────────────────────────────────────────────────────────────────

@@ -171,17 +171,21 @@ pub(super) fn resolve_swift_member_calls(
         let Some(receiver) = rc.receiver.as_deref() else {
             continue;
         };
-        // An upper-cased receiver is itself a type (`Type.staticMethod()`,
-        // `Singleton.shared.x()`); otherwise look it up in the declaring file's
-        // local type table.
-        let type_qualified = receiver.chars().next().is_some_and(char::is_uppercase);
-        let type_name = if type_qualified {
-            receiver.to_string()
-        } else if let Some(t) = type_table_by_file
+        // A receiver bound as a local (property/parameter) in this file resolves
+        // via its inferred type and is INFERRED — even when the local's name is
+        // upper-cased, which would otherwise look type-qualified. Only a receiver
+        // with NO local binding is treated as a bare type name
+        // (`Type.staticMethod()`), which is EXTRACTED because the type is named
+        // explicitly in source (#1533). Divergence from graphify-py
+        // (extract.py:9553), which keys solely on receiver casing and so mis-marks
+        // an upper-cased local as EXTRACTED.
+        let local_type = type_table_by_file
             .get(&rc.source_file)
-            .and_then(|tbl| tbl.get(receiver))
-        {
-            t.clone()
+            .and_then(|tbl| tbl.get(receiver));
+        let (type_name, type_qualified) = if let Some(t) = local_type {
+            (t.clone(), false)
+        } else if receiver.chars().next().is_some_and(char::is_uppercase) {
+            (receiver.to_string(), true)
         } else {
             continue;
         };

@@ -16,6 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::java::is_type_like_definition;
 use crate::types::{Edge, Node, RawCall};
 
 /// Normalise a class/method label to a comparison key (drop punctuation, fold).
@@ -82,9 +83,32 @@ pub(super) fn resolve_ruby_member_calls(
 ) {
     let node_by_id: HashMap<&str, &Node> = all_nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
-    // class label key -> [class node ids]; (class_node_id, method_key) -> method id.
+    // Index class-definition nodes independently of method ownership: a Ruby
+    // class is a `contains` target whose label is a Constant (upper-cased)
+    // type-like definition. This lets a method-less class (`class Config; end`)
+    // still resolve `Config.new`. Divergence from graphify-py, which builds the
+    // class index solely from `method` edges (extract.py:9621), so a class with
+    // no methods is invisible there.
     let mut class_def_nids: HashMap<String, Vec<String>> = HashMap::new();
     let mut method_index: HashMap<(String, String), String> = HashMap::new();
+    let contained: HashSet<&str> = all_edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .map(|e| e.target.as_str())
+        .collect();
+    for n in all_nodes {
+        if contained.contains(n.id.as_str())
+            && is_type_like_definition(n)
+            && n.label.chars().next().is_some_and(char::is_uppercase)
+        {
+            class_def_nids
+                .entry(key(&n.label))
+                .or_default()
+                .push(n.id.clone());
+        }
+    }
+    // (class_node_id, method_key) -> method id, from `method` edges. The edge
+    // source also confirms a class node (belt-and-braces with the index above).
     for e in all_edges.iter() {
         if e.relation != "method" {
             continue;

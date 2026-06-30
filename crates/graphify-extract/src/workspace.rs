@@ -447,12 +447,26 @@ pub fn package_entry_candidates(package_dir: &Path, subpath: &str) -> Vec<PathBu
     }
 
     if let Some(exports) = manifest_data.get("exports") {
-        if let Some(s) = exports.as_str() {
-            return vec![package_dir.join(s)];
-        }
-        if let Some(obj) = exports.as_object()
-            && let Some(dot) = obj.get(".")
-            && let Some(target) = resolve_export_target(dot)
+        // The bare-package target is a string `exports`, or — for a conditions
+        // object with no `.` subpath key (e.g. {"import": "./esm.js"}, which Node
+        // treats as the `.` entry) — the whole object resolved by condition
+        // priority. A subpath map ({".": …, "./foo": …}) yields None from
+        // `resolve_export_target` and falls through. Every target is
+        // containment-checked so a `../../etc/passwd` escape is rejected;
+        // graphify-py (extract.py:465) guards only subpath exports and misses the
+        // bare-conditions object entirely.
+        let target = if let Some(s) = exports.as_str() {
+            Some(s.to_string())
+        } else if let Some(obj) = exports.as_object() {
+            match obj.get(".") {
+                Some(dot) => resolve_export_target(dot),
+                None => resolve_export_target(exports),
+            }
+        } else {
+            None
+        };
+        if let Some(target) = target
+            && contained_in_package(&target, package_dir)
         {
             return vec![package_dir.join(target)];
         }

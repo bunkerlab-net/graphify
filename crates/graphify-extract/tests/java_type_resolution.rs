@@ -263,10 +263,10 @@ fn java_cross_file_constructor_call_resolves() {
 }
 
 #[test]
-fn java_type_parameters_do_not_resolve_to_real_class() {
+fn java_type_parameters_do_not_resolve_to_real_class() -> Result<(), Box<dyn std::error::Error>> {
     // #1518: a generic field `List<T>` must not emit a references edge to a real
     // same-named class `T` — `T` is a type variable, not a type.
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir()?;
     let real_type = write_file(tmp.path(), "T.java", "public class T {}\n");
     let generic = write_file(
         tmp.path(),
@@ -295,4 +295,5 @@ fn java_type_parameters_do_not_resolve_to_real_class() {
         !has_generic_t_ref,
         "type parameter T must not resolve to the real T class"
     );
+    Ok(())
 }

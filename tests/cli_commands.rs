@@ -1211,5 +1211,5 @@ fn save_result_requires_answer_or_answer_file() {
         .args(["save-result", "--question", "q", "--outcome", "useful"])
         .assert()
         .failure()
-        .stderr(contains("--answer"));
+        .stderr(contains("--answer").and(contains("--answer-file")));
 }

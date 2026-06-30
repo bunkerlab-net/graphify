@@ -62,6 +62,7 @@ pub(super) fn run_language_resolvers(
 
 /// The default ordered resolver set: Swift (#1356), then Python (#1446), then
 /// Ruby (#1499). Order preserves the prior inlined wiring.
+#[must_use]
 pub(super) fn default_resolvers() -> [LanguageResolver; 3] {
     [
         LanguageResolver {

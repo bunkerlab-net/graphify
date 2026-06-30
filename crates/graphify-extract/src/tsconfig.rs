@@ -230,24 +230,32 @@ pub fn load_tsconfig_aliases(start_dir: &Path) -> AliasMap {
 /// Mirrors Python `_resolve_tsconfig_alias`.
 #[must_use]
 pub fn resolve_tsconfig_alias(raw: &str, aliases: &AliasMap) -> Option<PathBuf> {
-    for (alias_prefix, alias_bases) in aliases {
-        if raw == alias_prefix || raw.starts_with(&format!("{alias_prefix}/")) {
-            let rest = raw[alias_prefix.len()..].trim_start_matches('/');
-            let mut first: Option<PathBuf> = None;
-            for base in alias_bases {
-                let cand = normpath(&Path::new(base).join(rest));
-                let resolved = resolve_js_module_path(&cand);
-                if resolved.is_file() {
-                    return Some(resolved);
-                }
-                if first.is_none() {
-                    first = Some(cand);
-                }
+    // Collect every alias prefix that matches `raw`, longest first: tsc resolves
+    // the most specific (longest) prefix, so `@/feature/*` wins over `@/*` for
+    // `@/feature/x`. Divergence from graphify-py (extract.py:291), which returns
+    // the first match in declaration order and so lets a broad prefix shadow a
+    // more specific one. The first-candidate fallback is kept, but taken from the
+    // longest matching prefix.
+    let mut matched: Vec<(&String, &Vec<String>)> = aliases
+        .iter()
+        .filter(|(prefix, _)| raw == prefix.as_str() || raw.starts_with(&format!("{prefix}/")))
+        .collect();
+    matched.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
+    let mut first: Option<PathBuf> = None;
+    for (alias_prefix, alias_bases) in matched {
+        let rest = raw[alias_prefix.len()..].trim_start_matches('/');
+        for base in alias_bases {
+            let cand = normpath(&Path::new(base).join(rest));
+            let resolved = resolve_js_module_path(&cand);
+            if resolved.is_file() {
+                return Some(resolved);
             }
-            return first;
+            if first.is_none() {
+                first = Some(cand);
+            }
         }
     }
-    None
+    first
 }
 
 /// Resolve a JS/TS-style import specifier path to an actual file on disk.

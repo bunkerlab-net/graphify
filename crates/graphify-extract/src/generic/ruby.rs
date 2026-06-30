@@ -54,8 +54,16 @@ fn visit(node: Node<'_>, source: &[u8], bindings: &mut HashMap<String, Option<St
     }
     loop {
         let child = cur.node();
-        // A nested method has its own scope — don't descend into it.
-        if matches!(child.kind(), "method" | "singleton_method") {
+        // A nested scope has its own bindings — don't let its assignments leak
+        // into this method. graphify-py only skips `method`/`singleton_method`
+        // (extract.py:2513): a `class`/`module` body is a syntax error inside a
+        // method, so MRI never produces one here, but tree-sitter's error
+        // recovery can on partial/invalid source (e.g. mid-edit under `watch`),
+        // so we guard them too.
+        if matches!(
+            child.kind(),
+            "method" | "singleton_method" | "class" | "module"
+        ) {
             if !cur.goto_next_sibling() {
                 break;
             }

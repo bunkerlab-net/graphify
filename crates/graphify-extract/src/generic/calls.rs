@@ -91,17 +91,35 @@ pub(super) fn walk_calls(
             // real local symbol is a genuine call and must be kept. Only drop
             // built-ins when they DON'T resolve, so they can't become cross-file
             // god-nodes via the raw-call pass (#726).
-            // A capitalized-receiver Python member call (`ClassName.method()`)
-            // defers to receiver-based cross-file resolution: the bare method
-            // name can collide with an in-file node — even the calling method
-            // itself — which would match `tgt == caller` and silently drop the
-            // call. `resolve_python_member_calls` resolves it via the receiver
-            // (#1446). Gated to Python so Swift's own resolver is unaffected.
+            // Ruby: the receiver's inferred type from the method's local
+            // `var = Const.new` bindings, when unambiguously known (#1499).
+            // Computed up-front so it can also gate member-call deferral below.
+            let receiver_type = if ctx.config.lang_id == LangId::Ruby {
+                receiver.as_deref().and_then(|r| {
+                    ctx.ruby_var_types
+                        .get(caller_nid)
+                        .and_then(|m| m.get(r).cloned())
+                        .flatten()
+                })
+            } else {
+                None
+            };
+            let receiver_upper = receiver
+                .as_deref()
+                .is_some_and(|r| r.chars().next().is_some_and(char::is_uppercase));
+            // Defer to receiver-based cross-file resolution rather than a bare
+            // same-file `label_to_nid` match (which can collide with an in-file
+            // symbol — even the caller — and drop or mis-link the call):
+            //   * Python `ClassName.method()` (upper-cased receiver), #1446;
+            //   * Ruby `Const.new` / `Const.method()` (upper-cased receiver), and a
+            //     typed instance call `var.method()` whose `var` has a known type
+            //     (#1499). graphify-py only defers upper-cased receivers
+            //     (extract.py:3899); deferring the typed-instance case too keeps a
+            //     `p.run` from being swallowed by a same-file `run`.
             let defer_member = is_member_call
-                && ctx.config.lang_id == LangId::Python
-                && receiver
-                    .as_deref()
-                    .is_some_and(|r| r.chars().next().is_some_and(char::is_uppercase));
+                && ((ctx.config.lang_id == LangId::Python && receiver_upper)
+                    || (ctx.config.lang_id == LangId::Ruby
+                        && (receiver_upper || receiver_type.is_some())));
             let tgt_nid = if defer_member {
                 None
             } else {
@@ -127,18 +145,6 @@ pub(super) fn walk_calls(
                     }
                 }
             } else if !crate::builtins::is_language_builtin_global(&callee) {
-                // Ruby: attach the receiver's inferred type from the method's
-                // local `var = Const.new` bindings, when unambiguously known (#1499).
-                let receiver_type = if ctx.config.lang_id == LangId::Ruby {
-                    receiver.as_deref().and_then(|r| {
-                        ctx.ruby_var_types
-                            .get(caller_nid)
-                            .and_then(|m| m.get(r).cloned())
-                            .flatten()
-                    })
-                } else {
-                    None
-                };
                 ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: callee.clone(),
