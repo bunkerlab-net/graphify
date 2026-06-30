@@ -169,10 +169,17 @@ fn header_remap_skips_non_c_family_importers() {
         header_id, "foo",
         "header should be salted away from the bare id"
     );
+    // A C-family `#include` resolves to the header variant...
     assert_eq!(
         edges[1].target, header_id,
         "a C `#include` should resolve to the header variant"
     );
+    // ...while a non-C importer's edge must NOT be redirected to the header. We
+    // assert only the negative here: the salt remap is keyed by the importer's own
+    // file, and `consumer.py` matches neither colliding definition, so the pass
+    // has no information to resolve a bare ambiguous import to the Python module.
+    // Pinning a positive target would either codify a dangling id or assume a
+    // module-inference step this pass (and the graphify-py reference) never does.
     assert_ne!(
         edges[0].target, header_id,
         "a non-C import must not be repointed at the header variant"
