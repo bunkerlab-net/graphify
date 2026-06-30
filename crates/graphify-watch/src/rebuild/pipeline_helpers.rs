@@ -430,6 +430,42 @@ pub(crate) fn merge_with_existing_graph(
         )
         .collect();
 
+    // An edge is OWNED by the file it was extracted from (its `source_file`). When
+    // that file is re-extracted, its prior edges must not be carried forward — the
+    // fresh extraction re-emits whichever ones still exist. Preserving by endpoint
+    // membership alone keeps a removed import's edge alive forever whenever both
+    // endpoint nodes survive (e.g. `a` no longer imports `b`, but both survive),
+    // producing phantom circular dependencies (#1521). So drop preserved edges
+    // whose source_file was re-extracted this run (or deleted). Unlike the
+    // node-level evict set, this MUST cover the full-rebuild case too: there every
+    // file is re-extracted but `evict_sources` only lists deleted files, so a
+    // removed import in a surviving file would otherwise never be pruned.
+    let mut edge_evict_sources = evict_sources.clone();
+    for p in extract_targets {
+        for root in [project_root, watch_root] {
+            edge_evict_sources.insert(norm_source_file(
+                &p.to_string_lossy(),
+                Some(&root.to_string_lossy()),
+            ));
+        }
+    }
+    let edge_evicted = |e: &Value| -> bool {
+        if edge_evict_sources.is_empty() {
+            return false;
+        }
+        let Some(sf) = e.get("source_file").and_then(Value::as_str) else {
+            return false;
+        };
+        if sf.is_empty() {
+            return false;
+        }
+        if edge_evict_sources.contains(sf) {
+            return true;
+        }
+        let norm = norm_source_file(sf, Some(&project_root_str));
+        !norm.is_empty() && edge_evict_sources.contains(&norm)
+    };
+
     let preserved_edges: Vec<Value> = existing
         .get("links")
         .or_else(|| existing.get("edges"))
@@ -439,7 +475,7 @@ pub(crate) fn merge_with_existing_graph(
                 .filter(|e| {
                     let src = e.get("source").and_then(Value::as_str).unwrap_or("");
                     let tgt = e.get("target").and_then(Value::as_str).unwrap_or("");
-                    all_ids.contains(src) && all_ids.contains(tgt)
+                    all_ids.contains(src) && all_ids.contains(tgt) && !edge_evicted(e)
                 })
                 .cloned()
                 .collect()

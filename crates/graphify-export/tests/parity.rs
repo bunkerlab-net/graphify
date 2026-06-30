@@ -203,6 +203,39 @@ fn test_to_graphml_has_community_attribute() {
     );
 }
 
+#[test]
+fn test_to_graphml_tolerates_none_attribute_values() -> Result<(), Box<dyn std::error::Error>> {
+    // A null attribute value must coerce to "" so a node/edge with a null field
+    // still exports (no crash). graphify-py needs this because nx.write_graphml
+    // raises ValueError on None (#1502); the hand-written Rust GraphML already
+    // renders null as empty, so this pins that contract.
+    let mut g = make_graph();
+    let communities = make_communities();
+    // Inject a null-valued attribute on one node...
+    let (nid, mut nattrs) = {
+        let (id, attrs) = g.nodes().next().ok_or("graph has at least one node")?;
+        (id.clone(), attrs.clone())
+    };
+    nattrs.insert("nullable_field".to_string(), Value::Null);
+    g.add_node(&nid, nattrs);
+    // ...and on one edge.
+    let edge_info = g
+        .edges()
+        .next()
+        .map(|e| (e.source.clone(), e.target.clone(), e.attrs.clone()));
+    if let Some((src, tgt, mut eattrs)) = edge_info {
+        eattrs.insert("nullable_field".to_string(), Value::Null);
+        g.add_edge(&src, &tgt, eattrs);
+    }
+
+    let tmp = tempdir()?;
+    let out = tmp.path().join("graph.graphml");
+    to_graphml(&g, &communities, &out)?;
+    let content = std::fs::read_to_string(&out)?;
+    assert!(content.contains("<graphml"), "GraphML missing <graphml");
+    Ok(())
+}
+
 // ── to_html ───────────────────────────────────────────────────────────────────
 
 #[test]

@@ -786,6 +786,127 @@ fn java_field_type_references_have_field_context() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// Ports `test_languages.py::test_java_type_parameters_do_not_emit_references` (#1518):
+/// `<T>` / `<U>` / `<V>` are type variables, not real types — no `references` edge
+/// and no sourceless stub node, while real types (Base, Payload) survive.
+#[test]
+fn java_type_parameters_do_not_emit_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("TypeParameters.java");
+    std::fs::write(
+        &source,
+        "class Payload {}\n\
+         class Base<X> {}\n\
+         class Box<T> extends Base<T> {\n\
+         \x20   T value;\n\
+         \x20   List<T> values;\n\
+         \x20   <U> U convert(T input, List<U> mapped, List<Payload> retained) {\n\
+         \x20       return null;\n\
+         \x20   }\n\
+         \x20   <V> Box(V value) {}\n\
+         }\n",
+    )?;
+    let result = extract_java(&source);
+    let references = edge_label_pairs(&result, "references", None);
+    assert!(
+        !references
+            .iter()
+            .any(|(_, t)| matches!(t.as_str(), "T" | "U" | "V")),
+        "type-parameter references leaked: {references:?}"
+    );
+    assert!(
+        !result
+            .nodes
+            .iter()
+            .any(|n| matches!(n.label.as_str(), "T" | "U" | "V") && n.source_file.is_empty()),
+        "sourceless type-parameter stub node leaked"
+    );
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    assert!(
+        inherits.contains(&("Box".into(), "Base".into())),
+        "{inherits:?}"
+    );
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        generics.contains(&("convert".into(), "Payload".into())),
+        "{generics:?}"
+    );
+    Ok(())
+}
+
+/// Ports `test_languages.py::test_java_record_component_type_references` (#1519):
+/// a record's header components emit `field` / `generic_arg` references like fields.
+#[test]
+fn java_record_component_type_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("RecordComponents.java");
+    std::fs::write(
+        &source,
+        "class Payload {}\n\
+         class Item {}\n\
+         class Attachment {}\n\
+         record Order(Payload payload, List<Item> items, int count, Attachment... attachments) {}\n",
+    )?;
+    let result = extract_java(&source);
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        fields.contains(&("Order".into(), "Payload".into())),
+        "{fields:?}"
+    );
+    assert!(
+        fields.contains(&("Order".into(), "List".into())),
+        "{fields:?}"
+    );
+    assert!(
+        generics.contains(&("Order".into(), "Item".into())),
+        "{generics:?}"
+    );
+    assert!(
+        fields.contains(&("Order".into(), "Attachment".into())),
+        "{fields:?}"
+    );
+    Ok(())
+}
+
+/// Ports `test_languages.py::test_java_record_components_skip_type_parameters` (#1519):
+/// a generic record's type parameters are skipped in its component references.
+#[test]
+fn java_record_components_skip_type_parameters() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("GenericRecord.java");
+    std::fs::write(
+        &source,
+        "class Payload {}\n\
+         class Box<X> {}\n\
+         record Batch<T>(T value, Box<T> boxed, Box<Payload> retained) {}\n",
+    )?;
+    let result = extract_java(&source);
+    let references = edge_label_pairs(&result, "references", None);
+    assert!(
+        !references.contains(&("Batch".into(), "T".into())),
+        "{references:?}"
+    );
+    assert!(
+        !result
+            .nodes
+            .iter()
+            .any(|n| n.label == "T" && n.source_file.is_empty()),
+        "sourceless T stub node leaked"
+    );
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        fields.contains(&("Batch".into(), "Box".into())),
+        "{fields:?}"
+    );
+    assert!(
+        generics.contains(&("Batch".into(), "Payload".into())),
+        "{generics:?}"
+    );
+    Ok(())
+}
+
 /// Ports `test_languages.py::test_java_type_annotations_have_attribute_context` (#1487).
 #[test]
 fn java_type_annotations_have_attribute_context() -> Result<(), Box<dyn std::error::Error>> {

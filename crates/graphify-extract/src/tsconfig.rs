@@ -33,8 +33,12 @@ pub fn strip_jsonc(text: &str) -> String {
     TRAILING_COMMA_RE.replace_all(&stripped, "$1").into_owned()
 }
 
+/// Alias prefix → ordered list of resolved base dirs. tsc tries each target in
+/// declared order until one resolves on disk (#1531).
+pub type AliasMap = IndexMap<String, Vec<String>>;
+
 // Cache: tsconfig path string → alias map
-static ALIAS_CACHE: LazyLock<Mutex<IndexMap<String, IndexMap<String, String>>>> =
+static ALIAS_CACHE: LazyLock<Mutex<IndexMap<String, AliasMap>>> =
     LazyLock::new(|| Mutex::new(IndexMap::new()));
 
 /// Recursively read path aliases from a tsconfig, following `extends` chains.
@@ -44,7 +48,7 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
     tsconfig: &Path,
     base_dir: &Path,
     seen: &mut HashSet<String, S>,
-) -> IndexMap<String, String> {
+) -> AliasMap {
     let key = tsconfig.to_string_lossy().into_owned();
     if seen.contains(&key) {
         return IndexMap::new();
@@ -61,7 +65,7 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
             Err(_) => return IndexMap::new(),
         };
 
-    let mut aliases: IndexMap<String, String> = IndexMap::new();
+    let mut aliases: AliasMap = IndexMap::new();
 
     // Follow extends chain. TypeScript 5.0 allows `extends` to be either a
     // string or an array of paths; for an array, parents are processed in
@@ -119,17 +123,24 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
             if arr.is_empty() {
                 continue;
             }
-            let Some(first) = arr[0].as_str() else {
-                continue;
-            };
             let alias_prefix = alias.trim_end_matches("/*");
-            let target_base = first.trim_end_matches("/*");
-            aliases.insert(
-                alias_prefix.to_string(),
-                normpath(&paths_base.join(target_base))
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            // Keep ALL targets in declared order — tsc tries each until one
+            // resolves on disk. Discarding the fallbacks (#1531) misresolved or
+            // dropped imports whose file lived at a non-first target.
+            // Empty / non-string entries are skipped.
+            let target_bases: Vec<String> = arr
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|t| !t.is_empty())
+                .map(|t| {
+                    normpath(&paths_base.join(t.trim_end_matches("/*")))
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            if !target_bases.is_empty() {
+                aliases.insert(alias_prefix.to_string(), target_bases);
+            }
         }
     }
 
@@ -139,7 +150,7 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
 /// Lexically normalise a path (collapse `.`, resolve `..` where possible),
 /// mirroring Python's `os.path.normpath`. Used so a `baseUrl` like `./src`
 /// does not leave a `.` component in the resolved alias target.
-fn normpath(p: &Path) -> PathBuf {
+pub(crate) fn normpath(p: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
     for comp in p.components() {
@@ -176,7 +187,7 @@ fn normpath(p: &Path) -> PathBuf {
 /// Panics if the internal alias cache mutex is poisoned (which would indicate
 /// a prior panic in another thread holding the lock).
 #[must_use]
-pub fn load_tsconfig_aliases(start_dir: &Path) -> IndexMap<String, String> {
+pub fn load_tsconfig_aliases(start_dir: &Path) -> AliasMap {
     let current = match start_dir.canonicalize() {
         Ok(c) => c,
         Err(_) => start_dir.to_path_buf(),
@@ -208,6 +219,43 @@ pub fn load_tsconfig_aliases(start_dir: &Path) -> IndexMap<String, String> {
         candidate_dir = dir.parent();
     }
     IndexMap::new()
+}
+
+/// Resolve `raw` against tsconfig path aliases (#1531). Try each target in
+/// declared order; return the first whose candidate resolves to a real file on
+/// disk (tsc parity). If none exist, return the first candidate (no false edge
+/// is fabricated; the prior single-target behaviour is preserved). Returns
+/// `None` when no alias prefix matches.
+///
+/// Mirrors Python `_resolve_tsconfig_alias`.
+#[must_use]
+pub fn resolve_tsconfig_alias(raw: &str, aliases: &AliasMap) -> Option<PathBuf> {
+    // Collect every alias prefix that matches `raw`, longest first: tsc resolves
+    // the most specific (longest) prefix, so `@/feature/*` wins over `@/*` for
+    // `@/feature/x`. Divergence from graphify-py (extract.py:291), which returns
+    // the first match in declaration order and so lets a broad prefix shadow a
+    // more specific one. The first-candidate fallback is kept, but taken from the
+    // longest matching prefix.
+    let mut matched: Vec<(&String, &Vec<String>)> = aliases
+        .iter()
+        .filter(|(prefix, _)| raw == prefix.as_str() || raw.starts_with(&format!("{prefix}/")))
+        .collect();
+    matched.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
+    let mut first: Option<PathBuf> = None;
+    for (alias_prefix, alias_bases) in matched {
+        let rest = raw[alias_prefix.len()..].trim_start_matches('/');
+        for base in alias_bases {
+            let cand = normpath(&Path::new(base).join(rest));
+            let resolved = resolve_js_module_path(&cand);
+            if resolved.is_file() {
+                return Some(resolved);
+            }
+            if first.is_none() {
+                first = Some(cand);
+            }
+        }
+    }
+    first
 }
 
 /// Resolve a JS/TS-style import specifier path to an actual file on disk.

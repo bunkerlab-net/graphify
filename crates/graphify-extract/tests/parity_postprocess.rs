@@ -45,6 +45,7 @@ fn raw(caller: &str, callee: &str, source_file: &str) -> RawCall {
         source_file: source_file.to_string(),
         source_location: String::new(),
         receiver: None,
+        receiver_type: None,
     }
 }
 
@@ -142,4 +143,92 @@ fn rewire_does_not_rewire_to_dotted_label() {
     let mut edges = vec![e("user", "stub", "u.py", "inherits")];
     rewire_unique_stub_nodes(&mut nodes, &mut edges);
     assert!(nodes.iter().any(|n| n.id == "stub"));
+}
+
+#[test]
+fn header_remap_skips_non_c_family_importers() {
+    // #1475 parity-bug fix: a header-variant repoint applies only to a C-family
+    // importer's `#include`. A Python `imports_from` whose target id merely
+    // collides with a C header must NOT be silently rewritten to the header.
+    let mut nodes = vec![
+        n("foo", "foo", "src/foo.py"),    // python module
+        n("foo", "foo", "include/foo.h"), // C header, same bare id
+    ];
+    let mut edges = vec![
+        e("consumer", "foo", "src/consumer.py", "imports_from"), // non-C importer
+        e("caller", "foo", "lib/util.c", "imports_from"),        // C importer
+    ];
+    let mut raw_calls: Vec<RawCall> = Vec::new();
+    disambiguate_colliding_node_ids(&mut nodes, &mut edges, &mut raw_calls, Path::new("."));
+    let header_id = nodes
+        .iter()
+        .find(|nd| nd.source_file == "include/foo.h")
+        .map(|nd| nd.id.clone())
+        .expect("header node present");
+    assert_ne!(
+        header_id, "foo",
+        "header should be salted away from the bare id"
+    );
+    // A C-family `#include` resolves to the header variant...
+    assert_eq!(
+        edges[1].target, header_id,
+        "a C `#include` should resolve to the header variant"
+    );
+    // ...while a non-C importer's edge must NOT be redirected to the header. We
+    // assert only the negative here: the salt remap is keyed by the importer's own
+    // file, and `consumer.py` matches neither colliding definition, so the pass
+    // has no information to resolve a bare ambiguous import to the Python module.
+    // Pinning a positive target would either codify a dangling id or assume a
+    // module-inference step this pass (and the graphify-py reference) never does.
+    assert_ne!(
+        edges[0].target, header_id,
+        "a non-C import must not be repointed at the header variant"
+    );
+}
+
+#[test]
+fn salted_id_does_not_collide_with_existing_node() {
+    // #1522 hardening: when a salted id would equal an id already occupied
+    // outside the collision group, it must be disambiguated further so no two
+    // nodes share an id (graphify-py only de-dupes within the group).
+    let naive = graphify_extract::make_id(&["src/a/foo.py", "foo"]);
+    let mut nodes = vec![
+        n("foo", "foo", "src/a/foo.py"),
+        n("foo", "foo", "src/b/foo.py"),
+        n(&naive, "other", "src/c/other.py"), // already occupies the naive salt
+    ];
+    let mut edges: Vec<Edge> = Vec::new();
+    let mut raw_calls: Vec<RawCall> = Vec::new();
+    disambiguate_colliding_node_ids(&mut nodes, &mut edges, &mut raw_calls, Path::new("."));
+    let ids: Vec<&str> = nodes.iter().map(|nd| nd.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        ids.len(),
+        "all node ids must be distinct: {ids:?}"
+    );
+}
+
+#[test]
+fn salted_ids_unique_across_colliding_groups() {
+    // Two distinct old ids that normalise to the same salted form under the same
+    // source key (`foo-bar`/`foo_bar` both -> `shared_rb_foo_bar`): a live
+    // minted-set keeps the two `shared.rb` nodes from reusing one id. Without it
+    // the second group reassigns the first group's salted id.
+    let mut nodes = vec![
+        n("foo-bar", "FooBar", "shared.rb"), // group "foo-bar"
+        n("foo-bar", "FooBar", "a.rb"),      // makes "foo-bar" ambiguous
+        n("foo_bar", "FooBar", "shared.rb"), // group "foo_bar"
+        n("foo_bar", "FooBar", "b.rb"),      // makes "foo_bar" ambiguous
+    ];
+    let mut edges: Vec<Edge> = Vec::new();
+    let mut raw_calls: Vec<RawCall> = Vec::new();
+    disambiguate_colliding_node_ids(&mut nodes, &mut edges, &mut raw_calls, Path::new("."));
+    let ids: Vec<&str> = nodes.iter().map(|nd| nd.id.as_str()).collect();
+    let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        ids.len(),
+        "all node ids must be distinct: {ids:?}"
+    );
 }

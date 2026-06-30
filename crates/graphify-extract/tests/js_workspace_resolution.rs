@@ -221,3 +221,397 @@ fn malformed_inner_workspaces_does_not_shadow_real_root() -> TestResult {
     );
     Ok(())
 }
+
+// ── #1531: tsconfig path-alias fallback targets ──────────────────────────────
+
+#[test]
+fn tsconfig_alias_resolves_second_target_when_first_missing() -> TestResult {
+    // tsc tries each `paths` target in declared order until one resolves on
+    // disk. The file lives only at the SECOND target, so keeping only the first
+    // entry (#1531) dropped the edge.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"$lib/*": ["generated/*", "src/lib/*"]}}}"#,
+    )?;
+    write(&root.join("src/lib/utils.ts"), "export const helper = 1\n")?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { helper } from '$lib/utils'\nconsole.log(helper)\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("src/lib/utils.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(&out, "src/routes/page.ts", "src/lib/utils.ts"),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn tsconfig_alias_first_target_wins_when_both_exist() -> TestResult {
+    // When the file exists at BOTH targets, tsc resolves to the FIRST. The edge
+    // must target the generated/ copy, not src/lib.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"$lib/*": ["generated/*", "src/lib/*"]}}}"#,
+    )?;
+    write(
+        &root.join("generated/utils.ts"),
+        "export const helper = 1\n",
+    )?;
+    write(&root.join("src/lib/utils.ts"), "export const helper = 2\n")?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { helper } from '$lib/utils'\nconsole.log(helper)\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("generated/utils.ts"),
+            root.join("src/lib/utils.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(&out, "src/routes/page.ts", "generated/utils.ts"),
+        "edges: {:?}",
+        out.edges
+    );
+    assert!(
+        !has_imports_from(&out, "src/routes/page.ts", "src/lib/utils.ts"),
+        "first target must win; edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn tsconfig_alias_none_exist_creates_no_false_edge() -> TestResult {
+    // The file exists at neither target; no concrete imports_from edge to either
+    // candidate may be fabricated (it stays an external/phantom target).
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"$lib/*": ["generated/*", "src/lib/*"]}}}"#,
+    )?;
+    write(&root.join("src/routes/other.ts"), "export const x = 1\n")?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { helper } from '$lib/utils'\nconsole.log(helper)\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("src/routes/other.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        !has_imports_from(&out, "src/routes/page.ts", "generated/utils.ts"),
+        "edges: {:?}",
+        out.edges
+    );
+    assert!(
+        !has_imports_from(&out, "src/routes/page.ts", "src/lib/utils.ts"),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+// ── #1308: workspace subpath `exports` map resolution ────────────────────────
+
+#[test]
+fn workspace_subpath_export_string_resolves() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/package.json"),
+        r#"{"name": "@example/pkg-a", "exports": {".": "./src/index.ts", "./browser": "./src/browser.ts"}}"#,
+    )?;
+    write(
+        &root.join("packages/pkg-a/src/browser.ts"),
+        "export const value = \"ok\"\n",
+    )?;
+    write(
+        &root.join("apps/web/src/consumer.ts"),
+        "import { value } from '@example/pkg-a/browser'\nexport const v = value\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("packages/pkg-a/src/browser.ts"),
+            root.join("apps/web/src/consumer.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(
+            &out,
+            "apps/web/src/consumer.ts",
+            "packages/pkg-a/src/browser.ts"
+        ),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_subpath_export_condition_object_resolves() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/package.json"),
+        r#"{"name": "@example/pkg-a", "exports": {"./browser": {"source": "./src/browser.ts", "import": "./dist/esm/browser.js", "require": "./dist/cjs/browser.js", "types": "./dist/types/browser.d.ts"}}}"#,
+    )?;
+    write(
+        &root.join("packages/pkg-a/src/browser.ts"),
+        "export const value = \"ok\"\n",
+    )?;
+    write(
+        &root.join("apps/web/src/consumer.ts"),
+        "import { value } from '@example/pkg-a/browser'\nexport const v = value\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("packages/pkg-a/src/browser.ts"),
+            root.join("apps/web/src/consumer.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(
+            &out,
+            "apps/web/src/consumer.ts",
+            "packages/pkg-a/src/browser.ts"
+        ),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_subpath_export_wildcard_resolves() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/package.json"),
+        r#"{"name": "@example/pkg-a", "exports": {"./*": {"source": "./src/*.ts"}}}"#,
+    )?;
+    write(
+        &root.join("packages/pkg-a/src/utils.ts"),
+        "export function add(a: number, b: number) { return a + b }\n",
+    )?;
+    write(
+        &root.join("apps/web/src/consumer.ts"),
+        "import { add } from '@example/pkg-a/utils'\nexport const sum = add(1, 2)\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("packages/pkg-a/src/utils.ts"),
+            root.join("apps/web/src/consumer.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(
+            &out,
+            "apps/web/src/consumer.ts",
+            "packages/pkg-a/src/utils.ts"
+        ),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_subpath_export_falls_back_to_filesystem() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/package.json"),
+        r#"{"name": "@example/pkg-a"}"#,
+    )?;
+    write(
+        &root.join("packages/pkg-a/browser.ts"),
+        "export const value = \"ok\"\n",
+    )?;
+    write(
+        &root.join("apps/web/src/consumer.ts"),
+        "import { value } from '@example/pkg-a/browser'\nexport const v = value\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("packages/pkg-a/browser.ts"),
+            root.join("apps/web/src/consumer.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(
+            &out,
+            "apps/web/src/consumer.ts",
+            "packages/pkg-a/browser.ts"
+        ),
+        "edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_subpath_export_rejects_path_escape() -> TestResult {
+    // An exports target that escapes the package dir must NOT resolve to the
+    // outside path (path-containment guard). Resolution falls through to the
+    // bare-path fallback, which has no real file here, so no edge lands.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/package.json"),
+        r#"{"name": "@example/pkg-a", "exports": {"./evil": "../../../../secret.ts"}}"#,
+    )?;
+    write(&root.join("secret.ts"), "export const leak = \"secret\"\n")?;
+    write(
+        &root.join("apps/web/src/consumer.ts"),
+        "import { leak } from '@example/pkg-a/evil'\nexport const v = leak\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("secret.ts"),
+            root.join("apps/web/src/consumer.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        !has_imports_from(&out, "apps/web/src/consumer.ts", "secret.ts"),
+        "escaped export must not resolve; edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_subpath_export_default_consulted_last() -> TestResult {
+    // When both `default` and an earlier condition match, the earlier condition
+    // (import) must win — `default` is Node's catch-all.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pnpm-workspace.yaml"),
+        "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/package.json"),
+        r#"{"name": "@example/pkg-a", "exports": {"./browser": {"default": "./src/default-entry.ts", "import": "./src/import-entry.ts"}}}"#,
+    )?;
+    write(
+        &root.join("packages/pkg-a/src/import-entry.ts"),
+        "export const value = \"import\"\n",
+    )?;
+    write(
+        &root.join("packages/pkg-a/src/default-entry.ts"),
+        "export const value = \"default\"\n",
+    )?;
+    write(
+        &root.join("apps/web/src/consumer.ts"),
+        "import { value } from '@example/pkg-a/browser'\nexport const v = value\n",
+    )?;
+
+    let out = extract(
+        &[
+            root.join("packages/pkg-a/src/import-entry.ts"),
+            root.join("packages/pkg-a/src/default-entry.ts"),
+            root.join("apps/web/src/consumer.ts"),
+        ],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(
+            &out,
+            "apps/web/src/consumer.ts",
+            "packages/pkg-a/src/import-entry.ts"
+        ),
+        "import condition must win; edges: {:?}",
+        out.edges
+    );
+    assert!(
+        !has_imports_from(
+            &out,
+            "apps/web/src/consumer.ts",
+            "packages/pkg-a/src/default-entry.ts"
+        ),
+        "default must not win over import; edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn tsconfig_alias_js_specifier_resolves_to_ts_source() -> TestResult {
+    // An aliased `.js` specifier backed by a `.ts` source must hash to the same
+    // file node as the real `.ts` file — the `.js`->`.ts` fallback applies to
+    // alias hits too, matching relative imports.
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}"#,
+    )?;
+    write(&root.join("src/foo.ts"), "export const x = 1\n")?;
+    write(
+        &root.join("src/app.ts"),
+        "import { x } from '@/foo.js'\nconsole.log(x)\n",
+    )?;
+
+    let out = extract(
+        &[root.join("src/foo.ts"), root.join("src/app.ts")],
+        Some(root),
+    );
+    assert!(
+        has_imports_from(&out, "src/app.ts", "src/foo.ts"),
+        "aliased `.js` specifier should resolve to the `.ts` source; edges: {:?}",
+        out.edges
+    );
+    Ok(())
+}

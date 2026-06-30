@@ -17,6 +17,8 @@ mod csharp;
 mod java;
 mod js;
 mod python;
+mod resolvers;
+mod ruby;
 mod swift;
 
 use crate::extractors::{
@@ -37,14 +39,11 @@ use cache::extract_single_file;
 use csharp::resolve_csharp_type_references;
 use java::{resolve_cross_file_java_imports, resolve_java_type_references};
 use js::{resolve_js_default_imports, resolve_js_reexport_imports};
-use python::{
-    resolve_cross_file_python_imports, resolve_python_member_calls, resolve_python_reexport_imports,
-};
+use python::{resolve_cross_file_python_imports, resolve_python_reexport_imports};
 use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swift::resolve_swift_member_calls;
 
 const PARALLEL_THRESHOLD: usize = 20;
 
@@ -188,6 +187,13 @@ fn relativise_under_root(path: &Path, root: &Path) -> Option<PathBuf> {
         .and_then(|c| c.strip_prefix(root).map(Path::to_path_buf).ok())
 }
 
+/// `true` when `id` begins with `prefix` followed by a `_` segment boundary —
+/// i.e. `id == "{prefix}_{suffix}"`. IDs are `make_id` output (lowercase word
+/// chars + `_`), so the byte index is always on a char boundary.
+fn prefix_segment_match(id: &str, prefix: &str) -> bool {
+    id.len() > prefix.len() && id.starts_with(prefix) && id.as_bytes()[prefix.len()] == b'_'
+}
+
 /// Extract AST nodes and edges from a list of code files.
 ///
 /// Two-pass process:
@@ -329,7 +335,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // way, gated by `source_file` so two files sharing a prefix can't
     // cross-contaminate. Keyed by the path string the extractor recorded in
     // `source_file` → (old_prefix, new_prefix).
-    let mut prefix_remap: HashMap<String, (String, String)> = HashMap::new();
+    let mut prefix_remap: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for path in paths {
         let old_id = make_id1(&path.to_string_lossy());
         // Resolve relative-to-root; a lexical strip can fail (path is relative, or
@@ -353,9 +359,26 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
                 id_remap.entry(canon_id).or_insert_with(|| new_id.clone());
             }
         }
+        // Each file maps from up to TWO old prefixes: the input-form
+        // `file_node_id(path)` and the absolute-resolved-form
+        // `file_node_id(canonicalize(path))`. Alias/workspace imports resolve
+        // specifiers through the canonical absolute path, so their symbol-edge
+        // targets are keyed off the ABSOLUTE file stem; with relative inputs the
+        // two forms differ and absolute-derived targets would otherwise orphan
+        // (#1529). Stored as a list so the symbol-prefix remap can try both.
+        let mut old_prefs: Vec<(String, String)> = Vec::new();
         let old_pref = crate::ids::file_node_id(path);
         if old_pref != new_id {
-            prefix_remap.insert(path.to_string_lossy().into_owned(), (old_pref, new_id));
+            old_prefs.push((old_pref.clone(), new_id.clone()));
+        }
+        if let Ok(canon) = path.canonicalize() {
+            let old_pref_abs = crate::ids::file_node_id(&canon);
+            if old_pref_abs != new_id && old_pref_abs != old_pref {
+                old_prefs.push((old_pref_abs, new_id.clone()));
+            }
+        }
+        if !old_prefs.is_empty() {
+            prefix_remap.insert(path.to_string_lossy().into_owned(), old_prefs);
         }
     }
     if !id_remap.is_empty() {
@@ -391,18 +414,34 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
             {
                 continue;
             }
-            let Some((old_pref, new_pref)) = prefix_remap.get(&n.source_file) else {
+            let Some(entry) = prefix_remap.get(&n.source_file) else {
                 continue;
             };
-            // IDs are make_id output (lowercase word chars + `_`), so slicing at
-            // a byte offset is always on a char boundary.
-            if n.id.len() > old_pref.len()
-                && n.id.starts_with(old_pref.as_str())
-                && n.id.as_bytes()[old_pref.len()] == b'_'
-            {
-                let new_nid = format!("{new_pref}{}", &n.id[old_pref.len()..]);
-                if new_nid != n.id {
-                    sym_remap.insert(n.id.clone(), new_nid);
+            // The node may carry the input-form OR the absolute-form prefix
+            // (#1529); try each, first match wins (source_file gating above
+            // prevents cross-file contamination).
+            let mut matched = false;
+            for (old_pref, new_pref) in entry {
+                if prefix_segment_match(&n.id, old_pref) {
+                    let new_nid = format!("{new_pref}{}", &n.id[old_pref.len()..]);
+                    if new_nid != n.id {
+                        sym_remap.insert(n.id.clone(), new_nid);
+                    }
+                    matched = true;
+                    break;
+                }
+            }
+            // When the node is already canonical, also map its absolute-form id
+            // variant → the canonical id, so an alias/workspace import edge that
+            // targeted the absolute prefix (its file resolved via the canonical
+            // path) reconnects instead of dangling (#1529). The absolute prefix
+            // is a full-path stem, so it cannot collide with a canonical id.
+            if !matched {
+                for (old_pref, new_pref) in entry {
+                    if old_pref != new_pref && prefix_segment_match(&n.id, new_pref) {
+                        let abs_id = format!("{old_pref}{}", &n.id[new_pref.len()..]);
+                        sym_remap.entry(abs_id).or_insert_with(|| n.id.clone());
+                    }
                 }
             }
         }
@@ -623,31 +662,28 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         });
     }
 
-    // Cross-file Swift member-call resolution (#1356): after the shared call pass
-    // (node ids and caller_nids final) and before source_file relativisation (the
-    // type-table re-parse keys on the absolute paths nodes/raw_calls still carry).
-    let swift_paths: Vec<PathBuf> = paths
-        .iter()
-        .filter(|p| p.extension().is_some_and(|e| e == "swift"))
-        .cloned()
-        .collect();
-    if !swift_paths.is_empty() {
-        resolve_swift_member_calls(&swift_paths, &all_nodes, &mut all_edges, &all_raw_calls);
-    }
+    // Cross-file, language-specific member-call resolution (#1356 Swift, #1446
+    // Python, #1499 Ruby). Runs after the shared call pass — node ids and
+    // caller_nids are final — and before source_file relativisation (Swift's
+    // type-table re-parse keys on the absolute paths nodes/raw_calls still
+    // carry). Each pass is suffix-gated and additive; a new language registers
+    // one resolver instead of editing this body.
+    let resolver_set = resolvers::default_resolvers();
+    resolvers::run_language_resolvers(
+        paths,
+        &all_nodes,
+        &mut all_edges,
+        &all_raw_calls,
+        &resolver_set,
+    );
 
-    // Cross-file Python qualified class-method calls (#1446): same timing as the
-    // Swift pass — after the shared call pass (ids final), before relativisation.
-    let has_python = paths
-        .iter()
-        .any(|p| p.extension().is_some_and(|e| e == "py" || e == "pyi"));
-    if has_python {
-        resolve_python_member_calls(&all_nodes, &mut all_edges, &all_raw_calls);
-    }
-
-    // Relativise source_file (and the #1462 origin_file) so persisted paths are
-    // portable across machines (#555). graphify-py relativizes only source_file
-    // (extract.py), leaking absolute origin_file paths into graph JSON — fix that
-    // determinism gap here too.
+    // Relativise source_file so persisted paths are portable across machines
+    // (#555), then drop the internal origin_file hint entirely. The colliding-id
+    // pass above already consumed it (#1462); keeping it would ship an absolute,
+    // machine-specific path into graph.json — the same "no absolute paths in
+    // output" contract that relativises source_file (#1516, #932). The per-file
+    // AST cache keeps its own copy, which the colliding-id pass reads on a cache
+    // hit.
     for n in &mut all_nodes {
         let sf_path = PathBuf::from(&n.source_file);
         if sf_path.is_absolute()
@@ -655,12 +691,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         {
             n.source_file = rel.to_string_lossy().into_owned();
         }
-        if let Some(of_path) = n.origin_file.as_deref().map(PathBuf::from)
-            && of_path.is_absolute()
-            && let Some(rel) = relativise_under_root(&of_path, &root)
-        {
-            n.origin_file = Some(rel.to_string_lossy().into_owned());
-        }
+        n.origin_file = None;
     }
     for e in &mut all_edges {
         let sf_path = PathBuf::from(&e.source_file);

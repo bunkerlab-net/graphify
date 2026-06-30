@@ -3,7 +3,7 @@
 //! `graphify-py/tests/test_java_type_resolution.py`.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use graphify_build::build_from_json;
@@ -260,4 +260,40 @@ fn java_cross_file_constructor_call_resolves() {
 
     let g = build_from_json(serde_json::to_value(&res).unwrap(), false, None).expect("build");
     assert!(g.contains_node(foo_id), "Foo node missing after build");
+}
+
+#[test]
+fn java_type_parameters_do_not_resolve_to_real_class() -> Result<(), Box<dyn std::error::Error>> {
+    // #1518: a generic field `List<T>` must not emit a references edge to a real
+    // same-named class `T` — `T` is a type variable, not a type.
+    let tmp = tempfile::tempdir()?;
+    let real_type = write_file(tmp.path(), "T.java", "public class T {}\n");
+    let generic = write_file(
+        tmp.path(),
+        "Generic.java",
+        "public class Generic<T> { java.util.List<T> values; }\n",
+    );
+    let res = extract(&[real_type, generic], Some(tmp.path()));
+
+    let id_to_label: HashMap<&str, &str> = res
+        .nodes
+        .iter()
+        .filter_map(|n| Some((n.get("id")?.as_str()?, n.get("label")?.as_str()?)))
+        .collect();
+    let has_generic_t_ref = res.edges.iter().any(|e| {
+        e.get("relation").and_then(|v| v.as_str()) == Some("references")
+            && e.get("source")
+                .and_then(|v| v.as_str())
+                .and_then(|s| id_to_label.get(s).copied())
+                == Some("Generic")
+            && e.get("target")
+                .and_then(|v| v.as_str())
+                .and_then(|t| id_to_label.get(t).copied())
+                == Some("T")
+    });
+    assert!(
+        !has_generic_t_ref,
+        "type parameter T must not resolve to the real T class"
+    );
+    Ok(())
 }

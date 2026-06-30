@@ -184,15 +184,17 @@ pub(crate) fn call_plain_openai_compat(req: &PlainOpenAiRequest<'_>) -> Result<S
         .build()
         .into();
 
-    let resp: PlainResp = agent
-        .post(&endpoint)
-        .header("Authorization", &format!("Bearer {}", req.api_key))
-        .header("Content-Type", "application/json")
-        .send_json(&body)
-        .map_err(|e| LlmError::Http(e.to_string()))?
-        .into_body()
-        .read_json()
-        .map_err(|e| LlmError::Parse(e.to_string()))?;
+    let resp: PlainResp = crate::openai_compat::send_json_with_retry(|| {
+        agent
+            .post(&endpoint)
+            .header("Authorization", &format!("Bearer {}", req.api_key))
+            .header("Content-Type", "application/json")
+            .send_json(&body)
+    })
+    .map_err(|e| LlmError::Http(e.to_string()))?
+    .into_body()
+    .read_json()
+    .map_err(|e| LlmError::Parse(e.to_string()))?;
 
     Ok(resp
         .choices

@@ -129,9 +129,9 @@ impl GoRefCtx<'_> {
     /// The stub carries no `source_file` so the corpus-level rewire can collapse
     /// it onto the real definition; a sourced stub would bake the referencing
     /// file's path (extension and all) into the id and block the rewire — the
-    /// phantom-duplicate-node bug (#1500/#1402). Unlike the generic-walker stub,
-    /// no `origin_file` is recorded: same-package Go refs resolve to the single
-    /// canonical type node rather than splitting per referencing file.
+    /// phantom-duplicate-node bug (#1500/#1402); the referencing file is recorded
+    /// as `origin_file` so same-label cross-file stubs split into distinct ids
+    /// (#1462/#1515), matching the generic `ensure_named_node`.
     fn ensure_named_node(&mut self, name: &str) -> String {
         let nid1 = make_id(&[self.pkg_scope, name]);
         if self.seen_ids.contains(&nid1) {
@@ -146,7 +146,7 @@ impl GoRefCtx<'_> {
                 source_file: String::new(),
                 source_location: Some(String::new()),
                 metadata: None,
-                origin_file: None,
+                origin_file: Some(self.str_path.to_string()),
             });
         }
         nid2

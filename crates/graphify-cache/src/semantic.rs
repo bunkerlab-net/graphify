@@ -1,5 +1,6 @@
 //! Semantic-extraction cache: per-source-file nodes/edges/hyperedges.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
@@ -120,4 +121,51 @@ pub fn save_semantic_cache(
         }
     }
     Ok(saved)
+}
+
+/// Remove orphaned semantic cache entries, returning the count pruned.
+///
+/// The semantic cache is content-hash-keyed (`{file_hash}.json` under
+/// `cache/semantic/`) and deliberately UNVERSIONED — entries are produced by the
+/// LLM from file contents, so invalidating them on every release would re-bill
+/// extraction. Because it is unversioned it is never swept by the AST
+/// version-cleanup, so every content change or file deletion leaves a permanent
+/// orphan that accumulates unbounded (#1527).
+///
+/// This sweeps `cache/semantic/*.json` and deletes any entry whose stem (the
+/// content hash) is not in `live_hashes` — the hashes of the current live
+/// document set. `*.tmp` atomic-write temporaries are skipped, and only this
+/// directory is touched (never `cache/ast/**`). Best-effort: each unlink failure
+/// is ignored (worst case is a surviving orphan, never wrong output). Mirrors
+/// Python `prune_semantic_cache`.
+#[must_use]
+pub fn prune_semantic_cache<S: std::hash::BuildHasher>(
+    root: &Path,
+    live_hashes: &HashSet<String, S>,
+) -> usize {
+    let semantic_dir = crate::paths::out_base(root).join("cache").join("semantic");
+    if !semantic_dir.is_dir() {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(&semantic_dir) else {
+        return 0;
+    };
+    let mut pruned = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Only `*.json`; `*.tmp` atomic-write temporaries are left untouched.
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if live_hashes.contains(stem) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            pruned += 1;
+        }
+    }
+    pruned
 }

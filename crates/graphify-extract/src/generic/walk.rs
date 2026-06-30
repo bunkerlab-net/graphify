@@ -382,6 +382,67 @@ fn emit_member_type_refs(
     }
 }
 
+/// Emit `references` edges for a Java record's header components
+/// (`record Order(Payload p, List<Item> items, Attachment... rest)`), mirroring
+/// field-type references. Type-parameter components are skipped by the
+/// collector (#1519).
+fn emit_java_record_component_refs(
+    ctx: &mut WalkCtx<'_, '_>,
+    record_node: Node<'_>,
+    class_nid: &str,
+    source: &[u8],
+) {
+    let Some(components) = record_node.child_by_field_name("parameters") else {
+        return;
+    };
+    let mut cur = components.walk();
+    if !cur.goto_first_child() {
+        return;
+    }
+    loop {
+        let component = cur.node();
+        let type_node = match component.kind() {
+            "formal_parameter" => component.child_by_field_name("type"),
+            "spread_parameter" => {
+                // `Attachment... rest`: the type is the first named child that is
+                // not the `modifiers` annotation block or the binder declarator.
+                let mut found = None;
+                let mut scur = component.walk();
+                if scur.goto_first_child() {
+                    loop {
+                        let child = scur.node();
+                        if child.is_named()
+                            && !matches!(child.kind(), "modifiers" | "variable_declarator")
+                        {
+                            found = Some(child);
+                            break;
+                        }
+                        if !scur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+                found
+            }
+            _ => None,
+        };
+        if let Some(type_node) = type_node {
+            let component_line = component.start_position().row as u32 + 1;
+            emit_member_type_refs(
+                ctx,
+                type_node,
+                class_nid,
+                component_line,
+                source,
+                super::references::java_collect_type_refs,
+            );
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+}
+
 // ── Structural walk ───────────────────────────────────────────────────────────
 
 /// Shared state threaded through every structural-walk recursion.
@@ -572,6 +633,12 @@ pub(super) fn walk<'tree>(
                         ctx.edges,
                     );
                 }
+            }
+            // Java record components (the `record Order(Payload p, List<Item>
+            // items)` header parameters) -> references, mirroring field types
+            // (#1519). Type-parameter components are skipped by the collector.
+            if t == "record_declaration" {
+                emit_java_record_component_refs(ctx, node, &class_nid, source);
             }
         }
 

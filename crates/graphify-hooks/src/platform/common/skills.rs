@@ -45,8 +45,8 @@ pub(in crate::platform) const SKILL_WINDOWS_MD: &str = SKILL_MD;
 pub(in crate::platform) const SKILL_REGISTRATION: &str = "\n# graphify\n\
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`) \
 - any input to knowledge graph. Trigger: `/graphify`\n\
-When the user types `/graphify`, invoke the Skill tool \
-with `skill: \"graphify\"` before doing anything else.\n";
+When the user types `/graphify`, use the installed graphify skill \
+or instructions before doing anything else.\n";
 
 /// Skill registration text appended to `~/.codebuddy/CODEBUDDY.md` (#1136).
 ///
@@ -56,5 +56,5 @@ with `skill: \"graphify\"` before doing anything else.\n";
 pub(in crate::platform) const CODEBUDDY_REGISTRATION: &str = "\n# graphify\n\
 - **graphify** (`~/.codebuddy/skills/graphify/SKILL.md`) \
 - any input to knowledge graph. Trigger: `/graphify`\n\
-When the user types `/graphify`, invoke the Skill tool \
-with `skill: \"graphify\"` before doing anything else.\n";
+When the user types `/graphify`, use the installed graphify skill \
+or instructions before doing anything else.\n";

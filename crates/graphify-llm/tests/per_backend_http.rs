@@ -99,6 +99,71 @@ fn openai_plain_via_mock() {
     assert_eq!(out, "plain answer");
 }
 
+#[test]
+#[serial_test::serial(env)]
+fn openai_retries_rate_limited_request() {
+    // A 429 must be retried (SDK max_retries parity, #1523): the first response is
+    // a rate limit, the retry succeeds, so the call resolves instead of dropping
+    // the chunk. Sequential mocks: 429 once, then 200.
+    let mut server = mockito::Server::new();
+    let _rl = server
+        .mock("POST", "/chat/completions")
+        .with_status(429)
+        .with_body("rate limited")
+        .expect(1)
+        .create();
+    let _ok = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(json_body("{\"nodes\":[{\"id\":\"x\"}],\"edges\":[]}"))
+        .expect_at_least(1)
+        .create();
+
+    let mut g = allow_private();
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+    g.set("GRAPHIFY_MAX_RETRIES", "3");
+    g.set("GRAPHIFY_RETRY_BASE_MS", "0"); // no backoff sleep under test
+
+    let resp = call_openai(
+        "key",
+        "gpt-test",
+        &[json!({"role":"user","content":"hi"})],
+        128,
+    )
+    .expect("429 should be retried and then resolve");
+    assert_eq!(resp.nodes.len(), 1);
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn openai_gives_up_when_retries_disabled() {
+    // GRAPHIFY_MAX_RETRIES=0 disables retries: a 429 fails immediately.
+    let mut server = mockito::Server::new();
+    let rl = server
+        .mock("POST", "/chat/completions")
+        .with_status(429)
+        .with_body("rate limited")
+        .expect(1)
+        .create();
+
+    let mut g = allow_private();
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+    g.set("GRAPHIFY_MAX_RETRIES", "0");
+    g.set("GRAPHIFY_RETRY_BASE_MS", "0");
+
+    assert!(
+        call_openai(
+            "key",
+            "gpt-test",
+            &[json!({"role":"user","content":"hi"})],
+            128
+        )
+        .is_err(),
+        "with retries disabled, a 429 must fail"
+    );
+    rl.assert(); // exactly one request: GRAPHIFY_MAX_RETRIES=0 means no retry
+}
+
 // ── gemini ─────────────────────────────────────────────────────────────────
 
 #[test]

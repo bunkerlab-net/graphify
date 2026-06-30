@@ -897,7 +897,7 @@ fn tsconfig_alias_excess_parent_dirs_clamp_at_root() {
     )
     .expect("write tsconfig");
     let aliases = graphify_extract::tsconfig::load_tsconfig_aliases(root);
-    let target = aliases.get("@top").expect("@top alias present");
+    let target = &aliases.get("@top").expect("@top alias present")[0];
     assert!(
         !target.contains(".."),
         "excess `..` left a stray parent component: {target}"

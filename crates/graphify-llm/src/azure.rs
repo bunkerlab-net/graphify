@@ -252,13 +252,15 @@ fn send_azure_request(api_key: &str, url: &str, body: &Value) -> Result<Value, L
         .timeout_global(Some(api_timeout()))
         .build()
         .into();
-    agent
-        .post(url)
-        .header("api-key", api_key)
-        .header("Content-Type", "application/json")
-        .send_json(body)
-        .map_err(|e| LlmError::Http(e.to_string()))?
-        .into_body()
-        .read_json()
-        .map_err(|e| LlmError::Parse(e.to_string()))
+    crate::openai_compat::send_json_with_retry(|| {
+        agent
+            .post(url)
+            .header("api-key", api_key)
+            .header("Content-Type", "application/json")
+            .send_json(body)
+    })
+    .map_err(|e| LlmError::Http(e.to_string()))?
+    .into_body()
+    .read_json()
+    .map_err(|e| LlmError::Parse(e.to_string()))
 }

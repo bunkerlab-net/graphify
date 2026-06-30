@@ -82,8 +82,9 @@ fn collect_swift_type_table(
 /// `is_member_call` (a bare method name collides across the corpus); this pass
 /// types the receiver via the file's local type table (or treats an upper-cased
 /// receiver as a type itself), then emits an edge ONLY when the type name
-/// resolves to exactly one definition (god-node guard). Everything it adds is
-/// INFERRED (type inference, not an explicit import).
+/// resolves to exactly one definition (god-node guard). A type-qualified call
+/// (`Type.staticMethod()`) is EXTRACTED — the type is named explicitly in source;
+/// an instance call typed via local inference (`obj.method()`) is INFERRED (#1533).
 #[allow(clippy::too_many_lines)] // linear: re-parse type tables, build indexes, resolve each member call
 pub(super) fn resolve_swift_member_calls(
     swift_paths: &[PathBuf],
@@ -170,10 +171,17 @@ pub(super) fn resolve_swift_member_calls(
         let Some(receiver) = rc.receiver.as_deref() else {
             continue;
         };
-        // An upper-cased receiver is itself a type (`Type.staticMethod()`,
-        // `Singleton.shared.x()`); otherwise look it up in the declaring file's
-        // local type table.
-        let type_name = if receiver.chars().next().is_some_and(char::is_uppercase) {
+        // An upper-cased receiver is named as a type in source
+        // (`Type.staticMethod()`, `Singleton.shared.x()`) and is EXTRACTED. A
+        // lower-cased receiver is a local; resolve its type via the file's local
+        // table and mark the call INFERRED (#1533). The table is file-wide, not
+        // scope-aware, so it is consulted ONLY for lower-cased receivers: using it
+        // to override an upper-cased (conventionally a type) receiver could wrongly
+        // demote a genuine `Type.staticMethod()` to INFERRED when the same name is
+        // a local in another scope of the file. Keys on casing like graphify-py
+        // (extract.py:9553).
+        let type_qualified = receiver.chars().next().is_some_and(char::is_uppercase);
+        let type_name = if type_qualified {
             receiver.to_string()
         } else if let Some(t) = type_table_by_file
             .get(&rc.source_file)
@@ -203,12 +211,17 @@ pub(super) fn resolve_swift_member_calls(
             source: rc.caller_nid.clone(),
             target,
             relation: relation.to_string(),
-            confidence: "INFERRED".to_string(),
+            confidence: if type_qualified {
+                "EXTRACTED"
+            } else {
+                "INFERRED"
+            }
+            .to_string(),
             source_file: rc.source_file.clone(),
             source_location: Some(rc.source_location.clone()),
             weight: 1.0,
             context: Some("call".to_string()),
-            confidence_score: Some(0.8),
+            confidence_score: Some(if type_qualified { 1.0 } else { 0.8 }),
         });
     }
     all_edges.extend(new_edges);

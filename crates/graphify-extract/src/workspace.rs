@@ -325,13 +325,75 @@ fn walk_subdirs(base: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Condition keys consulted when resolving an `exports` target, in priority
+/// order. `default` is Node's catch-all and must be consulted LAST so a more
+/// specific condition (source/import/module/etc.) wins when several match.
+/// Mirrors Python `_EXPORT_CONDITION_PRIORITY`.
+const EXPORT_CONDITION_PRIORITY: [&str; 7] = [
+    "source", "import", "module", "svelte", "types", "require", "default",
+];
+
+/// Resolve an `exports` map value (string or condition object) to a relative
+/// target string, honouring [`EXPORT_CONDITION_PRIORITY`] for objects and
+/// recursing into nested condition objects. Mirrors Python `_resolve_export_target`.
+fn resolve_export_target(value: &Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    let obj = value.as_object()?;
+    for cond in EXPORT_CONDITION_PRIORITY {
+        match obj.get(cond) {
+            Some(Value::String(s)) => return Some(s.clone()),
+            Some(nested @ Value::Object(_)) => {
+                if let Some(found) = resolve_export_target(nested) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Guard against `exports` targets that escape the package directory (e.g.
+/// `"./evil": "../../../etc/passwd"`). `true` only when `package_dir/target`
+/// stays within `package_dir`. Mirrors Python `_contained_in_package`
+/// (`Path.resolve().is_relative_to(...)`): a lexical `..`-collapse rejects the
+/// obvious escape, then the nearest existing ancestor is canonicalised so a
+/// symlink that crosses the package boundary can't slip through either.
+fn contained_in_package(target: &str, package_dir: &Path) -> bool {
+    let Ok(pkg_canon) = package_dir.canonicalize() else {
+        return false;
+    };
+    let candidate = crate::tsconfig::normpath(&pkg_canon.join(target));
+    if !candidate.starts_with(&pkg_canon) {
+        return false;
+    }
+    // Canonicalise the nearest existing ancestor to follow any symlink on the
+    // path; a not-yet-created tail keeps the lexical result above.
+    let mut probe = candidate.as_path();
+    loop {
+        if std::fs::symlink_metadata(probe).is_ok() {
+            return probe
+                .canonicalize()
+                .is_ok_and(|resolved| resolved.starts_with(&pkg_canon));
+        }
+        let Some(parent) = probe.parent() else {
+            return false;
+        };
+        probe = parent;
+    }
+}
+
 /// Pick the most likely entry-point file for a workspace package.
 ///
-/// When `subpath` is non-empty (i.e. the import was `pkg/foo/bar`),
-/// return `package_dir/subpath` directly. Otherwise read `package.json`
-/// and prefer (in order) `exports["."]` (string or object), then
-/// `svelte` / `module` / `main` / `types`, then `src/index` / `index`
-/// fallbacks. Mirrors `_package_entry_candidates` in Python.
+/// When `subpath` is non-empty (i.e. the import was `pkg/foo/bar`), the
+/// package's `exports` subpath map is consulted first (`./foo` conditions or a
+/// single `./*` wildcard, with a path-escape guard, #1308), falling back to
+/// `package_dir/subpath`. Otherwise read `package.json` and prefer (in order)
+/// `exports["."]` (string or condition object), then `svelte` / `module` /
+/// `main` / `types`, then `src/index` / `index` fallbacks. Mirrors
+/// `_package_entry_candidates` in Python.
 #[must_use]
 pub fn package_entry_candidates(package_dir: &Path, subpath: &str) -> Vec<PathBuf> {
     let manifest_path = package_dir.join("package.json");
@@ -341,26 +403,72 @@ pub fn package_entry_candidates(package_dir: &Path, subpath: &str) -> Vec<PathBu
         .unwrap_or(Value::Null);
 
     if !subpath.is_empty() {
+        // Consult the package's `exports` subpath map before the bare-path
+        // fallback (#1308): "./browser" -> conditions -> file, plus single
+        // wildcard "./*" patterns. Targets that escape the package dir are
+        // rejected; resolution then falls through to the bare path.
+        if let Some(exports) = manifest_data.get("exports").and_then(Value::as_object) {
+            let subpath_key = format!("./{subpath}");
+            if let Some(target) = exports.get(&subpath_key).and_then(resolve_export_target) {
+                if contained_in_package(&target, package_dir) {
+                    return vec![package_dir.join(target)];
+                }
+            } else {
+                for (pattern, pattern_value) in exports {
+                    if pattern.matches('*').count() != 1 {
+                        continue;
+                    }
+                    let mut parts = pattern.splitn(2, '*');
+                    let prefix = parts.next().unwrap_or("");
+                    let suffix = parts.next().unwrap_or("");
+                    if !(subpath_key.starts_with(prefix)
+                        && (suffix.is_empty() || subpath_key.ends_with(suffix)))
+                    {
+                        continue;
+                    }
+                    let end = subpath_key.len().saturating_sub(suffix.len());
+                    let matched = if prefix.len() <= end {
+                        &subpath_key[prefix.len()..end]
+                    } else {
+                        ""
+                    };
+                    if let Some(resolved) = resolve_export_target(pattern_value)
+                        && resolved.contains('*')
+                    {
+                        let target = resolved.replace('*', matched);
+                        if contained_in_package(&target, package_dir) {
+                            return vec![package_dir.join(target)];
+                        }
+                    }
+                }
+            }
+        }
         return vec![package_dir.join(subpath)];
     }
 
     if let Some(exports) = manifest_data.get("exports") {
-        if let Some(s) = exports.as_str() {
-            return vec![package_dir.join(s)];
-        }
-        if let Some(obj) = exports.as_object()
-            && let Some(dot) = obj.get(".")
+        // The bare-package target is a string `exports`, or — for a conditions
+        // object with no `.` subpath key (e.g. {"import": "./esm.js"}, which Node
+        // treats as the `.` entry) — the whole object resolved by condition
+        // priority. A subpath map ({".": …, "./foo": …}) yields None from
+        // `resolve_export_target` and falls through. Every target is
+        // containment-checked so a `../../etc/passwd` escape is rejected;
+        // graphify-py (extract.py:465) guards only subpath exports and misses the
+        // bare-conditions object entirely.
+        let target = if let Some(s) = exports.as_str() {
+            Some(s.to_string())
+        } else if let Some(obj) = exports.as_object() {
+            match obj.get(".") {
+                Some(dot) => resolve_export_target(dot),
+                None => resolve_export_target(exports),
+            }
+        } else {
+            None
+        };
+        if let Some(target) = target
+            && contained_in_package(&target, package_dir)
         {
-            if let Some(s) = dot.as_str() {
-                return vec![package_dir.join(s)];
-            }
-            if let Some(dot_obj) = dot.as_object() {
-                for key in ["types", "import", "default", "svelte"] {
-                    if let Some(s) = dot_obj.get(key).and_then(Value::as_str) {
-                        return vec![package_dir.join(s)];
-                    }
-                }
-            }
+            return vec![package_dir.join(target)];
         }
     }
 

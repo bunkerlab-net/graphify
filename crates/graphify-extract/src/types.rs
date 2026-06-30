@@ -84,6 +84,12 @@ pub struct RawCall {
     /// by cross-file member-call resolution (#1356). `None` for other languages
     /// and non-member calls.
     pub receiver: Option<String>,
+    /// For Ruby member calls (`var.method()`), the receiver's inferred type from
+    /// local `var = ClassName.new` bindings, when unambiguously known. Lets the
+    /// cross-file pass resolve the call by the receiver's *type* rather than by
+    /// globally-unique method name (#1499). `None` for other languages, non-member
+    /// calls, and receivers whose type is unknown or ambiguous.
+    pub receiver_type: Option<String>,
 }
 
 /// Result of extracting a single file.

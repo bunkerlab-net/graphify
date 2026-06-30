@@ -459,14 +459,12 @@ pub fn resolve_js_import_target(raw: &str, str_path: &str) -> (String, Option<st
         .parent()
         .unwrap_or(std::path::Path::new("."));
     let aliases = load_tsconfig_aliases(start_dir);
-    for (alias_prefix, alias_base) in &aliases {
-        if raw == alias_prefix || raw.starts_with(&format!("{alias_prefix}/")) {
-            let rest = raw[alias_prefix.len()..].trim_start_matches('/');
-            let joined = std::path::Path::new(alias_base).join(rest);
-            let resolved_raw = std::path::PathBuf::from(normalize_path(&joined));
-            let resolved = crate::tsconfig::resolve_js_module_path(&resolved_raw);
-            return (make_id1(&resolved.to_string_lossy()), Some(resolved));
-        }
+    if let Some(hit) = crate::tsconfig::resolve_tsconfig_alias(raw, &aliases) {
+        // Match the relative-import path: route the alias hit through
+        // `resolve_js_module_path` so a `.js` specifier backed by a `.ts`
+        // source hashes to the same id.
+        let resolved = crate::tsconfig::resolve_js_module_path(&hit);
+        return (make_id1(&resolved.to_string_lossy()), Some(resolved));
     }
     // Try resolving against a pnpm workspace before falling back to the
     // bare-module hash. Inside a monorepo, `@scope/pkg` should resolve to

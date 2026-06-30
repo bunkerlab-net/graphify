@@ -1736,6 +1736,30 @@ fn test_agents_section_does_not_skip_dirty_graph_output() {
     assert!(AGENTS_MD_SECTION.contains("not a reason to skip graphify"));
 }
 
+#[test]
+fn test_agents_section_uses_generic_graphify_instruction() {
+    // #1530: the AGENTS.md section must not name a host-specific `skill` tool.
+    assert!(!AGENTS_MD_SECTION.contains("`skill` tool"));
+    assert!(!AGENTS_MD_SECTION.contains("skill: \"graphify\""));
+    assert!(AGENTS_MD_SECTION.contains("use the installed graphify skill"));
+}
+
+#[test]
+#[serial(home_env)]
+fn test_skill_registration_uses_host_generic_instruction() {
+    // #1530: the CLAUDE.md skill registration must use the host-generic
+    // instruction, not the literal `skill: "graphify"` / "Skill tool".
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_skill_to(dir.path(), "claude");
+    let content = dir.path().join(".claude/CLAUDE.md").read_to_string_unwrap();
+    assert!(
+        content.contains("use the installed graphify skill or instructions"),
+        "{content:?}"
+    );
+    assert!(!content.contains("skill: \"graphify\""), "{content:?}");
+    assert!(!content.contains("Skill tool"), "{content:?}");
+}
+
 // ---------------------------------------------------------------------------
 // install_upgrade parity (test_install_upgrade.py)
 // ---------------------------------------------------------------------------

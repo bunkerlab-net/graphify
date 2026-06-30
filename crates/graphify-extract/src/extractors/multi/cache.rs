@@ -32,6 +32,7 @@ fn file_result_to_value(result: &FileResult) -> Value {
                 "source_file": rc.source_file,
                 "source_location": rc.source_location,
                 "receiver": rc.receiver,
+                "receiver_type": rc.receiver_type,
             })
         })
         .collect();
@@ -97,6 +98,13 @@ fn value_to_file_result(v: &Value) -> FileResult {
                         // invalidated by the version bump that shipped the field.
                         receiver: rc
                             .get("receiver")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        // `receiver_type` (#1499) reads back as `None` when
+                        // absent; same version-namespaced invalidation as
+                        // `receiver` above keeps a pre-field entry from surfacing.
+                        receiver_type: rc
+                            .get("receiver_type")
                             .and_then(Value::as_str)
                             .map(str::to_string),
                     })

@@ -98,7 +98,11 @@ fn swift_cross_file_member_calls_resolve() {
 }
 
 #[test]
-fn swift_cross_file_member_calls_are_inferred_and_resolve_to_real_nodes() {
+fn swift_cross_file_member_calls_have_correct_confidence_and_resolve() {
+    // Instance calls typed via local inference (vm.update(), self.svc.fetch()) are
+    // INFERRED; type-qualified static calls (SessionType.staticMethod(),
+    // Singleton.shared.method()) name the receiver type explicitly in source, so
+    // they are EXTRACTED (#1533). All must land on real definition nodes.
     let tmp = tempfile::tempdir().unwrap();
     let files = issue_fixture(&tmp.path().join("src"));
     let res = extract(&files, Some(&tmp.path().join("cache")));
@@ -108,46 +112,71 @@ fn swift_cross_file_member_calls_are_inferred_and_resolve_to_real_nodes() {
         .iter()
         .filter_map(|n| n.get("id").and_then(|v| v.as_str()))
         .collect();
-    let member_targets: HashSet<&str> =
-        [".update()", ".fetch()", ".staticMethod()", ".method()"].into();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut inferred_calls = 0;
+    let inferred_targets: HashSet<&str> = [".update()", ".fetch()"].into();
+    let extracted_targets: HashSet<&str> = [".staticMethod()", ".method()"].into();
+    let mut seen_inferred: HashSet<String> = HashSet::new();
+    let mut seen_extracted: HashSet<String> = HashSet::new();
     for e in &res.edges {
-        let rel = e.get("relation").and_then(|v| v.as_str()).unwrap_or("");
-        let conf = e.get("confidence").and_then(|v| v.as_str()).unwrap_or("");
-        if rel == "calls" && conf == "INFERRED" {
-            inferred_calls += 1;
+        if e.get("relation").and_then(|v| v.as_str()) != Some("calls") {
+            continue;
         }
         let tgt = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
         let tgt_label = label_of(&res, tgt);
-        if rel == "calls" && member_targets.contains(tgt_label) {
+        let conf = e.get("confidence").and_then(|v| v.as_str()).unwrap_or("");
+        let score = e
+            .get("confidence_score")
+            .and_then(serde_json::Value::as_f64);
+        let source_backed = res
+            .nodes
+            .iter()
+            .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(tgt))
+            .and_then(|n| n.get("source_file").and_then(|v| v.as_str()))
+            .is_some_and(|sf| !sf.is_empty());
+        if inferred_targets.contains(tgt_label) {
             assert_eq!(conf, "INFERRED");
-            assert_eq!(
-                e.get("confidence_score")
-                    .and_then(serde_json::Value::as_f64),
-                Some(0.8)
-            );
-            assert!(node_ids.contains(tgt), "member target not a node: {tgt}");
-            let sf = res
-                .nodes
-                .iter()
-                .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(tgt))
-                .and_then(|n| n.get("source_file").and_then(|v| v.as_str()))
-                .unwrap_or("");
-            assert!(!sf.is_empty(), "member target not source-backed: {tgt}");
-            seen.insert(tgt_label.to_string());
+            assert_eq!(score, Some(0.8));
+            assert!(node_ids.contains(tgt) && source_backed, "unresolved: {tgt}");
+            seen_inferred.insert(tgt_label.to_string());
+        } else if extracted_targets.contains(tgt_label) {
+            assert_eq!(conf, "EXTRACTED");
+            assert_eq!(score, Some(1.0));
+            assert!(node_ids.contains(tgt) && source_backed, "unresolved: {tgt}");
+            seen_extracted.insert(tgt_label.to_string());
         }
     }
-    let want: HashSet<String> = member_targets.iter().map(|s| (*s).to_string()).collect();
-    assert_eq!(seen, want);
-    assert!(
-        inferred_calls >= 5,
-        "expected >=5 INFERRED calls, got {inferred_calls}"
+    assert_eq!(
+        seen_inferred,
+        inferred_targets
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<HashSet<String>>()
+    );
+    assert_eq!(
+        seen_extracted,
+        extracted_targets
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<HashSet<String>>()
     );
 
-    // Edges survive graph construction (targets are real nodes).
+    // Resolved member calls survive graph construction (targets are real nodes).
+    let surviving = res
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && matches!(
+                    e.get("confidence").and_then(|v| v.as_str()),
+                    Some("INFERRED" | "EXTRACTED")
+                )
+        })
+        .count();
+    assert!(
+        surviving >= 5,
+        "expected >=5 resolved calls, got {surviving}"
+    );
     let g = build_from_json(serde_json::to_value(&res).unwrap(), true, None).expect("build");
-    for t in &member_targets {
+    for t in inferred_targets.iter().chain(extracted_targets.iter()) {
         let nid = res
             .nodes
             .iter()
@@ -227,5 +256,68 @@ fn swift_unknown_receiver_emits_no_edge() {
             ".help()".to_string()
         )),
         "unknown receiver should not resolve: {edges:?}"
+    );
+}
+
+#[test]
+fn swift_uppercase_local_does_not_shadow_a_real_type_receiver() {
+    // Regression: the file's local type table is file-wide, not scope-aware. An
+    // upper-cased local binding (here a parameter `SessionType: OtherType`) must
+    // NOT demote a genuine `SessionType.staticMethod()` to an INFERRED call on
+    // OtherType — an upper-cased receiver is resolved as the named type
+    // (EXTRACTED), ignoring the table. A table-first resolver would mis-resolve it
+    // to OtherType.staticMethod.
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("src");
+    let mut files = vec![
+        write_file(
+            &base,
+            "Core/SessionType.swift",
+            "enum SessionType {\n    static func staticMethod() {}\n}\n",
+        ),
+        write_file(
+            &base,
+            "Core/OtherType.swift",
+            "class OtherType {\n    func staticMethod() {}\n}\n",
+        ),
+        write_file(
+            &base,
+            "Views/Poller.swift",
+            "class Poller {\n\
+             \x20   func bind(SessionType: OtherType) {}\n\n\
+             \x20   func go() {\n\
+             \x20       SessionType.staticMethod()\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ];
+    files.sort();
+    let res = extract(&files, Some(&tmp.path().join("cache")));
+    let edge = res
+        .edges
+        .iter()
+        .find(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && label_of(&res, e.get("source").and_then(|v| v.as_str()).unwrap_or("")) == ".go()"
+                && label_of(&res, e.get("target").and_then(|v| v.as_str()).unwrap_or(""))
+                    == ".staticMethod()"
+        })
+        .expect("go() should call a staticMethod");
+    assert_eq!(
+        edge.get("confidence").and_then(|v| v.as_str()),
+        Some("EXTRACTED"),
+        "an upper-cased receiver is type-qualified, not table-resolved"
+    );
+    // ...and it must target SessionType's method, not OtherType's.
+    let tgt_id = edge.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    let tgt_sf = res
+        .nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(tgt_id))
+        .and_then(|n| n.get("source_file").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    assert!(
+        tgt_sf.contains("SessionType"),
+        "must resolve to SessionType.staticMethod, got source_file {tgt_sf}"
     );
 }

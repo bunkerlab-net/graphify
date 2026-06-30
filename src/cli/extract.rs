@@ -553,6 +553,12 @@ fn run_semantic_phase(
     }
 
     save_semantic_cache_safe(&sem_result, path);
+    // Prune orphaned semantic cache entries against the FULL live document set
+    // (sem_paths), NOT the incremental cache-miss subset, which would delete every
+    // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
+    // unversioned, so it is never swept by the AST version-cleanup: every content
+    // change or file deletion leaves a permanent orphan otherwise (#1527).
+    prune_semantic_cache_safe(path, &sem_paths);
     merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);
     let extraction_json = serde_json::json!({
         "nodes": sem_result.nodes,
@@ -578,6 +584,33 @@ fn save_semantic_cache_safe(sem_result: &graphify_llm::LlmResponse, path: &std::
         )
     {
         eprintln!("      warning: failed to save semantic cache: {e}");
+    }
+}
+
+/// Best-effort prune of orphaned semantic cache entries (#1527). Builds the live
+/// content-hash set from the semantic files that still exist on disk (a deleted
+/// file is left out so its stale entry is swept), then sweeps everything else. A
+/// prune failure only costs one re-extraction on a future run, never wrong output.
+fn prune_semantic_cache_safe(root: &std::path::Path, sem_paths: &[String]) {
+    let live: std::collections::HashSet<String> = sem_paths
+        .iter()
+        .filter_map(|p| {
+            // Resolve a relative path against `root` exactly as
+            // `check_semantic_cache` does (semantic.rs), so the live-set hashes
+            // key the same entries the cache lookup did; otherwise a relative CLI
+            // input would hash differently here and prune a valid entry.
+            let mut fp = std::path::PathBuf::from(p);
+            if !fp.is_absolute() {
+                fp = root.join(&fp);
+            }
+            fp.is_file()
+                .then(|| graphify_cache::file_hash(&fp, root).ok())
+                .flatten()
+        })
+        .collect();
+    let pruned = graphify_cache::prune_semantic_cache(root, &live);
+    if pruned > 0 {
+        eprintln!("      pruned {pruned} orphaned semantic cache entries");
     }
 }
 

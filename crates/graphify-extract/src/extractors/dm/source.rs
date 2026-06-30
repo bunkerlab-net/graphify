@@ -274,6 +274,7 @@ impl CallCtx<'_> {
             source_file: self.str_path.to_string(),
             source_location: format!("L{line}"),
             receiver: None,
+            receiver_type: None,
         });
     }
 

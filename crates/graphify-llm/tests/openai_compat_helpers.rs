@@ -4,8 +4,8 @@
 
 use graphify_llm::openai_compat::{
     OpenAiRequest, api_timeout, call_openai_compat, derive_ollama_num_ctx, extraction_messages,
-    model_requires_default_temperature, plain_messages, resolve_max_tokens, resolve_temperature,
-    safe_parse_response,
+    model_requires_default_temperature, plain_messages, resolve_max_retries, resolve_max_tokens,
+    resolve_temperature, safe_parse_response,
 };
 use serde_json::json;
 use std::time::Duration;
@@ -313,4 +313,23 @@ fn resolve_temperature_env_var_invalid_falls_back() {
     g.set("GRAPHIFY_LLM_TEMPERATURE", "hot");
     assert_eq!(resolve_temperature(Some(0.0), "gpt-4.1-mini"), Some(0.0));
     assert_eq!(resolve_temperature(Some(0.0), "o3-mini"), None);
+}
+
+// ── resolve_max_retries ──────────────────────────────────────────────────────
+
+#[test]
+#[serial_test::serial(env)]
+fn resolve_max_retries_default_and_env() {
+    // Default retry count is generous (so 429s are absorbed, #1523); env overrides.
+    let mut g = EnvGuard::new();
+    g.remove("GRAPHIFY_MAX_RETRIES");
+    assert_eq!(resolve_max_retries(), 6, "default should be generous");
+    g.set("GRAPHIFY_MAX_RETRIES", "10");
+    assert_eq!(resolve_max_retries(), 10);
+    g.set("GRAPHIFY_MAX_RETRIES", "0");
+    assert_eq!(resolve_max_retries(), 0, "disable is allowed");
+    g.set("GRAPHIFY_MAX_RETRIES", "bogus");
+    assert_eq!(resolve_max_retries(), 6, "invalid -> default");
+    g.set("GRAPHIFY_MAX_RETRIES", "-1");
+    assert_eq!(resolve_max_retries(), 6, "negative -> default");
 }

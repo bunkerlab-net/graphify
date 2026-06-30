@@ -11,6 +11,24 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
+/// Overwrite every occurrence of `needle` in `haystack` with equal-length
+/// spaces, preserving byte offsets and line numbers so tree-sitter spans stay
+/// valid. Mirrors Python's `source.replace(macro, b" " * len(macro))` (#1475).
+fn blank_bytes(haystack: &mut [u8], needle: &[u8]) {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return;
+    }
+    let mut i = 0;
+    while i + needle.len() <= haystack.len() {
+        if &haystack[i..i + needle.len()] == needle {
+            haystack[i..i + needle.len()].fill(b' ');
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+}
+
 /// Collect every `type_identifier` name under a property's type node, descending
 /// through `generic_specifier`/`type_name` so `NSArray<Product *>` yields both
 /// `NSArray` and the element type `Product` (#1475).
@@ -36,8 +54,9 @@ fn collect_objc_type_names<'a>(
 
 /// Extract interfaces, implementations, protocols, methods, and imports from `.m`/`.mm`/`.h` files.
 #[must_use]
+#[allow(clippy::too_many_lines)] // linear orchestration: read+blank source, parse, structural walk, call walk, reconcile
 pub fn extract_objc(path: &Path) -> FileResult {
-    let source = match std::fs::read(path) {
+    let mut source = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => {
             return FileResult {
@@ -48,6 +67,18 @@ pub fn extract_objc(path: &Path) -> FileResult {
             };
         }
     };
+
+    // tree-sitter-objc cannot expand these argument-less annotation macros (no
+    // trailing `;`), and their presence before `@interface` makes the parser
+    // fail to emit a class_interface node, swallowing the whole interface
+    // (#1475). Blank them to equal-length spaces so byte offsets and line
+    // numbers are preserved and the interface parses.
+    for macro_bytes in [
+        b"NS_ASSUME_NONNULL_BEGIN".as_slice(),
+        b"NS_ASSUME_NONNULL_END".as_slice(),
+    ] {
+        blank_bytes(&mut source, macro_bytes);
+    }
 
     let mut parser = tree_sitter::Parser::new();
     if parser
@@ -116,8 +147,11 @@ pub fn extract_objc(path: &Path) -> FileResult {
     {
         let mut call_ctx = ObjcCallCtx {
             str_path: &str_path,
+            stem: &stem,
             all_method_nids: &all_method_nids,
+            nodes: &mut nodes,
             edges: &mut edges,
+            seen_ids: &mut seen_ids,
             seen_calls: &mut seen_calls,
         };
         for (caller_nid, body_start, body_end) in &method_bodies {
@@ -156,6 +190,37 @@ struct ObjcWalkCtx<'a> {
     method_bodies: &'a mut Vec<(String, usize, usize)>,
 }
 
+/// Return the NID for a named type, creating a SOURCELESS placeholder stub when
+/// no file-qualified node exists. The stub carries no `source_file` so a real
+/// cross-file definition can be rewired onto it (#1402); `origin_file` records
+/// the referencing file to disambiguate same-label stubs (#1462). Mirrors Python
+/// objc `ensure_named_node`.
+fn ensure_objc_named_node(
+    stem: &str,
+    str_path: &str,
+    name: &str,
+    nodes: &mut Vec<Node>,
+    seen_ids: &mut HashSet<String>,
+) -> String {
+    let nid1 = make_id(&[stem, name]);
+    if seen_ids.contains(&nid1) {
+        return nid1;
+    }
+    let nid2 = make_id1(name);
+    if seen_ids.insert(nid2.clone()) {
+        nodes.push(Node {
+            id: nid2.clone(),
+            label: name.to_string(),
+            file_type: "code".to_string(),
+            source_file: String::new(),
+            source_location: Some(String::new()),
+            metadata: None,
+            origin_file: Some(str_path.to_string()),
+        });
+    }
+    nid2
+}
+
 impl ObjcWalkCtx<'_> {
     /// Return the NID for a named type, creating a SOURCELESS placeholder stub
     /// when no file-qualified node exists. Mirrors Python objc `ensure_named_node`
@@ -164,23 +229,7 @@ impl ObjcWalkCtx<'_> {
     /// the referencing file is recorded as `origin_file` to disambiguate
     /// same-label stubs (#1462), matching the generic `ensure_named_node`.
     fn ensure_named_node(&mut self, name: &str) -> String {
-        let nid1 = make_id(&[self.stem, name]);
-        if self.seen_ids.contains(&nid1) {
-            return nid1;
-        }
-        let nid2 = make_id1(name);
-        if self.seen_ids.insert(nid2.clone()) {
-            self.nodes.push(Node {
-                id: nid2.clone(),
-                label: name.to_string(),
-                file_type: "code".to_string(),
-                source_file: String::new(),
-                source_location: Some(String::new()),
-                metadata: None,
-                origin_file: Some(self.str_path.to_string()),
-            });
-        }
-        nid2
+        ensure_objc_named_node(self.stem, self.str_path, name, self.nodes, self.seen_ids)
     }
 }
 
@@ -224,10 +273,25 @@ fn walk_objc(
                             loop {
                                 if sc.node().kind() == "string_content" {
                                     let raw = read_text(sc.node(), source);
-                                    let module =
-                                        raw.split('/').next_back().unwrap_or("").replace(".h", "");
-                                    if !module.is_empty() {
-                                        let tgt_nid = make_id1(&module);
+                                    // Resolve the quoted include to a real file so the
+                                    // target id matches the (possibly disambiguated)
+                                    // node id _make_id gives that file; the bare-stem id
+                                    // never survives id-collision splitting when a
+                                    // `.h`/`.m` pair exists, so the edge dangled (#1475).
+                                    let tgt_nid = crate::import_handlers::resolve_c_include_path(
+                                        raw,
+                                        ctx.str_path,
+                                    )
+                                    .map(|resolved| make_id1(&resolved.to_string_lossy()))
+                                    .or_else(|| {
+                                        let module = raw
+                                            .split('/')
+                                            .next_back()
+                                            .unwrap_or("")
+                                            .replace(".h", "");
+                                        (!module.is_empty()).then(|| make_id1(&module))
+                                    });
+                                    if let Some(tgt_nid) = tgt_nid {
                                         ctx.edges.push(Edge {
                                             external: false,
                                             source: ctx.file_nid.to_string(),
@@ -655,8 +719,11 @@ fn walk_objc(
 /// Shared state threaded through every [`walk_calls_objc`] recursion.
 struct ObjcCallCtx<'a> {
     str_path: &'a str,
+    stem: &'a str,
     all_method_nids: &'a HashSet<String>,
+    nodes: &'a mut Vec<Node>,
     edges: &'a mut Vec<Edge>,
+    seen_ids: &'a mut HashSet<String>,
     seen_calls: &'a mut HashSet<(String, String)>,
 }
 
@@ -669,13 +736,48 @@ fn walk_calls_objc(
     body_end: usize,
 ) {
     let str_path = ctx.str_path;
+    let stem = ctx.stem;
     let all_method_nids = ctx.all_method_nids;
+    let nodes = &mut *ctx.nodes;
     let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
     let seen_calls = &mut *ctx.seen_calls;
     if node.start_byte() >= body_end || node.end_byte() <= body_start {
         return;
     }
     if node.kind() == "message_expression" {
+        // `[[Foo alloc] init]` — the inner `[Foo alloc]` is a message_expression
+        // whose method is the identifier `alloc` and whose receiver is the bare
+        // class identifier `Foo`; resolve that class and emit a `references` edge
+        // so the allocating method links to the allocated type. ensure_named_node
+        // emits a sourceless stub for an unknown name, which the corpus rewire
+        // collapses only when exactly one real class of that name exists, so an
+        // unknown/ambiguous class produces no false resolved edge (#1475).
+        if let (Some(meth), Some(recv)) = (
+            node.child_by_field_name("method"),
+            node.child_by_field_name("receiver"),
+        ) && meth.kind() == "identifier"
+            && read_text(meth, source) == "alloc"
+            && recv.kind() == "identifier"
+        {
+            let tname = read_text(recv, source);
+            let ref_line = node.start_position().row + 1;
+            let type_nid = ensure_objc_named_node(stem, str_path, tname, nodes, seen_ids);
+            if type_nid != caller_nid {
+                edges.push(Edge {
+                    external: false,
+                    source: caller_nid.to_string(),
+                    target: type_nid,
+                    relation: "references".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{ref_line}")),
+                    weight: 1.0,
+                    context: Some("type".to_string()),
+                    confidence_score: None,
+                });
+            }
+        }
         // `[receiver sel]` and `[receiver kw1:a kw2:b]` both parse to a
         // message_expression whose selector parts carry the field name "method"
         // (one for a simple selector, several for a compound one); the receiver
