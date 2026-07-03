@@ -15,9 +15,9 @@ graphify-security = { workspace = true }
 hex = { workspace = true }
 ignore_walk = { version = "0.4", package = "ignore" }
 indexmap = { workspace = true }
-lopdf = "0.42"
+lopdf = "0.43"
 md5 = "0.8"
-quick-xml = "0.40"
+quick-xml = "0.41"
 rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
@@ -30,7 +30,7 @@ unicode-normalization = { workspace = true }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-lopdf = "0.42"
+lopdf = "0.43"
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
