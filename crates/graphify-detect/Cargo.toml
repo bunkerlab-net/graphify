@@ -17,7 +17,7 @@ ignore_walk = { version = "0.4", package = "ignore" }
 indexmap = { workspace = true }
 lopdf = "0.43"
 md5 = "0.8"
-quick-xml = "0.41"
+quick-xml = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

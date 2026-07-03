@@ -20,7 +20,7 @@ indexmap = { workspace = true }
 native-tls = { version = "0.2", optional = true }
 postgres = { version = "0.19", optional = true }
 postgres-native-tls = { version = "0.5", optional = true }
-quick-xml = "0.41"
+quick-xml = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
