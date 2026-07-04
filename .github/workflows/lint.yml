@@ -26,7 +26,7 @@ jobs:
           submodules: true
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master # zizmor: ignore[ref-version-mismatch]
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: ${{ matrix.toolchain }}
           components: clippy, rustfmt
@@ -47,7 +47,7 @@ jobs:
 
       - name: Cache Cargo
         if: matrix.toolchain == 'stable'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
