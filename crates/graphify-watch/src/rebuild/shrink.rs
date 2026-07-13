@@ -13,6 +13,17 @@ use serde_json::Value;
 
 use crate::error::WatchError;
 
+/// A shrink-guard function: the production pipeline uses [`check_shrink`];
+/// `test_support` supplies a scoped rejecting variant so the marker-refusal
+/// contract can be exercised without global state or environment coupling.
+pub type ShrinkChecker = fn(
+    bool,
+    &Value,
+    &Value,
+    Option<&Path>,
+    bool,
+    Option<&HashSet<String>>,
+) -> Result<(), WatchError>;
 /// Return `Ok(())` when the node count is acceptable, `Err` when the new graph
 /// has shrunk relative to the existing one.
 ///
@@ -51,21 +62,6 @@ pub fn check_shrink(
     had_explicit_deletions: bool,
     rebuilt_sources: Option<&HashSet<String>>,
 ) -> Result<(), WatchError> {
-    // Test-only hook: graphify-py's `_rebuild_code` marker test monkeypatches
-    // `_check_shrink` to force a refusal. Under the reconcile path a genuine
-    // *unexplained* shrink cannot be triggered from test inputs (every lost node
-    // is excused as a rebuilt/deleted source), so this env var stands in for the
-    // monkeypatch, letting the "marker not updated on refusal" contract be
-    // exercised deterministically. Never set in production.
-    if std::env::var_os("GRAPHIFY_TEST_FORCE_SHRINK_REFUSE").is_some() {
-        if let Some(tmp_path) = tmp {
-            let _ = std::fs::remove_file(tmp_path);
-        }
-        return Err(WatchError::ShrinkRefused {
-            existing: 0,
-            new: 0,
-        });
-    }
     if force || had_explicit_deletions {
         return Ok(());
     }

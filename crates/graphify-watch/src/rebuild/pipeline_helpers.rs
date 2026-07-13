@@ -17,7 +17,6 @@ use crate::error::WatchError;
 use crate::rebuild::community::node_community_map;
 use crate::rebuild::helpers::{build_analysis, detect_code_files, graph_to_topology_value};
 use crate::rebuild::reconcile::lexical_abs;
-use crate::rebuild::shrink::check_shrink;
 
 /// Re-export of [`graphify_detect::DetectResult`] used throughout the pipeline.
 pub(crate) type DetectResult = graphify_detect::DetectResult;
@@ -275,6 +274,7 @@ pub(crate) fn run_no_cluster_path(
     force: bool,
     had_explicit_deletions: bool,
     rebuilt_sources: Option<&HashSet<String>>,
+    check_shrink_fn: crate::rebuild::ShrinkChecker,
     t_post: std::time::Instant,
 ) -> Result<bool, WatchError> {
     // Dedupe nodes by id and parallel edges by (source, target, relation): the
@@ -311,7 +311,7 @@ pub(crate) fn run_no_cluster_path(
     }
     let t_write = std::time::Instant::now();
     if !same_graph {
-        check_shrink(
+        check_shrink_fn(
             force,
             existing_graph_data,
             &candidate_data,
@@ -582,12 +582,14 @@ pub(crate) struct CommitArgs<'a> {
     pub out: &'a Path,
     /// Project root used to relativise manifest keys (#777).
     pub project_root: &'a Path,
+    /// Shrink-guard to apply before committing (injectable for tests).
+    pub check_shrink_fn: crate::rebuild::ShrinkChecker,
 }
 
 /// Atomically commit the rebuild outputs: `graph.json`, `GRAPH_REPORT.md`,
 /// labels, and the AST manifest.
 pub(crate) fn commit_rebuild_outputs(args: &CommitArgs<'_>) -> Result<(), WatchError> {
-    check_shrink(
+    (args.check_shrink_fn)(
         args.force,
         args.existing_graph_data,
         args.candidate_graph_data,
@@ -705,6 +707,8 @@ pub(crate) struct FinaliseArgs<'a> {
     pub project_root: &'a std::path::Path,
     /// User-supplied watch path, written to `.graphify_root` after acceptance.
     pub watch_path: &'a std::path::Path,
+    /// Shrink-guard to apply before committing (injectable for tests).
+    pub check_shrink_fn: crate::rebuild::ShrinkChecker,
 }
 
 /// Finalise the rebuild: commit (or skip), prune `needs_update`, render the HTML
@@ -732,6 +736,7 @@ pub(crate) fn finalise_rebuild(args: &FinaliseArgs<'_>) -> Result<(), WatchError
             detected: args.detected,
             out: args.out,
             project_root: args.project_root,
+            check_shrink_fn: args.check_shrink_fn,
         })?;
     }
     // #8d8d2b8: persist the `.graphify_root` marker only after the graph is

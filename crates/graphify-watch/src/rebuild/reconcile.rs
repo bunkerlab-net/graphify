@@ -268,6 +268,11 @@ pub fn rebase_relative_source_files(payload: &mut Value, source_root: &Path, tar
     let Some(obj) = payload.as_object_mut() else {
         return;
     };
+    // Buckets `nodes`/`edges`/`hyperedges` mirror graphify-py's
+    // `_rebase_relative_source_files` exactly. This runs on the FRESH extraction
+    // (`result`), whose edge bucket is always `edges` — the `links` key only
+    // appears after the no-cluster writer renames it, long after this call — so a
+    // `links` bucket here would never match and adding one diverges from Python.
     for bucket in ["nodes", "edges", "hyperedges"] {
         let Some(items) = obj.get_mut(bucket).and_then(Value::as_array_mut) else {
             continue;

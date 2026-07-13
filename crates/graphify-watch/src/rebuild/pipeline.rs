@@ -39,6 +39,7 @@ pub(crate) fn rebuild_code_inner(
     force: bool,
     no_cluster: bool,
     follow_symlinks: bool,
+    check_shrink_fn: crate::rebuild::ShrinkChecker,
 ) -> Result<bool, WatchError> {
     let watch_root = watch_path
         .canonicalize()
@@ -111,6 +112,7 @@ pub(crate) fn rebuild_code_inner(
             force,
             had_explicit_deletions,
             Some(&rebuilt_sources),
+            check_shrink_fn,
             t_post,
         );
     }
@@ -166,6 +168,7 @@ pub(crate) fn rebuild_code_inner(
         out: &out,
         project_root: &project_root,
         watch_path,
+        check_shrink_fn,
     })?;
 
     Ok(true)

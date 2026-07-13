@@ -1336,16 +1336,12 @@ fn rebuild_does_not_update_root_marker_when_write_is_refused() {
         );
 
         fs::write(&app, "def after():\n    return 2\n").expect("edit app.py");
-        // SAFETY: test-only env, serialized by #[serial].
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("GRAPHIFY_TEST_FORCE_SHRINK_REFUSE", "1");
-        }
-        let refused = rebuild_code(Path::new("src"), None, opts);
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::remove_var("GRAPHIFY_TEST_FORCE_SHRINK_REFUSE");
-        }
+        // Force a shrink refusal via the typed test seam (no env / global state).
+        let refused = graphify_watch::test_support::rebuild_code_forcing_shrink_refusal(
+            Path::new("src"),
+            None,
+            opts,
+        );
         // Rust surfaces a shrink refusal as `Err(ShrinkRefused)` (established
         // crate-wide via `check_shrink`'s `?`), where graphify-py returns False;
         // either way the write is refused, which is what this test pins.
@@ -1357,12 +1353,6 @@ fn rebuild_does_not_update_root_marker_when_write_is_refused() {
         );
     });
     std::env::set_current_dir(&prev).expect("restore cwd");
-    let _ = std::env::var("GRAPHIFY_TEST_FORCE_SHRINK_REFUSE").map(|_| {
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::remove_var("GRAPHIFY_TEST_FORCE_SHRINK_REFUSE");
-        }
-    });
     result.expect("marker test panicked");
 }
 

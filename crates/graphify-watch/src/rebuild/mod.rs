@@ -22,7 +22,7 @@ pub use pending::{
     rebuild_with_pending,
 };
 pub use relativize::relativize_source_files;
-pub use shrink::check_shrink;
+pub use shrink::{ShrinkChecker, check_shrink};
 
 use std::path::{Path, PathBuf};
 
@@ -75,6 +75,19 @@ pub fn rebuild_code(
     changed_paths: Option<&[PathBuf]>,
     opts: RebuildOptions,
 ) -> Result<bool, WatchError> {
+    rebuild_code_impl(watch_path, changed_paths, opts, check_shrink)
+}
+
+/// [`rebuild_code`] with an injectable shrink-guard. The public entry always
+/// supplies the real [`check_shrink`]; `test_support` supplies a rejecting
+/// checker scoped to a single call, so no global state or environment variable
+/// can alter production behaviour.
+pub(crate) fn rebuild_code_impl(
+    watch_path: &Path,
+    changed_paths: Option<&[PathBuf]>,
+    opts: RebuildOptions,
+    check_shrink_fn: ShrinkChecker,
+) -> Result<bool, WatchError> {
     if !stabilize_rebuild_cwd(watch_path) {
         return Ok(false);
     }
@@ -87,6 +100,7 @@ pub fn rebuild_code(
             opts.force,
             opts.no_cluster,
             opts.follow_symlinks,
+            check_shrink_fn,
         ),
         LockPolicy::TryAcquire | LockPolicy::BlockOn => {
             let block = matches!(opts.lock, LockPolicy::BlockOn);
@@ -120,6 +134,7 @@ pub fn rebuild_code(
                     opts.force,
                     opts.no_cluster,
                     opts.follow_symlinks,
+                    check_shrink_fn,
                 )
             });
             drop(guard);
