@@ -137,6 +137,7 @@ pub fn call_openai_plain(
     model: &str,
     prompt: &str,
     max_tokens: u32,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     let base = base_url();
     call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
@@ -149,6 +150,7 @@ pub fn call_openai_plain(
         disable_thinking: false,
         extra_body: None,
         max_tokens,
+        usage,
     })
 }
 

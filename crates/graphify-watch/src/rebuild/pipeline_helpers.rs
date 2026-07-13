@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 
 use graphify_build::{Graph, build_from_json, dedupe_edges, dedupe_nodes, norm_source_file};
 use graphify_cluster::{cluster, remap_communities_to_previous, score_all};
-use graphify_detect::extensions::CODE_EXTENSIONS;
-use graphify_detect::{FileType, classify_file};
 use graphify_export::{backup_if_protected, to_html, to_json};
 use graphify_extract::extract;
 use indexmap::IndexMap;
@@ -18,7 +16,7 @@ use crate::canonical::{
 use crate::error::WatchError;
 use crate::rebuild::community::node_community_map;
 use crate::rebuild::helpers::{build_analysis, detect_code_files, graph_to_topology_value};
-use crate::rebuild::relativize::relativize_source_files;
+use crate::rebuild::reconcile::lexical_abs;
 use crate::rebuild::shrink::check_shrink;
 
 /// Re-export of [`graphify_detect::DetectResult`] used throughout the pipeline.
@@ -37,9 +35,12 @@ pub(crate) fn resolve_project_root(watch_path: &Path, watch_root: &Path) -> Path
 }
 
 /// Run detection and log the elapsed time when `GRAPHIFY_PERF_LOG` is set.
-pub(crate) fn detect_phase(watch_path: &Path) -> (DetectResult, Vec<PathBuf>) {
+pub(crate) fn detect_phase(
+    watch_path: &Path,
+    follow_symlinks: bool,
+) -> (DetectResult, Vec<PathBuf>) {
     let t_detect = std::time::Instant::now();
-    let (detected, code_files) = detect_code_files(watch_path, false);
+    let (detected, code_files) = detect_code_files(watch_path, follow_symlinks);
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf] detect: {:.2}s ({} files)",
@@ -76,84 +77,81 @@ pub(crate) fn compute_rebuilt_sources(
     sources
 }
 
-/// `true` when `path` would have been pulled into the rebuild's `code_files`
-/// set if it still existed on disk. Mirrors the inclusion rule used in
-/// [`crate::rebuild::helpers::detect_code_files`]: any `FileType::Code` plus
-/// the markdown-family documents (`.md` / `.mdx` / `.qmd`) that have AST
-/// extractors. Used to narrow the shrink-guard bypass — a deleted
-/// `.gitignore` or `.env` is not a tracked-code deletion.
-fn is_tracked_code_path(path: &Path) -> bool {
-    if matches!(classify_file(path), Some(FileType::Code)) {
-        return true;
-    }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    matches!(ext, "md" | "mdx" | "qmd")
-}
-
 /// Plausible absolute locations for a hook-provided changed path.
 ///
 /// Git hooks pass paths relative to the repository root, but watch callers may
-/// pass them relative to the watched root. Keep both interpretations (deduped,
-/// `change_root` first) so a graph rooted at `src` accepts both `src/app.py`
-/// and `app.py`. Absolute inputs resolve to a single candidate. Canonicalises
-/// when the target exists, falling back to the lexical join for deleted files
-/// so the candidate is still usable for eviction. Mirrors
-/// `_changed_path_candidates` in `graphify-py/graphify/watch.py` (#1348).
+/// pass them relative to the watched root. Keep both interpretations so a graph
+/// rooted at `src` accepts both `src/app.py` and `app.py`. Each interpretation
+/// yields BOTH a lexical absolute (Python `os.path.abspath` — usable for a
+/// deleted file) and the symlink-resolved form, deduped. Mirrors
 fn changed_path_candidates(raw: &Path, change_root: &Path, watch_root: &Path) -> Vec<PathBuf> {
-    if raw.is_absolute() {
-        return vec![raw.canonicalize().unwrap_or_else(|_| raw.to_path_buf())];
-    }
+    // Both a lexical absolute (Python `os.path.abspath`, `.`/`..` collapsed, no
+    // symlink resolution — usable for a deleted file) AND the symlink-resolved
+    // form, deduped. Mirrors `_changed_path_candidates` (#8d8d2b8).
     let mut candidates: Vec<PathBuf> = Vec::new();
-    for base in [change_root, watch_root] {
-        let joined = base.join(raw);
-        let cand = joined.canonicalize().unwrap_or(joined);
-        if !candidates.contains(&cand) {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let push = |cand: PathBuf, candidates: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>| {
+        if seen.insert(cand.clone()) {
             candidates.push(cand);
         }
+    };
+    if raw.is_absolute() {
+        let lexical = PathBuf::from(lexical_abs(raw));
+        let resolved = raw.canonicalize().unwrap_or_else(|_| lexical.clone());
+        push(lexical, &mut candidates, &mut seen);
+        push(resolved, &mut candidates, &mut seen);
+        return candidates;
+    }
+    for base in [change_root, watch_root] {
+        let lexical = PathBuf::from(lexical_abs(&base.join(raw)));
+        let resolved = lexical.canonicalize().unwrap_or_else(|_| lexical.clone());
+        push(lexical, &mut candidates, &mut seen);
+        push(resolved, &mut candidates, &mut seen);
     }
     candidates
 }
 
-/// Record `path` as an evicted source under BOTH the project root and the
-/// watched root, so eviction matches however the existing graph's `source_file`
-/// paths were relativised. Mirrors `_add_deleted_source` in
-/// `graphify-py/graphify/watch.py` (#1348).
+/// Record `path` as an evicted source: its absolute lexical identity (for the
+/// reconciliation's identity-based eviction) plus its `source_file` form under
+/// BOTH the project and watched roots (so eviction matches however the prior
+/// graph relativised paths). Mirrors `_add_deleted_source` (#8d8d2b8).
 fn add_deleted_source(
     deleted_paths: &mut Vec<String>,
+    deleted_source_identities: &mut HashSet<String>,
     path: &Path,
     project_root: &Path,
     watch_root: &Path,
 ) {
+    deleted_source_identities.insert(lexical_abs(path));
     for root in [project_root, watch_root] {
         let rel = norm_source_file(&path.to_string_lossy(), Some(&root.to_string_lossy()));
+        let rel = if rel.is_empty() {
+            path.to_string_lossy().into_owned()
+        } else {
+            rel
+        };
         if !deleted_paths.contains(&rel) {
             deleted_paths.push(rel);
         }
     }
 }
 
-/// Result of [`compute_extract_targets`]: which files to extract from, which
-/// paths to evict from the existing graph, and whether the change set declared
-/// a tracked-code-file deletion (relevant for the shrink-guard bypass).
+/// Result of [`compute_extract_targets`]: which files to extract from, the
+/// `source_file` forms to evict, and their absolute identities.
 pub(crate) struct ExtractTargets {
     /// Existing tracked code files that the caller wants re-extracted.
     pub wanted: Vec<PathBuf>,
-    /// Paths to evict from any prior graph — covers both true deletions and
+    /// `source_file` forms to evict from any prior graph — deletions plus
     /// non-code paths in the change set whose nodes should drop out.
     pub deleted_paths: Vec<String>,
-    /// `true` when the change set contained at least one path that no longer
-    /// exists on disk. The watch shrink-guard bypass is keyed off this flag
-    /// (not `!deleted_paths.is_empty()`) so a changed-but-untracked README
-    /// can't accidentally suppress the guard.
-    pub had_tracked_deletion: bool,
+    /// Absolute lexical identities of the evicted sources (identity-based
+    /// eviction in the reconciliation, robust to root/rename differences).
+    pub deleted_source_identities: HashSet<String>,
 }
 
-/// Compute the list of files to extract from + the list of deleted paths to evict.
+/// Compute the files to extract from + the paths/identities to evict.
 ///
-/// Returns `None` when there's nothing to do (no tracked files in the change set).
+/// Returns `None` when there's nothing to do (no tracked files, no deletions).
 pub(crate) fn compute_extract_targets(
     changed_paths: Option<&[PathBuf]>,
     code_files: &[PathBuf],
@@ -164,7 +162,7 @@ pub(crate) fn compute_extract_targets(
         return Some(ExtractTargets {
             wanted: code_files.to_vec(),
             deleted_paths: Vec::new(),
-            had_tracked_deletion: false,
+            deleted_source_identities: HashSet::new(),
         });
     };
     // Git hooks emit repo-root-relative paths; resolve candidates against the
@@ -172,20 +170,18 @@ pub(crate) fn compute_extract_targets(
     let change_root = std::env::current_dir()
         .and_then(|cwd| cwd.canonicalize())
         .unwrap_or_else(|_| watch_root.to_path_buf());
-    let code_set: std::collections::HashSet<PathBuf> = code_files
+    // Lexical absolute (Python `os.path.abspath`), matching the candidate forms.
+    let code_set: HashSet<PathBuf> = code_files
         .iter()
-        .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+        .map(|p| PathBuf::from(lexical_abs(p)))
         .collect();
     let mut wanted: Vec<PathBuf> = Vec::new();
     let mut deleted_paths: Vec<String> = Vec::new();
-    let mut had_tracked_deletion = false;
+    let mut deleted_source_identities: HashSet<String> = HashSet::new();
     for raw in changed {
         let candidates = changed_path_candidates(raw, &change_root, watch_root);
 
-        // Prefer a candidate that still exists and is a tracked code file:
-        // that's the file to re-extract from. Trying the change root (repo
-        // root / cwd) before the watched root lets a subdir-rooted graph
-        // accept a repo-relative hook path like `src/app.py` (#1348).
+        // A candidate that still exists and is a tracked code file: re-extract it.
         if let Some(tracked) = candidates
             .iter()
             .find(|cand| cand.exists() && code_set.contains(cand.as_path()))
@@ -197,29 +193,31 @@ pub(crate) fn compute_extract_targets(
             continue;
         }
 
-        // A candidate that exists under the watched root but was filtered out
-        // by detect (vendored, gitignored, non-code): evict any stale nodes
-        // that still claim it. The file still exists, so this is not a
-        // tracked-code deletion and must not flip the shrink-guard bypass.
+        // Exists under the watched root but detect filtered it out (vendored /
+        // gitignored / non-code): evict any stale nodes still claiming it.
         if let Some(existing) = candidates
             .iter()
             .find(|cand| cand.exists() && cand.starts_with(watch_root))
         {
-            add_deleted_source(&mut deleted_paths, existing, project_root, watch_root);
+            add_deleted_source(
+                &mut deleted_paths,
+                &mut deleted_source_identities,
+                existing,
+                project_root,
+                watch_root,
+            );
             continue;
         }
 
-        // A candidate under the watched root that no longer exists: the file
-        // was deleted or renamed away. Evict its preserved nodes, and only when
-        // its extension matches the inclusion rule (code plus markdown-family
-        // documents with AST extractors) flag a tracked-code deletion so the
-        // shrink-guard bypass kicks in (#1007). A deleted `.gitignore` or
-        // `.env` is not a tracked-code deletion and must not suppress it.
+        // Deleted or renamed away inside the watched root: evict its nodes.
         if let Some(deleted) = candidates.iter().find(|cand| cand.starts_with(watch_root)) {
-            if is_tracked_code_path(deleted) {
-                had_tracked_deletion = true;
-            }
-            add_deleted_source(&mut deleted_paths, deleted, project_root, watch_root);
+            add_deleted_source(
+                &mut deleted_paths,
+                &mut deleted_source_identities,
+                deleted,
+                project_root,
+                watch_root,
+            );
         }
     }
     if wanted.is_empty() && deleted_paths.is_empty() {
@@ -229,7 +227,7 @@ pub(crate) fn compute_extract_targets(
     Some(ExtractTargets {
         wanted,
         deleted_paths,
-        had_tracked_deletion,
+        deleted_source_identities,
     })
 }
 
@@ -264,256 +262,6 @@ pub(crate) fn extract_phase(extract_targets: &[PathBuf], watch_root: &Path) -> V
     result
 }
 
-/// Outcome of [`merge_with_existing_graph`].
-pub(crate) struct MergeOutcome {
-    /// The (relativised) existing graph JSON, or `Value::Null` when absent.
-    pub existing_graph_data: Value,
-    /// `true` when the full-re-extraction reconciliation evicted at least one
-    /// node from a deleted source file. Feeds the shrink-guard bypass.
-    pub evicted_deleted_sources: bool,
-}
-
-/// Merge AST-extracted nodes/edges with preserved entries from any prior `graph.json`.
-///
-/// Returns the existing graph JSON (or `Value::Null` when absent) so the caller can
-/// reuse it for downstream comparisons, plus whether a deleted source was evicted.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // single-pass merge over two relativisation roots
-pub(crate) fn merge_with_existing_graph(
-    result: &mut Value,
-    existing_graph_path: &Path,
-    has_changed_paths: bool,
-    deleted_paths: &[String],
-    extract_targets: &[PathBuf],
-    code_files: &[PathBuf],
-    project_root: &Path,
-    watch_root: &Path,
-) -> MergeOutcome {
-    // Reject oversized graph files before reading them into memory — mirrors
-    // the size-cap guard added in `graphify-py/graphify/watch.py`. Surface
-    // the rejection on stderr so the user knows we skipped the merge.
-    if let Err(err) = graphify_security::check_graph_file_size_cap(existing_graph_path) {
-        eprintln!(
-            "[graphify watch] skipping merge with existing graph at {}: {err}",
-            existing_graph_path.display()
-        );
-        return MergeOutcome {
-            existing_graph_data: Value::Null,
-            evicted_deleted_sources: false,
-        };
-    }
-    let Ok(text) = std::fs::read_to_string(existing_graph_path) else {
-        return MergeOutcome {
-            existing_graph_data: Value::Null,
-            evicted_deleted_sources: false,
-        };
-    };
-    let Ok(mut existing) = serde_json::from_str::<Value>(&text) else {
-        return MergeOutcome {
-            existing_graph_data: Value::Null,
-            evicted_deleted_sources: false,
-        };
-    };
-    // Relativise the existing graph's source_file paths before reconciliation so
-    // they compare equal to the freshly-extracted (relative) paths (#1007).
-    relativize_source_files(&mut existing, project_root);
-    let existing_graph_data = existing.clone();
-
-    let new_ast_ids: std::collections::HashSet<String> = result
-        .get("nodes")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|n| n.get("id").and_then(Value::as_str).map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let project_root_str = project_root.to_string_lossy().into_owned();
-    let mut evict_sources: std::collections::HashSet<String> =
-        deleted_paths.iter().cloned().collect();
-    // True once the full-re-extraction reconciliation discovers a stale node.
-    // The watch shrink-guard bypass keys off this (mirrors Python's
-    // `bool(deleted_paths)` after reconciliation) so legitimate file deletions
-    // don't trip the "refusing to shrink" guard.
-    let mut evicted_deleted_sources = false;
-    if has_changed_paths {
-        for p in extract_targets {
-            for root in [project_root, watch_root] {
-                evict_sources.insert(norm_source_file(
-                    &p.to_string_lossy(),
-                    Some(&root.to_string_lossy()),
-                ));
-            }
-        }
-    } else {
-        // Full re-extraction: reconcile existing code-file nodes against the
-        // current set of code files on disk, evicting nodes whose source file
-        // was deleted since the last run (#1007). Non-code nodes (docs/papers/
-        // images) are left to the LLM re-extraction path and skipped here.
-        // Files outside `project_root` are intentionally dropped: graph nodes
-        // only ever carry project-relative `source_file` paths, so a code file
-        // living outside the root can't match any node and need not be tracked.
-        // `canonicalize` falls back to the raw path; `norm_source_file` keeps
-        // the relative form normalised so it compares equal to node paths.
-        let current_sources: std::collections::HashSet<String> = code_files
-            .iter()
-            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
-            .filter_map(|abs| abs.strip_prefix(project_root).map(Path::to_path_buf).ok())
-            .map(|rel| norm_source_file(&rel.to_string_lossy(), Some(&project_root_str)))
-            .collect();
-        if let Some(nodes) = existing.get("nodes").and_then(Value::as_array) {
-            for n in nodes {
-                let Some(sf) = n.get("source_file").and_then(Value::as_str) else {
-                    continue;
-                };
-                if sf.is_empty() {
-                    continue;
-                }
-                let ext_is_code = Path::new(sf)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(str::to_lowercase)
-                    .is_some_and(|e| CODE_EXTENSIONS.contains(&e.as_str()));
-                if !ext_is_code {
-                    continue;
-                }
-                let norm = norm_source_file(sf, Some(&project_root_str));
-                if !current_sources.contains(&norm) {
-                    evict_sources.insert(sf.to_string());
-                    evict_sources.insert(norm);
-                    evicted_deleted_sources = true;
-                }
-            }
-        }
-    }
-
-    // On a full re-extraction `new_ast_ids` is the complete current AST set, so
-    // any AST-marked node missing from it is stale and must be dropped even if
-    // its source file survives (a symbol removed from a surviving file, #1116).
-    // In incremental mode an AST node from an unchanged file is legitimately
-    // absent, so this only fires on a full rebuild. Marker-less nodes (semantic,
-    // or pre-upgrade graphs) lack `_origin` and are never dropped here.
-    let full_rebuild = !has_changed_paths;
-    let preserved_nodes: Vec<Value> = existing
-        .get("nodes")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter(|n| {
-                    let id = n.get("id").and_then(Value::as_str).unwrap_or("");
-                    if new_ast_ids.contains(id) {
-                        return false;
-                    }
-                    if full_rebuild && n.get("_origin").and_then(Value::as_str) == Some("ast") {
-                        return false;
-                    }
-                    if !evict_sources.is_empty() {
-                        let src = n.get("source_file").and_then(Value::as_str).unwrap_or("");
-                        if evict_sources.contains(src) {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let all_ids: std::collections::HashSet<String> = new_ast_ids
-        .iter()
-        .cloned()
-        .chain(
-            preserved_nodes
-                .iter()
-                .filter_map(|n| n.get("id").and_then(Value::as_str).map(str::to_string)),
-        )
-        .collect();
-
-    // An edge is OWNED by the file it was extracted from (its `source_file`). When
-    // that file is re-extracted, its prior edges must not be carried forward — the
-    // fresh extraction re-emits whichever ones still exist. Preserving by endpoint
-    // membership alone keeps a removed import's edge alive forever whenever both
-    // endpoint nodes survive (e.g. `a` no longer imports `b`, but both survive),
-    // producing phantom circular dependencies (#1521). So drop preserved edges
-    // whose source_file was re-extracted this run (or deleted). Unlike the
-    // node-level evict set, this MUST cover the full-rebuild case too: there every
-    // file is re-extracted but `evict_sources` only lists deleted files, so a
-    // removed import in a surviving file would otherwise never be pruned.
-    let mut edge_evict_sources = evict_sources.clone();
-    for p in extract_targets {
-        for root in [project_root, watch_root] {
-            edge_evict_sources.insert(norm_source_file(
-                &p.to_string_lossy(),
-                Some(&root.to_string_lossy()),
-            ));
-        }
-    }
-    let edge_evicted = |e: &Value| -> bool {
-        if edge_evict_sources.is_empty() {
-            return false;
-        }
-        let Some(sf) = e.get("source_file").and_then(Value::as_str) else {
-            return false;
-        };
-        if sf.is_empty() {
-            return false;
-        }
-        if edge_evict_sources.contains(sf) {
-            return true;
-        }
-        let norm = norm_source_file(sf, Some(&project_root_str));
-        !norm.is_empty() && edge_evict_sources.contains(&norm)
-    };
-
-    let preserved_edges: Vec<Value> = existing
-        .get("links")
-        .or_else(|| existing.get("edges"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter(|e| {
-                    let src = e.get("source").and_then(Value::as_str).unwrap_or("");
-                    let tgt = e.get("target").and_then(Value::as_str).unwrap_or("");
-                    all_ids.contains(src) && all_ids.contains(tgt) && !edge_evicted(e)
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut merged_nodes: Vec<Value> = result
-        .get("nodes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    merged_nodes.extend(preserved_nodes);
-
-    let mut merged_edges: Vec<Value> = result
-        .get("edges")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    merged_edges.extend(preserved_edges);
-
-    let hyper = existing
-        .get("hyperedges")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-
-    *result = json!({
-        "nodes": merged_nodes,
-        "edges": merged_edges,
-        "hyperedges": hyper,
-        "input_tokens": 0,
-        "output_tokens": 0,
-    });
-    MergeOutcome {
-        existing_graph_data,
-        evicted_deleted_sources,
-    }
-}
-
 /// Execute the `--no-cluster` shortcut: write `graph.json` only, no clustering or report.
 // One-shot `--no-cluster` shortcut threading the rebuild context; an args
 // struct would add indirection for a single call site.
@@ -523,6 +271,7 @@ pub(crate) fn run_no_cluster_path(
     existing_graph_path: &Path,
     existing_graph_data: &Value,
     out: &Path,
+    watch_path: &Path,
     force: bool,
     had_explicit_deletions: bool,
     rebuilt_sources: Option<&HashSet<String>>,
@@ -573,6 +322,15 @@ pub(crate) fn run_no_cluster_path(
         std::fs::write(existing_graph_path, json_text(&candidate_data).as_bytes())
             .map_err(WatchError::Io)?;
     }
+    // #8d8d2b8: write the user-supplied `.graphify_root` marker only after the
+    // candidate graph is accepted (or unchanged), so a refused shrink — which
+    // returns early above via `check_shrink`'s `?` — can never leave the marker
+    // describing a new root while graph.json still holds paths under the old one.
+    std::fs::write(
+        out.join(".graphify_root"),
+        watch_path.to_string_lossy().as_bytes(),
+    )
+    .map_err(WatchError::Io)?;
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf] write graph.json: {:.2}s",
@@ -710,7 +468,7 @@ pub(crate) fn run_analysis(
     report_root: &str,
 ) -> Value {
     let t_analysis = std::time::Instant::now();
-    let mut analysis = build_analysis(graph, communities, watch_path);
+    let mut analysis = build_analysis(graph, communities, watch_path, (0, 0));
     if let Some(obj) = analysis.as_object_mut() {
         obj.insert("root".to_string(), Value::String(report_root.to_string()));
     }
@@ -772,7 +530,7 @@ pub(crate) fn compare_existing_graph(existing_graph_path: &Path, candidate_data:
 /// Render the report and log the elapsed time when `GRAPHIFY_PERF_LOG` is set.
 pub(crate) fn render_report_phase(graph_with_hyper: &Graph, analysis: &Value) -> String {
     let t_report = std::time::Instant::now();
-    let report_content = graphify_report::render_report(graph_with_hyper, analysis);
+    let report_content = graphify_report::render_report(graph_with_hyper, analysis, false);
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf] render_report: {:.2}s",
@@ -945,6 +703,8 @@ pub(crate) struct FinaliseArgs<'a> {
     pub out: &'a std::path::Path,
     /// Project root used to relativise manifest keys (#777).
     pub project_root: &'a std::path::Path,
+    /// User-supplied watch path, written to `.graphify_root` after acceptance.
+    pub watch_path: &'a std::path::Path,
 }
 
 /// Finalise the rebuild: commit (or skip), prune `needs_update`, render the HTML
@@ -974,6 +734,14 @@ pub(crate) fn finalise_rebuild(args: &FinaliseArgs<'_>) -> Result<(), WatchError
             project_root: args.project_root,
         })?;
     }
+    // #8d8d2b8: persist the `.graphify_root` marker only after the graph is
+    // committed (or found unchanged) — a refused shrink returns via the `?`
+    // above, so the marker never describes a root that graph.json doesn't match.
+    std::fs::write(
+        args.out.join(".graphify_root"),
+        args.watch_path.to_string_lossy().as_bytes(),
+    )
+    .map_err(WatchError::Io)?;
     let flag = args.out.join("needs_update");
     if flag.exists() {
         let _ = std::fs::remove_file(&flag);

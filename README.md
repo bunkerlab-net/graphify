@@ -21,6 +21,7 @@ graphify-out/
 ├── .graphify_root              marker so child runs find the project root
 ├── .graphify_analysis.json     analysis sidecar feeding GRAPH_REPORT.md
 ├── .graphify_labels.json       community label cache (skip the LLM next time)
+├── .graphify_learning.json     work-memory overlay — learned verdicts for report/serve/explain/viz (graphify reflect)
 ├── stage_02_extract.json       cached extraction output for incremental runs
 └── .graphify_semantic_marker   set when semantic extraction has already run
 ```

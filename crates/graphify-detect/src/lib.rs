@@ -32,7 +32,8 @@ pub use ignore::{
     is_included, load_graphifyignore, load_graphifyinclude, parse_gitignore_line,
 };
 pub use incremental::{
-    IncrementalDetectResult, Manifest, detect_incremental, load_manifest, save_manifest,
+    IncrementalDetectResult, Manifest, detect_incremental, detect_incremental_with_cache_root,
+    load_manifest, save_manifest,
 };
 pub use manifest::{
     MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, load_manifest_from_path,
@@ -41,4 +42,7 @@ pub use manifest::{
 };
 pub use sensitive::{SKIP_DIRS, SKIP_FILES, is_noise_dir, is_sensitive};
 pub use shebang::{env_command_args, shebang_interpreter};
-pub use walk::{DetectResult, FILE_TYPE_KINDS, auto_follow_symlinks, collect_files, detect};
+pub use walk::{
+    DetectResult, FILE_TYPE_KINDS, auto_follow_symlinks, collect_files, detect,
+    detect_with_cache_root,
+};

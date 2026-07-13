@@ -381,6 +381,54 @@ fn test_parse_llm_json_fenced_array_falls_through_to_empty_fragment() {
     assert_eq!(result, json!({"nodes": [], "edges": [], "hyperedges": []}));
 }
 
+// ── #1631: sanitize malformed fragments at the parse chokepoint ─────────────
+
+#[test]
+fn test_parse_llm_json_drops_non_dict_entries() {
+    // A stray non-dict entry in nodes/edges/hyperedges (a nested list or scalar
+    // slipping past parse) must be dropped so downstream `.get()` access can't
+    // crash and discard the whole chunk.
+    let raw = r#"{"nodes":[{"id":"a"},["not","a","dict"],"bare",{"id":"b"}],"edges":[{"source":"a","target":"b"},["stray"],42],"hyperedges":[{"id":"h"},null]}"#;
+    let parsed = parse_llm_json(raw);
+    assert_eq!(parsed["nodes"], json!([{"id": "a"}, {"id": "b"}]));
+    assert_eq!(parsed["edges"], json!([{"source": "a", "target": "b"}]));
+    assert_eq!(parsed["hyperedges"], json!([{"id": "h"}]));
+}
+
+#[test]
+fn test_parse_llm_json_coerces_non_list_buckets_to_empty() {
+    // A non-list bucket value becomes `[]`; an explicit null is left untouched
+    // (absent-key semantics).
+    let parsed = parse_llm_json(r#"{"nodes":{"id":"oops"},"edges":"nope","hyperedges":null}"#);
+    assert_eq!(parsed["nodes"], json!([]));
+    assert_eq!(parsed["edges"], json!([]));
+    assert_eq!(parsed["hyperedges"], json!(null));
+}
+
+#[test]
+fn test_parse_llm_json_sanitizes_stray_list_in_edges() {
+    let parsed = parse_llm_json(
+        r#"{"nodes":[{"id":"a"}],"edges":[{"source":"a","target":"b"},["malformed"]],"hyperedges":[]}"#,
+    );
+    for key in ["nodes", "edges", "hyperedges"] {
+        assert!(
+            parsed[key]
+                .as_array()
+                .is_some_and(|a| a.iter().all(Value::is_object)),
+            "{key} must contain only objects after sanitize"
+        );
+    }
+    assert_eq!(parsed["edges"], json!([{"source": "a", "target": "b"}]));
+}
+
+#[test]
+fn test_parse_llm_json_fenced_response_is_sanitized() {
+    let raw =
+        "Here you go:\n\n```json\n{\"nodes\":[[\"bad\"],{\"id\":\"ok\"}],\"edges\":[]}\n```\n";
+    let parsed = parse_llm_json(raw);
+    assert_eq!(parsed["nodes"], json!([{"id": "ok"}]));
+}
+
 // ---------------------------------------------------------------------------
 // test_llm_parser.py / test_claude_cli_backend.py — claude -p argv shape
 // ---------------------------------------------------------------------------
@@ -1197,6 +1245,22 @@ fn test_pack_chunks_by_tokens_rejects_zero_budget() {
     assert!(matches!(err, LlmError::InvalidInput(..)));
 }
 
+#[test]
+fn test_pack_chunks_with_special_token_doc_does_not_crash() -> Result<(), Box<dyn std::error::Error>>
+{
+    // #1685: packing a corpus that includes a doc mentioning tiktoken special
+    // tokens must not panic — the original crash happened during token-budget
+    // packing when the estimator hit `<|endoftext|>`.
+    let dir = tempfile::tempdir()?;
+    let doc = dir.path().join("doc.md");
+    std::fs::write(&doc, "see <|endoftext|> and <|im_start|> tokens\n")?;
+    let code = dir.path().join("code.py");
+    std::fs::write(&code, "def f():\n    return 1\n")?;
+    let chunks = graphify_llm::pack_chunks_by_tokens(&[doc, code], 60_000)?;
+    assert!(!chunks.is_empty(), "packing produced at least one chunk");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // --mode deep — extraction system prompt selection (graphify-py v0.8.22)
 // ---------------------------------------------------------------------------
@@ -1250,4 +1314,75 @@ fn test_extraction_system_deep_appends_suffix() {
     // Base prompt ends with a newline; the suffix opens with one, so the join
     // yields a blank-line separator (matches graphify-py concatenation).
     assert!(sys.contains("}\n\nDEEP_MODE"));
+}
+
+// ── #32ff6d6: claude-cli delivers extraction instructions in the user turn ────
+
+/// Runner that records the `user_message` and `system_prompt` it was handed.
+struct CaptureRunner {
+    seen_message: std::sync::Mutex<Option<String>>,
+    captured_system: std::sync::Mutex<Option<String>>,
+    system_was_none: std::sync::Mutex<bool>,
+}
+
+impl ClaudeRunner for CaptureRunner {
+    fn run(
+        &self,
+        user_message: &str,
+        system_prompt: Option<&str>,
+        _model: Option<&str>,
+        _add_dirs: &[std::path::PathBuf],
+        _timeout: std::time::Duration,
+    ) -> (String, String, i32) {
+        *self.seen_message.lock().expect("lock") = Some(user_message.to_string());
+        *self.system_was_none.lock().expect("lock") = system_prompt.is_none();
+        *self.captured_system.lock().expect("lock") = system_prompt.map(str::to_string);
+        ("{\"result\": \"{}\"}".to_string(), String::new(), 0)
+    }
+}
+
+#[test]
+fn test_claude_cli_extraction_instructions_ride_in_user_turn() {
+    // Newer Claude Code CLIs (>=2.1) ignore `--system-prompt` for the raw-JSON
+    // intent, so the extraction system prompt is folded into the user turn and
+    // no system prompt is passed (#32ff6d6).
+    let runner = CaptureRunner {
+        seen_message: std::sync::Mutex::new(None),
+        captured_system: std::sync::Mutex::new(None),
+        system_was_none: std::sync::Mutex::new(false),
+    };
+    let _ = graphify_llm::claude_cli::call_claude_cli_inner(
+        &runner,
+        "SOURCE_FILE_BODY",
+        8192,
+        Some("GRAPHIFY SYSTEM PROMPT"),
+        None,
+    );
+    assert!(
+        runner.seen_message.lock().expect("lock").is_some(),
+        "runner was invoked"
+    );
+    assert!(
+        *runner.system_was_none.lock().expect("lock"),
+        "no system prompt passed to the runner: {:?}",
+        runner.captured_system.lock().expect("lock")
+    );
+    let msg = runner
+        .seen_message
+        .lock()
+        .expect("lock")
+        .clone()
+        .unwrap_or_default();
+    assert!(
+        msg.contains("GRAPHIFY SYSTEM PROMPT"),
+        "system folded into user turn: {msg}"
+    );
+    assert!(
+        msg.contains("output ONLY the JSON object"),
+        "extraction instruction present: {msg}"
+    );
+    assert!(
+        msg.contains("SOURCE_FILE_BODY"),
+        "source body present: {msg}"
+    );
 }

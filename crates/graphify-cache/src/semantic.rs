@@ -58,6 +58,12 @@ pub fn check_semantic_cache(files: &[String], root: &Path) -> SemanticCacheSplit
 /// and writes one cache entry per source file. Returns the number of
 /// source files actually cached.
 ///
+/// When `merge_existing` is `true`, any already-cached entry for a file is
+/// concatenated (`prev + new`, in order, no dedup) with the new results
+/// instead of being overwritten. This lets callers checkpoint incrementally (e.g. once
+/// per chunk) without dropping a prior slice of a large file split across
+/// chunks (#1715). `false` overwrites, the default authoritative behaviour.
+///
 /// # Errors
 ///
 /// Returns [`CacheError::Io`] on filesystem failure or [`CacheError::Json`]
@@ -67,6 +73,7 @@ pub fn save_semantic_cache(
     edges: &[Value],
     hyperedges: &[Value],
     root: &Path,
+    merge_existing: bool,
 ) -> Result<usize, CacheError> {
     type SemanticBuckets = (Vec<Value>, Vec<Value>, Vec<Value>);
     let mut by_file: IndexMap<String, SemanticBuckets> = IndexMap::new();
@@ -111,11 +118,32 @@ pub fn save_semantic_cache(
             p = root.join(&p);
         }
         if p.is_file() {
-            let payload = serde_json::json!({
-                "nodes": n,
-                "edges": e,
-                "hyperedges": h,
-            });
+            let payload = if merge_existing {
+                // Accumulate a prior slice (a large file split across chunks)
+                // instead of overwriting it: prev + new, in order (#1715).
+                let prev = load_cached(&p, root, "semantic");
+                let prev_obj = prev.as_ref().and_then(Value::as_object);
+                let merged = |key: &str, new: &[Value]| -> Vec<Value> {
+                    let mut out: Vec<Value> = prev_obj
+                        .and_then(|m| m.get(key))
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    out.extend(new.iter().cloned());
+                    out
+                };
+                serde_json::json!({
+                    "nodes": merged("nodes", n),
+                    "edges": merged("edges", e),
+                    "hyperedges": merged("hyperedges", h),
+                })
+            } else {
+                serde_json::json!({
+                    "nodes": n,
+                    "edges": e,
+                    "hyperedges": h,
+                })
+            };
             save_cached(&p, &payload, root, "semantic")?;
             saved += 1;
         }

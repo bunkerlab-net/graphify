@@ -15,12 +15,20 @@ use serde::{Deserialize, Serialize};
 use crate::error::CacheError;
 use crate::paths::stat_index_file;
 
-/// Stat-fastpath entry: `(size, mtime_ns)` plus the cached hash.
+/// Stat-fastpath entry: `(size, mtime_ns)` plus an optional cached content hash
+/// and an optional cached word count. Either payload may be absent — a
+/// word-count-only entry (from [`crate::cached_word_count`]) carries no `hash`,
+/// and a hash-only entry carries no `word_count` — so both are `Option` and the
+/// `file_hash` fastpath requires `hash` present. Mirrors graphify-py's shared
+/// stat index (#1656).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StatEntry {
     pub(crate) size: u64,
     pub(crate) mtime_ns: u128,
-    pub(crate) hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) word_count: Option<u64>,
 }
 
 /// Process-wide stat index, lazily initialised per root.
@@ -53,12 +61,17 @@ pub(crate) fn lock_index() -> std::sync::MutexGuard<'static, StatIndexState> {
 /// later calls with a different `root` are silently ignored. The index
 /// file at `stat_index_file(root)` is loaded only once, so callers must
 /// not expect per-call rooting.
-pub(crate) fn ensure_stat_index(root: &Path) {
+pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) {
     let mut state = lock_index();
     if state.root.is_some() {
         return;
     }
-    let root_resolved = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // The stat index only determines the cache FILE location (entry keys are
+    // absolute paths), so honouring an explicit `cache_root` keeps detect()'s
+    // word-count cache under the requested `--out` dir instead of polluting the
+    // scanned corpus with a stray graphify-out/ (#1747).
+    let base = cache_root.unwrap_or(root);
+    let root_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     state.root = Some(root_resolved.clone());
     let path = stat_index_file(&root_resolved);
     if let Ok(text) = fs::read_to_string(&path)

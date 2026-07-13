@@ -1,8 +1,28 @@
 //! C# inheritance-edge emitter.
 
 use super::emit_base_node;
-use crate::generic::names::read_text_owned;
-use crate::generic::walk::add_edge;
+use crate::generic::names::{read_csharp_type_name, read_text_owned};
+use crate::generic::references::{CsharpTypeRef, csharp_collect_type_refs};
+use crate::generic::walk::add_edge_meta;
+
+/// Build C# type-reference edge metadata `{ref_token, [qualified], [ref_qualifier]}`
+/// (sanitised), or `None` (#1562).
+#[allow(clippy::similar_names)] // `qualified`/`qualifier` mirror graphify-py
+fn cs_ref_meta(
+    token: &str,
+    qualified: bool,
+    qualifier: &str,
+) -> Option<indexmap::IndexMap<String, serde_json::Value>> {
+    use serde_json::Value;
+    let mut pairs: Vec<(&str, Value)> = vec![("ref_token", Value::String(token.to_string()))];
+    if qualified {
+        pairs.push(("qualified", Value::Bool(true)));
+    }
+    if !qualifier.is_empty() {
+        pairs.push(("ref_qualifier", Value::String(qualifier.to_string())));
+    }
+    crate::generic::walk::sanitized_metadata(pairs)
+}
 use std::collections::HashSet;
 use tree_sitter::Node;
 
@@ -60,106 +80,6 @@ fn csharp_classify_base(name: &str, interface_names: &HashSet<String>) -> &'stat
     "inherits"
 }
 
-/// Walk a C# type-argument tree and append `(name, role)` tuples where role is
-/// `"generic_arg"` for arguments nested inside a `type_argument_list`.
-///
-/// Mirrors Python `_csharp_collect_type_refs` restricted to the generic case.
-fn csharp_collect_type_arg_refs(node: Node<'_>, source: &[u8], out: &mut Vec<String>) {
-    let t = node.kind();
-    if t == "predefined_type" {
-        return;
-    }
-    if t == "identifier" {
-        let name = read_text_owned(node, source);
-        if !name.is_empty() {
-            out.push(name);
-        }
-        return;
-    }
-    if t == "qualified_name" {
-        let text = read_text_owned(node, source);
-        let tail = text.rsplit('.').next().unwrap_or(&text).to_string();
-        if !tail.is_empty() {
-            out.push(tail);
-        }
-        return;
-    }
-    if t == "generic_name" {
-        let name_node = node.child_by_field_name("name").or_else(|| {
-            let mut sc = node.walk();
-            if sc.goto_first_child() {
-                loop {
-                    if sc.node().kind() == "identifier" {
-                        return Some(sc.node());
-                    }
-                    if !sc.goto_next_sibling() {
-                        break;
-                    }
-                }
-            }
-            None
-        });
-        if let Some(nn) = name_node {
-            let name = read_text_owned(nn, source);
-            if !name.is_empty() {
-                out.push(name);
-            }
-        }
-        let mut sc = node.walk();
-        if sc.goto_first_child() {
-            loop {
-                if sc.node().kind() == "type_argument_list" {
-                    let mut acur = sc.node().walk();
-                    if acur.goto_first_child() {
-                        loop {
-                            if acur.node().is_named() {
-                                csharp_collect_type_arg_refs(acur.node(), source, out);
-                            }
-                            if !acur.goto_next_sibling() {
-                                break;
-                            }
-                        }
-                    }
-                }
-                if !sc.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-        return;
-    }
-    if matches!(
-        t,
-        "nullable_type" | "array_type" | "pointer_type" | "ref_type"
-    ) {
-        let mut cur = node.walk();
-        if cur.goto_first_child() {
-            loop {
-                if cur.node().is_named() {
-                    csharp_collect_type_arg_refs(cur.node(), source, out);
-                }
-                if !cur.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-        return;
-    }
-    if node.is_named() {
-        let mut cur = node.walk();
-        if cur.goto_first_child() {
-            loop {
-                if cur.node().is_named() {
-                    csharp_collect_type_arg_refs(cur.node(), source, out);
-                }
-                if !cur.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-    }
-}
-
 /// Emit `inherits` / `implements` edges from a C# `base_list` node.
 ///
 /// Each base-list entry is classified by [`csharp_classify_base`]; declared
@@ -181,6 +101,9 @@ pub(crate) fn emit_csharp_inheritance(
     let edges = &mut *ctx.edges;
     let seen_ids = &mut *ctx.seen_ids;
     let interface_names = ctx.csharp_interface_names;
+    // A base that names an in-scope type parameter (`class Box<T> : T`) is a type
+    // variable, not a real base — skip it (#1562).
+    let type_params = crate::generic::references::csharp_type_parameters_in_scope(node, source);
     let mut cur = node.walk();
     if !cur.goto_first_child() {
         return;
@@ -192,35 +115,23 @@ pub(crate) fn emit_csharp_inheritance(
             if scur.goto_first_child() {
                 loop {
                     let sub = scur.node();
-                    let base = match sub.kind() {
-                        "identifier" => Some(read_text_owned(sub, source)),
-                        "qualified_name" => {
-                            let full = read_text_owned(sub, source);
-                            Some(full.rsplit('.').next().unwrap_or(&full).to_string())
-                        }
-                        "generic_name" => {
-                            if let Some(nc) = sub.child_by_field_name("name") {
-                                Some(read_text_owned(nc, source))
-                            } else {
-                                {
-                                    let mut tc = sub.walk();
-                                    if tc.goto_first_child() {
-                                        Some(tc.node())
-                                    } else {
-                                        None
-                                    }
-                                }
-                                .map(|first| read_text_owned(first, source))
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(b) = base
-                        && !b.is_empty()
+                    if let Some(info) = read_csharp_type_name(Some(sub), source)
+                        && !info.name.is_empty()
+                        && !type_params.contains(&info.name)
                     {
-                        let base_nid = emit_base_node(&b, line, stem, str_path, nodes, seen_ids);
-                        let relation = csharp_classify_base(&b, interface_names);
-                        add_edge(class_nid, &base_nid, relation, line, str_path, None, edges);
+                        let base_nid =
+                            emit_base_node(&info.name, line, stem, str_path, nodes, seen_ids);
+                        let relation = csharp_classify_base(&info.name, interface_names);
+                        add_edge_meta(
+                            class_nid,
+                            &base_nid,
+                            relation,
+                            line,
+                            str_path,
+                            None,
+                            cs_ref_meta(&info.name, info.qualified, &info.qualifier),
+                            edges,
+                        );
                         if sub.kind() == "generic_name" {
                             let mut tc = sub.walk();
                             if tc.goto_first_child() {
@@ -230,24 +141,30 @@ pub(crate) fn emit_csharp_inheritance(
                                         if acur.goto_first_child() {
                                             loop {
                                                 if acur.node().is_named() {
-                                                    let mut refs: Vec<String> = Vec::new();
-                                                    csharp_collect_type_arg_refs(
+                                                    let mut refs: Vec<CsharpTypeRef> = Vec::new();
+                                                    csharp_collect_type_refs(
                                                         acur.node(),
                                                         source,
+                                                        true,
                                                         &mut refs,
                                                     );
-                                                    for ref_name in refs {
+                                                    for r in &refs {
                                                         let target = emit_base_node(
-                                                            &ref_name, line, stem, str_path, nodes,
+                                                            &r.name, line, stem, str_path, nodes,
                                                             seen_ids,
                                                         );
-                                                        add_edge(
+                                                        add_edge_meta(
                                                             class_nid,
                                                             &target,
                                                             "references",
                                                             line,
                                                             str_path,
                                                             Some("generic_arg"),
+                                                            cs_ref_meta(
+                                                                &r.name,
+                                                                r.qualified,
+                                                                &r.qualifier,
+                                                            ),
                                                             edges,
                                                         );
                                                     }

@@ -75,6 +75,7 @@ postgres = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
 [dev-dependencies]
 # Sync PostgreSQL client used only to seed a live schema in the `net_*`
 # introspection integration tests (no TLS needed against the CI service).
+graphify-affected = { workspace = true }
 postgres = "0.19"
 tempfile = { workspace = true }
 

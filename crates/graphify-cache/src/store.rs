@@ -176,7 +176,7 @@ fn remove_json_files(dir: &Path, recursive: bool) -> Result<(), CacheError> {
 /// `hyperedges` bucket — i.e. an extraction fragment worth relativizing.
 fn has_path_buckets(value: &Value) -> bool {
     value.as_object().is_some_and(|o| {
-        ["nodes", "edges", "hyperedges"]
+        ["nodes", "edges", "hyperedges", "raw_calls"]
             .iter()
             .any(|k| o.get(*k).is_some_and(json_truthy))
     })
@@ -233,14 +233,18 @@ fn absolutize_source_files_in(payload: &mut Value, root: &Path) {
     });
 }
 
-/// Apply `rewrite` to every string `source_file` in the `nodes`, `edges`, and
-/// `hyperedges` buckets of `payload`. A returned `Some(new)` replaces the
-/// field; `None` leaves it untouched.
+/// Apply `rewrite` to every string `source_file` in the `nodes`, `edges`,
+/// `hyperedges`, and `raw_calls` buckets of `payload`. A returned `Some(new)`
+/// replaces the field; `None` leaves it untouched.
+///
+/// `raw_calls` carries `source_file` the same way (#1739 Pascal/Delphi cross-file
+/// inherited-call resolution), so it needs the same portable-path treatment for
+/// cache entries to round-trip across machines / checkout directories.
 fn for_each_source_file(payload: &mut Value, mut rewrite: impl FnMut(&str) -> Option<String>) {
     let Some(obj) = payload.as_object_mut() else {
         return;
     };
-    for bucket in ["nodes", "edges", "hyperedges"] {
+    for bucket in ["nodes", "edges", "hyperedges", "raw_calls"] {
         let Some(Value::Array(items)) = obj.get_mut(bucket) else {
             continue;
         };

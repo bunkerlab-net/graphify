@@ -210,7 +210,7 @@ fn call_bedrock_plain_via_mock() {
     g.set("AWS_ACCESS_KEY_ID", "fake");
     g.set("AWS_SECRET_ACCESS_KEY", "fake");
 
-    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32).expect("test invariant");
+    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32, None).expect("test invariant");
     // call_bedrock_plain returns the first nodes[].label string, which may be
     // empty since the JSON we returned isn't extraction-shaped — just verify
     // the function runs without panicking.

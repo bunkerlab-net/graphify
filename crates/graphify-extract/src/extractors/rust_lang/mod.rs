@@ -91,6 +91,7 @@ pub fn extract_rust(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::from([file_nid.clone()]);

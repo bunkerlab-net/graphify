@@ -23,6 +23,31 @@ pub fn empty_fragment() -> Value {
 /// Returns an empty fragment on failure. Capped at [`LLM_JSON_MAX_BYTES`].
 #[must_use]
 pub fn parse_llm_json(raw: &str) -> Value {
+    let mut fragment = parse_llm_json_inner(raw);
+    sanitize_fragment(&mut fragment);
+    fragment
+}
+
+/// Force each of `nodes`/`edges`/`hyperedges` to a list of objects (#1631): a
+/// non-list value becomes `[]`, non-object entries are dropped, and an
+/// absent/null field is left untouched — so a stray non-dict emitted by an LLM
+/// chunk can't crash downstream `.get()` access or discard the whole chunk.
+fn sanitize_fragment(fragment: &mut Value) {
+    let Some(map) = fragment.as_object_mut() else {
+        return;
+    };
+    for key in ["nodes", "edges", "hyperedges"] {
+        match map.get_mut(key) {
+            Some(Value::Array(arr)) => arr.retain(Value::is_object),
+            Some(slot) if !slot.is_null() => *slot = Value::Array(Vec::new()),
+            _ => {} // absent or null: leave untouched
+        }
+    }
+}
+
+/// Inner parse: the fence/prose/balanced-object strategies. [`parse_llm_json`]
+/// wraps this to sanitize the result shape.
+fn parse_llm_json_inner(raw: &str) -> Value {
     if raw.len() > LLM_JSON_MAX_BYTES {
         eprintln!(
             "[graphify] LLM response exceeds {LLM_JSON_MAX_BYTES} bytes \

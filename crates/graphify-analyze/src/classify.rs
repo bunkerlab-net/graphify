@@ -21,7 +21,7 @@ pub(crate) static LANG_FAMILY: std::sync::LazyLock<IndexMap<&'static str, &'stat
             m.insert(*ext, "python");
         }
         for ext in &[
-            ".js", ".jsx", ".mjs", ".ejs", ".ts", ".tsx", ".vue", ".svelte",
+            ".js", ".jsx", ".mjs", ".ejs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte",
         ] {
             m.insert(*ext, "js");
         }

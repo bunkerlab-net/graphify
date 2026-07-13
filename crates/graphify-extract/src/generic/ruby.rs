@@ -105,3 +105,186 @@ fn visit(node: Node<'_>, source: &[u8], bindings: &mut HashMap<String, Option<St
         }
     }
 }
+/// Last constant of a `constant` or `scope_resolution` (`A::B::C` -> `C`).
+/// Mirrors Python `_ruby_const_last_name`.
+pub(super) fn ruby_const_last_name(node: Node<'_>, source: &[u8]) -> String {
+    match node.kind() {
+        "constant" => read_text_owned(node, source),
+        "scope_resolution" => {
+            let mut cur = node.walk();
+            let mut last = String::new();
+            if cur.goto_first_child() {
+                loop {
+                    let c = cur.node();
+                    if c.kind() == "constant" {
+                        last = read_text_owned(c, source);
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            last
+        }
+        _ => String::new(),
+    }
+}
+
+/// A constant assignment whose RHS is `Struct.new(...)`, `Class.new(Super)` or
+/// `Data.define(...)` defines a class named after the constant (#1640).
+/// tree-sitter parses each as an `assignment` (not a `class`), so the generic
+/// class branch never sees them. Synthesise the class node, attach block-defined
+/// methods via `method` (recursing the block with the new node as parent), and
+/// emit an `inherits` edge for `Class.new(Super)`. Returns `true` when handled.
+/// Mirrors Python `_ruby_extra_walk`.
+pub(super) fn ruby_extra_walk<'tree>(
+    ctx: &mut super::walk::WalkCtx<'_, 'tree>,
+    node: Node<'tree>,
+    source: &[u8],
+) -> bool {
+    use super::graph::{add_edge, add_node};
+    use crate::ids::make_id;
+
+    if node.kind() != "assignment" {
+        return false;
+    }
+    let (Some(left), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    if left.kind() != "constant" || right.kind() != "call" {
+        return false;
+    }
+    let (Some(recv), Some(meth)) = (
+        right.child_by_field_name("receiver"),
+        right.child_by_field_name("method"),
+    ) else {
+        return false;
+    };
+    if recv.kind() != "constant" {
+        return false;
+    }
+    let recv_name = read_text_owned(recv, source);
+    let meth_name = read_text_owned(meth, source);
+    if !matches!(
+        (recv_name.as_str(), meth_name.as_str()),
+        ("Struct" | "Class", "new") | ("Data", "define")
+    ) {
+        return false;
+    }
+    let const_name = read_text_owned(left, source);
+    if const_name.is_empty() {
+        return false;
+    }
+    let line = u32::try_from(node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let class_nid = make_id(&[ctx.stem, &const_name]);
+    add_node(
+        &class_nid,
+        &const_name,
+        line,
+        ctx.str_path,
+        ctx.nodes,
+        ctx.seen_ids,
+    );
+    // Mirror the generic class branch: containment always hangs off the file node.
+    add_edge(
+        ctx.file_nid,
+        &class_nid,
+        "contains",
+        line,
+        ctx.str_path,
+        None,
+        ctx.edges,
+    );
+
+    // `Class.new(Super)` — the first positional constant argument is the superclass.
+    if recv_name == "Class" {
+        ruby_emit_class_new_super(ctx, right, &class_nid, line, source);
+    }
+
+    // Recurse the do/brace block so block-defined methods attach to the class.
+    ruby_recurse_block_methods(ctx, right, &class_nid, source);
+    true
+}
+
+/// Emit an `inherits` edge from `class_nid` to the first positional constant
+/// argument of a `Class.new(Super)` call. Mirrors the `Class.new` arm of
+/// Python `_ruby_extra_walk`.
+fn ruby_emit_class_new_super<'tree>(
+    ctx: &mut super::walk::WalkCtx<'_, 'tree>,
+    call: Node<'tree>,
+    class_nid: &str,
+    line: u32,
+    source: &[u8],
+) {
+    use super::graph::add_edge;
+    use super::inherit::emit_base_node;
+
+    let mut rc = call.walk();
+    let Some(args) = call.children(&mut rc).find(|c| c.kind() == "argument_list") else {
+        return;
+    };
+    let mut acur = args.walk();
+    if !acur.goto_first_child() {
+        return;
+    }
+    loop {
+        let arg = acur.node();
+        if matches!(arg.kind(), "constant" | "scope_resolution") {
+            let base = ruby_const_last_name(arg, source);
+            if !base.is_empty() {
+                let base_nid =
+                    emit_base_node(&base, line, ctx.stem, ctx.str_path, ctx.nodes, ctx.seen_ids);
+                add_edge(
+                    class_nid,
+                    &base_nid,
+                    "inherits",
+                    line,
+                    ctx.str_path,
+                    None,
+                    ctx.edges,
+                );
+            }
+            break;
+        }
+        if !acur.goto_next_sibling() {
+            break;
+        }
+    }
+}
+
+/// Recurse a `Struct.new`/`Class.new`/`Data.define` do/brace block so its
+/// block-defined methods attach to `class_nid` (the method handler sees it as
+/// parent). The block wraps its statements in a `body_statement` like a class body.
+fn ruby_recurse_block_methods<'tree>(
+    ctx: &mut super::walk::WalkCtx<'_, 'tree>,
+    call: Node<'tree>,
+    class_nid: &str,
+    source: &[u8],
+) {
+    let mut bc = call.walk();
+    let Some(block) = call
+        .children(&mut bc)
+        .find(|c| matches!(c.kind(), "do_block" | "block"))
+    else {
+        return;
+    };
+    let mut inner = block.walk();
+    let body = block
+        .children(&mut inner)
+        .find(|c| c.kind() == "body_statement")
+        .unwrap_or(block);
+    let mut bcur = body.walk();
+    if bcur.goto_first_child() {
+        loop {
+            super::walk::walk(ctx, bcur.node(), Some(class_nid), source);
+            if !bcur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}

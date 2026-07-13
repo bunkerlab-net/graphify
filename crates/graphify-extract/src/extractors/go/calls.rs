@@ -88,6 +88,8 @@ pub(super) fn walk_calls_go(
                                     weight: 1.0,
                                     context: Some("call".to_string()),
                                     confidence_score: None,
+                                    deferred: false,
+                                    metadata: None,
                                 });
                             }
                         }
@@ -101,6 +103,8 @@ pub(super) fn walk_calls_go(
                             source_location: format!("L{}", node.start_position().row + 1),
                             receiver: None,
                             receiver_type: None,
+                            lang: None,
+                            ..Default::default()
                         });
                     }
                 }

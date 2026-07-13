@@ -24,10 +24,13 @@ use crate::sections::{
 
 /// Render a `GRAPH_REPORT.md` string from a graph and analysis result.
 ///
-/// The output is byte-identical to the Python `generate()` function for
-/// the same inputs.
+/// The output is byte-identical to the Python `generate()` function for the
+/// same inputs. When `obsidian` is `true` the Community Hubs section emits
+/// `[[_COMMUNITY_*|label]]` wikilinks (only meaningful with the opt-in
+/// `--obsidian` export that creates those notes); otherwise a plain `- label`
+/// list, so a default run never dangles wikilinks (#1712).
 #[must_use]
-pub fn render_report(graph: &Graph, analysis: &Value) -> String {
+pub fn render_report(graph: &Graph, analysis: &Value, obsidian: bool) -> String {
     let today = Local::now().format("%Y-%m-%d").to_string();
     let empty_obj = serde_json::Map::new();
     let obj = analysis.as_object().unwrap_or(&empty_obj);
@@ -89,12 +92,15 @@ pub fn render_report(graph: &Graph, analysis: &Value) -> String {
         render_freshness(&mut lines, commit);
     }
     if !layout.non_empty.is_empty() {
-        render_nav_hubs(&mut lines, &layout.non_empty, &community_labels);
+        render_nav_hubs(&mut lines, &layout.non_empty, &community_labels, obsidian);
     }
     render_god_nodes(&mut lines, god_node_list);
     render_surprising(&mut lines, surprise_list);
     // Circular imports surfaced from the file-level dependency graph (#961).
-    render_import_cycles(&mut lines, graph);
+    // Suppressed on a documents-only corpus with no code / import edges (#1657).
+    if graph_has_code(graph) {
+        render_import_cycles(&mut lines, graph);
+    }
     if let Some(hyperedges) = graph
         .graph_attrs
         .get("hyperedges")
@@ -257,13 +263,129 @@ fn collect_isolated_nodes<'a>(
         .collect()
 }
 
+/// Whether the graph contains code: any node with `file_type == "code"`, or any
+/// edge whose relation is `imports`/`imports_from`. Mirrors the `_has_code`
+/// predicate gating the Import Cycles section on documents-only corpora (#1657).
+fn graph_has_code(graph: &Graph) -> bool {
+    graph
+        .nodes()
+        .any(|(_, attrs)| attrs.get("file_type").and_then(Value::as_str) == Some("code"))
+        || graph.edges().any(|e| {
+            matches!(
+                e.attrs.get("relation").and_then(Value::as_str),
+                Some("imports" | "imports_from")
+            )
+        })
+}
+
 /// Write a `GRAPH_REPORT.md` to `path`.
 ///
 /// # Errors
 ///
 /// Returns [`ReportError::Io`] if the file cannot be written.
-pub fn write_report(graph: &Graph, analysis: &Value, path: &Path) -> Result<(), ReportError> {
-    let content = render_report(graph, analysis);
+pub fn write_report(
+    graph: &Graph,
+    analysis: &Value,
+    path: &Path,
+    obsidian: bool,
+) -> Result<(), ReportError> {
+    let mut content = render_report(graph, analysis, obsidian);
+    content.push_str(&render_learning_section(path));
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// Append the `## Work-memory lessons` section from the sidecar overlay next to
+/// the report (`.graphify_learning.json` beside `graph.json`) plus the memory
+/// docs' dead-ends. Empty string when there is nothing to surface (#1441).
+/// Best-effort: any filesystem/parse failure yields no section, never an error.
+fn render_learning_section(report_path: &Path) -> String {
+    use chrono::Utc;
+
+    let graph_path = report_path.with_file_name("graph.json");
+    let overlay = graphify_reflect::load_learning_overlay(&graph_path);
+    let mem = graph_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("memory");
+    let dead_ends = if mem.is_dir() {
+        let docs = graphify_reflect::load_memory_docs(&mem);
+        graphify_reflect::aggregate_lessons(
+            &docs,
+            None,
+            Utc::now(),
+            graphify_reflect::DEFAULT_HALF_LIFE_DAYS,
+            graphify_reflect::DEFAULT_MIN_CORROBORATION,
+            None,
+        )
+        .dead_ends
+    } else {
+        Vec::new()
+    };
+
+    let mut preferred: Vec<(&String, &Value)> = overlay
+        .iter()
+        .filter(|(_, e)| e.get("status").and_then(Value::as_str) == Some("preferred"))
+        .collect();
+    // Order: most-used, then highest score, then node id for a stable tiebreak.
+    preferred.sort_by(|(na, a), (nb, b)| {
+        let uses = |e: &Value| e.get("uses").and_then(Value::as_u64).unwrap_or(0);
+        let score = |e: &Value| e.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+        uses(b)
+            .cmp(&uses(a))
+            .then_with(|| {
+                score(b)
+                    .partial_cmp(&score(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| na.cmp(nb))
+    });
+
+    if preferred.is_empty() && dead_ends.is_empty() {
+        return String::new();
+    }
+    let mut lines: Vec<String> = vec![String::new(), "## Work-memory lessons".to_string()];
+    if !preferred.is_empty() {
+        lines.push(String::new());
+        lines
+            .push("**Preferred sources** — corroborated by past sessions; start here.".to_string());
+        for (nid, e) in preferred.iter().take(10) {
+            let label = e
+                .get("label")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(nid.as_str());
+            let uses = e.get("uses").and_then(Value::as_u64).unwrap_or(0);
+            let score = e.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+            let stale = if e.get("stale").and_then(Value::as_bool) == Some(true) {
+                " _(code changed — re-verify)_"
+            } else {
+                ""
+            };
+            lines.push(format!(
+                "- `{label}` ({uses}× useful, score={score}){stale}"
+            ));
+        }
+    }
+    if !dead_ends.is_empty() {
+        lines.push(String::new());
+        lines
+            .push("**Known dead ends** — questions that led nowhere; don't re-derive.".to_string());
+        for d in &dead_ends {
+            let nodes = d
+                .nodes
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let arrow = if nodes.is_empty() {
+                String::new()
+            } else {
+                format!(" -> {nodes}")
+            };
+            lines.push(format!("- \"{}\"{arrow}", d.question));
+        }
+    }
+    lines.push(String::new());
+    lines.join("\n")
 }

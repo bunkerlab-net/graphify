@@ -72,6 +72,42 @@ fn dmm_type_path(entry: &str) -> String {
         .to_string()
 }
 
+/// Emit a deduped `uses` edge (context `"map"`) from the map-file node to each
+/// `/`-rooted type path in one tile's entry list.
+fn push_tile_edges(
+    inner: &str,
+    file_nid: &str,
+    str_path: &str,
+    open_line: u32,
+    seen_targets: &mut HashSet<String>,
+    edges: &mut Vec<Edge>,
+) {
+    for entry in split_dmm_tile(inner) {
+        let tpath = dmm_type_path(&entry);
+        if !tpath.starts_with('/') {
+            continue;
+        }
+        let tgt = make_id1(&tpath);
+        if !seen_targets.insert(tgt.clone()) {
+            continue;
+        }
+        edges.push(Edge {
+            source: file_nid.to_string(),
+            target: tgt,
+            relation: "uses".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            source_file: str_path.to_string(),
+            source_location: Some(format!("L{open_line}")),
+            weight: 1.0,
+            context: Some("map".to_string()),
+            confidence_score: None,
+            external: false,
+            deferred: false,
+            metadata: None,
+        });
+    }
+}
+
 /// Extract type-path references from a `.dmm` map file's tile dictionary.
 #[must_use]
 pub fn extract_dmm(path: &Path) -> FileResult {
@@ -101,6 +137,7 @@ pub fn extract_dmm(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
 
@@ -149,28 +186,14 @@ pub fn extract_dmm(path: &Path) -> FileResult {
             if rp <= lp {
                 continue;
             }
-            for entry in split_dmm_tile(&chunk[lp + 1..rp]) {
-                let tpath = dmm_type_path(&entry);
-                if !tpath.starts_with('/') {
-                    continue;
-                }
-                let tgt = make_id1(&tpath);
-                if !seen_targets.insert(tgt.clone()) {
-                    continue;
-                }
-                edges.push(Edge {
-                    source: file_nid.clone(),
-                    target: tgt,
-                    relation: "uses".to_string(),
-                    confidence: "EXTRACTED".to_string(),
-                    source_file: str_path.clone(),
-                    source_location: Some(format!("L{open_line}")),
-                    weight: 1.0,
-                    context: Some("map".to_string()),
-                    confidence_score: None,
-                    external: false,
-                });
-            }
+            push_tile_edges(
+                &chunk[lp + 1..rp],
+                &file_nid,
+                &str_path,
+                open_line,
+                &mut seen_targets,
+                &mut edges,
+            );
         }
     }
 

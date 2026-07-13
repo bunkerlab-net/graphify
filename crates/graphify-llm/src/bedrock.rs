@@ -412,6 +412,7 @@ pub fn call_bedrock_plain(
     region: &str,
     prompt: &str,
     max_tokens: u32,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     let client = client_for(region);
     let messages = vec![
@@ -451,6 +452,14 @@ pub fn call_bedrock_plain(
                 text.push_str(t);
             }
         }
+    }
+    if let Some(sink) = usage
+        && let Some(u) = output.usage()
+    {
+        sink.record(
+            u64::try_from(u.input_tokens()).unwrap_or(0),
+            u64::try_from(u.output_tokens()).unwrap_or(0),
+        );
     }
     Ok(text)
 }

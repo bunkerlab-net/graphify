@@ -275,6 +275,114 @@ fn test_to_html_contains_search() {
     assert!(content.contains("search"), "HTML missing 'search' element");
 }
 
+/// Extract and parse the `const RAW_NODES = [...]` vis.js node list from the
+/// interactive HTML export.
+fn raw_nodes_from_html(html: &str) -> Vec<Value> {
+    let after = html
+        .split("const RAW_NODES = ")
+        .nth(1)
+        .expect("RAW_NODES marker");
+    let arr = after.split(";\n").next().expect("RAW_NODES array");
+    serde_json::from_str(arr).expect("RAW_NODES is valid JSON")
+}
+
+fn html_with_overlay(overlay: Value) -> Vec<Value> {
+    let mut g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n_transformer", "label": "Transformer", "source_file": "t.py"},
+                {"id": "other", "label": "Other", "source_file": "o.py"},
+            ],
+            "edges": [],
+        }),
+        false,
+        None,
+    )
+    .expect("build graph");
+    g.graph_attrs
+        .insert("_learning_overlay".to_string(), overlay);
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.html");
+    to_html(&g, &IndexMap::new(), &out, None, None, None).expect("to_html");
+    raw_nodes_from_html(&std::fs::read_to_string(&out).expect("read html"))
+}
+
+#[test]
+fn test_to_html_annotated_node_gets_learning_status_and_ring() {
+    // #1441: a preferred node gets learning_status/stale fields, a green ring
+    // border, borderWidth 3, and a Lesson tooltip; an un-annotated node is untouched.
+    let nodes = html_with_overlay(json!({
+        "n_transformer": {"status": "preferred", "uses": 3, "score": 2.4, "stale": false}
+    }));
+    let ann = nodes
+        .iter()
+        .find(|n| n["id"] == "n_transformer")
+        .expect("annotated node");
+    assert_eq!(ann["learning_status"], "preferred");
+    assert_eq!(ann["learning_stale"], false);
+    assert_eq!(ann["color"]["border"], "#22c55e");
+    assert_eq!(ann["borderWidth"], 3);
+    assert!(
+        ann["title"]
+            .as_str()
+            .expect("title")
+            .contains("Lesson: preferred source")
+    );
+    let other = nodes
+        .iter()
+        .find(|n| n["id"] == "other")
+        .expect("other node");
+    assert!(other.get("learning_status").is_none());
+    assert!(other.get("learning_stale").is_none());
+}
+
+#[test]
+fn test_to_html_contested_stale_node_gets_dashed_desaturated_ring() {
+    let nodes = html_with_overlay(json!({
+        "n_transformer": {"status": "contested", "uses": 2, "neg": 3, "score": -0.5, "stale": true}
+    }));
+    let ann = nodes
+        .iter()
+        .find(|n| n["id"] == "n_transformer")
+        .expect("annotated node");
+    assert_eq!(ann["learning_status"], "contested");
+    assert_eq!(ann["learning_stale"], true);
+    assert_eq!(ann["color"]["border"], "#9ca3af");
+    assert_eq!(ann["shapeProperties"]["borderDashes"], json!([4, 4]));
+    assert!(
+        ann["title"]
+            .as_str()
+            .expect("title")
+            .contains("code changed")
+    );
+}
+
+#[test]
+fn test_to_html_unannotated_identical_to_pre_feature() {
+    // #1441: with no overlay, HTML is byte-identical whether `_learning_overlay`
+    // is omitted or an empty object — no learning fields leak into the render.
+    let g = make_graph();
+    let communities = make_communities();
+    let mut g_empty = make_graph();
+    g_empty
+        .graph_attrs
+        .insert("_learning_overlay".to_string(), json!({}));
+    let tmp = tempdir().expect("tempdir");
+    let a = tmp.path().join("a.html");
+    let b = tmp.path().join("b.html");
+    to_html(&g, &communities, &a, None, None, None).expect("to_html a");
+    to_html(&g_empty, &communities, &b, None, None, None).expect("to_html b");
+    // The output path appears in the title, so compare with the name normalized.
+    let ca = std::fs::read_to_string(&a)
+        .expect("read a")
+        .replace("a.html", "X.html");
+    let cb = std::fs::read_to_string(&b)
+        .expect("read b")
+        .replace("b.html", "X.html");
+    assert_eq!(ca, cb);
+    assert!(!ca.contains("learning_status"));
+}
+
 #[test]
 fn test_to_html_contains_legend_with_labels() {
     let g = make_graph();
@@ -724,4 +832,74 @@ fn to_canvas_never_emits_punctuation_only_filenames() {
             "punctuation-only canvas filename: {file}"
         );
     }
+}
+// ── to_json anti-shrink guard (#479 / d2d1f68 fail-safe) ────────────────────
+
+/// Build an undirected graph with `n` nodes labelled `n0..n{n-1}` (mirrors the
+/// Python `_mkG` helper).
+fn make_graph_n(n: usize) -> graphify_build::Graph {
+    let mut g = graphify_build::Graph::new(graphify_build::GraphKind::Graph);
+    for i in 0..n {
+        let mut attrs = IndexMap::new();
+        attrs.insert("label".to_string(), json!(format!("n{i}")));
+        g.add_node(&format!("n{i}"), attrs);
+    }
+    g
+}
+
+#[test]
+fn test_to_json_refuses_shrink() {
+    // #479: refuse to silently overwrite an existing graph with fewer nodes.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::write(
+        &out,
+        r#"{"nodes":[{"id":"n0"},{"id":"n1"},{"id":"n2"},{"id":"n3"},{"id":"n4"}],"links":[]}"#,
+    )
+    .expect("write existing");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        !to_json(&make_graph_n(2), &communities, &out, false, None, None).expect("to_json"),
+        "a smaller graph must be refused when force=false"
+    );
+    assert!(
+        to_json(&make_graph_n(2), &communities, &out, true, None, None).expect("to_json"),
+        "force=true overrides the shrink guard"
+    );
+}
+
+#[test]
+fn test_to_json_fails_safe_on_corrupt_existing() {
+    // A non-empty but unparseable existing graph.json (corrupt or mid-write) must
+    // NOT be silently overwritten — we can't verify the new graph isn't a partial
+    // shrink, so fail safe (refuse) unless force is given.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::write(&out, "{ this has content but is not valid json").expect("write existing");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        !to_json(&make_graph_n(10), &communities, &out, false, None, None).expect("to_json"),
+        "an unparseable existing graph must be refused when force=false"
+    );
+    assert!(
+        to_json(&make_graph_n(10), &communities, &out, true, None, None).expect("to_json"),
+        "force=true overrides"
+    );
+}
+
+#[test]
+fn test_to_json_proceeds_on_empty_existing() {
+    // An empty/whitespace existing file has no nodes to lose, so it is not a
+    // shrink risk — the write proceeds.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::write(&out, "").expect("write existing");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        to_json(&make_graph_n(3), &communities, &out, false, None, None).expect("to_json"),
+        "an empty existing file is not a shrink — proceed"
+    );
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    assert_eq!(data["nodes"].as_array().expect("array").len(), 3);
 }

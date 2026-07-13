@@ -1,7 +1,7 @@
 //! Parity tests against `graphify-py/tests/test_affected_cli.py` and
 //! the affected-helper unit tests embedded in
 //! `graphify-py/graphify/affected.py`.
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::needless_pass_by_value)]
 
 use std::fs;
 
@@ -405,4 +405,115 @@ fn resolve_seed_source_file_ambiguous_no_file_node_returns_none() {
     fs::write(&path, payload.to_string()).expect("write");
     let graph = load_graph(&path).expect("load");
     assert_eq!(resolve_seed(&graph, "pkg/handlers.py"), None);
+}
+
+// ── #1669: member-node seeding ────────────────────────────────────────────────
+// Ports `graphify-py/tests/test_affected_member_seed.py`. `affected <Class>` must
+// reach callers that bind to the class's METHOD nodes (post-#1634 method-
+// granularity resolution) by seeding the reverse walk with the root's own member
+// nodes (one `method`/`contains` hop). Those relations stay OUT of the general
+// relation-filtered walk, so no forward noise is pulled in elsewhere.
+
+fn hits_from(
+    nodes: serde_json::Value,
+    links: serde_json::Value,
+    seed: &str,
+    depth: usize,
+) -> std::collections::HashSet<String> {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("graph.json");
+    let payload = json!({
+        "directed": true,
+        "multigraph": false,
+        "graph": {},
+        "nodes": nodes,
+        "links": links,
+    });
+    fs::write(&path, payload.to_string()).expect("write");
+    let graph = load_graph(&path).expect("load graph");
+    affected_nodes(&graph, seed, DEFAULT_AFFECTED_RELATIONS, depth)
+        .into_iter()
+        .map(|h| h.node_id)
+        .collect()
+}
+
+#[test]
+fn class_affected_reaches_method_bound_caller() {
+    let hits = hits_from(
+        json!([
+            {"id": "proc", "label": "Processor"},
+            {"id": "proc_call", "label": ".call()"},
+            {"id": "runner", "label": "Runner"},
+            {"id": "runner_run", "label": ".run()"},
+        ]),
+        json!([
+            {"source": "proc", "target": "proc_call", "relation": "method"},
+            {"source": "runner", "target": "runner_run", "relation": "method"},
+            {"source": "runner_run", "target": "proc_call", "relation": "calls"},
+        ]),
+        "proc",
+        2,
+    );
+    assert!(
+        hits.contains("runner_run"),
+        "caller of Processor.call must be reachable from Processor"
+    );
+}
+
+#[test]
+fn member_method_node_not_reported_as_hit() {
+    let hits = hits_from(
+        json!([
+            {"id": "proc", "label": "Processor"},
+            {"id": "proc_call", "label": ".call()"},
+            {"id": "runner", "label": "Runner"},
+            {"id": "runner_run", "label": ".run()"},
+        ]),
+        json!([
+            {"source": "proc", "target": "proc_call", "relation": "method"},
+            {"source": "runner", "target": "runner_run", "relation": "method"},
+            {"source": "runner_run", "target": "proc_call", "relation": "calls"},
+        ]),
+        "proc",
+        2,
+    );
+    // the class's own method node is a seed, not an affected node
+    assert!(!hits.contains("proc_call"));
+}
+
+#[test]
+fn method_contains_still_excluded_from_general_walk() {
+    // A node two method-hops away (a DIFFERENT class discovered during the walk)
+    // must NOT be pulled in: only the root's own members are seeded.
+    let hits = hits_from(
+        json!([
+            {"id": "a", "label": "A"},
+            {"id": "a_m", "label": ".m()"},
+            {"id": "b", "label": "B"},
+            {"id": "b_m", "label": ".n()"},
+        ]),
+        json!([
+            {"source": "a", "target": "a_m", "relation": "method"},
+            {"source": "a_m", "target": "b", "relation": "calls"},
+            {"source": "b", "target": "b_m", "relation": "method"},
+        ]),
+        "a",
+        3,
+    );
+    assert!(hits.is_empty() || !hits.contains("b_m"));
+}
+
+#[test]
+fn class_level_caller_still_works() {
+    // A caller bound to the class node itself (not a method) is unaffected.
+    let hits = hits_from(
+        json!([
+            {"id": "svc", "label": "Svc"},
+            {"id": "caller", "label": ".use()"},
+        ]),
+        json!([{"source": "caller", "target": "svc", "relation": "references"}]),
+        "svc",
+        2,
+    );
+    assert!(hits.contains("caller"));
 }

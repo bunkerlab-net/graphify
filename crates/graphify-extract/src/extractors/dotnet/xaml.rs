@@ -653,6 +653,7 @@ fn communitytoolkit_members(vm_node: &Node) -> (HashMap<String, Node>, Vec<Edge>
                 source_location: Some(format!("L{line_no}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             },
         );
         edges.push(Edge {
@@ -666,6 +667,8 @@ fn communitytoolkit_members(vm_node: &Node) -> (HashMap<String, Node>, Vec<Edge>
             weight: 1.0,
             context: Some(context.to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     };
 
@@ -1053,6 +1056,7 @@ impl XamlBuilder {
             source_location: line.map(|l| format!("L{l}")),
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
     }
 
@@ -1096,6 +1100,8 @@ impl XamlBuilder {
             weight: 1.0,
             context: context.map(str::to_string),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 

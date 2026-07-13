@@ -60,10 +60,13 @@ pub(super) fn run_language_resolvers(
     }
 }
 
-/// The default ordered resolver set: Swift (#1356), then Python (#1446), then
-/// Ruby (#1499). Order preserves the prior inlined wiring.
+/// The default ordered resolver set: Swift (#1356), Python (#1446), Ruby (#1499),
+/// Java (#1696), C# (#1609), C++ (#1547), then Objective-C (#1556). Order preserves the
+/// prior inlined wiring; the passes are per-language and independently guarded
+/// (each C++/ObjC pass also gates on the `RawCall` lang tag for the `.h`
+/// overlap), so relative order is not observable.
 #[must_use]
-pub(super) fn default_resolvers() -> [LanguageResolver; 3] {
+pub(super) fn default_resolvers() -> [LanguageResolver; 9] {
     [
         LanguageResolver {
             suffixes: &[".swift"],
@@ -76,6 +79,30 @@ pub(super) fn default_resolvers() -> [LanguageResolver; 3] {
         LanguageResolver {
             suffixes: &[".rb"],
             resolve: ruby_pass,
+        },
+        LanguageResolver {
+            suffixes: &[".java"],
+            resolve: java_pass,
+        },
+        LanguageResolver {
+            suffixes: &[".cs"],
+            resolve: csharp_pass,
+        },
+        LanguageResolver {
+            suffixes: &[".cpp", ".cc", ".cxx", ".hpp", ".cu", ".cuh", ".metal", ".h"],
+            resolve: cpp_pass,
+        },
+        LanguageResolver {
+            suffixes: &[".m", ".mm", ".h"],
+            resolve: objc_pass,
+        },
+        LanguageResolver {
+            suffixes: &[".ts", ".tsx", ".js", ".jsx"],
+            resolve: typescript_pass,
+        },
+        LanguageResolver {
+            suffixes: &[".pas", ".pp", ".dpr", ".dpk", ".inc"],
+            resolve: pascal_pass,
         },
     ]
 }
@@ -95,6 +122,35 @@ fn python_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_ca
     super::python::resolve_python_member_calls(nodes, edges, raw_calls);
 }
 
+fn pascal_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_calls: &[RawCall]) {
+    super::pascal_resolution::resolve_pascal_inherited_calls(nodes, edges, raw_calls);
+}
+
 fn ruby_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_calls: &[RawCall]) {
     super::ruby::resolve_ruby_member_calls(nodes, edges, raw_calls);
+}
+
+fn java_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_calls: &[RawCall]) {
+    super::java::resolve_java_member_calls(nodes, edges, raw_calls);
+}
+
+fn csharp_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_calls: &[RawCall]) {
+    super::csharp::resolve_csharp_member_calls(nodes, edges, raw_calls);
+}
+
+fn cpp_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_calls: &[RawCall]) {
+    super::cpp::resolve_cpp_member_calls(nodes, edges, raw_calls);
+}
+
+fn objc_pass(_paths: &[PathBuf], nodes: &[Node], edges: &mut Vec<Edge>, raw_calls: &[RawCall]) {
+    super::objc::resolve_objc_member_calls(nodes, edges, raw_calls);
+}
+
+fn typescript_pass(
+    _paths: &[PathBuf],
+    nodes: &[Node],
+    edges: &mut Vec<Edge>,
+    raw_calls: &[RawCall],
+) {
+    super::typescript::resolve_typescript_member_calls(nodes, edges, raw_calls);
 }

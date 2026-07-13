@@ -169,16 +169,32 @@ fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
         );
         return true;
     }
-    let Ok(text) = std::fs::read_to_string(output_path) else {
+    // Read failure or an empty/whitespace file: no nodes to lose, so any new graph
+    // is a growth — proceed (Python treats an unreadable existing file as empty).
+    let raw = std::fs::read_to_string(output_path).unwrap_or_default();
+    if raw.trim().is_empty() {
         return false;
+    }
+    let existing_n = match serde_json::from_str::<Value>(&raw) {
+        Ok(data) => data
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
+        Err(exc) => {
+            // Non-empty but unparseable (corrupt or a mid-write): we cannot verify
+            // the new graph is not a silent shrink. Fail SAFE — refuse rather than
+            // overwrite (#479). A fail-OPEN here is the silent data-loss path the
+            // guard exists to prevent: a transiently unreadable graph.json would
+            // let a partial rebuild clobber a good one.
+            eprintln!(
+                "[graphify] WARNING: existing graph.json at {} could not be read to \
+                 verify the new graph is not smaller ({exc}). Refusing to overwrite. \
+                 Pass force=True to override.",
+                output_path.display()
+            );
+            return true;
+        }
     };
-    let Ok(existing_data) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-    let existing_n = existing_data
-        .get("nodes")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
     let new_n = graph.node_count();
     if new_n < existing_n {
         eprintln!(

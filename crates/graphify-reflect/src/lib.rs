@@ -21,6 +21,7 @@
 
 mod aggregate;
 mod graph;
+mod overlay;
 mod parse;
 mod render;
 
@@ -33,6 +34,10 @@ pub use aggregate::{
     aggregate_lessons,
 };
 pub use graph::{load_known_nodes, load_node_community};
+pub use overlay::{
+    LEARNING_SCHEMA_VERSION, LEARNING_SIDECAR_NAME, build_learning_overlay, load_learning_overlay,
+    write_learning_sidecar,
+};
 pub use parse::{MemoryDoc, load_memory_docs, parse_memory_doc};
 pub use render::render_lessons_md;
 
@@ -147,6 +152,13 @@ pub fn reflect(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(out_path, render_lessons_md(&agg))?;
+    // Work-memory overlay sidecar next to graph.json (#1441): a derived,
+    // experiential layer the read surfaces merge in at display time. graph.json
+    // stays purely structural. Best-effort — a sidecar write failure never fails
+    // the lessons run.
+    if let Some(graph) = graphs.graph {
+        let _ = write_learning_sidecar(&agg, graph, now);
+    }
     Ok((out_path.to_path_buf(), agg))
 }
 

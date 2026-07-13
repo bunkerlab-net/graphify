@@ -124,6 +124,14 @@ pub fn read_files(paths: &[PathBuf], root: &Path) -> String {
     read_units(&units, root)
 }
 
+/// The canonical `path` only when it stays inside `root` (009a98b): a symlink
+/// whose target escapes the corpus root must never be read. Mirrors Python
+/// `_resolve_under_root`.
+pub(crate) fn resolve_under_root(path: &Path, root: &Path) -> Option<PathBuf> {
+    let (rp, rr) = (path.canonicalize().ok()?, root.canonicalize().ok()?);
+    rp.starts_with(&rr).then_some(rp)
+}
+
 /// Read and format unit (whole file or slice) contents for the extraction prompt.
 ///
 /// A [`Unit::Slice`] reports its **parent file path** as the relative path so
@@ -136,6 +144,14 @@ pub fn read_units(units: &[Unit], root: &Path) -> String {
     let mut parts: Vec<String> = Vec::new();
     for u in units {
         let p = unit_path(u);
+        // Containment: skip a symlink whose target escapes the corpus root (009a98b).
+        let Some(safe_path) = resolve_under_root(p, root) else {
+            eprintln!(
+                "[graphify] skipping {}: symlink target outside corpus root",
+                p.display()
+            );
+            continue;
+        };
         // When `p` is outside `root` (e.g. an absolute path), only emit the
         // file name so we don't ship absolute filesystem paths to a remote
         // LLM backend (deliberate divergence from graphify-py's `str(p)`).
@@ -145,7 +161,7 @@ pub fn read_units(units: &[Unit], root: &Path) -> String {
         );
         let content = match u {
             Unit::Slice(fs) => read_slice_text(fs),
-            Unit::Whole(_) => file_to_text(p),
+            Unit::Whole(_) => file_to_text(&safe_path),
         };
         let Some(content) = content else {
             eprintln!("[graphify] failed to read {} for extraction", p.display());

@@ -87,6 +87,25 @@ pub fn to_canvas(
             communities
         };
 
+    // #1236 follow-up: drop community members absent from the graph or without a
+    // filename (stale community index / merge artifacts). Filtering once up front
+    // keeps the box sizing, card layout, and edge set all consistent with the
+    // cards actually emitted — mirrors the two-loop guard in graphify-py to_canvas.
+    let filtered_communities: IndexMap<i64, Vec<String>> = communities
+        .iter()
+        .map(|(&cid, members)| {
+            let kept: Vec<String> = members
+                .iter()
+                .filter(|m| {
+                    graph.node_data(m.as_str()).is_some() && node_filenames.contains_key(m.as_str())
+                })
+                .cloned()
+                .collect();
+            (cid, kept)
+        })
+        .collect();
+    let communities: &IndexMap<i64, Vec<String>> = &filtered_communities;
+
     let sorted_cids: Vec<i64> = {
         let mut v: Vec<i64> = communities.keys().copied().collect();
         v.sort_unstable();

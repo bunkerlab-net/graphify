@@ -101,6 +101,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
             source_location: Some("L1".to_string()),
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
         seen_ids.insert(file_nid.clone());
     }
@@ -122,6 +123,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     source_location: Some(format!("L{lineno}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
             }
             edges.push(Edge {
@@ -135,6 +137,8 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
             current_class_nid = Some(class_nid);
             continue;
@@ -158,6 +162,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     source_location: Some(format!("L{lineno}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
             }
             edges.push(Edge {
@@ -171,6 +176,8 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
             continue;
         }
@@ -190,6 +197,7 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                         source_location: Some(format!("L{lineno}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -203,6 +211,8 @@ fn extract_spock_fallback(path: &Path, ts_result: FileResult) -> FileResult {
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }

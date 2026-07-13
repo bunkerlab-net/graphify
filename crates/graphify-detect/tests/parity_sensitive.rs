@@ -33,9 +33,21 @@ fn sensitive_does_not_flag_tokenize_py() {
     assert!(!is_sensitive(Path::new("tokenize.py")));
 }
 
+/// `passwords.py` is a programming-language SOURCE file — a module, not a secret
+/// store — so it is no longer flagged (#1666). Data/config secret stores stay
+/// flagged (see the `.json`/`.yaml` cases).
 #[test]
-fn sensitive_flags_passwords_py() {
-    assert!(is_sensitive(Path::new("passwords.py")));
+fn sensitive_does_not_flag_passwords_py() {
+    assert!(!is_sensitive(Path::new("passwords.py")));
+}
+
+/// Same source-code exemption for Ruby modules whose names hit a generic keyword.
+#[test]
+fn sensitive_does_not_flag_ruby_code_modules() {
+    assert!(!is_sensitive(Path::new("app/models/device_token.rb")));
+    assert!(!is_sensitive(Path::new(
+        "app/controllers/api/v1/passwords_controller.rb"
+    )));
 }
 
 #[test]

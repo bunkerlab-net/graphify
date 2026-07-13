@@ -18,6 +18,7 @@ fn n(id: &str, label: &str, file_type: &str) -> Node {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }
 }
 
@@ -70,6 +71,8 @@ fn existing_edge_pairs_includes_relation() {
             weight: 0.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         },
         Edge {
             external: false,
@@ -82,6 +85,8 @@ fn existing_edge_pairs_includes_relation() {
             weight: 0.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         },
     ];
     let pairs = existing_edge_pairs(&edges);
@@ -116,6 +121,8 @@ fn existing_edge_pairs_distinguishes_context() {
             weight: 0.0,
             context: Some("parameter_type".to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         },
         Edge {
             external: false,
@@ -128,6 +135,8 @@ fn existing_edge_pairs_distinguishes_context() {
             weight: 0.0,
             context: Some("return_type".to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         },
     ];
     let pairs = existing_edge_pairs(&edges);

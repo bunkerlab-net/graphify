@@ -7,8 +7,9 @@ use std::path::Path;
 
 use graphify_cache::{
     _reset_stat_index_for_tests, body_content, cache_dir, cache_dir_versioned, cached_files,
-    clear_cache, ensure_atexit_flush_registered, file_hash, load_cached, load_cached_versioned,
-    prune_semantic_cache, save_cached, save_cached_versioned,
+    cached_word_count, clear_cache, ensure_atexit_flush_registered, file_hash, load_cached,
+    load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
+    save_semantic_cache,
 };
 use serde_json::{Value, json};
 use serial_test::serial;
@@ -749,4 +750,145 @@ fn semantic_prune_ignores_ast_and_tmp() {
     assert!(!semantic_dir.join("deadbeef.json").exists());
     assert!(tmp_entry.exists(), "*.tmp temporaries must not be swept");
     assert_eq!(ast_json(&ast_dir), 1, "AST entries must not be touched");
+}
+
+#[test]
+#[serial]
+fn test_save_semantic_cache_overwrites_by_default() {
+    // Default save_semantic_cache replaces a file's cached entry (the final,
+    // authoritative write in the extract pipeline).
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n");
+    save_semantic_cache(
+        &[json!({"id": "a", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        false,
+    )
+    .expect("save 1");
+    save_semantic_cache(
+        &[json!({"id": "b", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        false,
+    )
+    .expect("save 2");
+    let cached = load_cached(&f, tmp.path(), "semantic").expect("cached");
+    let ids: HashSet<&str> = cached["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        HashSet::from(["b"]),
+        "default must overwrite, not accumulate"
+    );
+}
+
+#[test]
+#[serial]
+fn test_save_semantic_cache_merge_existing_unions() {
+    // #1715: merge_existing=true concatenates (prev + new, ordered, no dedup)
+    // across all three arrays so a file split across chunks keeps every slice.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("big.md");
+    write_text(&f, "# Big\n");
+    save_semantic_cache(
+        &[json!({"id": "a", "source_file": "big.md"})],
+        &[json!({"source": "a", "target": "x", "source_file": "big.md"})],
+        &[json!({"id": "h1", "nodes": ["a"], "source_file": "big.md"})],
+        tmp.path(),
+        true,
+    )
+    .expect("chunk 1");
+    save_semantic_cache(
+        &[json!({"id": "b", "source_file": "big.md"})],
+        &[json!({"source": "b", "target": "y", "source_file": "big.md"})],
+        &[json!({"id": "h2", "nodes": ["b"], "source_file": "big.md"})],
+        tmp.path(),
+        true,
+    )
+    .expect("chunk 2");
+    let cached = load_cached(&f, tmp.path(), "semantic").expect("cached");
+    let field = |k: &str, id_key: &str| -> Vec<String> {
+        cached[k]
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|v| v[id_key].as_str().map(str::to_string))
+            .collect()
+    };
+    // Ordered prev + new, no dedup — verifies both accumulation and ordering.
+    assert_eq!(field("nodes", "id"), vec!["a", "b"]);
+    assert_eq!(field("edges", "source"), vec!["a", "b"]);
+    assert_eq!(field("hyperedges", "id"), vec!["h1", "h2"]);
+}
+
+// ── #1656: word-count caching ─────────────────────────────────────────────────
+// Ports `graphify-py/tests/test_word_count_cache.py`. Word counts are cached
+// against each file's stat signature so `detect()` doesn't re-parse every
+// unchanged PDF/docx on each run just to size the corpus.
+
+#[test]
+#[serial]
+fn word_count_cached_until_file_changes() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.txt");
+    write_text(&f, "one two three four five");
+
+    let calls = std::cell::Cell::new(0u32);
+    let compute = |p: &Path| -> u64 {
+        calls.set(calls.get() + 1);
+        fs::read_to_string(p)
+            .unwrap_or_default()
+            .split_whitespace()
+            .count() as u64
+    };
+
+    assert_eq!(cached_word_count(&f, tmp.path(), compute, None), 5);
+    assert_eq!(calls.get(), 1);
+    // Second call, file unchanged → served from cache, compute NOT re-run.
+    assert_eq!(cached_word_count(&f, tmp.path(), compute, None), 5);
+    assert_eq!(calls.get(), 1);
+
+    // Change the file → recompute.
+    write_text(&f, "only three words now");
+    bump_mtime(&f);
+    assert_eq!(cached_word_count(&f, tmp.path(), compute, None), 4);
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+#[serial]
+fn word_count_augments_existing_hash_entry() {
+    // `cached_word_count` must not clobber a hash already stored for the file: the
+    // hash still resolves from the fastpath afterwards, and the count is correct.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("m.py");
+    write_text(&f, "x = 1\n"); // -> ["x", "=", "1"] == 3 tokens
+    let h = file_hash(&f, tmp.path()).expect("hash");
+    assert!(!h.is_empty());
+    let wc = cached_word_count(
+        &f,
+        tmp.path(),
+        |p| {
+            fs::read_to_string(p)
+                .unwrap_or_default()
+                .split_whitespace()
+                .count() as u64
+        },
+        None,
+    );
+    assert_eq!(wc, 3);
+    // The hash entry survives alongside the word_count (fastpath still returns it).
+    assert_eq!(file_hash(&f, tmp.path()).expect("hash"), h);
 }

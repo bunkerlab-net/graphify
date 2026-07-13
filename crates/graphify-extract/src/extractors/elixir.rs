@@ -104,6 +104,7 @@ pub fn extract_elixir(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -179,6 +180,64 @@ fn get_alias_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> 
         }
     }
     None
+}
+
+/// Every module named by an `alias`/`import`/`require`/`use` argument. Handles
+/// the single form (`alias Foo.Bar` -> `["Foo.Bar"]`) and the multi-alias brace
+/// form (`alias Foo.{Bar, Baz}` -> `["Foo.Bar", "Foo.Baz"]`), which the grammar
+/// represents as a `dot` node holding the base alias plus a trailing `tuple` of
+/// member aliases. Mirrors Python `_get_alias_modules`.
+fn get_alias_modules(node: tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut cur = node.walk();
+    if !cur.goto_first_child() {
+        return Vec::new();
+    }
+    loop {
+        let child = cur.node();
+        if child.kind() == "alias" {
+            return vec![read_text(child, source)];
+        }
+        if child.kind() == "dot" {
+            let mut base: Option<String> = None;
+            let mut tuple_node: Option<tree_sitter::Node<'_>> = None;
+            let mut dc = child.walk();
+            if dc.goto_first_child() {
+                loop {
+                    let sub = dc.node();
+                    if sub.kind() == "alias" && base.is_none() {
+                        base = Some(read_text(sub, source));
+                    } else if sub.kind() == "tuple" {
+                        tuple_node = Some(sub);
+                    }
+                    if !dc.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            if let (Some(base), Some(tuple_node)) = (base.as_ref(), tuple_node) {
+                let mut members: Vec<String> = Vec::new();
+                let mut tc = tuple_node.walk();
+                if tc.goto_first_child() {
+                    loop {
+                        if tc.node().kind() == "alias" {
+                            members.push(read_text(tc.node(), source));
+                        }
+                        if !tc.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+                if !members.is_empty() {
+                    return members.into_iter().map(|m| format!("{base}.{m}")).collect();
+                }
+            }
+            return vec![read_text(child, source)];
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+    Vec::new()
 }
 
 /// Recursively walk an Elixir AST emitting nodes and edges for modules, functions, and imports.
@@ -273,6 +332,7 @@ fn walk_elixir(
                     source_location: Some(format!("L{line}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
             }
             edges.push(Edge {
@@ -286,6 +346,8 @@ fn walk_elixir(
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
             if let Some(do_block) = do_block_node {
                 let mut c = do_block.walk();
@@ -344,6 +406,7 @@ fn walk_elixir(
                     source_location: Some(format!("L{line}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
             }
             let relation = if parent_module_nid.is_some() {
@@ -362,6 +425,8 @@ fn walk_elixir(
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
             if let Some(do_block) = do_block_node {
                 function_bodies.push((func_nid, do_block.start_byte(), do_block.end_byte()));
@@ -369,9 +434,8 @@ fn walk_elixir(
         }
         kw if IMPORT_KEYWORDS.contains(kw) => {
             if let Some(args_node) = arguments_node {
-                let module_name = get_alias_text(args_node, source);
-                if let Some(mn) = module_name {
-                    let tgt_nid = make_id1(&mn);
+                for module_name in get_alias_modules(args_node, source) {
+                    let tgt_nid = make_id1(&module_name);
                     edges.push(Edge {
                         external: false,
                         source: file_nid.to_string(),
@@ -383,6 +447,8 @@ fn walk_elixir(
                         weight: 1.0,
                         context: Some("import".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -521,6 +587,8 @@ fn walk_calls_elixir(
                         weight: 1.0,
                         context: Some("call".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -533,6 +601,8 @@ fn walk_calls_elixir(
                 source_location: format!("L{}", node.start_position().row + 1),
                 receiver: None,
                 receiver_type: None,
+                lang: None,
+                ..Default::default()
             });
         }
     }

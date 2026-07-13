@@ -93,30 +93,26 @@ pub fn claude_uninstall(project_dir: &Path) -> Result<String, HooksError> {
     }
     remove_skill(&skill_dst);
 
-    let target = project_dir.join("CLAUDE.md");
-
-    if target.exists() {
-        let content = fs::read_to_string(&target)?;
-        if content.contains(CLAUDE_MD_MARKER) {
-            let cleaned = remove_graphify_section(&content);
-            if cleaned.is_empty() {
-                fs::remove_file(&target)?;
-                msgs.push(format!(
-                    "CLAUDE.md was empty after removal - deleted {}",
-                    target.display()
-                ));
-            } else {
-                fs::write(&target, format!("{cleaned}\n").as_bytes())?;
-                msgs.push(format!(
-                    "graphify section removed from {}",
-                    target.display()
-                ));
-            }
-        } else {
-            msgs.push("graphify section not found in CLAUDE.md - nothing to do".to_string());
+    // A user may relocate the graphify section into the local-only files Claude
+    // Code supports (not committed to a shared repo), so clean CLAUDE.md AND
+    // CLAUDE.local.md AND .claude/CLAUDE.local.md (#1731).
+    let md_targets = [
+        project_dir.join("CLAUDE.md"),
+        project_dir.join("CLAUDE.local.md"),
+        project_dir.join(".claude").join("CLAUDE.local.md"),
+    ];
+    let existing: Vec<&std::path::PathBuf> = md_targets.iter().filter(|t| t.exists()).collect();
+    let mut removed_any = false;
+    for target in &existing {
+        // Not short-circuited: every present file must be cleaned, not just the first.
+        if strip_graphify_md_section(target, &mut msgs)? {
+            removed_any = true;
         }
-    } else {
+    }
+    if existing.is_empty() {
         msgs.push("No CLAUDE.md found in current directory - nothing to do".to_string());
+    } else if !removed_any {
+        msgs.push("graphify section not found in CLAUDE.md - nothing to do".to_string());
     }
 
     msgs.push(uninstall_claude_hook(project_dir)?);
@@ -146,14 +142,61 @@ pub fn install_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
 ///
 /// Returns `HooksError::Io` on filesystem failures.
 pub fn uninstall_claude_hook(project_dir: &Path) -> Result<String, HooksError> {
-    let settings_path = project_dir.join(".claude").join("settings.json");
+    // A user may relocate the hook into settings.local.json (not committed to a
+    // shared repo), so clean whichever file holds it (#1731).
+    let claude_dir = project_dir.join(".claude");
+    let mut msgs: Vec<String> = Vec::new();
+    for name in ["settings.json", "settings.local.json"] {
+        if let Some(m) = strip_graphify_hook(&claude_dir.join(name))? {
+            msgs.push(m);
+        }
+    }
+    Ok(msgs.join("\n"))
+}
+
+/// Drop graphify `PreToolUse` hooks from a single Claude settings file, if
+/// present. Returns the removal message when a hook was actually removed.
+fn strip_graphify_hook(settings_path: &Path) -> Result<Option<String>, HooksError> {
     if !settings_path.exists() {
-        return Ok(String::new());
+        return Ok(None);
     }
-    let mut settings = read_json_or_empty(&settings_path);
+    let mut settings = read_json_or_empty(settings_path);
     if !remove_pretooluse_hooks(&mut settings) {
-        return Ok(String::new());
+        return Ok(None);
     }
-    write_json(&settings_path, &settings)?;
-    Ok("  .claude/settings.json  ->  PreToolUse hook removed".to_string())
+    write_json(settings_path, &settings)?;
+    let name = settings_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("settings.json");
+    Ok(Some(format!(
+        "  .claude/{name}  ->  PreToolUse hook removed"
+    )))
+}
+
+/// Strip the `## graphify` section from one CLAUDE.md-style file, pushing a
+/// status message. Returns `true` when a section was removed; deletes the file
+/// if nothing else remains. An unreadable file is silently skipped (#1731).
+fn strip_graphify_md_section(target: &Path, msgs: &mut Vec<String>) -> Result<bool, HooksError> {
+    let Ok(content) = fs::read_to_string(target) else {
+        return Ok(false);
+    };
+    if !content.contains(CLAUDE_MD_MARKER) {
+        return Ok(false);
+    }
+    let cleaned = remove_graphify_section(&content);
+    if cleaned.is_empty() {
+        fs::remove_file(target)?;
+        msgs.push(format!(
+            "{} was empty after removal - deleted",
+            target.display()
+        ));
+    } else {
+        fs::write(target, format!("{cleaned}\n").as_bytes())?;
+        msgs.push(format!(
+            "graphify section removed from {}",
+            target.display()
+        ));
+    }
+    Ok(true)
 }

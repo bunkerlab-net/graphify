@@ -136,6 +136,15 @@ impl ImageRef {
 pub fn build_image_refs(image_files: &[PathBuf], root: &Path, read_bytes: bool) -> Vec<ImageRef> {
     let mut refs = Vec::with_capacity(image_files.len());
     for p in image_files {
+        // Containment: skip an image symlink whose target escapes the corpus root
+        // (009a98b). The resolved path is reused as the ImageRef's absolute path.
+        let Some(abs_path) = crate::read::resolve_under_root(p, root) else {
+            eprintln!(
+                "[graphify] skipping image {}: symlink target outside corpus root",
+                p.display()
+            );
+            continue;
+        };
         let rel = p.strip_prefix(root).map_or_else(
             |_| p.to_string_lossy().into_owned(),
             |r| r.to_string_lossy().into_owned(),
@@ -151,7 +160,7 @@ pub fn build_image_refs(image_files: &[PathBuf], root: &Path, read_bytes: bool) 
             // Check the on-disk size first so an oversized image is never read
             // into memory just to be dropped — a multi-GB file would otherwise
             // be fully allocated before the length check rejected it.
-            match std::fs::metadata(p) {
+            match std::fs::metadata(&abs_path) {
                 Ok(meta) if meta.len() > MAX_IMAGE_BYTES as u64 => {
                     eprintln!(
                         "[graphify] image {rel} is {} KB, over the {} MB inline-image \
@@ -161,14 +170,13 @@ pub fn build_image_refs(image_files: &[PathBuf], root: &Path, read_bytes: bool) 
                         MAX_IMAGE_BYTES / (1024 * 1024)
                     );
                 }
-                Ok(_) => match std::fs::read(p) {
+                Ok(_) => match std::fs::read(&abs_path) {
                     Ok(bytes) => raw = Some(bytes),
                     Err(exc) => eprintln!("[graphify] could not read image {rel}: {exc}"),
                 },
                 Err(exc) => eprintln!("[graphify] could not stat image {rel}: {exc}"),
             }
         }
-        let abs_path = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
         refs.push(ImageRef {
             path: abs_path,
             rel,

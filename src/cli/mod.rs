@@ -35,6 +35,11 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
+/// Commands for which the startup skill-version check is suppressed: install /
+/// uninstall re-stamp the skill, and the hook gates run on every editor tool
+/// use and must stay silent (#1568). Matches graphify-py's `_silent_cmds`.
+const SKILL_CHECK_SILENT_CMDS: [&str; 4] = ["install", "uninstall", "hook-check", "hook-guard"];
+
 /// Configure runtime services, parse argv, and dispatch the selected subcommand.
 ///
 /// Registers the `graphify-cache` atexit flush, initialises `tracing`, then
@@ -46,6 +51,20 @@ pub(crate) fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    // #1568: warn about a stale on-disk skill (a `.graphify_version` stamp that
+    // mismatches this package). Skipped for install/uninstall (they re-stamp) and
+    // the silent hook gates (run on every editor tool use). Checked on raw argv
+    // before clap parsing so `--version`/`--help` still surface the warning, and
+    // platform subcommands (`graphify claude install`) are caught by the "install"
+    // token — matching graphify-py's `sys.argv` scan.
+    let raw_args: Vec<String> = std::env::args().collect();
+    if !raw_args
+        .iter()
+        .any(|a| SKILL_CHECK_SILENT_CMDS.contains(&a.as_str()))
+    {
+        graphify_hooks::check_skill_versions(env!("CARGO_PKG_VERSION"));
+    }
 
     let parsed = args::Cli::parse();
     match parsed.command {
@@ -99,7 +118,18 @@ pub(crate) fn load_graph(path: &std::path::Path) -> anyhow::Result<graphify_buil
              (fixes same-name-file collisions)."
         );
     }
-    let graph = graphify_build::build_from_json(value, true, None)?;
+    let mut graph = graphify_build::build_from_json(value, true, None)?;
+    // Work-memory overlay (#1441): stash the learned-verdict sidecar (if present)
+    // next to graph.json onto the graph so read surfaces (explain, query text)
+    // can annotate nodes. Best-effort; graph.json itself stays purely structural.
+    let overlay: serde_json::Map<String, serde_json::Value> =
+        graphify_reflect::load_learning_overlay(path)
+            .into_iter()
+            .collect();
+    graph.graph_attrs.insert(
+        "_learning_overlay".to_string(),
+        serde_json::Value::Object(overlay),
+    );
     Ok(graph)
 }
 
@@ -116,6 +146,9 @@ pub(crate) fn build_analysis(
     graph: &graphify_build::Graph,
     communities: &indexmap::IndexMap<i64, Vec<String>>,
     root: &std::path::Path,
+    // (input, output) LLM token cost surfaced in the report (#1694). `(0, 0)`
+    // for paths that ran no LLM calls.
+    token_cost: (u64, u64),
 ) -> serde_json::Value {
     let mut communities_json = serde_json::Map::new();
     for (cid, members) in communities {
@@ -149,11 +182,13 @@ pub(crate) fn build_analysis(
         "cohesion": serde_json::Value::Object(cohesion_json.clone()),
         "gods": god_nodes.clone(),
         "surprises": surprising.clone(),
-        "tokens": serde_json::json!({"input": 0u64, "output": 0u64}),
+        "tokens": serde_json::json!({"input": token_cost.0, "output": token_cost.1}),
         // Rust report aliases (read by graphify_report::render_report).
         "cohesion_scores": serde_json::Value::Object(cohesion_json),
         "god_nodes": god_nodes,
         "surprising_connections": surprising,
+        // `token_cost` is the form `graphify_report::render_report` reads (#1694).
+        "token_cost": serde_json::json!({"input": token_cost.0, "output": token_cost.1}),
         "suggested_questions": suggested,
         "min_community_size": 3,
     })

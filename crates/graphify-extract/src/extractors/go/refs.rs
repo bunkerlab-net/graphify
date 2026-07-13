@@ -147,6 +147,7 @@ impl GoRefCtx<'_> {
                 source_location: Some(String::new()),
                 metadata: None,
                 origin_file: Some(self.str_path.to_string()),
+                node_type: None,
             });
         }
         nid2
@@ -165,6 +166,8 @@ impl GoRefCtx<'_> {
             weight: 1.0,
             context: Some(context.to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -181,6 +184,8 @@ impl GoRefCtx<'_> {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 }

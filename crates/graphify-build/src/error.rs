@@ -25,6 +25,19 @@ pub enum BuildError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
+    /// The existing graph file for an incremental merge could not be parsed
+    /// (truncated / corrupt / manually edited). Mirrors graphify-py
+    /// `build_merge`'s actionable error (#1536).
+    #[error(
+        "Cannot read {path} for incremental merge: {source}. Delete the file and run a full rebuild."
+    )]
+    CorruptGraph {
+        /// Path of the unreadable graph file.
+        path: String,
+        /// Underlying JSON parse error.
+        source: serde_json::Error,
+    },
+
     /// The existing graph file exceeded the memory-bomb size cap.
     #[error(transparent)]
     Security(#[from] graphify_security::SecurityError),

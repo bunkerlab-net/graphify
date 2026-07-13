@@ -1,10 +1,10 @@
 //! Objective-C extractor — custom walk over tree-sitter-objc AST.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::ids::{file_stem, make_id, make_id1};
-use crate::types::{Edge, FileResult, Node};
+use crate::types::{Edge, FileResult, Node, RawCall, RawCallLang};
 
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
@@ -50,6 +50,97 @@ fn collect_objc_type_names<'a>(
             }
         }
     }
+}
+
+/// Bare variable name from an Objective-C declaration declarator, unwrapping pointer /
+/// init wrappers (`*f`, `f = ...`). `None` for anything that isn't a plain named
+/// local. Mirrors graphify-py `_cpp_declarator_name` (shared grammar).
+fn objc_declarator_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" => Some(read_text(node, source).to_string()),
+        "pointer_declarator" | "reference_declarator" | "init_declarator" => {
+            let inner = node.child_by_field_name("declarator").or_else(|| {
+                let mut cur = node.walk();
+                node.children(&mut cur).find(|c| {
+                    matches!(
+                        c.kind(),
+                        "identifier" | "pointer_declarator" | "reference_declarator"
+                    )
+                })
+            });
+            inner.and_then(|c| objc_declarator_name(c, source))
+        }
+        _ => None,
+    }
+}
+
+/// Collect `var -> ClassName` from Objective-C local declarations (`Foo *f = ...;`) in a
+/// method body into `table` (first-binding-wins). Only a capitalized
+/// `type_identifier` with a single named declarator is recorded (precision over
+/// recall). Mirrors graphify-py `_objc_local_var_types`.
+fn collect_objc_local_var_types(
+    body: tree_sitter::Node<'_>,
+    source: &[u8],
+    table: &mut HashMap<String, String>,
+) {
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "method_definition" && n.id() != body.id() {
+            continue;
+        }
+        if n.kind() == "declaration" {
+            let mut cur = n.walk();
+            let type_node = n.child_by_field_name("type").or_else(|| {
+                let mut c2 = n.walk();
+                n.children(&mut c2).find(|c| c.kind() == "type_identifier")
+            });
+            if let Some(tn) = type_node
+                && tn.kind() == "type_identifier"
+            {
+                let type_name = read_text(tn, source).trim().to_string();
+                let declarators: Vec<tree_sitter::Node<'_>> = n
+                    .children(&mut cur)
+                    .filter(|c| {
+                        matches!(
+                            c.kind(),
+                            "identifier" | "pointer_declarator" | "init_declarator"
+                        )
+                    })
+                    .collect();
+                if !type_name.is_empty()
+                    && type_name.chars().next().is_some_and(char::is_uppercase)
+                    && declarators.len() == 1
+                    && let Some(var) = objc_declarator_name(declarators[0], source)
+                    && !table.contains_key(&var)
+                {
+                    table.insert(var, type_name);
+                }
+            }
+        }
+        let mut cur = n.walk();
+        for c in n.children(&mut cur) {
+            stack.push(c);
+        }
+    }
+}
+
+/// File-wide Objective-C `var -> ClassName` table: run [`collect_objc_local_var_types`]
+/// on every `method_definition` body (each body must be the traversal root, since
+/// the collector skips *nested* method definitions). First-binding-wins.
+fn build_objc_type_table(root: tree_sitter::Node<'_>, source: &[u8]) -> HashMap<String, String> {
+    let mut table = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "method_definition" {
+            collect_objc_local_var_types(n, source, &mut table);
+            continue;
+        }
+        let mut cur = n.walk();
+        for c in n.children(&mut cur) {
+            stack.push(c);
+        }
+    }
+    table
 }
 
 /// Extract interfaces, implementations, protocols, methods, and imports from `.m`/`.mm`/`.h` files.
@@ -107,7 +198,7 @@ pub fn extract_objc(path: &Path) -> FileResult {
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
-    let mut method_bodies: Vec<(String, usize, usize)> = Vec::new();
+    let mut method_bodies: Vec<(String, usize, usize, String)> = Vec::new();
 
     let file_nid = make_id1(&str_path);
     seen_ids.insert(file_nid.clone());
@@ -121,6 +212,7 @@ pub fn extract_objc(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -144,6 +236,23 @@ pub fn extract_objc(path: &Path) -> FileResult {
         .map(|n| n.id.clone())
         .collect();
     let mut seen_calls: HashSet<(String, String)> = HashSet::new();
+    // Container (class/category/protocol) -> its method nids, for scoped
+    // dot-syntax and @selector resolution (#1475).
+    let mut class_method_nids: HashMap<String, HashSet<String>> = HashMap::new();
+    for (m_nid, _, _, container_nid) in &method_bodies {
+        class_method_nids
+            .entry(container_nid.clone())
+            .or_default()
+            .insert(m_nid.clone());
+    }
+    // `accesses` edges dedup independently of `calls`: a body may legitimately
+    // both `[self foo]` and `self.foo` the same sibling. DIVERGENCE from
+    // graphify-py, which shares one relation-blind set and drops the second edge.
+    let mut seen_accesses: HashSet<(String, String)> = HashSet::new();
+    // #1556: file-wide `var -> ClassName` table from `Foo *f = ...;` locals, and
+    // a `raw_calls` buffer for the cross-file ObjC resolver.
+    let objc_type_table = build_objc_type_table(tree.root_node(), &source);
+    let mut raw_calls: Vec<RawCall> = Vec::new();
     {
         let mut call_ctx = ObjcCallCtx {
             str_path: &str_path,
@@ -153,13 +262,18 @@ pub fn extract_objc(path: &Path) -> FileResult {
             edges: &mut edges,
             seen_ids: &mut seen_ids,
             seen_calls: &mut seen_calls,
+            class_method_nids: &class_method_nids,
+            seen_accesses: &mut seen_accesses,
+            raw_calls: &mut raw_calls,
+            objc_type_table: &objc_type_table,
         };
-        for (caller_nid, body_start, body_end) in &method_bodies {
+        for (caller_nid, body_start, body_end, container_nid) in &method_bodies {
             walk_calls_objc(
                 &mut call_ctx,
                 tree.root_node(),
                 &source,
                 caller_nid,
+                container_nid,
                 *body_start,
                 *body_end,
             );
@@ -170,7 +284,7 @@ pub fn extract_objc(path: &Path) -> FileResult {
     FileResult {
         nodes,
         edges,
-        raw_calls: vec![],
+        raw_calls,
         error: None,
     }
 }
@@ -187,7 +301,7 @@ struct ObjcWalkCtx<'a> {
     nodes: &'a mut Vec<Node>,
     edges: &'a mut Vec<Edge>,
     seen_ids: &'a mut HashSet<String>,
-    method_bodies: &'a mut Vec<(String, usize, usize)>,
+    method_bodies: &'a mut Vec<(String, usize, usize, String)>,
 }
 
 /// Return the NID for a named type, creating a SOURCELESS placeholder stub when
@@ -216,6 +330,7 @@ fn ensure_objc_named_node(
             source_location: Some(String::new()),
             metadata: None,
             origin_file: Some(str_path.to_string()),
+            node_type: None,
         });
     }
     nid2
@@ -265,6 +380,8 @@ fn walk_objc(
                                 weight: 1.0,
                                 context: Some("import".to_string()),
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     } else if child.kind() == "string_literal" {
@@ -303,6 +420,8 @@ fn walk_objc(
                                             weight: 1.0,
                                             context: Some("import".to_string()),
                                             confidence_score: None,
+                                            deferred: false,
+                                            metadata: None,
                                         });
                                     }
                                 }
@@ -338,6 +457,8 @@ fn walk_objc(
                         weight: 1.0,
                         context: Some("import".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -381,6 +502,7 @@ fn walk_objc(
                     source_location: Some(format!("L{line}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
             }
             ctx.edges.push(Edge {
@@ -394,6 +516,8 @@ fn walk_objc(
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
             // Superclass and protocol adoption
             let mut colon_seen = false;
@@ -416,6 +540,8 @@ fn walk_objc(
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                         colon_seen = false;
                     } else if child.kind() == "parameterized_arguments" {
@@ -443,6 +569,8 @@ fn walk_objc(
                                                     weight: 1.0,
                                                     context: None,
                                                     confidence_score: None,
+                                                    deferred: false,
+                                                    metadata: None,
                                                 });
                                             }
                                             if !tc.goto_next_sibling() {
@@ -493,6 +621,8 @@ fn walk_objc(
                                                         weight: 1.0,
                                                         context: Some("field".to_string()),
                                                         confidence_score: None,
+                                                        deferred: false,
+                                                        metadata: None,
                                                     });
                                                 }
                                             }
@@ -546,6 +676,7 @@ fn walk_objc(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                     ctx.edges.push(Edge {
                         external: false,
@@ -558,6 +689,8 @@ fn walk_objc(
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
                 let mut cur = node.walk();
@@ -611,6 +744,7 @@ fn walk_objc(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -624,7 +758,52 @@ fn walk_objc(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
+                // Adopted protocols: `@protocol Derived <Base, Other>` nest under a
+                // `protocol_reference_list` (distinct from the
+                // `parameterized_arguments` used by @interface adoption), whose
+                // members are direct `identifier` children — emit `implements` per
+                // adopted protocol (cd3a376).
+                let mut cur2 = node.walk();
+                if cur2.goto_first_child() {
+                    loop {
+                        if cur2.node().kind() == "protocol_reference_list" {
+                            let mut pc = cur2.node().walk();
+                            if pc.goto_first_child() {
+                                loop {
+                                    if pc.node().kind() == "identifier" {
+                                        let base_nid =
+                                            ctx.ensure_named_node(read_text(pc.node(), source));
+                                        if base_nid != proto_nid {
+                                            ctx.edges.push(Edge {
+                                                external: false,
+                                                source: proto_nid.clone(),
+                                                target: base_nid,
+                                                relation: "implements".to_string(),
+                                                confidence: "EXTRACTED".to_string(),
+                                                source_file: ctx.str_path.to_string(),
+                                                source_location: Some(format!("L{line}")),
+                                                weight: 1.0,
+                                                context: None,
+                                                confidence_score: None,
+                                                deferred: false,
+                                                metadata: None,
+                                            });
+                                        }
+                                    }
+                                    if !pc.goto_next_sibling() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !cur2.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
@@ -678,6 +857,7 @@ fn walk_objc(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -691,10 +871,16 @@ fn walk_objc(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 if t == "method_definition" {
-                    ctx.method_bodies
-                        .push((method_nid, node.start_byte(), node.end_byte()));
+                    ctx.method_bodies.push((
+                        method_nid,
+                        node.start_byte(),
+                        node.end_byte(),
+                        container.to_string(),
+                    ));
                 }
             }
         }
@@ -725,13 +911,23 @@ struct ObjcCallCtx<'a> {
     edges: &'a mut Vec<Edge>,
     seen_ids: &'a mut HashSet<String>,
     seen_calls: &'a mut HashSet<(String, String)>,
+    class_method_nids: &'a HashMap<String, HashSet<String>>,
+    seen_accesses: &'a mut HashSet<(String, String)>,
+    /// Deferred message sends for the cross-file Objective-C resolver (#1556).
+    raw_calls: &'a mut Vec<RawCall>,
+    /// File-wide `var -> ClassName` table for typing `[f doThing]` receivers.
+    objc_type_table: &'a HashMap<String, String>,
 }
 
+// Linear message-send/dot-access dispatch; crossed 100 lines only because each
+// of its many `Edge` literals gained a `metadata: None` field (#1562).
+#[allow(clippy::too_many_lines)]
 fn walk_calls_objc(
     ctx: &mut ObjcCallCtx<'_>,
     node: tree_sitter::Node<'_>,
     source: &[u8],
     caller_nid: &str,
+    container_nid: &str,
     body_start: usize,
     body_end: usize,
 ) {
@@ -775,6 +971,8 @@ fn walk_calls_objc(
                     weight: 1.0,
                     context: Some("type".to_string()),
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }
@@ -820,19 +1018,188 @@ fn walk_calls_objc(
                             weight: 1.0,
                             context: Some("call".to_string()),
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                 }
             }
+            // #1556: also emit a raw_call so the cross-file resolver can type the
+            // receiver and link to a method in ANOTHER file. Only a bare
+            // identifier receiver (`f`, `self`, `Foo`) can be typed; a nested send
+            // (`[[Foo alloc] init]`) has no simple receiver and is left to the
+            // alloc/init `references` edge above.
+            if let Some(recv) = node.child_by_field_name("receiver")
+                && recv.kind() == "identifier"
+            {
+                let recv_text = read_text(recv, source).to_string();
+                let line = node.start_position().row + 1;
+                let receiver_type = ctx.objc_type_table.get(&recv_text).cloned();
+                ctx.raw_calls.push(RawCall {
+                    caller_nid: caller_nid.to_string(),
+                    callee: method_name.clone(),
+                    is_member_call: true,
+                    source_file: str_path.to_string(),
+                    source_location: format!("L{line}"),
+                    receiver: Some(recv_text),
+                    receiver_type,
+                    lang: Some(RawCallLang::ObjC),
+                    ..Default::default()
+                });
+            }
         }
+    }
+    if node.kind() == "field_expression" {
+        emit_objc_dot_access(ctx, node, source, caller_nid, container_nid);
+    }
+    if node.kind() == "selector_expression" {
+        emit_objc_selector_call(ctx, node, source, caller_nid);
     }
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_objc(ctx, cur.node(), source, caller_nid, body_start, body_end);
+            walk_calls_objc(
+                ctx,
+                cur.node(),
+                source,
+                caller_nid,
+                container_nid,
+                body_start,
+                body_end,
+            );
             if !cur.goto_next_sibling() {
                 break;
             }
         }
+    }
+}
+
+/// Emit an `accesses` edge for a DIRECT dot-syntax property access (`self.name`),
+/// resolved to a sibling method of the SAME class by EXACT node id (a method id
+/// is `make_id(container, name)`; a suffix match would mis-resolve `self.name` to
+/// a sibling `-surname` and suppress the real `-name`). Only a `self` receiver
+/// maps to a sibling — see the guard below. Mirrors graphify-py `field_expression`
+/// (#1475), tightened for correctness.
+fn emit_objc_dot_access(
+    ctx: &mut ObjcCallCtx<'_>,
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_nid: &str,
+    container_nid: &str,
+) {
+    let str_path = ctx.str_path;
+    // Only a DIRECT `self.field` access maps to a sibling method. In a chain like
+    // `self.product.name` the outer receiver is `self.product` (not `self`), so
+    // `name` belongs to product's type — resolving it against this class would be
+    // a false edge; the inner `self.product` is handled by the recursive walk.
+    // DIVERGENCE from graphify-py, which resolves every trailing field name
+    // against the enclosing class and so mis-attributes chained / `other.x` access.
+    let receiver_is_self = node
+        .child_by_field_name("argument")
+        .or_else(|| node.child(0))
+        .is_some_and(|r| read_text(r, source).trim() == "self");
+    if !receiver_is_self {
+        return;
+    }
+    // Collect sibling targets first (immutable borrow of class_method_nids),
+    // then emit (mutable borrow of edges/seen_accesses).
+    let mut targets: Vec<String> = Vec::new();
+    if let Some(siblings) = ctx.class_method_nids.get(container_nid) {
+        let mut cur = node.walk();
+        if cur.goto_first_child() {
+            loop {
+                if cur.node().kind() == "field_identifier" {
+                    let target = make_id(&[container_nid, read_text(cur.node(), source)]);
+                    if siblings.contains(&target) && target != caller_nid {
+                        targets.push(target);
+                    }
+                }
+                if !cur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+    let line = node.start_position().row + 1;
+    for target in targets {
+        if ctx
+            .seen_accesses
+            .insert((caller_nid.to_string(), target.clone()))
+        {
+            ctx.edges.push(Edge {
+                external: false,
+                source: caller_nid.to_string(),
+                target,
+                relation: "accesses".to_string(),
+                confidence: "EXTRACTED".to_string(),
+                source_file: str_path.to_string(),
+                source_location: Some(format!("L{line}")),
+                weight: 1.0,
+                context: None,
+                confidence_score: None,
+                deferred: false,
+                metadata: None,
+            });
+        }
+    }
+}
+
+/// Emit a `calls` edge for a `@selector(name)` expression, resolved by EXACT
+/// selector name against every class's methods, but only when exactly one method
+/// matches and it is not the caller (no ambiguous fan-out, no self-call). Note:
+/// matches are counted BEFORE rejecting the caller — a selector present on both
+/// the caller and one other class is ambiguous and emits nothing (DIVERGENCE from
+/// graphify-py, which excludes the caller first and would emit a false edge to
+/// the other). Mirrors graphify-py `selector_expression` (#1475).
+fn emit_objc_selector_call(
+    ctx: &mut ObjcCallCtx<'_>,
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_nid: &str,
+) {
+    let str_path = ctx.str_path;
+    let mut sel = String::new();
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == "identifier" {
+                sel.push_str(read_text(cur.node(), source));
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    if sel.is_empty() {
+        return;
+    }
+    let mut matches: Vec<String> = Vec::new();
+    for (container, methods) in ctx.class_method_nids {
+        let cand = make_id(&[container, &sel]);
+        if methods.contains(&cand) {
+            matches.push(cand);
+        }
+    }
+    if matches.len() == 1
+        && matches[0] != caller_nid
+        && ctx
+            .seen_calls
+            .insert((caller_nid.to_string(), matches[0].clone()))
+    {
+        let line = node.start_position().row + 1;
+        ctx.edges.push(Edge {
+            external: false,
+            source: caller_nid.to_string(),
+            target: matches.remove(0),
+            relation: "calls".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            source_file: str_path.to_string(),
+            source_location: Some(format!("L{line}")),
+            weight: 1.0,
+            context: Some("call".to_string()),
+            confidence_score: None,
+            deferred: false,
+            metadata: None,
+        });
     }
 }

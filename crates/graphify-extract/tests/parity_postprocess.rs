@@ -18,6 +18,7 @@ fn n(id: &str, label: &str, source_file: &str) -> Node {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }
 }
 
@@ -33,6 +34,8 @@ fn e(src: &str, tgt: &str, source_file: &str, relation: &str) -> Edge {
         context: None,
         confidence_score: None,
         external: false,
+        deferred: false,
+        metadata: None,
     }
 }
 
@@ -46,6 +49,8 @@ fn raw(caller: &str, callee: &str, source_file: &str) -> RawCall {
         source_location: String::new(),
         receiver: None,
         receiver_type: None,
+        lang: None,
+        ..Default::default()
     }
 }
 

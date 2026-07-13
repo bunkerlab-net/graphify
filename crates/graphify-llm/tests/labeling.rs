@@ -209,6 +209,26 @@ fn label_communities_malformed_errors() {
 }
 
 #[test]
+fn label_communities_salvages_truncated_reply() {
+    // #1690: a reply truncated mid-object (invalid JSON) still yields its
+    // complete `"cid":"name"` pairs; the unfinished entry falls back to its
+    // placeholder rather than losing the whole batch to a parse error.
+    let (node_labels, communities) = graph();
+    let gods = IndexSet::new();
+    let labels = label_communities_with(
+        &communities,
+        &node_labels,
+        &gods,
+        "gemini",
+        LabelOptions::default(),
+        |_, _, _, _| Ok(r#"{"0":"Orders","1":"Pay"#.to_string()),
+    )
+    .expect("salvage yields at least one label");
+    assert_eq!(labels[&0], "Orders");
+    assert_eq!(labels[&1], "Community 1");
+}
+
+#[test]
 fn generate_community_labels_degrades_on_error() {
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
@@ -241,7 +261,7 @@ fn generate_community_labels_no_backend() {
 
     let (node_labels, communities) = graph();
     let gods = IndexSet::new();
-    let (labels, source) =
+    let (labels, source, _usage) =
         generate_community_labels(&communities, &node_labels, &gods, None, None, true, 4, 100);
     assert_eq!(source, "placeholder");
     assert_eq!(labels[&0], "Community 0");
@@ -325,7 +345,7 @@ fn label_communities_real_path_via_custom_provider() {
     assert_eq!(labels[&0], "Orders");
     assert_eq!(labels[&1], "Payments");
 
-    let (labels, source) = generate_community_labels(
+    let (labels, source, _usage) = generate_community_labels(
         &communities,
         &node_labels,
         &gods,

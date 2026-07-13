@@ -8,9 +8,9 @@ use std::time::Duration;
 use graphify_security::{
     MAX_FETCH_BYTES, MAX_GRAPH_FILE_BYTES, MAX_TEXT_BYTES, METADATA_MAX_LIST_ITEMS,
     METADATA_MAX_VALUE_LEN, SecurityError, check_graph_file_size_cap,
-    check_graph_file_size_cap_with, safe_fetch, sanitize_label, sanitize_metadata,
-    sanitize_metadata_map, sanitize_metadata_string, sanitize_metadata_value, test_support,
-    validate_graph_path, validate_url,
+    check_graph_file_size_cap_with, max_graph_file_bytes, safe_fetch, sanitize_label,
+    sanitize_metadata, sanitize_metadata_map, sanitize_metadata_string, sanitize_metadata_value,
+    test_support, validate_graph_path, validate_url,
 };
 use serde_json::{Map, Value, json};
 
@@ -400,6 +400,54 @@ fn graph_size_cap_missing_file_silently_returns() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let missing = tmp.path().join("does_not_exist.json");
     check_graph_file_size_cap(&missing).expect("missing file silently ok");
+}
+
+// ---------------------------------------------------------------------------
+// GRAPHIFY_MAX_GRAPH_BYTES parsing via the public entry point (#1722)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial_test::serial(graphify_max_graph_bytes_env)]
+fn max_graph_file_bytes_env_unset_is_default() {
+    let _g = EnvGuard::unset("GRAPHIFY_MAX_GRAPH_BYTES");
+    assert_eq!(max_graph_file_bytes(), MAX_GRAPH_FILE_BYTES);
+}
+
+#[test]
+#[serial_test::serial(graphify_max_graph_bytes_env)]
+fn max_graph_file_bytes_env_parses_binary_suffixes() {
+    let _g = EnvGuard::set("GRAPHIFY_MAX_GRAPH_BYTES", "2GB");
+    assert_eq!(max_graph_file_bytes(), 2 * 1024 * 1024 * 1024);
+    let _g = EnvGuard::set("GRAPHIFY_MAX_GRAPH_BYTES", "640mb");
+    assert_eq!(max_graph_file_bytes(), 640 * 1024 * 1024);
+}
+
+#[test]
+#[serial_test::serial(graphify_max_graph_bytes_env)]
+fn max_graph_file_bytes_env_unparseable_falls_back_to_default() {
+    // Mirrors test_security.py::test_max_graph_bytes_unparseable_falls_back.
+    for raw in ["not-a-number", "1.5GB", "0x10", "640KB"] {
+        let _g = EnvGuard::set("GRAPHIFY_MAX_GRAPH_BYTES", raw);
+        assert_eq!(
+            max_graph_file_bytes(),
+            MAX_GRAPH_FILE_BYTES,
+            "value {raw:?} should fall back to the default cap"
+        );
+    }
+}
+
+#[test]
+#[serial_test::serial(graphify_max_graph_bytes_env)]
+fn max_graph_file_bytes_env_nonpositive_falls_back_to_default() {
+    // Mirrors test_security.py::test_max_graph_bytes_nonpositive_falls_back.
+    for raw in ["0", "-1", "-4GB"] {
+        let _g = EnvGuard::set("GRAPHIFY_MAX_GRAPH_BYTES", raw);
+        assert_eq!(
+            max_graph_file_bytes(),
+            MAX_GRAPH_FILE_BYTES,
+            "value {raw:?} should fall back to the default cap"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

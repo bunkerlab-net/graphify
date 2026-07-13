@@ -54,6 +54,25 @@ pub(crate) fn cmd_cluster_only(
         || path.join(crate::cli::graphify_out_dir()).join("graph.json"),
         std::path::Path::to_path_buf,
     );
+    // #1747 Case 2: where the re-clustered outputs (graph.json, GRAPH_REPORT.md,
+    // labels, analysis, html) land. When `--graph` points INSIDE a graphify-out/
+    // dir (another project/tenant's output), write beside it — not into a stray
+    // graphify-out/ in the CWD. But an arbitrary `--graph` (e.g. an archived
+    // `backup/graph.json`, #934) falls back to `<path>/graphify-out`, the
+    // restore-into-place workflow. The default (no `--graph`) already resolves
+    // graph_path under `<path>/graphify-out`, so both branches agree there.
+    let out_dir_name = crate::cli::graphify_out_dir();
+    let out_base: std::path::PathBuf = if graph.is_some()
+        && out_dir_name.file_name().is_some()
+        && graph_path.parent().and_then(std::path::Path::file_name) == out_dir_name.file_name()
+    {
+        graph_path
+            .parent()
+            .map_or_else(|| path.join(&out_dir_name), std::path::Path::to_path_buf)
+    } else {
+        path.join(&out_dir_name)
+    };
+    std::fs::create_dir_all(&out_base)?;
     eprintln!("[1/4] loading {} ...", graph_path.display());
     let g = load_graph(&graph_path)?;
     eprintln!(
@@ -131,19 +150,6 @@ pub(crate) fn cmd_cluster_only(
         communities.clone()
     };
 
-    eprintln!("[3/4] writing report ...");
-    let analysis = build_analysis(&g, &report_communities, path);
-    let report_path = graph_path.with_file_name("GRAPH_REPORT.md");
-    graphify_report::write_report(&g, &analysis, &report_path)?;
-    eprintln!("      wrote {}", report_path.display());
-
-    // Persist the analysis sidecar for downstream exports (wiki, obsidian, etc.).
-    // Mirrors Python's `cluster-only` path which rewrites `.graphify_analysis.json`.
-    let analysis_path = graph_path.with_file_name(".graphify_analysis.json");
-    std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
-    eprintln!("      wrote {}", analysis_path.display());
-    stages.mark("analyze");
-
     // Resolve `.graphify_labels.json` so the HTML viz and downstream exports can
     // find community labels. Three paths, checked in this order:
     //   1. labels file exists & not forced & we are NOT LLM-naming gaps — i.e.
@@ -159,8 +165,9 @@ pub(crate) fn cmd_cluster_only(
     //      LLM call.
     //   3. otherwise → auto-name with the configured backend (#1097); degrades
     //      to placeholders on no-backend/error.
-    let labels_path = graph_path.with_file_name(".graphify_labels.json");
+    let labels_path = out_base.join(".graphify_labels.json");
     let mut skip_label_write = false;
+    let mut label_usage = graphify_llm::LabelUsage::default();
     let labels: indexmap::IndexMap<i64, String> =
         if labels_path.exists() && !opts.force_relabel && (!opts.missing_only || opts.no_label) {
             match read_existing_labels(&labels_path) {
@@ -227,7 +234,7 @@ pub(crate) fn cmd_cluster_only(
                 eprintln!("Labeling communities...");
                 let node_labels = node_label_map(&g);
                 let gods = god_node_ids(&g);
-                let (mut labels, _source) = graphify_llm::generate_community_labels(
+                let (mut labels, _source, usage) = graphify_llm::generate_community_labels(
                     &to_label,
                     &node_labels,
                     &gods,
@@ -237,6 +244,7 @@ pub(crate) fn cmd_cluster_only(
                     opts.max_concurrency,
                     opts.batch_size,
                 );
+                label_usage = usage;
                 // Keep existing good labels for communities we skipped, then backfill
                 // any still-missing community with a placeholder.
                 for (cid, name) in existing {
@@ -252,11 +260,30 @@ pub(crate) fn cmd_cluster_only(
         };
     stages.mark("label");
 
+    eprintln!("[3/4] writing report ...");
+    let analysis = build_analysis(
+        &g,
+        &report_communities,
+        path,
+        (label_usage.input, label_usage.output),
+    );
+    let report_path = out_base.join("GRAPH_REPORT.md");
+    graphify_report::write_report(&g, &analysis, &report_path, false)?;
+    eprintln!("      wrote {}", report_path.display());
+
+    // Persist the analysis sidecar for downstream exports (wiki, obsidian, etc.).
+    // Mirrors Python's `cluster-only` path which rewrites `.graphify_analysis.json`.
+    let analysis_path = out_base.join(".graphify_analysis.json");
+    std::fs::write(&analysis_path, serde_json::to_string_pretty(&analysis)?)?;
+    eprintln!("      wrote {}", analysis_path.display());
+    stages.mark("analyze");
+
     // Refresh graph.json so node community attrs match the new partition and
     // carry the human community_name labels resolved above. Mirrors Python
     // `__main__.py:3283` (`to_json(G, communities, ..., community_labels=labels)`).
-    graphify_export::to_json(&g, &communities, &graph_path, true, None, Some(&labels))?;
-    eprintln!("      wrote {}", graph_path.display());
+    let graph_out = out_base.join("graph.json");
+    graphify_export::to_json(&g, &communities, &graph_out, true, None, Some(&labels))?;
+    eprintln!("      wrote {}", graph_out.display());
 
     if skip_label_write {
         eprintln!(
@@ -275,7 +302,7 @@ pub(crate) fn cmd_cluster_only(
         eprintln!("      wrote {}", labels_path.display());
     }
 
-    let html_path = graph_path.with_file_name("graph.html");
+    let html_path = out_base.join("graph.html");
     if no_viz {
         if html_path.exists() {
             std::fs::remove_file(&html_path)?;

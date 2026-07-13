@@ -40,10 +40,11 @@ fn sensitive_does_not_flag_tokenize_py() {
     assert!(!is_sensitive(Path::new("tokenize.py")));
 }
 
-/// Files literally named `passwords.py` are secrets, regardless of extension.
+/// `passwords.py` is a programming-language SOURCE file (a module, not a secret
+/// store), so it is no longer flagged — only data/config secret stores are (#1666).
 #[test]
-fn sensitive_flags_passwords_py() {
-    assert!(is_sensitive(Path::new("passwords.py")));
+fn sensitive_does_not_flag_passwords_py() {
+    assert!(!is_sensitive(Path::new("passwords.py")));
 }
 
 /// `.ssh/` directory contents are always sensitive — SSH keys.

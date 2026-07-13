@@ -43,3 +43,12 @@ fn file_stem_root_level() {
     let p = std::path::PathBuf::from("models.py");
     assert_eq!(file_stem(&p), "models");
 }
+/// A path with no file name (`Path(".")` — a `source_file` equal to the scan
+/// root) has no per-file stem, so `file_stem` returns "" instead of raising or
+/// leaking `.` into a node id (#1618).
+#[test]
+fn file_stem_handles_dot_path() {
+    use std::path::Path;
+    assert_eq!(file_stem(Path::new(".")), "");
+    assert_eq!(file_stem(Path::new("src/foo.py")), "src/foo");
+}

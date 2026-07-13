@@ -383,3 +383,65 @@ fn extract_corpus_parallel_empty_files() {
     assert!(resp.nodes.is_empty());
     assert_eq!(failed, 0);
 }
+// ── #1632: parallel merge is deterministic (submission order, not completion) ──
+
+#[test]
+fn extract_corpus_parallel_merge_order_is_deterministic() {
+    // Each file gets a distinct node id via a body-matched mock; with 4 chunks
+    // running concurrently, completion order is nondeterministic. The merged
+    // node order must nonetheless be stable run-to-run (submission order), so
+    // graph.json is byte-identical across runs (#1632).
+    let mut server = mockito::Server::new();
+    for i in 0..4 {
+        let body = json!({
+            "choices": [{
+                "message": {"content": format!("{{\"nodes\":[{{\"id\":\"node_from_f{i}\"}}],\"edges\":[]}}")},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+        })
+        .to_string();
+        server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(format!("def f{i}")))
+            .with_status(200)
+            .with_body(body)
+            .expect_at_least(1)
+            .create();
+    }
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let files = write_files(&tmp, 4);
+    let cfg = CorpusConfig {
+        backend: "openai",
+        api_key: Some("k"),
+        model: Some("m"),
+        root: tmp.path(),
+        chunk_size: 1,
+        token_budget: None,
+        max_concurrency: 4,
+        max_retry_depth: 1,
+        deep_mode: false,
+    };
+
+    let node_ids = |resp: &graphify_llm::LlmResponse| -> Vec<String> {
+        resp.nodes
+            .iter()
+            .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(str::to_string))
+            .collect()
+    };
+
+    let (resp1, _) = extract_corpus_parallel(&files, &cfg, None);
+    let (resp2, _) = extract_corpus_parallel(&files, &cfg, None);
+    let order1 = node_ids(&resp1);
+    let order2 = node_ids(&resp2);
+    assert_eq!(order1.len(), 4, "all four chunks should merge: {order1:?}");
+    assert_eq!(
+        order1, order2,
+        "merge order must be identical across runs (deterministic)"
+    );
+}

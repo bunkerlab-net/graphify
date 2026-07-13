@@ -34,6 +34,7 @@ pub(crate) fn add_node(
             source_location: Some(format!("L{line}")),
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
     }
 }
@@ -52,6 +53,22 @@ pub(crate) fn add_edge(
     context: Option<&str>,
     edges: &mut Vec<Edge>,
 ) {
+    add_edge_meta(src, tgt, relation, line, str_path, context, None, edges);
+}
+
+/// [`add_edge`] carrying optional edge `metadata` (e.g. C# `ref_token` /
+/// `qualified` / `ref_qualifier`, #1562).
+#[allow(clippy::too_many_arguments)] // edge fields; grouping into a struct would churn every caller
+pub(crate) fn add_edge_meta(
+    src: &str,
+    tgt: &str,
+    relation: &str,
+    line: u32,
+    str_path: &str,
+    context: Option<&str>,
+    metadata: Option<indexmap::IndexMap<String, serde_json::Value>>,
+    edges: &mut Vec<Edge>,
+) {
     edges.push(Edge {
         external: false,
         source: src.to_string(),
@@ -63,6 +80,8 @@ pub(crate) fn add_edge(
         weight: 1.0,
         context: context.map(str::to_string),
         confidence_score: None,
+        deferred: false,
+        metadata,
     });
 }
 
@@ -188,6 +207,7 @@ pub(crate) fn ensure_named_node(
             source_location: Some(String::new()),
             metadata: None,
             origin_file: Some(str_path.to_string()),
+            node_type: None,
         });
     }
     nid2

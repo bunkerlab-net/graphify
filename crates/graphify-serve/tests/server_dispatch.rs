@@ -27,6 +27,19 @@ fn write_graph(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
+/// Write a single distinctly-labelled node graph to `dir/graphify-out/graph.json`.
+fn write_graph_labeled(dir: &std::path::Path, id: &str, label: &str) -> std::path::PathBuf {
+    let out = dir.join("graphify-out");
+    fs::create_dir_all(&out).expect("create_dir_all");
+    let graph = json!({
+        "nodes": [{"id": id, "label": label, "source_file": "x.py", "community": 0}],
+        "edges": []
+    });
+    let path = out.join("graph.json");
+    fs::write(&path, serde_json::to_string(&graph).expect("fixture")).expect("write");
+    path
+}
+
 /// Run the server with a scripted input and return all parsed JSON-RPC responses.
 async fn run_with_input(graph_path: &std::path::Path, input: &str) -> Vec<Value> {
     // Use two separate duplex streams: one for input (test → server), one for output.
@@ -206,4 +219,92 @@ async fn server_calls_god_nodes_tool() {
         .as_str()
         .expect("test invariant");
     assert!(text.starts_with("God nodes"));
+}
+
+#[tokio::test]
+async fn server_tools_carry_optional_project_path() {
+    // #1594: every tool schema gains an optional `project_path` string.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let gp = write_graph(tmp.path());
+    let input = "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/list\"}\n";
+    let responses = run_with_input(&gp, input).await;
+    let tools = responses[0]["result"]["tools"].as_array().expect("array");
+    assert!(!tools.is_empty());
+    for t in tools {
+        assert_eq!(
+            t["inputSchema"]["properties"]["project_path"]["type"].as_str(),
+            Some("string"),
+            "tool {} missing optional project_path",
+            t["name"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn server_project_path_routes_to_that_projects_graph() {
+    // #1594: project_path routes a call to that project's graph; omitting it
+    // hits the default graph the server was started with.
+    let tmp1 = tempfile::tempdir().expect("tempdir");
+    let default_gp = write_graph(tmp1.path()); // default graph has node "alpha"
+    let tmp2 = tempfile::tempdir().expect("tempdir");
+    write_graph_labeled(tmp2.path(), "g1", "gamma");
+    let proj = tmp2.path().to_string_lossy().into_owned();
+    let input = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_node\",\"arguments\":{{\"label\":\"gamma\",\"project_path\":{proj:?}}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_node\",\"arguments\":{{\"label\":\"alpha\"}}}}}}\n"
+    );
+    let responses = run_with_input(&default_gp, &input).await;
+    let text_of = |id: i64| -> String {
+        responses
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| {
+                r["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    };
+    assert!(
+        text_of(21).contains("gamma"),
+        "project_path routed: {}",
+        text_of(21)
+    );
+    assert!(
+        text_of(22).contains("alpha"),
+        "default graph: {}",
+        text_of(22)
+    );
+}
+
+#[tokio::test]
+async fn server_bad_project_path_errors_without_killing_server() {
+    // #1594: a bad project_path yields a tool error, not a crash — the server
+    // still answers the next call against the default graph.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let gp = write_graph(tmp.path());
+    let input = "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"get_node\",\"arguments\":{\"label\":\"alpha\",\"project_path\":\"/no/such/project/xyz\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{\"name\":\"get_node\",\"arguments\":{\"label\":\"alpha\"}}}\n";
+    let responses = run_with_input(&gp, input).await;
+    let text_of = |id: i64| -> String {
+        responses
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| {
+                r["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    };
+    assert!(
+        text_of(23).to_lowercase().contains("error"),
+        "bad project_path should return an error text: {}",
+        text_of(23)
+    );
+    assert!(
+        text_of(24).contains("alpha"),
+        "server still serving default: {}",
+        text_of(24)
+    );
 }

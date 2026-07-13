@@ -190,9 +190,12 @@ pub fn build_ddl(catalog: &PgCatalog) -> String {
 #[must_use]
 pub fn introspect_catalog(catalog: &PgCatalog, host: &str, dbname: &str) -> FileResult {
     let ddl = build_ddl(catalog);
-    // `Path::join` collapses the scheme's `//` to `/`, matching Python's
-    // `str(Path("postgresql://host/db"))` == "postgresql:/host/db".
-    let virtual_path = PathBuf::from("postgresql:").join(host).join(dbname);
+    // Build the virtual URI with explicit posix `/` separators (never via
+    // `Path::join`, which inserts the platform separator and yields the invalid
+    // `postgresql:\host\db` on Windows). Mirrors graphify-py's #1672 switch to
+    // `PurePosixPath`: the scheme's `//` collapses to a single `/`, so the path
+    // is `postgresql:/host/db` on every platform.
+    let virtual_path = PathBuf::from(format!("postgresql:/{host}/{dbname}"));
     extract_sql_with_content(&virtual_path, ddl.as_bytes())
 }
 
@@ -292,31 +295,40 @@ fn pg_query_catalog(client: &mut postgres::Client) -> Result<PgCatalog, PgIntros
 
     let foreign_keys = q(
         client,
-        // Cast the aggregated `column_name`s to `text`: they are
-        // `information_schema.sql_identifier` (a domain over `name`), and
-        // `ARRAY_AGG` over a domain yields an array whose element type the
+        // #1746: read foreign keys from `pg_catalog.pg_constraint`, NOT
+        // `information_schema.referential_constraints` — that view only exposes
+        // constraints where the current user has WRITE access to the referencing
+        // table, so a read-only introspection role saw zero FK rows (while
+        // tables/views/routines still appeared) and the graph silently lost
+        // every `references` edge. pg_constraint is world-readable and keyed by
+        // constraint oid, which also avoids cross-matching same-named
+        // constraints on sibling tables. Composite-FK column order is preserved
+        // via UNNEST(conkey/confkey) WITH ORDINALITY.
+        //
+        // The `att.attname::text` casts mirror the old query's `::text`: attname
+        // is the `name` type, and ARRAY_AGG over it yields a `name[]` the
         // postgres client cannot map onto `Vec<String>` (it deserializes only
-        // text/varchar/name arrays). The per-element `::text` cast makes the
-        // result a plain `text[]`. Without it, introspecting any database that
-        // has a foreign key fails at runtime with "error deserializing column".
-        "SELECT tc.constraint_name, kcu1.table_schema, kcu1.table_name, \
-         ARRAY_AGG(kcu1.column_name::text ORDER BY kcu1.ordinal_position) AS columns, \
-         kcu2.table_schema AS foreign_table_schema, kcu2.table_name AS foreign_table_name, \
-         ARRAY_AGG(kcu2.column_name::text ORDER BY kcu2.ordinal_position) AS foreign_columns \
-         FROM information_schema.table_constraints AS tc \
-         JOIN information_schema.referential_constraints AS rc \
-           ON tc.constraint_name = rc.constraint_name AND tc.table_schema = rc.constraint_schema \
-         JOIN information_schema.key_column_usage AS kcu1 \
-           ON tc.constraint_name = kcu1.constraint_name AND tc.table_schema = kcu1.table_schema \
-         JOIN information_schema.key_column_usage AS kcu2 \
-           ON rc.unique_constraint_name = kcu2.constraint_name \
-           AND rc.unique_constraint_schema = kcu2.table_schema \
-           AND kcu1.position_in_unique_constraint = kcu2.ordinal_position \
-         WHERE tc.constraint_type = 'FOREIGN KEY' \
-           AND tc.table_schema NOT IN ('pg_catalog', 'information_schema') \
-         GROUP BY tc.constraint_name, kcu1.table_schema, kcu1.table_name, \
-           kcu2.table_schema, kcu2.table_name \
-         ORDER BY kcu1.table_schema, kcu1.table_name",
+        // text/varchar/name arrays reliably); the per-element cast makes the
+        // result a plain `text[]`.
+        "SELECT con.conname AS constraint_name, ns.nspname AS table_schema, \
+         rel.relname AS table_name, \
+         (SELECT ARRAY_AGG(att.attname::text ORDER BY k.ord) \
+            FROM UNNEST(con.conkey) WITH ORDINALITY AS k(attnum, ord) \
+            JOIN pg_catalog.pg_attribute att \
+              ON att.attrelid = con.conrelid AND att.attnum = k.attnum) AS columns, \
+         fns.nspname AS foreign_table_schema, frel.relname AS foreign_table_name, \
+         (SELECT ARRAY_AGG(att.attname::text ORDER BY k.ord) \
+            FROM UNNEST(con.confkey) WITH ORDINALITY AS k(attnum, ord) \
+            JOIN pg_catalog.pg_attribute att \
+              ON att.attrelid = con.confrelid AND att.attnum = k.attnum) AS foreign_columns \
+         FROM pg_catalog.pg_constraint con \
+         JOIN pg_catalog.pg_class rel ON rel.oid = con.conrelid \
+         JOIN pg_catalog.pg_namespace ns ON ns.oid = rel.relnamespace \
+         JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid \
+         JOIN pg_catalog.pg_namespace fns ON fns.oid = frel.relnamespace \
+         WHERE con.contype = 'f' \
+           AND ns.nspname NOT IN ('pg_catalog', 'information_schema') \
+         ORDER BY ns.nspname, rel.relname, con.conname",
     )?
     .iter()
     .map(|r| PgForeignKey {

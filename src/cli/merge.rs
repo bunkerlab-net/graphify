@@ -32,7 +32,10 @@ pub(crate) fn read_graph_capped(path: &std::path::Path) -> Result<serde_json::Va
 /// Union-merge two graph JSON values, deduplicating nodes by id (last writer wins).
 ///
 /// Edges and hyperedges from both graphs are concatenated without deduplication.
-/// Mirrors the Python `_merge_graphs` helper in `__main__.py`.
+/// Mirrors the Python `_merge_graphs` helper in `__main__.py`. Operating on raw
+/// JSON arrays (not networkx graphs) makes this immune to the #1606 "all graphs
+/// must be directed or undirected" mismatch: inputs may freely mix
+/// directed/undirected/multi shapes.
 pub(crate) fn merge_two_graphs(
     a: serde_json::Value,
     b: serde_json::Value,
@@ -136,6 +139,67 @@ fn repo_tag_from_path(graph_path: &std::path::Path) -> String {
         )
 }
 
+/// Return a unique repo tag per input graph for `merge-graphs` (#1729).
+///
+/// The naive tag from [`repo_tag_from_path`] (the `graphify-out` parent dir
+/// name) is not unique across inputs: `src/graphify-out` and
+/// `frontend/src/graphify-out` both yield `src`, so prefixing both node sets
+/// with `src::` collides same-stem nodes and silently merges unrelated
+/// entities. Colliding tags are widened with their own parent dir
+/// (`frontend_src`); any that still collide get an index suffix (`tag-2`) so no
+/// two graphs ever share a prefix.
+fn distinct_repo_tags(graph_paths: &[std::path::PathBuf]) -> Vec<String> {
+    use std::path::Path;
+    // `graphify-out/..` → the repo dir (parent of the `graphify-out` dir).
+    let repo_dirs: Vec<&Path> = graph_paths
+        .iter()
+        .map(|p| p.parent().and_then(Path::parent).unwrap_or(Path::new("")))
+        .collect();
+    let name_of = |d: &Path| -> String {
+        d.file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("repo")
+            .to_string()
+    };
+    let mut tags: Vec<String> = repo_dirs.iter().map(|&d| name_of(d)).collect();
+    // Widen with the grandparent dir when the bare names collide.
+    let distinct = tags.iter().collect::<std::collections::HashSet<_>>().len();
+    if distinct != tags.len() {
+        tags = repo_dirs
+            .iter()
+            .map(|&d| {
+                let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let parent = d
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if !parent.is_empty() && !name.is_empty() {
+                    format!("{parent}_{name}")
+                } else if name.is_empty() {
+                    "repo".to_string()
+                } else {
+                    name.to_string()
+                }
+            })
+            .collect();
+    }
+    // Index-suffix any remaining duplicates so every prefix is distinct.
+    let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    tags.into_iter()
+        .map(|t| {
+            let count = seen.entry(t.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                t
+            } else {
+                format!("{t}-{count}")
+            }
+        })
+        .collect()
+}
+
 /// Prefix every node id (and matching edge endpoints) with `{tag}::` so that
 /// cross-repo merges do not collide on shared names like `main` or `init`.
 /// Mirrors `graphify_build::prefix_graph_for_global` but operates on the raw
@@ -173,9 +237,9 @@ fn prefix_node_ids(graph_value: &mut serde_json::Value, tag: &str) {
 
 /// Merge two or more graph JSON files into a single cross-repo graph.
 ///
-/// Each graph's node ids are prefixed with `<repo>::` (derived from the
-/// graph's `parent.parent.name`, matching Python's convention) before the
-/// union-merge so cross-repo merges do not collide. Writes the combined
+/// Each graph's node ids are prefixed with a distinct `<repo>::` tag (via
+/// [`distinct_repo_tags`], #1729) before the union-merge, so cross-repo merges
+/// never collide even when two inputs share a `graphify-out` parent name. Writes the combined
 /// result to `out` (defaulting to `graphify-out/merged-graph.json`).
 pub(crate) fn cmd_merge_graphs(
     graphs: &[std::path::PathBuf],
@@ -184,13 +248,21 @@ pub(crate) fn cmd_merge_graphs(
     if graphs.len() < 2 {
         anyhow::bail!("merge-graphs requires at least 2 graph files");
     }
+    let tags = distinct_repo_tags(graphs);
+    // Note (to stderr) when the naive `graphify-out` dir names collide, so the
+    // user sees which distinct tags were substituted (#1729).
+    let naive: Vec<String> = graphs.iter().map(|g| repo_tag_from_path(g)).collect();
+    if naive.iter().collect::<std::collections::HashSet<_>>().len() != naive.len() {
+        eprintln!(
+            "  note: repo dir names collide; using distinct tags: {}",
+            tags.join(", ")
+        );
+    }
     let mut merged = read_graph_capped(&graphs[0])?;
-    let first_tag = repo_tag_from_path(&graphs[0]);
-    prefix_node_ids(&mut merged, &first_tag);
-    for g in &graphs[1..] {
+    prefix_node_ids(&mut merged, &tags[0]);
+    for (g, tag) in graphs[1..].iter().zip(&tags[1..]) {
         let mut next = read_graph_capped(g)?;
-        let tag = repo_tag_from_path(g);
-        prefix_node_ids(&mut next, &tag);
+        prefix_node_ids(&mut next, tag);
         merged = merge_two_graphs(merged, next)?;
     }
     let default_out = graphify_out_dir().join("merged-graph.json");

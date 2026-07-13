@@ -167,7 +167,15 @@ pub fn validate_semantic_fragment(fragment: &Value) -> Vec<String> {
                     continue;
                 };
                 validate_semantic_id(&mut errors, &format!("hyperedges[{i}].id"), map.get("id"));
-                let Some(he_nodes) = map.get("nodes").and_then(Value::as_array) else {
+                // Accept alias member keys (`members`/`node_ids`) as the list so
+                // an alias-keyed hyperedge is not rejected (#1561); sanitize/build
+                // fold them onto `nodes`.
+                let he_nodes = map
+                    .get("nodes")
+                    .or_else(|| map.get("members"))
+                    .or_else(|| map.get("node_ids"))
+                    .and_then(Value::as_array);
+                let Some(he_nodes) = he_nodes else {
                     errors.push(format!("hyperedges[{i}].nodes must be a list"));
                     continue;
                 };
@@ -361,7 +369,11 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
         let Some(map) = he.as_object() else {
             continue;
         };
-        let Some(he_nodes) = map.get("nodes").and_then(Value::as_array) else {
+        // Fold alias member keys (`members`/`node_ids`) onto `nodes` before
+        // filtering, so an alias-keyed hyperedge isn't dropped (#1561).
+        let mut he_map = map.clone();
+        normalize_hyperedge_members(&mut he_map);
+        let Some(he_nodes) = he_map.get("nodes").and_then(Value::as_array) else {
             continue;
         };
         let original_len = he_nodes.len();
@@ -373,11 +385,10 @@ pub fn sanitize_semantic_fragment(fragment: &mut Map<String, Value>) {
         if filtered.len() < 2 {
             continue;
         }
-        let mut new_map = map.clone();
         if filtered.len() != original_len {
-            new_map.insert("nodes".to_string(), Value::Array(filtered));
+            he_map.insert("nodes".to_string(), Value::Array(filtered));
         }
-        keep_hyperedges.push(Value::Object(new_map));
+        keep_hyperedges.push(Value::Object(he_map));
     }
 
     fragment.insert("nodes".to_string(), Value::Array(keep_nodes));
@@ -487,4 +498,49 @@ fn append_rationale_attr(node: &mut Map<String, Value>, texts: &[String]) {
         format!("{existing}\n\n{new_text}")
     };
     node.insert("rationale".to_string(), Value::String(merged));
+}
+
+/// Member-list alias keys a hyperedge may use in place of the canonical `nodes`.
+const HE_MEMBER_ALIASES: [&str; 2] = ["members", "node_ids"];
+
+/// Canonicalize a hyperedge's member list onto the `nodes` key, in place (#1561).
+///
+/// Duplicated (not imported) so graphify-semantic stays independent of
+/// graphify-build. If `nodes` is already an array it wins and only stray alias
+/// keys are dropped; otherwise the first alias (`members`, then `node_ids`) that
+/// is an array is moved to `nodes`, deduped preserving order, with a single
+/// stderr WARNING; a non-string member is kept for the validator to flag.
+fn normalize_hyperedge_members(he: &mut Map<String, Value>) {
+    if !he.get("nodes").is_some_and(Value::is_array) {
+        let found = HE_MEMBER_ALIASES
+            .iter()
+            .find_map(|&alias| match he.get(alias) {
+                Some(Value::Array(vals)) => Some((alias, vals.clone())),
+                _ => None,
+            });
+        if let Some((alias, vals)) = found {
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut deduped: Vec<Value> = Vec::with_capacity(vals.len());
+            for ref_v in vals {
+                if let Value::String(s) = &ref_v
+                    && !seen.insert(s.clone())
+                {
+                    continue;
+                }
+                deduped.push(ref_v);
+            }
+            let id = he
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string();
+            he.insert("nodes".to_string(), Value::Array(deduped));
+            eprintln!(
+                "[graphify] WARNING: hyperedge '{id}' uses field '{alias}' instead of 'nodes'; normalizing."
+            );
+        }
+    }
+    for alias in HE_MEMBER_ALIASES {
+        he.remove(alias);
+    }
 }

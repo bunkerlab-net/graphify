@@ -10,11 +10,13 @@ version.workspace = true
 
 [dependencies]
 graphify-build = { workspace = true }
+hex = { workspace = true }
 indexmap = { workspace = true }
 leiden-rs = { version = "0.8", default-features = false, features = ["rayon"] }
 rand = { version = "0.10", features = ["std_rng"] }
 rayon = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }

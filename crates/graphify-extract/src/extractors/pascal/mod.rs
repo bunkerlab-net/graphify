@@ -12,9 +12,9 @@ pub use forms::{extract_delphi_form, extract_lazarus_form};
 pub use package::extract_lazarus_package;
 
 use crate::ids::{file_stem, make_id, make_id1};
-use crate::types::{Edge, FileResult, Node};
+use crate::types::{Edge, FileResult, Node, RawCall};
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -414,6 +414,139 @@ fn lineno(text: &str, offset: usize) -> usize {
 
 // ── Regex-based Pascal extractor ──────────────────────────────────────────────
 
+/// A per-file scoped call resolver for Pascal/Delphi, mirroring Python
+/// `_resolve_pascal_callee_factory`. Resolution order for a call to `name_lower`
+/// from `caller_nid`: (1) a method on the caller's own class, (2) a method on an
+/// ancestor class (BFS up `inherits` edges), (3) a file-level free function,
+/// (4) an unambiguous file-wide match. `None` when ambiguous at every level —
+/// the god-node guard also used by `resolve_ruby_member_calls`.
+struct PascalScopeResolver {
+    class_bases: HashMap<String, Vec<String>>,
+    class_procs: HashMap<String, HashMap<String, Vec<String>>>,
+    module_procs: HashMap<String, Vec<String>>,
+    global_procs: HashMap<String, Vec<String>>,
+    proc_owner: HashMap<String, String>,
+}
+
+impl PascalScopeResolver {
+    fn build(
+        records: &[(String, usize, String, String, String)],
+        edges: &[Edge],
+        module_nid: &str,
+    ) -> Self {
+        let mut class_bases: HashMap<String, Vec<String>> = HashMap::new();
+        for e in edges {
+            if e.relation == "inherits" {
+                class_bases
+                    .entry(e.source.clone())
+                    .or_default()
+                    .push(e.target.clone());
+            }
+        }
+        let mut class_procs: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        let mut module_procs: HashMap<String, Vec<String>> = HashMap::new();
+        let mut global_procs: HashMap<String, Vec<String>> = HashMap::new();
+        let mut proc_owner: HashMap<String, String> = HashMap::new();
+        for (proc_nid, _line, _body, container, name_lower) in records {
+            proc_owner.insert(proc_nid.clone(), container.clone());
+            global_procs
+                .entry(name_lower.clone())
+                .or_default()
+                .push(proc_nid.clone());
+            if container == module_nid {
+                module_procs
+                    .entry(name_lower.clone())
+                    .or_default()
+                    .push(proc_nid.clone());
+            } else {
+                class_procs
+                    .entry(container.clone())
+                    .or_default()
+                    .entry(name_lower.clone())
+                    .or_default()
+                    .push(proc_nid.clone());
+            }
+        }
+        Self {
+            class_bases,
+            class_procs,
+            module_procs,
+            global_procs,
+            proc_owner,
+        }
+    }
+
+    /// The single node id `name_lower` resolves to from `caller_nid`, or `None`
+    /// when unresolvable or ambiguous at every scope level.
+    fn resolve(&self, caller_nid: &str, name_lower: &str) -> Option<&str> {
+        if let Some(owner) = self.proc_owner.get(caller_nid) {
+            match lookup_proc(self.class_procs.get(owner), name_lower) {
+                ProcLookup::Unique(nid) => return Some(nid),
+                ProcLookup::Ambiguous => return None,
+                ProcLookup::Absent => {}
+            }
+            let mut seen_bases: HashSet<&str> = HashSet::new();
+            let mut queue: Vec<&str> = self
+                .class_bases
+                .get(owner)
+                .map(|v| v.iter().map(String::as_str).collect())
+                .unwrap_or_default();
+            let mut head = 0;
+            while head < queue.len() {
+                let base = queue[head];
+                head += 1;
+                if !seen_bases.insert(base) {
+                    continue;
+                }
+                match lookup_proc(self.class_procs.get(base), name_lower) {
+                    ProcLookup::Unique(nid) => return Some(nid),
+                    ProcLookup::Ambiguous => return None,
+                    ProcLookup::Absent => {}
+                }
+                if let Some(bases) = self.class_bases.get(base) {
+                    queue.extend(bases.iter().map(String::as_str));
+                }
+            }
+        }
+        match lookup_flat(self.module_procs.get(name_lower)) {
+            ProcLookup::Unique(nid) => return Some(nid),
+            ProcLookup::Ambiguous => return None,
+            ProcLookup::Absent => {}
+        }
+        // Global tier: only when exactly one candidate anywhere in the file.
+        match self.global_procs.get(name_lower) {
+            Some(v) if v.len() == 1 => Some(v[0].as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// Outcome of looking a proc name up in one scope level.
+enum ProcLookup<'a> {
+    /// Exactly one candidate — resolve to it.
+    Unique(&'a str),
+    /// Name present but owned by multiple procs — bail (god-node guard).
+    Ambiguous,
+    /// Name absent at this level — keep searching outward.
+    Absent,
+}
+
+/// Look `name_lower` up in a class's `name -> [nid]` proc map.
+fn lookup_proc<'a>(
+    class_map: Option<&'a HashMap<String, Vec<String>>>,
+    name_lower: &str,
+) -> ProcLookup<'a> {
+    lookup_flat(class_map.and_then(|m| m.get(name_lower)))
+}
+
+/// Look up in a flat `[nid]` candidate list (module free functions / a class bucket).
+fn lookup_flat(candidates: Option<&Vec<String>>) -> ProcLookup<'_> {
+    match candidates {
+        Some(v) if v.len() == 1 => ProcLookup::Unique(v[0].as_str()),
+        Some(_) => ProcLookup::Ambiguous,
+        None => ProcLookup::Absent,
+    }
+}
 #[allow(clippy::too_many_lines)]
 /// Extract Pascal classes, methods, uses, and inheritance using regex scanning.
 ///
@@ -449,6 +582,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
     };
@@ -471,6 +605,8 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
             weight: 1.0,
             context: context.map(str::to_string),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         }
     };
 
@@ -564,19 +700,35 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
         ));
 
         for base_name in pascal_split_bases(bases_raw) {
-            let resolved = pascal_resolve_class(path, &base_name);
-            let base_nid = resolved.unwrap_or_else(|| make_id1(&base_name));
-            if seen_ids.insert(base_nid.clone()) {
-                nodes.push(Node {
-                    id: base_nid.clone(),
-                    label: base_name.clone(),
-                    file_type: "code".to_string(),
-                    source_file: str_path.clone(),
-                    source_location: Some(format!("L{line}")),
-                    metadata: None,
-                    origin_file: None,
-                });
-            }
+            let same_file_nid = make_id(&[&stem, &base_name]);
+            let base_nid = if seen_ids.contains(&same_file_nid) {
+                // Base class already declared earlier in THIS file — reuse its real
+                // node instead of the cross-file/stub lookup below (which assumes
+                // one-class-per-file and would duplicate a same-file base) (#1739).
+                same_file_nid
+            } else if let Some(resolved) = pascal_resolve_class(path, &base_name) {
+                // Cross-file base found on disk — its real node arrives via THAT
+                // file's own extraction. Do NOT add a stub here: it would carry this
+                // file's source_file (wrong) and collide with the real node under
+                // cross-file id disambiguation, forking one class into two salted ids
+                // and breaking the cross-file `inherits`-chain resolver (#1739).
+                resolved
+            } else {
+                let stub = make_id1(&base_name);
+                if seen_ids.insert(stub.clone()) {
+                    nodes.push(Node {
+                        id: stub.clone(),
+                        label: base_name.clone(),
+                        file_type: "code".to_string(),
+                        source_file: str_path.clone(),
+                        source_location: Some(format!("L{line}")),
+                        metadata: None,
+                        origin_file: None,
+                        node_type: None,
+                    });
+                }
+                stub
+            };
             edges.push(make_edge(
                 &cls_nid, &base_nid, "inherits", line, None, &str_path,
             ));
@@ -622,7 +774,7 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
     }
 
     // Implementation headers
-    let mut impl_records: Vec<(String, usize, String)> = Vec::new();
+    let mut impl_records: Vec<(String, usize, String, String, String)> = Vec::new();
     let mut impl_pos = 0;
     while impl_pos < impl_text.len() {
         let Some(fm) = PAS_IMPL_HEADER_RE.find(&impl_text[impl_pos..]) else {
@@ -635,17 +787,32 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
         let qualified = cap.name("qual").map_or("", |m| m.as_str());
         let line = lineno(&stripped, impl_off + impl_pos + fm.start());
 
-        let (container, relation, label) = if let Some(dot) = qualified.find('.') {
+        let (container, relation, label, name_lower) = if let Some(dot) = qualified.find('.') {
             let cls_part = &qualified[..dot];
             let method_part = &qualified[dot + 1..];
             let cls_nid = make_id(&[&stem, cls_part]);
             if seen_ids.contains(&cls_nid) {
-                (cls_nid, "method", format!("{method_part}()"))
+                (
+                    cls_nid,
+                    "method",
+                    format!("{method_part}()"),
+                    method_part.to_lowercase(),
+                )
             } else {
-                (module_nid.clone(), "contains", format!("{qualified}()"))
+                (
+                    module_nid.clone(),
+                    "contains",
+                    format!("{qualified}()"),
+                    qualified.to_lowercase(),
+                )
             }
         } else {
-            (module_nid.clone(), "contains", format!("{qualified}()"))
+            (
+                module_nid.clone(),
+                "contains",
+                format!("{qualified}()"),
+                qualified.to_lowercase(),
+            )
         };
 
         let proc_nid = make_id(&[&stem, qualified]);
@@ -668,59 +835,84 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
         } else {
             String::new()
         };
-        impl_records.push((proc_nid, line, body_text));
+        impl_records.push((proc_nid, line, body_text, container, name_lower));
         impl_pos += fm.end();
     }
 
-    // Intra-file call edges
-    let all_procs: std::collections::HashMap<String, String> = nodes
-        .iter()
-        .filter(|n| n.id != file_nid && n.label.ends_with("()"))
-        .map(|n| (n.label.trim_end_matches("()").to_lowercase(), n.id.clone()))
-        .collect();
-
-    for (caller_nid, caller_line, body_text) in &impl_records {
+    // Intra-file call edges, scoped by the caller's own class, then its ancestor
+    // chain (via `inherits` edges already emitted above), then file-level free
+    // functions, then an unambiguous file-wide match. Same-named methods on
+    // unrelated classes (property accessors, generated TLB wrapper classes — a
+    // common Pascal/Delphi pattern) no longer collapse onto an arbitrary
+    // cross-class edge; an unresolvable name is reported as a `raw_call` for the
+    // cross-file inherited-call resolver instead of guessed or dropped (#1739).
+    let resolver = PascalScopeResolver::build(&impl_records, &edges, &module_nid);
+    let mut raw_calls: Vec<RawCall> = Vec::new();
+    for (caller_nid, caller_line, body_text, _container, _name_lower) in &impl_records {
         for cm in PAS_CALL_RE.find_iter(body_text) {
-            if let Some(cap) = PAS_CALL_RE.captures(&body_text[cm.start()..]) {
-                let callee_full = cap.get(1).map_or("", |m| m.as_str());
-                let callee_name = callee_full
-                    .split('.')
-                    .next_back()
-                    .unwrap_or("")
-                    .to_lowercase();
-                if PAS_KEYWORDS.contains(callee_name.as_str()) {
-                    continue;
-                }
-                let Some(callee_nid) = all_procs.get(&callee_name) else {
-                    continue;
-                };
-                if callee_nid == caller_nid {
-                    continue;
-                }
-                let pair = (caller_nid.clone(), callee_nid.clone());
-                if seen_call_pairs.insert(pair) {
-                    let call_line = caller_line
-                        + body_text[..cm.start()]
-                            .chars()
-                            .filter(|&c| c == '\n')
-                            .count();
-                    edges.push(make_edge(
-                        caller_nid,
-                        callee_nid,
-                        "calls",
-                        call_line,
-                        Some("call"),
-                        &str_path,
-                    ));
-                }
+            let Some(cap) = PAS_CALL_RE.captures(&body_text[cm.start()..]) else {
+                continue;
+            };
+            let callee_full = cap.get(1).map_or("", |m| m.as_str());
+            let callee_name = callee_full
+                .split('.')
+                .next_back()
+                .unwrap_or("")
+                .to_lowercase();
+            if PAS_KEYWORDS.contains(callee_name.as_str()) {
+                continue;
+            }
+            let call_line = caller_line
+                + body_text[..cm.start()]
+                    .chars()
+                    .filter(|&c| c == '\n')
+                    .count();
+            let Some(target_nid) = resolver.resolve(caller_nid, &callee_name) else {
+                // Not resolvable within this file (e.g. inherited from a base class
+                // declared in another file) — report for the cross-file resolver
+                // (`resolve_pascal_inherited_calls`) rather than guess or drop it.
+                raw_calls.push(RawCall {
+                    caller_nid: caller_nid.clone(),
+                    callee: callee_name,
+                    is_member_call: false,
+                    source_file: str_path.clone(),
+                    source_location: format!("L{call_line}"),
+                    receiver: None,
+                    receiver_type: None,
+                    lang: None,
+                    ..Default::default()
+                });
+                continue;
+            };
+            if target_nid == caller_nid {
+                continue;
+            }
+            let pair = (caller_nid.clone(), target_nid.to_string());
+            if seen_call_pairs.insert(pair) {
+                edges.push(make_edge(
+                    caller_nid,
+                    target_nid,
+                    "calls",
+                    call_line,
+                    Some("call"),
+                    &str_path,
+                ));
             }
         }
     }
 
+    // A class method declared in the interface section and defined in the
+    // implementation section both emit a `method` edge to the same node id, so
+    // dedup on (source, target, relation) — keeping the first occurrence — to stop
+    // the graph carrying doubled method/contains/inherits edges (d2d1f68). Mirrors
+    // the `seen_ids` node guard.
+    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+    edges.retain(|e| seen_edges.insert((e.source.clone(), e.target.clone(), e.relation.clone())));
+
     FileResult {
         nodes,
         edges,
-        raw_calls: vec![],
+        raw_calls,
         error: None,
     }
 }

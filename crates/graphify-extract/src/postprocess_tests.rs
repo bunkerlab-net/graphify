@@ -19,6 +19,7 @@ fn n(id: &str, label: &str, file_type: &str, source_file: &str) -> Node {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }
 }
 
@@ -34,13 +35,19 @@ fn e(src: &str, tgt: &str, relation: &str) -> Edge {
         weight: 0.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     }
 }
 
 #[test]
-fn node_label_key_strips_punctuation_and_lowercases() {
-    assert_eq!(node_label_key("Foo.Bar!"), "foobar");
-    assert_eq!(node_label_key("  Hello World  "), "helloworld");
+fn node_label_key_strips_punctuation_case_sensitive_by_default() {
+    // Default (exact-case): punctuation stripped, case preserved (#1581).
+    assert_eq!(node_label_key("Foo.Bar!", false), "FooBar");
+    assert_eq!(node_label_key("  Hello World  ", false), "HelloWorld");
+    // Folded: also lower-cases (case-insensitive-language matching only).
+    assert_eq!(node_label_key("Foo.Bar!", true), "foobar");
+    assert_eq!(node_label_key("  Hello World  ", true), "helloworld");
 }
 
 #[test]

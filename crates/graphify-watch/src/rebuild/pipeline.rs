@@ -16,9 +16,10 @@ use crate::rebuild::helpers::report_root_label;
 use crate::rebuild::pipeline_helpers::{
     FinaliseArgs, build_phase, cluster_phase, compare_existing_graph, compare_existing_report,
     compute_extract_targets, compute_rebuilt_sources, detect_phase, extract_phase,
-    finalise_rebuild, load_or_default_labels, merge_with_existing_graph, render_report_phase,
-    resolve_project_root, run_analysis, run_no_cluster_path, topology_unchanged, write_graph_tmp,
+    finalise_rebuild, load_or_default_labels, render_report_phase, resolve_project_root,
+    run_analysis, run_no_cluster_path, topology_unchanged, write_graph_tmp,
 };
+use crate::rebuild::reconcile::{rebase_relative_source_files, reconcile_existing_graph};
 use crate::rebuild::relativize::relativize_source_files;
 
 /// Inner rebuild pipeline, called after the lock has been acquired.
@@ -37,6 +38,7 @@ pub(crate) fn rebuild_code_inner(
     changed_paths: Option<&[PathBuf]>,
     force: bool,
     no_cluster: bool,
+    follow_symlinks: bool,
 ) -> Result<bool, WatchError> {
     let watch_root = watch_path
         .canonicalize()
@@ -45,8 +47,12 @@ pub(crate) fn rebuild_code_inner(
     let report_root = report_root_label(watch_path);
     let out = watch_path.join(graphify_security::graphify_out());
 
-    let (detected, code_files) = detect_phase(watch_path);
-    if code_files.is_empty() {
+    let (detected, code_files) = detect_phase(watch_path, follow_symlinks);
+    let existing_graph_path = out.join("graph.json");
+    // Proceed with no code files only when a prior graph exists — the rebuild
+    // then reconciles deletions/renames against it (#8d8d2b8). With neither,
+    // there is nothing to do.
+    if code_files.is_empty() && !existing_graph_path.exists() {
         println!("[graphify watch] No code files found - nothing to rebuild.");
         return Ok(false);
     }
@@ -57,40 +63,43 @@ pub(crate) fn rebuild_code_inner(
         return Ok(true);
     };
     let extract_targets = targets.wanted;
-    let deleted_paths = targets.deleted_paths;
-    let rebuilt_sources = compute_rebuilt_sources(&extract_targets, &deleted_paths, &project_root);
+    let mut deleted_paths = targets.deleted_paths;
+    let deleted_source_identities = targets.deleted_source_identities;
 
     let commit = git_head(&watch_root);
     let mut result = extract_phase(&extract_targets, &watch_root);
     let t_post = std::time::Instant::now();
 
-    let existing_graph_path = out.join("graph.json");
-    let merge = merge_with_existing_graph(
-        &mut result,
+    // Rebase cache-root-relative extraction paths onto the project root before
+    // reconciliation, so fresh and preserved paths share one root (#8d8d2b8).
+    rebase_relative_source_files(&mut result, &watch_root, &project_root);
+
+    let reconcile = reconcile_existing_graph(
         &existing_graph_path,
-        changed_paths.is_some(),
-        &deleted_paths,
-        &extract_targets,
-        &code_files,
+        &mut result,
+        &out,
         &project_root,
         &watch_root,
+        &code_files,
+        &extract_targets,
+        changed_paths.is_none(),
+        &mut deleted_paths,
+        &deleted_source_identities,
     );
-    let existing_graph_data = merge.existing_graph_data;
-    // A full re-extraction that evicts deleted-file nodes is a legitimate
-    // shrink, so bypass the guard the same way an explicit deletion does (#1007).
-    let had_explicit_deletions = targets.had_tracked_deletion || merge.evicted_deleted_sources;
+    let existing_graph_data = reconcile.existing_graph_data;
 
-    relativize_source_files(&mut result, &project_root);
+    // Relativise the merged result, scoped to the watched root so a preserved
+    // sibling-project node (identity outside the root) is not mis-relativised.
+    relativize_source_files(&mut result, &project_root, Some(&watch_root));
+
+    // Re-extracted or deleted sources may legitimately shrink the graph, so the
+    // shrink-guard bypass keys off any evicted source (`deleted_paths` now
+    // includes reconciliation-discovered removals). Mirrors Python's
+    // `had_explicit_deletions=bool(deleted_paths)`.
+    let rebuilt_sources = compute_rebuilt_sources(&extract_targets, &deleted_paths, &project_root);
+    let had_explicit_deletions = !deleted_paths.is_empty();
+
     std::fs::create_dir_all(&out).map_err(WatchError::Io)?;
-    // Write the user-supplied path, not the resolved absolute form, so a
-    // committed `graphify-out/.graphify_root` ports across clones and CI (#777).
-    // For `graphify update` (watch_path == "."), this stores "." and the next
-    // run resolves it against the caller's CWD.
-    std::fs::write(
-        out.join(".graphify_root"),
-        watch_path.to_string_lossy().as_bytes(),
-    )
-    .map_err(WatchError::Io)?;
 
     if no_cluster {
         return run_no_cluster_path(
@@ -98,6 +107,7 @@ pub(crate) fn rebuild_code_inner(
             &existing_graph_path,
             &existing_graph_data,
             &out,
+            watch_path,
             force,
             had_explicit_deletions,
             Some(&rebuilt_sources),
@@ -155,6 +165,7 @@ pub(crate) fn rebuild_code_inner(
         detected: &detected,
         out: &out,
         project_root: &project_root,
+        watch_path,
     })?;
 
     Ok(true)

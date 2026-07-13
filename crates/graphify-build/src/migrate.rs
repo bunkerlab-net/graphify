@@ -52,6 +52,11 @@ fn make_id1(part: &str) -> String {
 /// `graphify-extract::ids::file_stem`. `make_id` collapses the separators later.
 #[must_use]
 fn file_stem(path: &Path) -> String {
+    // No file name (`Path(".")` — a `source_file` equal to the scan root) → no
+    // per-file stem; return "" so the caller leaves the id untouched (#1618).
+    if path.file_name().is_none() {
+        return String::new();
+    }
     path.with_extension("").to_string_lossy().replace('\\', "/")
 }
 
@@ -222,44 +227,70 @@ pub(crate) fn apply_semantic_rekey(extraction: &mut Value, root: Option<&str>) {
     }
 }
 
+/// The normalised legacy-stem aliases node `nid` (in root-relative file `sf`,
+/// labelled `label`) would claim, or empty when it claims none.
+///
+/// "This node IS the file" is detected by `label == basename`, not an id-prefix
+/// test: a salted `.h`/`.cpp` pair (#1556) no longer string-prefixes its own
+/// `new_stem`, so the old id test dropped the salted header from the alias race
+/// and an unrelated same-stem file won as "unambiguous" (96db75c).
+fn claimed_aliases(nid: &str, sf: &str, label: Option<&str>) -> Vec<String> {
+    if sf.is_empty() {
+        return Vec::new();
+    }
+    let rel = Path::new(sf);
+    if rel.is_absolute() {
+        return Vec::new();
+    }
+    let new_stem = make_id1(&file_stem(rel));
+    let is_file_node = rel
+        .file_name()
+        .is_some_and(|n| Some(n.to_string_lossy().as_ref()) == label);
+    let suffix = if is_file_node {
+        String::new()
+    } else {
+        let norm_nid = normalize_id(nid);
+        let Some(suffix) = norm_nid.strip_prefix(&new_stem) else {
+            // `nid` isn't derived from this file's stem (e.g. a disambiguated id):
+            // an empty-suffix fallback would map unrelated edges onto this node.
+            return Vec::new();
+        };
+        if !suffix.is_empty() && !suffix.starts_with('_') {
+            return Vec::new();
+        }
+        suffix.to_string()
+    };
+    old_file_stems(rel)
+        .into_iter()
+        .filter(|old_stem| *old_stem != new_stem)
+        .map(|old_stem| normalize_id(&format!("{old_stem}{suffix}")))
+        .collect()
+}
+
 /// Register each canonical node's OLD-stem id forms as edge-resolution aliases,
 /// so a stale-id edge endpoint from an un-re-keyed fragment (e.g. an incremental
 /// update referencing a symbol in a file that was NOT re-extracted) still
 /// resolves to the migrated node instead of dangling (#1504). Only fills gaps —
-/// never overrides a real node id. `node_source_files` maps node id → its
-/// (already root-relative) `source_file`.
+/// never overrides a real node id. An alias claimed by more than one file is
+/// dropped (ambiguous), so a dangling edge stays dangling instead of riding the
+/// alias onto an arbitrary same-named file (3b2ca2e).
 pub(crate) fn register_legacy_id_aliases(
     norm_to_id: &mut IndexMap<String, String>,
     node_source_files: &IndexMap<String, String>,
+    node_labels: &IndexMap<String, String>,
 ) {
+    let mut candidates: IndexMap<String, indexmap::IndexSet<String>> = IndexMap::new();
     for (nid, sf) in node_source_files {
-        if sf.is_empty() {
-            continue;
+        for alias in claimed_aliases(nid, sf, node_labels.get(nid).map(String::as_str)) {
+            candidates.entry(alias).or_default().insert(nid.clone());
         }
-        let rel = Path::new(sf);
-        if rel.is_absolute() {
-            continue;
-        }
-        let new_stem = make_id1(&file_stem(rel));
-        let norm_nid = normalize_id(nid);
-        let Some(suffix) = norm_nid.strip_prefix(&new_stem) else {
-            // `nid` isn't derived from this file's stem (e.g. a disambiguated id),
-            // so an empty-suffix fallback would register an `old_stem` alias that
-            // maps unrelated edges onto this node. Skip unless the stem matches.
-            continue;
-        };
-        if !suffix.is_empty() && !suffix.starts_with('_') {
-            continue;
-        }
-        for old_stem in old_file_stems(rel) {
-            if old_stem == new_stem {
-                continue;
-            }
-            let alias = format!("{old_stem}{suffix}");
-            // The edge resolver always normalises its lookup key, so only the
-            // normalised alias is consulted.
+    }
+    for (alias, claimants) in &candidates {
+        if claimants.len() == 1
+            && let Some(nid) = claimants.iter().next()
+        {
             norm_to_id
-                .entry(normalize_id(&alias))
+                .entry(alias.clone())
                 .or_insert_with(|| nid.clone());
         }
     }

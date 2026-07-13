@@ -154,7 +154,7 @@ pub fn build_app(graph_path: &str, opts: &HttpOptions) -> Result<Router, ServeEr
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let ctx = Arc::new(HttpCtx {
-        state: Mutex::new(McpServerState::load(graph_path)?),
+        state: Mutex::new(McpServerState::load(graph_path)),
         graph_path: graph_path.to_string(),
         api_key,
         json_response: opts.json_response,

@@ -13,6 +13,46 @@ use crate::{
     azure, bedrock, claude, claude_cli, deepseek, gemini, kimi, ollama, openai, openai_compat,
 };
 
+/// Thread-safe accumulator for LLM token usage (#1694).
+///
+/// Threaded through the community-labeling path so cluster-only mode reports the
+/// real cost of otherwise-uninstrumented calls. Backends that do not return
+/// usage contribute nothing (honest, not estimated). `Relaxed` ordering is
+/// sufficient: only the final totals are read, after all recording completes.
+#[derive(Debug, Default)]
+pub struct UsageSink {
+    input: std::sync::atomic::AtomicU64,
+    output: std::sync::atomic::AtomicU64,
+}
+
+impl UsageSink {
+    /// A zeroed accumulator.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one response's `input`/`output` token counts.
+    pub fn record(&self, input: u64, output: u64) {
+        self.input
+            .fetch_add(input, std::sync::atomic::Ordering::Relaxed);
+        self.output
+            .fetch_add(output, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Total input tokens recorded.
+    #[must_use]
+    pub fn input(&self) -> u64 {
+        self.input.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Total output tokens recorded.
+    #[must_use]
+    pub fn output(&self) -> u64 {
+        self.output.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// Send a plain-text `prompt` to the named `backend` and return the text reply.
 ///
 /// Mirrors Python `_call_llm` at `llm.py:1719`. Unlike [`crate::extract_files_direct`],
@@ -42,6 +82,23 @@ pub fn call_llm_with_model(
     max_tokens: usize,
     model: Option<&str>,
 ) -> Result<String, LlmError> {
+    call_llm_with_model_usage(prompt, backend, max_tokens, model, None)
+}
+
+/// [`call_llm_with_model`] that accumulates each response's token usage into
+/// `usage` when provided (#1694). Backends that do not return usage contribute
+/// nothing. Used by the community-labeling path to total otherwise-untracked
+/// cost; existing callers use the wrappers above and are unaffected.
+///
+/// # Errors
+/// Same as [`call_llm`].
+pub fn call_llm_with_model_usage(
+    prompt: &str,
+    backend: &str,
+    max_tokens: usize,
+    model: Option<&str>,
+    usage: Option<&UsageSink>,
+) -> Result<String, LlmError> {
     let max_tokens_u32 = u32::try_from(max_tokens).unwrap_or(u32::MAX);
     // Treat a blank `--model ""` as "no override", matching Python's
     // `model or default` (an empty string is falsy there).
@@ -52,7 +109,7 @@ pub fn call_llm_with_model(
     if !crate::providers::is_builtin_backend(backend)
         && let Some(provider) = crate::providers::load_custom_providers().get(backend)
     {
-        return call_custom_plain(provider, prompt, max_tokens_u32, model);
+        return call_custom_plain(provider, prompt, max_tokens_u32, model, usage);
     }
 
     // Validate the backend name; per-arm config (base URL, model) is resolved below.
@@ -106,46 +163,13 @@ pub fn call_llm_with_model(
     let mdl = model.unwrap_or(resolved_default.as_ref());
 
     match backend {
-        "claude" => {
-            // Call Anthropic API without the extraction system prompt.
-            let timeout = openai_compat::api_timeout();
-            let claude_base = claude::base_url();
-            graphify_security::validate_url(&claude_base)?;
-            let endpoint = format!("{claude_base}/v1/messages");
-            let body = serde_json::json!({
-                "model": mdl,
-                "max_tokens": max_tokens_u32,
-                "messages": [{"role": "user", "content": prompt}],
-            });
-            let agent: ureq::Agent = ureq::Agent::config_builder()
-                .timeout_global(Some(timeout))
-                .build()
-                .into();
-            let http_resp = crate::openai_compat::send_json_with_retry(|| {
-                agent
-                    .post(&endpoint)
-                    .header("x-api-key", &key)
-                    .header("anthropic-version", "2023-06-01")
-                    .header("Content-Type", "application/json")
-                    .send_json(&body)
-            })
-            .map_err(|e| LlmError::Http(e.to_string()))?;
-            // Deserialize just enough to extract the text.
-            let val: serde_json::Value = http_resp
-                .into_body()
-                .read_json()
-                .map_err(|e| LlmError::Parse(e.to_string()))?;
-            Ok(val["content"]
-                .as_array()
-                .and_then(|a| a.first())
-                .and_then(|v| v["text"].as_str())
-                .unwrap_or("")
-                .to_string())
+        "claude" => call_claude_plain(prompt, mdl, max_tokens_u32, &key, usage),
+        "claude-cli" => {
+            claude_cli::call_claude_cli_plain_with_model(prompt, max_tokens_u32, model, usage)
         }
-        "claude-cli" => claude_cli::call_claude_cli_plain_with_model(prompt, max_tokens_u32, model),
         "bedrock" => {
             let region = bedrock::resolve_region();
-            bedrock::call_bedrock_plain(mdl, &region, prompt, max_tokens_u32)
+            bedrock::call_bedrock_plain(mdl, &region, prompt, max_tokens_u32, usage)
         }
         "kimi" => kimi::call_plain_openai_compat(&kimi::PlainOpenAiRequest {
             base_url: &kimi::base_url(),
@@ -157,20 +181,74 @@ pub fn call_llm_with_model(
             disable_thinking: true,
             extra_body: None,
             max_tokens: max_tokens_u32,
+            usage,
         }),
-        "gemini" => gemini::call_gemini_plain(&key, mdl, prompt, max_tokens_u32),
-        "openai" => openai::call_openai_plain(&key, mdl, prompt, max_tokens_u32),
-        "deepseek" => deepseek::call_deepseek_plain(&key, mdl, prompt, max_tokens_u32),
-        "ollama" => ollama::call_ollama_plain(&key, &ollama_base_url, mdl, prompt, max_tokens_u32),
+        "gemini" => gemini::call_gemini_plain(&key, mdl, prompt, max_tokens_u32, usage),
+        "openai" => openai::call_openai_plain(&key, mdl, prompt, max_tokens_u32, usage),
+        "deepseek" => deepseek::call_deepseek_plain(&key, mdl, prompt, max_tokens_u32, usage),
+        "ollama" => {
+            ollama::call_ollama_plain(&key, &ollama_base_url, mdl, prompt, max_tokens_u32, usage)
+        }
         "azure" => {
             // Resolve the deployment from the environment when no override is
             // given, then require AZURE_OPENAI_ENDPOINT.
             let azure_mdl = model.map_or_else(azure::resolve_model, str::to_string);
             let endpoint = azure::resolve_endpoint()?;
-            azure::call_azure_plain(&key, &endpoint, &azure_mdl, prompt, max_tokens_u32)
+            azure::call_azure_plain(&key, &endpoint, &azure_mdl, prompt, max_tokens_u32, usage)
         }
         _ => unreachable!("backend_config already validated backend name"),
     }
+}
+
+/// Anthropic `/v1/messages` plain call, recording usage into `usage` (#1694).
+fn call_claude_plain(
+    prompt: &str,
+    model: &str,
+    max_tokens: u32,
+    api_key: &str,
+    usage: Option<&UsageSink>,
+) -> Result<String, LlmError> {
+    let timeout = openai_compat::api_timeout();
+    let claude_base = claude::base_url();
+    graphify_security::validate_url(&claude_base)?;
+    let endpoint = format!("{claude_base}/v1/messages");
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    });
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .build()
+        .into();
+    let http_resp = openai_compat::send_json_with_retry(|| {
+        agent
+            .post(&endpoint)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .send_json(&body)
+    })
+    .map_err(|e| LlmError::Http(e.to_string()))?;
+    // Deserialize just enough to extract the text and usage.
+    let val: serde_json::Value = http_resp
+        .into_body()
+        .read_json()
+        .map_err(|e| LlmError::Parse(e.to_string()))?;
+    let content = val["content"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v["text"].as_str())
+        .unwrap_or("")
+        .to_string();
+    if let Some(sink) = usage {
+        let u = &val["usage"];
+        sink.record(
+            u["input_tokens"].as_u64().unwrap_or(0),
+            u["output_tokens"].as_u64().unwrap_or(0),
+        );
+    }
+    Ok(content)
 }
 
 /// Plain-text call against a custom OpenAI-compatible provider (#1084).
@@ -181,6 +259,7 @@ fn call_custom_plain(
     prompt: &str,
     max_tokens: u32,
     model: Option<&str>,
+    usage: Option<&UsageSink>,
 ) -> Result<String, LlmError> {
     let key = std::env::var(&provider.env_key).unwrap_or_default();
     if key.is_empty() {
@@ -199,5 +278,6 @@ fn call_custom_plain(
         disable_thinking: false,
         extra_body: provider.extra_body.as_ref(),
         max_tokens,
+        usage,
     })
 }

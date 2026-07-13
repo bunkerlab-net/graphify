@@ -61,6 +61,26 @@ fn pascal_extractor_produces_nodes() {
 }
 
 #[test]
+fn pascal_no_duplicate_edges() {
+    // A class method declared in the interface section and defined in the
+    // implementation section each used to emit a `method` edge to the same node,
+    // doubling method/contains/inherits edges — skewing degree/centrality and
+    // tripping the cross-file resolver's single-owner god-node guard (d2d1f68).
+    // Edges are now deduped on (source, target, relation).
+    let result = extract_pascal(&fixtures().join("sample.pas"));
+    let mut seen = std::collections::HashSet::new();
+    let dups: Vec<(&str, &str, &str)> = result
+        .edges
+        .iter()
+        .filter_map(|e| {
+            let key = (e.source.as_str(), e.target.as_str(), e.relation.as_str());
+            if seen.insert(key) { None } else { Some(key) }
+        })
+        .collect();
+    assert!(dups.is_empty(), "duplicate pascal edges: {dups:?}");
+}
+
+#[test]
 fn delphi_form_extractor_produces_nodes() {
     let result = extract_delphi_form(&fixtures().join("sample.dfm"));
     assert!(result.error.is_none(), "{:?}", result.error);
@@ -158,6 +178,259 @@ fn objc_protocols_and_categories() {
         result.nodes.len() > 3,
         "expected lots of nodes from objc protocols"
     );
+}
+
+/// Ports `test_objc_protocol_adopts_protocol` (cd3a376): `@protocol Derived <Base>`
+/// emits `implements` Derived->Base — protocol-on-protocol adoption nests under a
+/// `protocol_reference_list` node that was previously ignored. Protocol nodes are
+/// labeled with angle brackets (`<Base>`).
+#[test]
+fn objc_protocol_adopts_protocol() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("protocols.m");
+    std::fs::write(
+        &source,
+        "@protocol Base\n- (void)baseMethod;\n@end\n\n\
+         @protocol Derived <Base>\n- (void)derivedMethod;\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let implements = edge_label_pairs(&result, "implements", None);
+    assert!(
+        implements
+            .iter()
+            .any(|(s, t)| s == "<Derived>" && t == "<Base>"),
+        "<Derived> implements <Base> missing: {implements:?}"
+    );
+    Ok(())
+}
+
+/// Ports the #1475/#1543 dot-syntax + @selector features (0792b41): `self.name`
+/// dot-syntax emits an `accesses` edge to a sibling method resolved by EXACT id.
+#[test]
+fn objc_dot_syntax_property_access() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Dog.m");
+    std::fs::write(
+        &source,
+        "@implementation Dog\n- (NSString *)name { return @\"Rex\"; }\n\
+         - (void)greet { NSLog(@\"%@\", self.name); }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let nid2label: std::collections::HashMap<&str, &str> = result
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    let accesses: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "accesses")
+        .collect();
+    assert_eq!(
+        accesses.len(),
+        1,
+        "expected exactly one access: {accesses:?}"
+    );
+    assert_eq!(
+        nid2label.get(accesses[0].source.as_str()),
+        Some(&"-greet"),
+        "{accesses:?}"
+    );
+    assert_eq!(
+        nid2label.get(accesses[0].target.as_str()),
+        Some(&"-name"),
+        "{accesses:?}"
+    );
+    Ok(())
+}
+
+/// Two classes each declaring `-name`: `self.name` in one must resolve only to
+/// its OWN class's `-name`, not fan out to the other's (scoped to sibling set).
+#[test]
+fn objc_dot_syntax_no_fanout_across_classes() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("AB.m");
+    std::fs::write(
+        &source,
+        "@implementation A\n- (NSString *)name { return @\"A\"; }\n\
+         - (void)show { NSLog(@\"%@\", self.name); }\n@end\n\
+         @implementation B\n- (NSString *)name { return @\"B\"; }\n\
+         - (void)show { NSLog(@\"%@\", self.name); }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let nid2label: std::collections::HashMap<&str, &str> = result
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    // method nid -> its containing class nid (from `class -> method` edges).
+    let method_class: std::collections::HashMap<&str, &str> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "method")
+        .map(|e| (e.target.as_str(), e.source.as_str()))
+        .collect();
+    let accesses: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "accesses")
+        .collect();
+    assert_eq!(
+        accesses.len(),
+        2,
+        "expected 2 scoped accesses: {accesses:?}"
+    );
+    for e in &accesses {
+        assert_eq!(nid2label.get(e.source.as_str()), Some(&"-show"), "{e:?}");
+        assert_eq!(nid2label.get(e.target.as_str()), Some(&"-name"), "{e:?}");
+        // Scoping: source and target belong to the SAME class (no cross fan-out).
+        assert_eq!(
+            method_class.get(e.source.as_str()),
+            method_class.get(e.target.as_str()),
+            "access crossed a class boundary: {e:?}"
+        );
+    }
+    Ok(())
+}
+
+/// A property not defined in the current class produces zero `accesses` edges.
+#[test]
+fn objc_dot_syntax_unresolvable_zero_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("X.m");
+    std::fs::write(
+        &source,
+        "@implementation X\n- (void)run { NSLog(@\"%@\", self.missing); }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert!(
+        edge_label_pairs(&result, "accesses", None).is_empty(),
+        "unresolvable property must emit no accesses"
+    );
+    Ok(())
+}
+
+/// A substring-colliding sibling must neither be falsely matched nor suppress the
+/// real one: `self.name` with both `-name` and `-surname` resolves to `-name` only
+/// (EXACT id, not `ends_with`).
+#[test]
+fn objc_dot_syntax_substring_sibling_exact_match() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Person.m");
+    std::fs::write(
+        &source,
+        "@implementation Person\n- (NSString *)name { return @\"n\"; }\n\
+         - (NSString *)surname { return @\"s\"; }\n\
+         - (void)show { NSLog(@\"%@\", self.name); }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let accesses = edge_label_pairs(&result, "accesses", None);
+    assert!(
+        accesses.contains(&("-show".to_string(), "-name".to_string())),
+        "self.name must resolve to -name: {accesses:?}"
+    );
+    assert!(
+        !accesses.iter().any(|(_, t)| t == "-surname"),
+        "substring sibling -surname must not be matched: {accesses:?}"
+    );
+    Ok(())
+}
+
+/// DIVERGENCE from graphify-py (correctness fix): a non-`self` receiver whose
+/// trailing field name collides with a sibling method must NOT emit an access.
+/// `other.name` inside a class with `-name` is not a self access.
+#[test]
+fn objc_dot_syntax_non_self_receiver_no_access() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Owner.m");
+    std::fs::write(
+        &source,
+        "@implementation Owner\n- (NSString *)name { return @\"o\"; }\n\
+         - (void)show:(Owner *)other { NSLog(@\"%@\", other.name); }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let accesses = edge_label_pairs(&result, "accesses", None);
+    assert!(
+        !accesses.iter().any(|(_, t)| t == "-name"),
+        "non-self receiver must not fabricate a self access: {accesses:?}"
+    );
+    Ok(())
+}
+
+/// `@selector(fetch)` with exactly one matching method emits a `calls` edge.
+#[test]
+fn objc_selector_expression_calls_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Sched.m");
+    std::fs::write(
+        &source,
+        "@implementation Sched\n- (void)fetch { }\n\
+         - (void)schedule { [self performSelector:@selector(fetch)]; }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let calls = edge_label_pairs(&result, "calls", Some("call"));
+    assert!(
+        calls.iter().any(|(s, t)| s == "-schedule" && t == "-fetch"),
+        "-schedule -> -fetch selector call missing: {calls:?}"
+    );
+    Ok(())
+}
+
+/// `@selector(doThing)` with two `doThing` methods is ambiguous and emits zero
+/// `calls` edges (no fan-out).
+#[test]
+fn objc_selector_ambiguous_no_fanout() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Dual.m");
+    std::fs::write(
+        &source,
+        "@implementation A\n- (void)doThing { }\n\
+         - (void)run { [self performSelector:@selector(doThing)]; }\n@end\n\
+         @implementation B\n- (void)doThing { }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let calls = edge_label_pairs(&result, "calls", None);
+    assert!(
+        !calls.iter().any(|(_, t)| t == "-doThing"),
+        "ambiguous selector must emit no calls edge: {calls:?}"
+    );
+    Ok(())
+}
+
+/// Regression for the separate calls/accesses dedup sets (DIVERGENCE from
+/// graphify-py's relation-blind dedup): a body with BOTH `[self name]` (message)
+/// and `self.name` (dot-syntax) to the same sibling must emit a `calls` AND an
+/// `accesses` edge — a shared dedup set would drop whichever is visited second.
+#[test]
+fn objc_calls_and_accesses_coexist_same_target() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Both.m");
+    std::fs::write(
+        &source,
+        "@implementation Both\n- (NSString *)name { return @\"n\"; }\n\
+         - (void)run { [self name]; NSLog(@\"%@\", self.name); }\n@end\n",
+    )?;
+    let result = extract_objc(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let calls = edge_label_pairs(&result, "calls", None);
+    let accesses = edge_label_pairs(&result, "accesses", None);
+    assert!(
+        calls.iter().any(|(s, t)| s == "-run" && t == "-name"),
+        "[self name] must emit a calls edge: {calls:?}"
+    );
+    assert!(
+        accesses.iter().any(|(s, t)| s == "-run" && t == "-name"),
+        "self.name must emit a separate accesses edge: {accesses:?}"
+    );
+    Ok(())
 }
 
 /// Ports `test_languages.py::test_objc_resolves_self_method_calls` (#1475): the
@@ -330,12 +603,105 @@ fn fortran_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+/// Ports `test_fortran_finds_function_call` (b8f41c7): `y = f(x)` function
+/// invocations parse as `call_expression` (not `subroutine_call`) and must emit
+/// a `calls` edge, resolved against defined procedures so `arr(i)` array
+/// indexing can't fabricate a spurious edge.
+#[test]
+fn fortran_finds_function_call() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("geometry.f90");
+    std::fs::write(
+        &source,
+        "module geometry\ncontains\n  \
+         subroutine helper()\n    print *, \"hi\"\n  end subroutine helper\n\n  \
+         function double_val(x) result(y)\n    real, intent(in) :: x\n    real :: y\n    \
+         y = x * 2.0\n  end function double_val\n\n  \
+         subroutine report(radius)\n    real, intent(in) :: radius\n    real :: scaled\n    \
+         real :: values(3)\n    call helper()\n    scaled = double_val(radius)\n    \
+         scaled = values(1)\n    print *, scaled\n  \
+         end subroutine report\nend module geometry\n",
+    )?;
+    let result = extract_fortran(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let calls = edge_label_pairs(&result, "calls", None);
+    // `scaled = double_val(radius)` — function invocation (`call_expression`).
+    assert!(
+        calls
+            .iter()
+            .any(|(s, t)| s.contains("report") && t.contains("double_val")),
+        "report() -> double_val() calls edge missing: {calls:?}"
+    );
+    // `call helper()` — subroutine_call still emits after the traversal rewrite.
+    assert!(
+        calls
+            .iter()
+            .any(|(s, t)| s.contains("report") && t.contains("helper")),
+        "report() -> helper() subroutine call missing: {calls:?}"
+    );
+    // Attribution: the enclosing module must NOT also receive the subroutine's
+    // calls (nested-scope calls belong only to their own scope).
+    assert!(
+        !calls
+            .iter()
+            .any(|(s, t)| s.contains("geometry")
+                && (t.contains("double_val") || t.contains("helper"))),
+        "module must not receive nested subroutine calls: {calls:?}"
+    );
+    // Array indexing (`values(1)`) shares `name(...)` syntax with a call but the
+    // array variable resolves to no procedure node, so the `seen_ids` guard must
+    // suppress a spurious `calls` edge to it.
+    assert!(
+        !calls.iter().any(|(_, t)| t.contains("values")),
+        "array access must not fabricate a calls edge: {calls:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn elixir_extractor_produces_nodes() {
     let result = extract_elixir(&fixtures().join("sample.ex"));
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no elixir nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// Ports `test_elixir_multi_alias_expands` (f2ea6a6): `alias Foo.{Bar, Baz}` (a
+/// `dot` node + trailing `tuple`) emits one imports edge per expanded module,
+/// including a multi-segment prefix; the single form stays unchanged.
+#[test]
+fn elixir_multi_alias_expands() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("user.ex");
+    std::fs::write(
+        &source,
+        "defmodule MyApp.Accounts.User do\n  \
+         alias MyApp.Repo\n  \
+         alias MyApp.Schemas.{Account, Token}\nend\n",
+    )?;
+    let result = extract_elixir(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let targets: Vec<&str> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports")
+        .map(|e| e.target.as_str())
+        .collect();
+    // Multi-segment brace prefix expands to one target per member.
+    assert!(
+        targets.contains(&make_id(&["MyApp.Schemas.Account"]).as_str()),
+        "MyApp.Schemas.Account import missing: {targets:?}"
+    );
+    assert!(
+        targets.contains(&make_id(&["MyApp.Schemas.Token"]).as_str()),
+        "MyApp.Schemas.Token import missing: {targets:?}"
+    );
+    // Single-alias form is unchanged.
+    assert!(
+        targets.contains(&make_id(&["MyApp.Repo"]).as_str()),
+        "single alias MyApp.Repo missing: {targets:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -354,6 +720,36 @@ fn powershell_advanced_classes_enums_configs() {
         result.nodes.len() > 5,
         "expected many powershell nodes from advanced fixture"
     );
+}
+
+/// Ports `test_powershell_class_base_type_emits_inherits_edge` (a129ff2):
+/// `class Circle : Shape` emits `inherits`; with multiple bases the first is
+/// `inherits` and the rest `implements` (no syntactic base/interface split).
+#[test]
+fn powershell_class_base_types_emit_inheritance() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("shapes.ps1");
+    std::fs::write(
+        &source,
+        "class Shape {\n}\nclass IDrawable {\n}\nclass Circle : Shape, IDrawable {\n}\n",
+    )?;
+    let result = extract_powershell(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    let implements = edge_label_pairs(&result, "implements", None);
+    // First base -> inherits.
+    assert!(
+        inherits.iter().any(|(s, t)| s == "Circle" && t == "Shape"),
+        "Circle inherits Shape missing: {inherits:?}"
+    );
+    // Subsequent bases -> implements.
+    assert!(
+        implements
+            .iter()
+            .any(|(s, t)| s == "Circle" && t == "IDrawable"),
+        "Circle implements IDrawable missing: {implements:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -381,12 +777,135 @@ fn systemverilog_complex_extracts_nodes() {
     assert!(!result.nodes.is_empty(), "no verilog nodes from complex sv");
 }
 
+/// Ports `test_systemverilog_qualified_field_references` (297075c): class
+/// properties with leading qualifiers (rand/local/protected/...) must still emit
+/// `references[field]` edges — `rand Config x;` (three tokens) previously failed
+/// the two-token `<type> <name>;` shape and dropped its type reference.
+#[test]
+fn systemverilog_qualified_field_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("proc.sv");
+    std::fs::write(
+        &source,
+        "class Config;\nendclass\n\nclass BaseProcessor;\nendclass\n\n\
+         class DataProcessor;\n  rand Config m_cfg;\n  \
+         protected BaseProcessor m_parent;\nendclass\n",
+    )?;
+    let result = extract_verilog(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let field_refs = edge_label_pairs(&result, "references", Some("field"));
+    assert!(
+        field_refs
+            .iter()
+            .any(|(s, t)| s == "DataProcessor" && t == "Config"),
+        "rand-qualified field dropped: {field_refs:?}"
+    );
+    assert!(
+        field_refs
+            .iter()
+            .any(|(s, t)| s == "DataProcessor" && t == "BaseProcessor"),
+        "protected-qualified field dropped: {field_refs:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn rust_extractor_produces_nodes() {
     let result = extract_rust(&fixtures().join("sample.rs"));
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no rust nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// Ports `test_rust_tuple_struct_field_references` (7eb847b): tuple-struct
+/// positional field types nest under `ordered_field_declaration_list` with no
+/// `field_declaration` wrapper, and must still emit `field`/`generic_arg` refs.
+#[test]
+fn rust_tuple_struct_field_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("lib.rs");
+    std::fs::write(
+        &source,
+        "struct Graph {}\nstruct DataProcessor {}\nstruct Wrapper<T> { value: T }\n\
+         struct GraphPair(Graph, Wrapper<DataProcessor>);\n",
+    )?;
+    let result = extract_rust(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        fields.iter().any(|(s, t)| s == "GraphPair" && t == "Graph"),
+        "tuple-struct field reference missing: {fields:?}"
+    );
+    assert!(
+        fields
+            .iter()
+            .any(|(s, t)| s == "GraphPair" && t == "Wrapper"),
+        "tuple-struct generic container reference missing: {fields:?}"
+    );
+    assert!(
+        generics
+            .iter()
+            .any(|(s, t)| s == "GraphPair" && t == "DataProcessor"),
+        "tuple-struct generic_arg reference missing: {generics:?}"
+    );
+    Ok(())
+}
+
+/// Divergence from graphify-py (7eb847b): the Python allowlist for tuple
+/// positional field types omits `pointer_type`/`slice_type`, silently dropping
+/// them. Recursing the collector (which handles both) fixes that gap — a
+/// raw-pointer positional field still emits a `field` reference.
+#[test]
+fn rust_tuple_struct_pointer_field_reference() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("ptr.rs");
+    std::fs::write(&source, "struct Config {}\nstruct Holder(*const Config);\n")?;
+    let result = extract_rust(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    assert!(
+        fields.iter().any(|(s, t)| s == "Holder" && t == "Config"),
+        "raw-pointer positional field must emit a field ref: {fields:?}"
+    );
+    Ok(())
+}
+
+/// Ports `test_rust_enum_variant_references` (674184d), covering all three
+/// variant shapes: unit (no refs), tuple payload (`field` + nested `generic_arg`),
+/// and struct payload (`field`). All were dropped before the enum path existed.
+#[test]
+fn rust_enum_variant_field_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("events.rs");
+    std::fs::write(
+        &source,
+        "struct Foo {}\nstruct Bar {}\nstruct Baz {}\nstruct Wrapper<T> { value: T }\n\
+         enum E {\n    Unit,\n    Tuple(Foo, Wrapper<Bar>),\n    Named { value: Baz },\n}\n",
+    )?;
+    let result = extract_rust(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    // Tuple variant: direct payload -> field, nested generic arg -> generic_arg.
+    assert!(
+        fields.iter().any(|(s, t)| s == "E" && t == "Foo"),
+        "tuple-variant field reference missing: {fields:?}"
+    );
+    assert!(
+        fields.iter().any(|(s, t)| s == "E" && t == "Wrapper"),
+        "tuple-variant generic container reference missing: {fields:?}"
+    );
+    assert!(
+        generics.iter().any(|(s, t)| s == "E" && t == "Bar"),
+        "tuple-variant generic_arg reference missing: {generics:?}"
+    );
+    // Struct variant: named field payload -> field.
+    assert!(
+        fields.iter().any(|(s, t)| s == "E" && t == "Baz"),
+        "struct-variant field reference missing: {fields:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -477,6 +996,37 @@ fn cpp_extractor_produces_nodes() {
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no cpp nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// Ports the C++ base-class template-arg fix (21bcb43): a templated base like
+/// `Connection<HttpClient>` emits both the `inherits` edge to the container and
+/// a `generic_arg` reference to the type argument, mirroring the Java behaviour.
+#[test]
+fn cpp_base_class_template_args_emit_generic_arg_refs() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("pool.cpp");
+    std::fs::write(
+        &source,
+        "template <typename T> class Connection {};\nclass HttpClient {};\n\
+         class PooledClient : public Connection<HttpClient> {};\n",
+    )?;
+    let result = extract_cpp(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    let generics = edge_label_pairs(&result, "references", Some("generic_arg"));
+    assert!(
+        inherits
+            .iter()
+            .any(|(s, t)| s == "PooledClient" && t == "Connection"),
+        "PooledClient inherits Connection missing: {inherits:?}"
+    );
+    assert!(
+        generics
+            .iter()
+            .any(|(s, t)| s == "PooledClient" && t == "HttpClient"),
+        "PooledClient->HttpClient generic_arg missing: {generics:?}"
+    );
+    Ok(())
 }
 
 // ── CUDA (.cu/.cuh route through the C++ extractor) ──────────────────────────
@@ -680,6 +1230,47 @@ fn csharp_parameter_return_and_generic_contexts() {
     );
 }
 
+/// Ports `test_csharp_property_type_references_have_field_context` (bb5e519):
+/// C# auto-properties emit `references[field]` for the property type, plus
+/// `generic_arg` for type arguments — `List<Processor>` yields both.
+#[test]
+fn csharp_property_type_references_have_field_context() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("DataProcessor.cs");
+    std::fs::write(
+        &source,
+        "using System.Collections.Generic;\nclass Processor {}\nclass DataProcessor {\n    \
+         public Processor Owner { get; set; }\n    \
+         public List<Processor> Workers { get; set; }\n}\n",
+    )?;
+    let result = extract_csharp(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let field_refs = edge_label_pairs(&result, "references", Some("field"));
+    let generic_refs = edge_label_pairs(&result, "references", Some("generic_arg"));
+    // `public Processor Owner { get; set; }` — property type -> field ref.
+    assert!(
+        field_refs
+            .iter()
+            .any(|(s, t)| s == "DataProcessor" && t == "Processor"),
+        "DataProcessor->Processor field missing: {field_refs:?}"
+    );
+    // `public List<Processor> Workers { get; set; }` — the List container -> field.
+    assert!(
+        field_refs
+            .iter()
+            .any(|(s, t)| s == "DataProcessor" && t == "List"),
+        "DataProcessor->List field missing: {field_refs:?}"
+    );
+    // ...and the generic argument -> generic_arg.
+    assert!(
+        generic_refs
+            .iter()
+            .any(|(s, t)| s == "DataProcessor" && t == "Processor"),
+        "DataProcessor->Processor generic_arg missing: {generic_refs:?}"
+    );
+    Ok(())
+}
+
 /// Java methods emit `references` edges with `parameter_type`, `return_type`,
 /// `generic_arg`, plus `attribute` for `@Override`-style annotations.
 ///
@@ -854,9 +1445,12 @@ fn java_record_component_type_references() -> Result<(), Box<dyn std::error::Err
         fields.contains(&("Order".into(), "Payload".into())),
         "{fields:?}"
     );
+    // `List` is a java.util library type: skipped as noise (92edf78), so only its
+    // user-type generic argument (`Item`) survives, not the container itself.
+    let all_refs = edge_label_pairs(&result, "references", None);
     assert!(
-        fields.contains(&("Order".into(), "List".into())),
-        "{fields:?}"
+        !all_refs.contains(&("Order".into(), "List".into())),
+        "List (library type) must not be a references target: {all_refs:?}"
     );
     assert!(
         generics.contains(&("Order".into(), "Item".into())),
@@ -903,6 +1497,57 @@ fn java_record_components_skip_type_parameters() -> Result<(), Box<dyn std::erro
     assert!(
         generics.contains(&("Batch".into(), "Payload".into())),
         "{generics:?}"
+    );
+    Ok(())
+}
+
+/// Ports `test_java_builtin_library_types_not_emitted_as_references` (92edf78):
+/// ubiquitous java.lang/util/... types (String, List, Map, ...) never resolve to
+/// a project node, so they must not be emitted as `references` targets.
+#[test]
+fn java_builtin_library_types_not_emitted_as_references() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Svc.java");
+    std::fs::write(
+        &source,
+        "package com.app;\nimport java.util.List;\nimport java.util.Map;\n\
+         public class Svc {\n    private String name;\n    private List<Integer> ids;\n    \
+         public Map<String, Object> lookup(Long id) { return null; }\n    \
+         public java.util.Optional<Boolean> flag() { return null; }\n}\n",
+    )?;
+    let result = extract_java(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let refs = edge_label_pairs(&result, "references", None);
+    for builtin in [
+        "String", "Integer", "Map", "Object", "Long", "List", "Optional", "Boolean",
+    ] {
+        assert!(
+            !refs.iter().any(|(_, t)| t == builtin),
+            "builtin/library type {builtin} must not be a references target: {refs:?}"
+        );
+    }
+    Ok(())
+}
+
+/// Ports `test_java_user_types_still_emit_references` (92edf78): guard against
+/// over-skipping — a user type sharing the field/return shape still resolves.
+#[test]
+fn java_user_types_still_emit_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("OrderSvc.java");
+    std::fs::write(
+        &source,
+        "package com.app;\npublic class OrderSvc {\n    \
+         private java.util.List<OrderDto> orders;\n    \
+         public OrderDto first() { return null; }\n}\n",
+    )?;
+    let result = extract_java(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let refs = edge_label_pairs(&result, "references", None);
+    assert!(
+        refs.iter().any(|(_, t)| t == "OrderDto"),
+        "user type OrderDto must still emit references: {refs:?}"
     );
     Ok(())
 }
@@ -973,12 +1618,76 @@ fn java_enum_and_annotation_declarations_are_type_nodes() -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Ports `test_languages.py::test_java_enum_constants_have_case_of_edge` (cf36d10):
+/// Java enum constants become nodes with a `case_of` edge to the enum.
+#[test]
+fn java_enum_constants_have_case_of_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("ErrorCode.java");
+    std::fs::write(
+        &source,
+        "enum ErrorCode {\n    OK(0),\n    GAME_DONE(1001);\n    private final int code;\n    \
+         ErrorCode(int code) { this.code = code; }\n}\n",
+    )?;
+    let result = extract_java(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let ls = labels(&result);
+    assert!(ls.contains(&"OK"), "OK constant node missing: {ls:?}");
+    assert!(
+        ls.contains(&"GAME_DONE"),
+        "GAME_DONE constant node missing: {ls:?}"
+    );
+    let case_of = edge_label_pairs(&result, "case_of", None);
+    assert!(
+        case_of.contains(&("ErrorCode".into(), "OK".into())),
+        "ErrorCode->OK case_of missing: {case_of:?}"
+    );
+    assert!(
+        case_of.contains(&("ErrorCode".into(), "GAME_DONE".into())),
+        "ErrorCode->GAME_DONE case_of missing: {case_of:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn groovy_extractor_produces_nodes() {
     let result = extract_groovy(&fixtures().join("sample.groovy"));
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no groovy nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// Ports `test_groovy_extends_edge` + `test_groovy_implements_edge` (64a6093):
+/// tree-sitter-groovy exposes `superclass`/`interfaces` like Java, so Groovy
+/// `extends`/`implements` must emit `inherits`/`implements` edges (previously
+/// gated Java-only and silently dropped).
+#[test]
+fn groovy_extends_and_implements_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("ExtendedService.groovy");
+    std::fs::write(
+        &source,
+        "class SampleService {}\ninterface Resettable {\n    void reset()\n}\n\
+         class ExtendedService extends SampleService implements Resettable {\n    \
+         void reset() {}\n}\n",
+    )?;
+    let result = extract_groovy(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    let implements = edge_label_pairs(&result, "implements", None);
+    assert!(
+        inherits
+            .iter()
+            .any(|(s, t)| s == "ExtendedService" && t == "SampleService"),
+        "ExtendedService inherits SampleService missing: {inherits:?}"
+    );
+    assert!(
+        implements
+            .iter()
+            .any(|(s, t)| s == "ExtendedService" && t == "Resettable"),
+        "ExtendedService implements Resettable missing: {implements:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -997,6 +1706,52 @@ fn kotlin_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+/// Ports `test_languages.py::test_kotlin_enum_entries_have_case_of_edge`
+/// (#1700 Kotlin half, #1738): Kotlin enum entries become nodes with a
+/// `case_of` edge to the enum (needs the `enum_class_body` body fallback).
+#[test]
+fn kotlin_enum_entries_have_case_of_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Direction.kt");
+    std::fs::write(
+        &source,
+        "enum class Direction {\n    NORTH,\n    SOUTH\n}\n",
+    )?;
+    let result = extract_kotlin(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let ls = labels(&result);
+    assert!(ls.contains(&"NORTH"), "NORTH entry node missing: {ls:?}");
+    assert!(ls.contains(&"SOUTH"), "SOUTH entry node missing: {ls:?}");
+    let case_of = edge_label_pairs(&result, "case_of", None);
+    assert!(
+        case_of.contains(&("Direction".into(), "NORTH".into())),
+        "Direction->NORTH case_of missing: {case_of:?}"
+    );
+    assert!(
+        case_of.contains(&("Direction".into(), "SOUTH".into())),
+        "Direction->SOUTH case_of missing: {case_of:?}"
+    );
+    Ok(())
+}
+
+/// Ports the Kotlin interface-delegation fix (9b04022): `class Foo : Bar by r`
+/// wraps the delegated interface in an `explicit_delegation` node, which must
+/// still emit an `implements` edge to the interface.
+#[test]
+fn kotlin_interface_delegation_emits_implements_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Delegate.kt");
+    std::fs::write(&source, "interface Repo\nclass Foo(r: Repo) : Repo by r\n")?;
+    let result = extract_kotlin(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let implements = edge_label_pairs(&result, "implements", None);
+    assert!(
+        implements.iter().any(|(s, t)| s == "Foo" && t == "Repo"),
+        "Foo implements Repo (by delegation) missing: {implements:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn scala_extractor_produces_nodes() {
     let result = extract_scala(&fixtures().join("sample.scala"));
@@ -1005,12 +1760,112 @@ fn scala_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+/// Ports the Scala var-field regression (67b4525): a `var b: Repo` field's type
+/// reference is emitted (previously only `val` fields were handled).
+#[test]
+fn scala_var_field_emits_type_reference() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Service.scala");
+    std::fs::write(
+        &source,
+        "class Repo\nclass Service {\n  var repo: Repo = null\n}\n",
+    )?;
+    let result = extract_scala(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let refs = edge_label_pairs(&result, "references", None);
+    assert!(
+        refs.iter().any(|(s, t)| s == "Service" && t == "Repo"),
+        "Service->Repo var-field type reference missing: {refs:?}"
+    );
+    Ok(())
+}
+
+/// Ports the Ruby-superclass regression (a19b9e9): `class Dog < Animal` emits an
+/// `inherits` edge (previously every Ruby inherits edge was silently dropped).
+#[test]
+fn ruby_superclass_emits_inherits_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("dog.rb");
+    std::fs::write(&source, "class Animal\nend\nclass Dog < Animal\nend\n")?;
+    let result = extract_ruby(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let inherits = edge_label_pairs(&result, "inherits", None);
+    assert!(
+        inherits.iter().any(|(s, t)| s == "Dog" && t == "Animal"),
+        "Dog->Animal inherits edge missing: {inherits:?}"
+    );
+    Ok(())
+}
+
+/// Ports `test_languages.py::test_julia_qualified_and_relative_imports` (984a6a8):
+/// a qualified `using Base.Threads` emits an `imports` edge (previously only bare
+/// identifiers were handled, so scoped/relative forms were silently dropped).
+#[test]
+fn julia_qualified_import_emits_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("mod.jl");
+    std::fs::write(&source, "using Base.Threads\n")?;
+    let result = extract_julia(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let import_targets: Vec<String> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "imports")
+        .map(|e| e.target.clone())
+        .collect();
+    assert!(
+        import_targets.iter().any(|t| t.contains("base_threads")),
+        "qualified import Base.Threads missing: {import_targets:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn php_extractor_produces_nodes() {
     let result = extract_php(&fixtures().join("sample.php"));
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no php nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// Ports `test_php.py::test_php_constructor_property_promotion_contexts` (51f805e):
+/// a PHP 8 promoted ctor param (`__construct(private Repo $r)`) emits both a
+/// `parameter_type` (on the ctor) and a `field` (on the class) reference; a
+/// non-promoted param leaks no `field` edge.
+#[test]
+fn php_constructor_property_promotion_contexts() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("Service.php");
+    std::fs::write(
+        &source,
+        "<?php\nclass Repo {}\nclass Logger {}\nclass Service {\n    \
+         public function __construct(private Repo $repo, Logger $logger) {}\n}\n",
+    )?;
+    let result = extract_php(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let field_refs = edge_label_pairs(&result, "references", Some("field"));
+    let param_refs = edge_label_pairs(&result, "references", Some("parameter_type"));
+    // Promoted `Repo` is both a ctor parameter type and a class field.
+    assert!(
+        param_refs.iter().any(|(_, t)| t == "Repo"),
+        "Repo parameter_type missing: {param_refs:?}"
+    );
+    assert!(
+        field_refs
+            .iter()
+            .any(|(s, t)| s == "Service" && t == "Repo"),
+        "Service->Repo field missing: {field_refs:?}"
+    );
+    // Non-promoted `Logger` is only a parameter type, never a class field.
+    assert!(
+        param_refs.iter().any(|(_, t)| t == "Logger"),
+        "Logger parameter_type missing: {param_refs:?}"
+    );
+    assert!(
+        !field_refs.iter().any(|(_, t)| t == "Logger"),
+        "non-promoted Logger must not leak a field edge: {field_refs:?}"
+    );
+    Ok(())
 }
 
 /// PHP static property access (`DefaultPalette::$primary`) → `uses_static_prop`.
@@ -1096,6 +1951,29 @@ fn swift_extractor_produces_nodes() {
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no swift nodes");
     assert_no_dangling_edges(&result);
+}
+
+/// Ports `test_swift_enum_associated_value_type_reference` (ad70152):
+/// a Swift enum case with an associated value (`case failed(Config)`) emits a
+/// `references[type]` edge from the enum to the associated type.
+#[test]
+fn swift_enum_associated_value_type_references() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("NetworkError.swift");
+    std::fs::write(
+        &source,
+        "class Config {}\nenum NetworkError {\n    case timeout\n    case failed(Config)\n}\n",
+    )?;
+    let result = extract_swift(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let type_refs = edge_label_pairs(&result, "references", Some("type"));
+    assert!(
+        type_refs
+            .iter()
+            .any(|(s, t)| s == "NetworkError" && t == "Config"),
+        "NetworkError->Config type reference missing: {type_refs:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1336,6 +2214,35 @@ fn apex_enum_extraction() {
 fn apex_interface_extraction() {
     let r = extract_apex(&fixtures().join("sample.cls"));
     assert!(labels(&r).contains(&"Notifiable"));
+}
+
+/// Ports `test_apex_interface_extends` (53c769d): `interface X extends A, B`
+/// emits one `extends` edge per parent — group 2 was captured but never read,
+/// so interface multiple inheritance was silently dropped.
+#[test]
+fn apex_interface_extends() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("PaymentProcessor.cls");
+    std::fs::write(
+        &source,
+        "public interface PaymentProcessor extends Processor, Auditable { void process(); }\n",
+    )?;
+    let result = extract_apex(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let extends = edge_label_pairs(&result, "extends", None);
+    assert!(
+        extends
+            .iter()
+            .any(|(s, t)| s == "PaymentProcessor" && t == "Processor"),
+        "PaymentProcessor extends Processor missing: {extends:?}"
+    );
+    assert!(
+        extends
+            .iter()
+            .any(|(s, t)| s == "PaymentProcessor" && t == "Auditable"),
+        "PaymentProcessor extends Auditable missing: {extends:?}"
+    );
+    Ok(())
 }
 
 /// `test_apex_method_extraction`

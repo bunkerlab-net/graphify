@@ -20,8 +20,9 @@ use crate::ids::{file_stem, make_id, make_id1};
 use crate::tsconfig::load_tsconfig_aliases;
 use crate::types::Edge;
 
+use super::indirect::js_local_bound_names;
 use super::names::{read_text, read_text_owned};
-use super::walk::{add_edge, add_node, first_child_kind};
+use super::walk::{add_edge, add_node, first_child_kind, named_children};
 
 // ── JS/TS assignment-form helpers (#09da529) ──────────────────────────────────
 
@@ -31,7 +32,16 @@ use super::walk::{add_edge, add_node, first_child_kind};
 /// `function_expression`. Mirrors Python `_JS_FUNCTION_VALUE_TYPES`.
 #[must_use]
 pub(super) fn is_js_function_value(kind: &str) -> bool {
-    matches!(kind, "arrow_function" | "function_expression" | "function")
+    // `generator_function` is the expression form (`const g = function*(){}`),
+    // captured as a node like `function_expression` (09aeb97). NOTE: neither the
+    // generator nor plain function-expression form is a `function_boundary_type`
+    // (only the `*_declaration` forms are), so calls inside an assigned function
+    // value are attributed to the enclosing scope — a pre-existing call-boundary
+    // shape shared with `function_expression`, not changed by this generator fix.
+    matches!(
+        kind,
+        "arrow_function" | "function_expression" | "function" | "generator_function"
+    )
 }
 
 /// Symbol an `assignment_expression` LHS defines when its RHS is a function.
@@ -113,6 +123,8 @@ pub(super) fn js_extra_walk<'tree>(
     let edges = &mut *ctx.edges;
     let seen_ids = &mut *ctx.seen_ids;
     let function_bodies = &mut *ctx.function_bodies;
+    let callable_def_nids = &mut *ctx.callable_def_nids;
+    let local_bound_names = &mut *ctx.local_bound_names;
     let t = node.kind();
 
     // CommonJS / prototype member assignments whose value is a function:
@@ -159,6 +171,8 @@ pub(super) fn js_extra_walk<'tree>(
             JsAssignTarget::This(_) => None,
         };
         if let Some(nid) = nid {
+            callable_def_nids.insert(nid.clone());
+            local_bound_names.insert(nid.clone(), js_local_bound_names(value, source));
             if let Some(body) = value.child_by_field_name("body") {
                 function_bodies.push((nid, body));
             }
@@ -189,6 +203,8 @@ pub(super) fn js_extra_walk<'tree>(
                 seen_ids,
             );
             add_edge(parent_nid, &nid, "method", line, str_path, None, edges);
+            callable_def_nids.insert(nid.clone());
+            local_bound_names.insert(nid.clone(), js_local_bound_names(value, source));
             if let Some(body) = value.child_by_field_name("body") {
                 function_bodies.push((nid, body));
             }
@@ -240,6 +256,9 @@ pub(super) fn js_extra_walk<'tree>(
                                 seen_ids,
                             );
                             add_edge(file_nid, &func_nid, "contains", line, str_path, None, edges);
+                            callable_def_nids.insert(func_nid.clone());
+                            local_bound_names
+                                .insert(func_nid.clone(), js_local_bound_names(value, source));
                             if let Some(body) = value.child_by_field_name("body") {
                                 function_bodies.push((func_nid, body));
                             }
@@ -379,6 +398,8 @@ fn require_imports_js(
                 weight: 1.0,
                 context: Some("import".to_string()),
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
             found = true;
 
@@ -426,6 +447,8 @@ fn require_imports_js(
                         weight: 1.0,
                         context: Some("import".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -477,7 +500,15 @@ pub fn resolve_js_import_target(raw: &str, str_path: &str) -> (String, Option<st
     if module_name.is_empty() {
         return (String::new(), None);
     }
-    (make_id1(module_name), None)
+    // Unresolved: relative/absolute, tsconfig-alias and workspace resolution have
+    // all run and failed, so this is an external package (or a dangling local
+    // path). Namespace the id with the "ref" prefix so it can NEVER collapse to
+    // the same id as a local file/symbol node. Without it the bare last-segment
+    // id (e.g. `tailwindcss/colors` -> `colors`) collides with any unrelated local
+    // file of that stem via build's pre-migration alias index, producing a
+    // confident EXTRACTED cross-language phantom `imports_from` edge (#1638). The
+    // ref-namespaced target has no node, so build drops it as an external ref.
+    (make_id(&["ref", raw]), None)
 }
 
 /// Collapse `.` and `..` path components without requiring the path to exist on disk.
@@ -596,9 +627,168 @@ pub(super) fn dynamic_import_js(
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: true,
+                metadata: None,
             });
         }
         break;
     }
     true
+}
+
+// ── TS/JS decorator reference edges (3540416) ─────────────────────────────────
+
+/// Head symbol of a TS `decorator` node: `@Injectable` -> the identifier;
+/// `@Component({...})` / `@Input()` -> the `function` of the `call_expression`;
+/// `@ng.Component()` -> the `property` of the `member_expression` (the imported
+/// symbol, not the namespace alias). Mirrors graphify-py `_ts_decorator_name`.
+fn ts_decorator_name(deco_node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut cur = deco_node.walk();
+    if !cur.goto_first_child() {
+        return None;
+    }
+    loop {
+        let child = cur.node();
+        if child.is_named() {
+            let mut target = child;
+            if target.kind() == "call_expression" {
+                target = target.child_by_field_name("function").unwrap_or(target);
+            }
+            return match target.kind() {
+                "member_expression" => target
+                    .child_by_field_name("property")
+                    .map(|p| read_text_owned(p, source)),
+                "identifier" => Some(read_text_owned(target, source)),
+                _ => None,
+            };
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+    None
+}
+
+/// Name of a `method_definition`, matching the id the function-types branch
+/// builds (`make_id(class_nid, name)`). Mirrors graphify-py `_ts_method_name`.
+fn ts_method_name(method_node: Node<'_>, source: &[u8]) -> Option<String> {
+    method_node
+        .child_by_field_name("name")
+        .map(|n| read_text_owned(n, source))
+}
+
+/// Collect `decorator` nodes under `node` (parameter decorators inside a method's
+/// params, or a field's own decorator) without crossing into a nested class or a
+/// nested method, which own their own decorators. Mirrors graphify-py
+/// `_ts_descendant_decorators`.
+fn ts_descendant_decorators(node: Node<'_>) -> Vec<Node<'_>> {
+    fn rec<'t>(n: Node<'t>, top: bool, out: &mut Vec<Node<'t>>) {
+        let mut cur = n.walk();
+        if !cur.goto_first_child() {
+            return;
+        }
+        loop {
+            let child = cur.node();
+            match child.kind() {
+                "decorator" => out.push(child),
+                "class_declaration" | "abstract_class_declaration" => {}
+                "method_definition" if !top => {}
+                _ => rec(child, false, out),
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(node, true, &mut out);
+    out
+}
+
+/// Emit `references[decorator]` edges from a TS/JS class and its members to the
+/// symbols of the decorators applied to them. Methods (graph nodes) own their
+/// decorators and their parameter decorators; fields/parameters attribute to the
+/// class. Mirrors graphify-py `_ts_emit_decorator_edges` (3540416).
+pub(super) fn emit_ts_decorator_edges<'tree>(
+    ctx: &mut super::walk::WalkCtx<'_, 'tree>,
+    class_node: Node<'tree>,
+    class_nid: &str,
+    source: &[u8],
+) {
+    let stem = ctx.stem;
+    let str_path = ctx.str_path;
+    let nodes = &mut *ctx.nodes;
+    let edges = &mut *ctx.edges;
+    let seen_ids = &mut *ctx.seen_ids;
+    let mut emit = |deco: Node<'tree>, owner: &str| {
+        let Some(name) = ts_decorator_name(deco, source) else {
+            return;
+        };
+        let line = deco.start_position().row as u32 + 1;
+        let target = super::graph::ensure_named_node(&name, stem, str_path, nodes, seen_ids);
+        if target != owner {
+            add_edge(
+                owner,
+                &target,
+                "references",
+                line,
+                str_path,
+                Some("decorator"),
+                edges,
+            );
+        }
+    };
+    // Class-level: `@Deco class C` (child of class) + `@Deco export class C`
+    // (decorators on the wrapping export_statement, before the class).
+    for child in named_children(class_node) {
+        if child.kind() == "decorator" {
+            emit(child, class_nid);
+        }
+    }
+    if let Some(parent) = class_node.parent()
+        && parent.kind() == "export_statement"
+    {
+        for child in named_children(parent) {
+            match child.kind() {
+                "decorator" => emit(child, class_nid),
+                "class_declaration" | "abstract_class_declaration" => break,
+                _ => {}
+            }
+        }
+    }
+    // Member decorators inside the class body.
+    let Some(body) = first_child_kind(class_node, "class_body") else {
+        return;
+    };
+    for member in named_children(body) {
+        match member.kind() {
+            "decorator" => {
+                // Method decorator: sibling preceding the method; skip stacked ones.
+                let mut sib = member.next_named_sibling();
+                while let Some(s) = sib
+                    && s.kind() == "decorator"
+                {
+                    sib = s.next_named_sibling();
+                }
+                let owner = match sib {
+                    Some(s) if s.kind() == "method_definition" => ts_method_name(s, source)
+                        .map_or_else(|| class_nid.to_string(), |m| make_id(&[class_nid, &m])),
+                    _ => class_nid.to_string(),
+                };
+                emit(member, &owner);
+            }
+            "method_definition" => {
+                let m_nid = ts_method_name(member, source)
+                    .map_or_else(|| class_nid.to_string(), |m| make_id(&[class_nid, &m]));
+                for deco in ts_descendant_decorators(member) {
+                    emit(deco, &m_nid);
+                }
+            }
+            _ => {
+                for deco in ts_descendant_decorators(member) {
+                    emit(deco, class_nid);
+                }
+            }
+        }
+    }
 }

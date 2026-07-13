@@ -43,6 +43,7 @@ fn parse_form_text(text: &str, path: &Path) -> FileResult {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
     };
@@ -68,6 +69,8 @@ fn parse_form_text(text: &str, path: &Path) -> FileResult {
                 weight: 1.0,
                 context,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
     };

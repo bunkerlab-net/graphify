@@ -62,6 +62,7 @@ pub(super) fn walk_rust(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -75,6 +76,8 @@ pub(super) fn walk_rust(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 emit_rust_param_return_refs(ctx, node, &func_nid, line, source);
                 if let Some(body) = node.child_by_field_name("body") {
@@ -97,6 +100,7 @@ pub(super) fn walk_rust(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -110,12 +114,17 @@ pub(super) fn walk_rust(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 if t == "trait_item" {
                     emit_rust_trait_bounds(ctx, node, &item_nid, line, source);
                 }
                 if t == "struct_item" {
                     emit_rust_struct_fields(ctx, node, &item_nid, source);
+                }
+                if t == "enum_item" {
+                    emit_rust_enum_variant_fields(ctx, node, &item_nid, source);
                 }
             }
         }
@@ -134,6 +143,7 @@ pub(super) fn walk_rust(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 impl_nid = Some(nid);
@@ -184,6 +194,8 @@ pub(super) fn walk_rust(
                         weight: 1.0,
                         context: Some("import".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -225,6 +237,7 @@ impl RustWalkCtx<'_> {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         nid2
@@ -243,6 +256,8 @@ impl RustWalkCtx<'_> {
             weight: 1.0,
             context: Some(context.to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -259,6 +274,8 @@ impl RustWalkCtx<'_> {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 }
@@ -379,8 +396,9 @@ fn emit_rust_struct_fields(
         return;
     }
     loop {
-        if cur.node().kind() == "field_declaration_list" {
-            let mut fcur = cur.node().walk();
+        let list = cur.node();
+        if list.kind() == "field_declaration_list" {
+            let mut fcur = list.walk();
             if fcur.goto_first_child() {
                 loop {
                     if fcur.node().kind() == "field_declaration" {
@@ -391,6 +409,14 @@ fn emit_rust_struct_fields(
                     }
                 }
             }
+        } else if list.kind() == "ordered_field_declaration_list" {
+            // Tuple struct (`struct Wrapper(pub Logger, Config);`) — positional
+            // field types nest directly here with no `field_declaration` wrapper.
+            // Recursing the whole list through the collector covers every type
+            // form it supports (incl. slice/pointer types the Python allowlist
+            // dropped) without duplicating the type grammar (7eb847b).
+            let fline = list.start_position().row + 1;
+            emit_rust_type_node_refs(ctx, list, item_nid, fline, source);
         }
         if !cur.goto_next_sibling() {
             break;
@@ -430,6 +456,18 @@ fn emit_rust_struct_field(
     let Some(type_node) = type_node else {
         return;
     };
+    emit_rust_type_node_refs(ctx, type_node, item_nid, line, source);
+}
+
+/// Collect Rust type refs from `type_node` and emit `references[field]` /
+/// `references[generic_arg]` edges from `item_nid`, skipping self-references.
+fn emit_rust_type_node_refs(
+    ctx: &mut RustWalkCtx<'_>,
+    type_node: tree_sitter::Node<'_>,
+    item_nid: &str,
+    line: usize,
+    source: &[u8],
+) {
     let mut refs: Vec<(String, bool)> = Vec::new();
     rust_collect_type_refs(type_node, source, false, &mut refs);
     for (ref_name, is_generic) in refs {
@@ -437,6 +475,80 @@ fn emit_rust_struct_field(
         let tgt = ctx.ensure_named_node(&ref_name, line);
         if tgt != item_nid {
             ctx.push_ref(item_nid, &tgt, context, line);
+        }
+    }
+}
+
+/// Emit `references[field]` / `references[generic_arg]` edges for the payload
+/// types of an `enum_item`'s variants. Tuple variants (`Click(Logger)`) nest
+/// types under `ordered_field_declaration_list`; struct variants
+/// (`Resize { size: Dim }`) under `field_declaration_list`. Neither was
+/// traversed before, so every enum-variant type reference was dropped (674184d).
+fn emit_rust_enum_variant_fields(
+    ctx: &mut RustWalkCtx<'_>,
+    node: tree_sitter::Node<'_>,
+    item_nid: &str,
+    source: &[u8],
+) {
+    let mut cur = node.walk();
+    if !cur.goto_first_child() {
+        return;
+    }
+    loop {
+        if cur.node().kind() == "enum_variant_list" {
+            let mut vcur = cur.node().walk();
+            if vcur.goto_first_child() {
+                loop {
+                    if vcur.node().kind() == "enum_variant" {
+                        emit_rust_enum_variant(ctx, vcur.node(), item_nid, source);
+                    }
+                    if !vcur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        if !cur.goto_next_sibling() {
+            break;
+        }
+    }
+}
+
+/// Emit payload-type references for a single `enum_variant`.
+fn emit_rust_enum_variant(
+    ctx: &mut RustWalkCtx<'_>,
+    variant: tree_sitter::Node<'_>,
+    item_nid: &str,
+    source: &[u8],
+) {
+    let vline = variant.start_position().row + 1;
+    let mut cur = variant.walk();
+    if !cur.goto_first_child() {
+        return;
+    }
+    loop {
+        let vc = cur.node();
+        if vc.kind() == "ordered_field_declaration_list" {
+            // Tuple variant (`Click(Logger)`): recurse the whole payload list.
+            emit_rust_type_node_refs(ctx, vc, item_nid, vline, source);
+        } else if vc.kind() == "field_declaration_list" {
+            let mut fcur = vc.walk();
+            if fcur.goto_first_child() {
+                loop {
+                    if fcur.node().kind() == "field_declaration"
+                        && let Some(tn) = fcur.node().child_by_field_name("type")
+                    {
+                        let fline = fcur.node().start_position().row + 1;
+                        emit_rust_type_node_refs(ctx, tn, item_nid, fline, source);
+                    }
+                    if !fcur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        if !cur.goto_next_sibling() {
+            break;
         }
     }
 }

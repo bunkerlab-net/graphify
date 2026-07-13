@@ -39,6 +39,8 @@ pub(super) fn walk_from_refs(
                                     weight: 1.0,
                                     context: None,
                                     confidence_score: None,
+                                    deferred: false,
+                                    metadata: None,
                                 });
                             }
                             if !rc.goto_next_sibling() {

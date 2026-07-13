@@ -17,6 +17,7 @@ pub(super) mod fs;
 pub(super) mod hooks_json;
 pub(super) mod install_skill;
 pub(super) mod markdown;
+pub(super) mod skill_version;
 pub(super) mod skills;
 pub(super) mod uninstall_all;
 
@@ -32,6 +33,10 @@ pub use markdown::{
     CLAUDE_MD_SECTION, CURSOR_RULE, GEMINI_MD_SECTION, KILO_PLUGIN_JS, KIRO_STEERING,
     OPENCODE_PLUGIN_JS, READ_SETTINGS_HOOK_MATCHER, SETTINGS_HOOK_MATCHER,
     VSCODE_INSTRUCTIONS_SECTION,
+};
+pub use skill_version::{
+    check_skill_versions, refresh_all_version_stamps, skill_destinations, skill_version_warnings,
+    user_skill_destinations, version_tuple,
 };
 pub use uninstall_all::uninstall_all;
 

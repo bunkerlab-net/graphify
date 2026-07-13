@@ -51,6 +51,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -64,6 +65,8 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 let mut rc = GoRefCtx {
                     source,
@@ -117,6 +120,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             source_location: Some(format!("L{line}")),
                             metadata: None,
                             origin_file: None,
+                            node_type: None,
                         });
                     }
                     let mnid = make_id(&[&parent_nid, method_name]);
@@ -129,6 +133,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             source_location: Some(format!("L{line}")),
                             metadata: None,
                             origin_file: None,
+                            node_type: None,
                         });
                     }
                     edges.push(Edge {
@@ -142,6 +147,8 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                     mnid
                 } else {
@@ -155,6 +162,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             source_location: Some(format!("L{line}")),
                             metadata: None,
                             origin_file: None,
+                            node_type: None,
                         });
                     }
                     edges.push(Edge {
@@ -168,6 +176,8 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                     mnid
                 };
@@ -205,6 +215,7 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         edges.push(Edge {
@@ -218,6 +229,8 @@ pub(super) fn walk_go(ctx: &mut GoWalkCtx<'_>, node: tree_sitter::Node<'_>, sour
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                         // Struct field embeds/references and interface embedding.
                         let mut rc = GoRefCtx {
@@ -347,6 +360,8 @@ fn emit_go_import_spec(
             weight: 1.0,
             context: Some("import".to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
         // Track local name (alias or last path segment)
         let alias = spec.child_by_field_name("name");

@@ -201,10 +201,79 @@ fn detect_skips_snapshots_dir() {
         "export function greet() { return 'hi'; }",
     )
     .expect("test invariant");
+    // a bare snapshots/ dir that actually holds .snap files is still a JS artefact
+    let snap = tmp.path().join("snapshots");
+    std::fs::create_dir_all(&snap).expect("create_dir_all");
+    std::fs::write(
+        snap.join("component.test.tsx.snap"),
+        "exports[`renders`] = `<span/>`",
+    )
+    .expect("test invariant");
     let result = detect(tmp.path(), None, None);
     let all_files: Vec<_> = result.files.values().flatten().collect();
     assert!(!all_files.iter().any(|f| f.contains("__snapshots__")));
+    let sep = std::path::MAIN_SEPARATOR;
+    assert!(
+        !all_files
+            .iter()
+            .any(|f| f.contains(&format!("{sep}snapshots{sep}")))
+    );
     assert!(all_files.iter().any(|f| f.contains("app.ts")));
+}
+
+#[test]
+fn detect_keeps_snapshots_code_namespace() {
+    // #1666: a bare snapshots/ dir with NO .snap files is a legit code namespace
+    // (e.g. Rails app/services/snapshots/) and must NOT be pruned as a JS artefact.
+    let tmp = tempdir().expect("tempdir");
+    let svc = tmp.path().join("app").join("services").join("snapshots");
+    std::fs::create_dir_all(&svc).expect("create_dir_all");
+    std::fs::write(
+        svc.join("round_reader.rb"),
+        "class RoundReader\n  def call; end\nend\n",
+    )
+    .expect("test invariant");
+    std::fs::write(
+        svc.join("backfill_marker.rb"),
+        "class BackfillMarker\n  def run; end\nend\n",
+    )
+    .expect("test invariant");
+    std::fs::write(tmp.path().join("app.rb"), "class App; end\n").expect("test invariant");
+    let result = detect(tmp.path(), None, None);
+    let all_files: Vec<_> = result.files.values().flatten().collect();
+    assert!(all_files.iter().any(|f| f.contains("round_reader.rb")));
+    assert!(all_files.iter().any(|f| f.contains("backfill_marker.rb")));
+}
+
+#[test]
+fn detect_records_unclassified_extensionless_files() {
+    // #1692: extensionless, non-shebang project files (Dockerfile, Makefile, ...)
+    // were considered but left no trace. detect() now lists them under
+    // `unclassified` so they can be surfaced instead of silently vanishing.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("app.py"), "def f():\n    return 1\n").expect("test invariant");
+    std::fs::write(
+        tmp.path().join("Dockerfile"),
+        "FROM python:3.12\nRUN pip install x\n",
+    )
+    .expect("test invariant");
+    std::fs::write(tmp.path().join("Makefile"), "build:\n\techo hi\n").expect("test invariant");
+    std::fs::write(tmp.path().join("LICENSE"), "MIT License\n").expect("test invariant");
+    let result = detect(tmp.path(), None, None);
+    let names: Vec<String> = result
+        .unclassified
+        .iter()
+        .filter_map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .collect();
+    assert!(names.iter().any(|n| n == "Dockerfile"), "{names:?}");
+    assert!(names.iter().any(|n| n == "Makefile"), "{names:?}");
+    assert!(names.iter().any(|n| n == "LICENSE"), "{names:?}");
+    // classified source is NOT listed as unclassified
+    assert!(!names.iter().any(|n| n == "app.py"), "{names:?}");
 }
 
 #[test]
@@ -357,18 +426,39 @@ fn detect_handles_circular_symlinks() {
 
 #[cfg(unix)]
 #[test]
-fn detect_auto_detects_direct_symlink_child() {
+fn detect_does_not_auto_follow_symlink_child() {
+    // 009a98b: following symlinks is now an explicit opt-in — a symlinked child no
+    // longer auto-enables it. The real directory is still scanned directly; the
+    // symlink is only traversed when `follow_symlinks = Some(true)` and its target
+    // stays inside the scan root.
     let tmp = tempdir().expect("tempdir");
     let real_dir = tmp.path().join("real_lib");
     std::fs::create_dir_all(&real_dir).expect("create_dir_all");
     std::fs::write(real_dir.join("util.py"), "x = 1").expect("test invariant");
     std::os::unix::fs::symlink(&real_dir, tmp.path().join("linked_lib")).expect("test invariant");
-    // Default (no kwarg): auto-detect → follows because of linked_lib symlink
-    let result = detect(tmp.path(), None, None);
+
+    // Default (no kwarg): symlink NOT followed, but the real dir is scanned.
+    let default_run = detect(tmp.path(), None, None);
     assert!(
-        result.files["code"]
+        default_run.files["code"]
             .iter()
-            .any(|f| f.contains("linked_lib"))
+            .any(|f| f.contains("real_lib")),
+        "the real directory must still be scanned"
+    );
+    assert!(
+        !default_run.files["code"]
+            .iter()
+            .any(|f| f.contains("linked_lib")),
+        "the symlinked child must NOT be auto-followed (009a98b)"
+    );
+
+    // Explicit opt-in: the in-root symlink target is followed.
+    let opt_in = detect(tmp.path(), Some(true), None);
+    assert!(
+        opt_in.files["code"]
+            .iter()
+            .any(|f| f.contains("linked_lib")),
+        "an explicitly-followed in-root symlink must be scanned"
     );
 }
 
@@ -577,4 +667,54 @@ fn detect_incremental_survives_dict_valued_mtime() {
     let unchanged: Vec<&String> = result.unchanged_files.values().flatten().collect();
     assert!(changed.iter().any(|f| f.contains("mod.py")));
     assert!(!unchanged.iter().any(|f| f.contains("mod.py")));
+}
+#[test]
+fn detect_reports_walk_errors_key() {
+    // detect() always surfaces a walk_errors list so callers can tell whether
+    // enumeration was complete.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("a.py"), "def f(): pass\n").expect("test invariant");
+    let result = detect(tmp.path(), None, None);
+    assert!(
+        result.walk_errors.is_empty(),
+        "clean walk must report no errors: {:?}",
+        result.walk_errors
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn detect_surfaces_unreadable_dir_instead_of_silent_skip() {
+    // A subtree whose scan raises (permissions, or a dir deleted mid-walk) used to
+    // be silently dropped, yielding a partial graph. detect() now records it in
+    // walk_errors while still enumerating the rest of the tree.
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("a.py"), "def f(): pass\n").expect("test invariant");
+    let locked = tmp.path().join("locked");
+    std::fs::create_dir(&locked).expect("mkdir");
+    std::fs::write(locked.join("b.py"), "def g(): pass\n").expect("test invariant");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    // If the perms don't actually block the scan (running as root, or a platform
+    // that ignores mode 0o000), the skip path can't be exercised — bail cleanly.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).ok();
+        return;
+    }
+
+    let result = detect(tmp.path(), None, None);
+    // Restore perms so the tempdir can be cleaned up.
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).ok();
+
+    assert!(
+        result.files["code"].iter().any(|f| f.ends_with("a.py")),
+        "the rest of the tree must still be enumerated: {:?}",
+        result.files["code"]
+    );
+    assert!(
+        !result.walk_errors.is_empty(),
+        "the unreadable directory must be recorded in walk_errors"
+    );
 }

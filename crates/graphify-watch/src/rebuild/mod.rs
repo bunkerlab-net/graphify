@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod pending;
 pub mod pipeline;
 mod pipeline_helpers;
+pub mod reconcile;
 pub mod relativize;
 pub mod shrink;
 
@@ -53,6 +54,9 @@ pub struct RebuildOptions {
     pub no_cluster: bool,
     /// Lock-acquisition policy.
     pub lock: LockPolicy,
+    /// Follow symlinked directories during detection (mirrors graphify-py
+    /// `_rebuild_code(follow_symlinks=...)`).
+    pub follow_symlinks: bool,
 }
 
 /// Re-run AST extraction + build + optional cluster + report for code files.
@@ -71,12 +75,19 @@ pub fn rebuild_code(
     changed_paths: Option<&[PathBuf]>,
     opts: RebuildOptions,
 ) -> Result<bool, WatchError> {
+    if !stabilize_rebuild_cwd(watch_path) {
+        return Ok(false);
+    }
     let out = watch_path.join(graphify_security::graphify_out());
 
     match opts.lock {
-        LockPolicy::None => {
-            rebuild_code_inner(watch_path, changed_paths, opts.force, opts.no_cluster)
-        }
+        LockPolicy::None => rebuild_code_inner(
+            watch_path,
+            changed_paths,
+            opts.force,
+            opts.no_cluster,
+            opts.follow_symlinks,
+        ),
         LockPolicy::TryAcquire | LockPolicy::BlockOn => {
             let block = matches!(opts.lock, LockPolicy::BlockOn);
             // #1059: an incremental hook must not drop its change set when
@@ -103,10 +114,45 @@ pub fn rebuild_code(
             // (including the paths we just queued ourselves) and merge with our
             // own change set, then loop to absorb any late arrivals.
             let result = pending::rebuild_with_pending(&out, changed_paths, |paths| {
-                rebuild_code_inner(watch_path, paths, opts.force, opts.no_cluster)
+                rebuild_code_inner(
+                    watch_path,
+                    paths,
+                    opts.force,
+                    opts.no_cluster,
+                    opts.follow_symlinks,
+                )
             });
             drop(guard);
             result
         }
     }
+}
+
+/// Ensure relative rebuild paths have a usable CWD before queue/lock setup.
+///
+/// Detached git hooks can inherit a transient working directory that is deleted
+/// before the background rebuild starts; in that state `current_dir()` and the
+/// relative `graphify-out` mkdirs fail before the normal rebuild error handling
+/// can run. Hooks that know the repo root export `GRAPHIFY_REPO_ROOT`, so the
+/// rebuild recovers by chdir'ing there. Mirrors graphify-py
+/// `_stabilize_rebuild_cwd`; returns `false` (skip the rebuild) when the CWD is
+/// gone and no repo root is available.
+fn stabilize_rebuild_cwd(watch_path: &Path) -> bool {
+    if watch_path.is_absolute() {
+        return true;
+    }
+    if let Ok(root) = std::env::var("GRAPHIFY_REPO_ROOT") {
+        let root = root.trim();
+        if !root.is_empty() && Path::new(root).is_dir() && std::env::set_current_dir(root).is_ok() {
+            return true;
+        }
+    }
+    if std::env::current_dir().is_ok() {
+        return true;
+    }
+    eprintln!(
+        "[graphify watch] Rebuild failed: current working directory no longer \
+         exists and GRAPHIFY_REPO_ROOT is not set."
+    );
+    false
 }

@@ -114,6 +114,9 @@ pub struct AggResult {
     pub corrections: Vec<Correction>,
     /// Per-community buckets; empty unless a graph was supplied.
     pub by_community: IndexMap<String, Bucket>,
+    /// Overall per-node (date, question, outcome) provenance trail, most-recent
+    /// order determined by the consumer. Feeds the learning-overlay sidecar.
+    pub node_provenance: IndexMap<String, Vec<(String, String, String)>>,
 }
 
 /// Mutable accumulator threaded through aggregation.
@@ -126,6 +129,9 @@ struct AggBucket {
     node_last: IndexMap<String, String>,
     dead_ends: Vec<DeadEnd>,
     corrections: Vec<Correction>,
+    /// Per-node (date, question, outcome) trail feeding the learning-overlay
+    /// sidecar's provenance; never rendered into LESSONS.md.
+    node_provenance: IndexMap<String, Vec<(String, String, String)>>,
 }
 
 /// Parse an ISO date/datetime to an aware UTC datetime, or `None`.
@@ -166,7 +172,15 @@ fn round_score(x: f64) -> f64 {
     (x * factor).round() / factor
 }
 
-fn record_node(b: &mut AggBucket, node: &str, sign: i32, weight: f64, date: &str) {
+fn record_node(
+    b: &mut AggBucket,
+    node: &str,
+    sign: i32,
+    weight: f64,
+    date: &str,
+    question: &str,
+    outcome: &str,
+) {
     *b.node_score.entry(node.to_owned()).or_insert(0.0) += f64::from(sign) * weight;
     if sign > 0 {
         *b.node_pos.entry(node.to_owned()).or_insert(0) += 1;
@@ -177,6 +191,11 @@ fn record_node(b: &mut AggBucket, node: &str, sign: i32, weight: f64, date: &str
     if date > cur {
         b.node_last.insert(node.to_owned(), date.to_owned());
     }
+    b.node_provenance.entry(node.to_owned()).or_default().push((
+        date.to_owned(),
+        question.to_owned(),
+        outcome.to_owned(),
+    ));
 }
 
 fn cmp_score_then_node(sa: f64, na: &str, sb: f64, nb: &str) -> Ordering {
@@ -267,8 +286,9 @@ fn apply_doc(b: &mut AggBucket, doc: &MemoryDoc, nodes: &[String], sign: i32, we
         _ => b.counts.unmarked += 1,
     }
     if sign != 0 {
+        let outcome = doc.outcome.as_deref().unwrap_or("");
         for n in nodes {
-            record_node(b, n, sign, weight, date);
+            record_node(b, n, sign, weight, date, &doc.question, outcome);
         }
     }
     match doc.outcome.as_deref() {
@@ -364,5 +384,6 @@ pub fn aggregate_lessons(
         dead_ends: dedupe_dead_ends(overall.dead_ends),
         corrections: dedupe_corrections(overall.corrections),
         by_community: community_out,
+        node_provenance: overall.node_provenance,
     }
 }

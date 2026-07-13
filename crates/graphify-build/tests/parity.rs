@@ -1270,3 +1270,175 @@ fn semantic_rekey_migrates_relative_leaves_absolute() {
     assert!(g2.contains_node("api_readme"));
     assert!(!g2.contains_node("abs_docs_v1_api_readme"));
 }
+
+// ── #1536: corrupt graph.json on build_merge ─────────────────────────────────
+
+#[test]
+fn test_build_merge_corrupt_graph_raises_actionable_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let gp = tmp.path().join("graph.json");
+    std::fs::write(&gp, "{ not valid json").expect("write");
+    let err = build_merge(&[], &gp, None, false, false, None).expect_err("corrupt graph errors");
+    let msg = format!("{err}");
+    assert!(msg.contains("Cannot read"), "msg: {msg}");
+    assert!(
+        msg.contains("incremental merge") || msg.contains("rebuild"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn test_build_merge_valid_graph_still_loads() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let gp = tmp.path().join("graph.json");
+    std::fs::write(
+        &gp,
+        r#"{"nodes": [{"id": "a", "label": "A", "file_type": "code", "source_file": "a.py"}], "links": []}"#,
+    )
+    .expect("write");
+    let new = json!({"nodes": [{"id": "b", "label": "B", "file_type": "code", "source_file": "b.py"}], "edges": []});
+    let g = build_merge(&[new], &gp, None, false, false, None).expect("valid merge");
+    assert!(
+        g.node_count() >= 2,
+        "both nodes present: {}",
+        g.node_count()
+    );
+}
+
+// ── #1753: deterministic ghost-node merge — distinct non-AST concepts survive ──
+
+fn label_count(g: &Graph, label: &str) -> usize {
+    g.nodes()
+        .filter(|(_, a)| a.get("label").and_then(Value::as_str) == Some(label))
+        .count()
+}
+
+#[test]
+fn test_ghost_merge_non_ast_different_files_both_survive() {
+    // Two non-AST concept nodes sharing (basename, label) but from DIFFERENT
+    // files are distinct concepts — both must survive, not collapse (#1753).
+    let extraction = json!({
+        "nodes": [
+            {"id": "a_update", "label": "update", "file_type": "concept", "source_file": "dir_a/update.md", "source_location": "L1"},
+            {"id": "b_update", "label": "update", "file_type": "concept", "source_file": "dir_b/update.md", "source_location": "L1"},
+        ],
+        "edges": []
+    });
+    let g = build_from_json(extraction, false, None).expect("build");
+    assert_eq!(
+        label_count(&g, "update"),
+        2,
+        "both distinct concepts survive"
+    );
+}
+
+#[test]
+fn test_ghost_merge_non_ast_same_file_still_merges() {
+    // A genuine same-file duplicate (identical source_file) still collapses.
+    let extraction = json!({
+        "nodes": [
+            {"id": "u1", "label": "update", "file_type": "concept", "source_file": "dir_a/update.md", "source_location": "L1"},
+            {"id": "u2", "label": "update", "file_type": "concept", "source_file": "dir_a/update.md", "source_location": "L2"},
+        ],
+        "edges": []
+    });
+    let g = build_from_json(extraction, false, None).expect("build");
+    assert_eq!(
+        label_count(&g, "update"),
+        1,
+        "same-file duplicate collapses"
+    );
+}
+
+// ── #1749: cross-language imports/references guard ───────────────────────────
+
+fn has_edge(g: &Graph, rel: &str, src_label: &str, tgt_label: &str) -> bool {
+    let id_of = |label: &str| -> Option<String> {
+        g.nodes()
+            .find(|(_, a)| a.get("label").and_then(Value::as_str) == Some(label))
+            .map(|(id, _)| id.clone())
+    };
+    let (Some(s), Some(t)) = (id_of(src_label), id_of(tgt_label)) else {
+        return false;
+    };
+    g.edges().any(|e| {
+        e.source == s
+            && e.target == t
+            && e.attrs.get("relation").and_then(Value::as_str) == Some(rel)
+    })
+}
+
+#[test]
+fn test_cross_language_imports_references_are_dropped() {
+    // A Python `import time` must not bind to a same-named `time.ts` (#1749).
+    let extraction = json!({
+        "nodes": [
+            {"id": "pa", "label": "a.py", "file_type": "code", "source_file": "a.py"},
+            {"id": "tt", "label": "time.ts", "file_type": "code", "source_file": "src/time.ts"},
+            {"id": "tb", "label": "b.ts", "file_type": "code", "source_file": "src/b.ts"},
+        ],
+        "edges": [
+            {"source": "pa", "target": "tt", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "a.py"},
+            {"source": "tb", "target": "tt", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "src/b.ts"},
+        ]
+    });
+    let g = build_from_json(extraction, false, None).expect("build");
+    assert!(
+        !has_edge(&g, "imports_from", "a.py", "time.ts"),
+        "py→ts import dropped"
+    );
+    assert!(
+        has_edge(&g, "imports_from", "b.ts", "time.ts"),
+        "ts→ts import kept"
+    );
+}
+
+#[test]
+fn test_cross_family_reference_to_unknown_ext_is_kept() {
+    // A config/manifest (unknown ext) → code reference must survive: only BOTH
+    // endpoints being known code languages of different families is a phantom.
+    let extraction = json!({
+        "nodes": [
+            {"id": "pkg", "label": "package.json", "file_type": "config", "source_file": "package.json"},
+            {"id": "app", "label": "app.ts", "file_type": "code", "source_file": "src/app.ts"},
+        ],
+        "edges": [
+            {"source": "pkg", "target": "app", "relation": "references", "confidence": "EXTRACTED", "source_file": "package.json"}
+        ]
+    });
+    let g = build_from_json(extraction, false, None).expect("build");
+    assert!(
+        has_edge(&g, "references", "package.json", "app.ts"),
+        "config→code reference kept"
+    );
+}
+
+// ── #1574: build_merge preserves unchanged-file hyperedges ───────────────────
+
+#[test]
+fn test_build_merge_preserves_unchanged_hyperedges() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let gp = tmp.path().join("graph.json");
+    std::fs::write(
+        &gp,
+        r#"{"nodes": [{"id": "d1", "label": "doc", "file_type": "document", "source_file": "docs/a.md"}],
+            "links": [],
+            "hyperedges": [{"id": "h1", "nodes": ["d1"], "source_file": "docs/a.md"}]}"#,
+    )
+    .expect("write");
+    // Re-extract a DIFFERENT file; the unchanged file's hyperedge must survive.
+    let new = json!({"nodes": [{"id": "c1", "label": "code", "file_type": "code", "source_file": "src/x.py"}], "edges": [], "hyperedges": []});
+    let g = build_merge(&[new], &gp, None, false, false, None).expect("merge");
+    let hyper = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        hyper
+            .iter()
+            .any(|h| h.get("id").and_then(Value::as_str) == Some("h1")),
+        "unchanged-file hyperedge preserved, got {hyper:?}"
+    );
+}

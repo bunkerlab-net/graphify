@@ -183,6 +183,8 @@ fn add_import_edge(
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     } else {
         result.nodes.push(Node {
@@ -193,6 +195,7 @@ fn add_import_edge(
             source_location: None,
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
         result.edges.push(Edge {
             external: false,
@@ -205,6 +208,8 @@ fn add_import_edge(
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
         existing_ids.insert(node_id);
     }

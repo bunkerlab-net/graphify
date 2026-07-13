@@ -112,6 +112,8 @@ fn walk_imports(ctx: &mut ImportWalkCtx<'_>, node: tree_sitter::Node<'_>, source
                         weight: 0.8,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -464,7 +466,7 @@ impl PyReexportResolver<'_> {
                         ));
                     }
                     aliases.insert(
-                        (self.file_nids[idx].clone(), local.to_lowercase()),
+                        (self.file_nids[idx].clone(), local.clone()),
                         origin_sym.clone(),
                     );
                 }
@@ -631,6 +633,8 @@ pub(super) fn resolve_python_member_calls(
             weight: 1.0,
             context: Some("call".to_string()),
             confidence_score: Some(1.0),
+            deferred: false,
+            metadata: None,
         });
     }
     all_edges.extend(new_edges);

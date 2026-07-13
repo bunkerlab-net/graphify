@@ -7,14 +7,14 @@
 
 use std::collections::HashMap;
 
-use graphify_build::{Graph, build_from_json};
+use graphify_build::{Graph, GraphKind, build_from_json};
 use graphify_prs::error::PrsError;
 use graphify_prs::gh::GhClient;
 use graphify_prs::git::GitClient;
 use graphify_serve::graph::{
     bfs, communities_from_graph, compute_idf, dfs, filter_graph_by_context, find_node,
-    infer_context_filters, load_graph, normalize_context_filters, pick_seeds, query_graph_text,
-    query_terms, resolve_context_filters, score_nodes, subgraph_to_text,
+    infer_context_filters, load_graph, normalize_context_filters, pick_seeds, pick_seeds_diverse,
+    query_graph_text, query_terms, resolve_context_filters, score_nodes, subgraph_to_text,
 };
 use graphify_serve::tools::{
     tool_get_pr_impact_with_clients, tool_list_prs_with_clients, tool_triage_prs_with_clients,
@@ -252,6 +252,60 @@ fn test_score_nodes_multiword_exact_label_outranks_superset() {
 }
 
 #[test]
+fn test_score_nodes_coverage_lone_generic_exact_hit_loses_to_multi_term_match() {
+    // #1602: in a multi-term query, a lone generic term that exactly equals a
+    // short leaf label ("list" == a list() leaf) must NOT bury a node matching
+    // several of the query's terms. Per-term exact/prefix tiers are scaled by
+    // squared term coverage. Leaves sit in the target's own directory to pin
+    // that source-path hits do NOT count toward coverage.
+    let mut nodes = vec![
+        json!({"id": "target", "label": "ClientLive.Index", "source_file": "lib/clients_live/index.ex", "community": 0}),
+        json!({"id": "form", "label": "ClientLive.Form", "source_file": "lib/clients_live/form.ex", "community": 0}),
+        json!({"id": "show", "label": "ClientLive.Show", "source_file": "lib/clients_live/show.ex", "community": 0}),
+    ];
+    for i in 0..3 {
+        nodes.push(json!({"id": format!("leaf{i}"), "label": "list()", "source_file": format!("lib/clients_live/helpers{i}.ex"), "community": 0}));
+    }
+    for i in 0..24 {
+        nodes.push(json!({"id": format!("filler{i}"), "label": format!("shopping list {i}"), "source_file": format!("lib/filler{i}.ex"), "community": 0}));
+    }
+    let g = build_from_json(json!({"nodes": nodes, "edges": []}), false, None).expect("graph");
+    let mut cache = HashMap::new();
+    let scored = score_nodes(
+        &g,
+        &["clientlive", "index", "clients", "list", "columns"],
+        &mut cache,
+    );
+    let by_id: HashMap<&str, f64> = scored.iter().map(|(s, n)| (n.as_str(), *s)).collect();
+    assert_eq!(scored[0].1, "target");
+    assert!(
+        by_id["target"] > by_id["leaf0"],
+        "a 1-of-5-terms exact collision must not outrank the node matching 3 of 5 terms"
+    );
+}
+
+#[test]
+fn test_score_nodes_coverage_full_coverage_query_is_unchanged() {
+    // A single-term (coverage == 1) identifier lookup keeps the exact tier's full
+    // magnitude, so #1602 dampening never touches it. Full-query exact tier (10x)
+    // + per-term exact tier + source hit ("extract" in "extract.py"), undampened.
+    let g = make_graph();
+    let mut cache = HashMap::new();
+    let scored = score_nodes(&g, &["extract"], &mut cache);
+    let w = *compute_idf(&g, &["extract"], &mut cache)
+        .get("extract")
+        .expect("idf for extract");
+    // EXACT=1000, SOURCE=0.5 (see graph.rs constants).
+    let expected = (1000.0 * 10.0 + 1000.0 + 0.5) * w;
+    assert_eq!(scored[0].1, "n1");
+    assert!(
+        (scored[0].0 - expected).abs() <= expected.abs() * 1e-9,
+        "single-term exact score {} must equal the undampened {expected}",
+        scored[0].0
+    );
+}
+
+#[test]
 fn test_find_node_ignores_trailing_punctuation() {
     let g = make_graph();
     assert_eq!(find_node(&g, "extract?"), vec!["n1".to_string()]);
@@ -275,6 +329,50 @@ fn test_find_node_matches_full_punctuated_unicode_label() {
         find_node(&g, "Skill /auditar — Auditoría inquisitiva de enlaces"),
         vec!["n1".to_string()]
     );
+}
+
+#[test]
+fn test_find_node_matches_punctuated_file_label_exactly() {
+    // #1704: an exactly-typed punctuated file label must resolve through explain,
+    // just like it does through path/query. Built directly so the explicit
+    // norm_label is not rewritten by build_from_json canonicalization.
+    let mut g = Graph::new(GraphKind::Graph);
+    let mk = |label: &str, norm: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("norm_label".to_string(), json!(norm));
+        a.insert("source_file".to_string(), json!(src));
+        a.insert("source_location".to_string(), json!("L1"));
+        a
+    };
+    g.add_node(
+        "f1",
+        mk("blockStream.ts", "blockstream.ts", "lib/blockStream.ts"),
+    );
+    g.add_node(
+        "f2",
+        mk(
+            "blockStream.test.ts",
+            "blockstream.test.ts",
+            "lib/blockStream.test.ts",
+        ),
+    );
+    assert_eq!(find_node(&g, "blockStream.ts"), vec!["f1".to_string()]);
+    assert_eq!(find_node(&g, "blockStream.test.ts"), vec!["f2".to_string()]);
+}
+
+#[test]
+fn test_find_node_resolves_when_label_and_norm_label_diverge() {
+    // #1704: when label ("BlockStream") and norm_label ("blockstream.ts") diverge,
+    // the punctuation-preserving norm_query resolves the exactly-typed label.
+    let mut g = Graph::new(GraphKind::Graph);
+    let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+    a.insert("label".to_string(), json!("BlockStream"));
+    a.insert("norm_label".to_string(), json!("blockstream.ts"));
+    a.insert("source_file".to_string(), json!("lib/x.ts"));
+    a.insert("source_location".to_string(), json!("L1"));
+    g.add_node("n1", a);
+    assert_eq!(find_node(&g, "blockStream.ts"), vec!["n1".to_string()]);
 }
 
 #[test]
@@ -334,13 +432,30 @@ fn test_find_node_source_file_path_backslash_prefers_file_level_node() {
 
 #[test]
 fn test_query_terms_strips_search_punctuation() {
+    // "what" is a question stopword (dropped); punctuation still stripped from "extract?".
     assert_eq!(
         query_terms("what calls extract?"),
-        vec![
-            "what".to_string(),
-            "calls".to_string(),
-            "extract".to_string()
-        ]
+        vec!["calls".to_string(), "extract".to_string()]
+    );
+}
+
+#[test]
+fn test_query_terms_drops_question_stopwords() {
+    // Natural-language question/filler words are dropped so content words drive
+    // seeding: "how does the frontier cache work" → content terms only (#6e97088).
+    assert_eq!(
+        query_terms("how does the frontier cache work"),
+        vec!["frontier".to_string(), "cache".to_string()]
+    );
+}
+
+#[test]
+fn test_query_terms_all_stopwords_falls_back_to_unfiltered() {
+    // An all-stopword query keeps its terms rather than seeding on nothing
+    // ("it" is dropped as a short English token before the stopword filter).
+    assert_eq!(
+        query_terms("how does it work"),
+        vec!["how".to_string(), "does".to_string(), "work".to_string()]
     );
 }
 
@@ -886,6 +1001,51 @@ fn test_pick_seeds_respects_max_k() {
     assert_eq!(seeds.len(), 3);
 }
 
+#[test]
+fn test_pick_seeds_without_diversity_args_is_unchanged() {
+    // pick_seeds (no graph/terms) keeps the pre-#1445 gap-cutoff behavior.
+    let scored = vec![
+        (1000.0_f64, "fbs".to_string()),
+        (1.0, "err1".to_string()),
+        (0.9, "err2".to_string()),
+    ];
+    assert_eq!(pick_seeds(&scored, 3, 0.2), vec!["fbs".to_string()]);
+}
+
+#[test]
+fn test_pick_seeds_diversity_recovers_starved_term() {
+    // #1445: one term's incidental EXACT match ("unrelated") outscores the
+    // substring match on the relevant term ("widget" → rate_limit_widget) by
+    // ~1000x, so the 20%-gap cutoff drops the relevant node. pick_seeds_diverse
+    // guarantees a per-term seed, recovering it. Directed fixture mirrors Python.
+    let mut g = Graph::new(GraphKind::DiGraph);
+    let mk = |label: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("source_file".to_string(), json!(src));
+        a
+    };
+    g.add_node("noise", mk("unrelated", "design_tokens.json"));
+    g.add_node("target", mk("rate_limit_widget", "src/widget.py"));
+    g.add_node("other", mk("something_else", "src/other.py"));
+    g.add_edge("other", "target", indexmap::IndexMap::new());
+
+    let mut cache = HashMap::new();
+    let terms = ["unrelated", "widget"];
+    let scored = score_nodes(&g, &terms, &mut cache);
+    // Premise: without diversity, only the exact match survives the gap cutoff.
+    assert_eq!(pick_seeds(&scored, 3, 0.2), vec!["noise".to_string()]);
+    let after = pick_seeds_diverse(&scored, 3, 0.2, &g, &terms, &mut cache);
+    assert!(
+        after.contains(&"noise".to_string()),
+        "exact match kept: {after:?}"
+    );
+    assert!(
+        after.contains(&"target".to_string()),
+        "starved term recovered: {after:?}"
+    );
+}
+
 // ── Truncation hint (issue #897) ──────────────────────────────────────────────
 
 #[test]
@@ -1047,7 +1207,7 @@ fn test_tool_triage_prs_respects_limit() {
 fn query_terms_filters_only_short_english_terms() {
     assert_eq!(
         query_terms("the quick brown"),
-        vec!["the", "quick", "brown"]
+        vec!["quick", "brown"] // "the" is a question/filler stopword, dropped
     );
     let r = query_terms("an ai bot");
     assert_eq!(r, vec!["bot"]);
@@ -1144,4 +1304,43 @@ fn test_load_graph_accepts_under_cap() {
     .expect("write");
     let result = load_graph(graph_path.to_str().expect("utf-8"));
     assert!(result.is_ok(), "small graph should load: {result:?}");
+}
+
+// --- #1441 work-memory overlay: query-text learning suffix --------------------
+
+#[test]
+fn test_subgraph_to_text_annotates_node_with_learning_status() {
+    let mut g = make_graph();
+    g.graph_attrs.insert(
+        "_learning_overlay".to_string(),
+        json!({ "n1": { "status": "preferred" } }),
+    );
+    let nodes: std::collections::HashSet<String> =
+        ["n1".to_string(), "n2".to_string()].into_iter().collect();
+    let text = subgraph_to_text(&g, &nodes, &[], 1000, None);
+    let extract_line = text
+        .lines()
+        .find(|l| l.starts_with("NODE extract "))
+        .expect("extract node line");
+    assert!(
+        extract_line.contains("learning=preferred]"),
+        "{extract_line}"
+    );
+    let cluster_line = text
+        .lines()
+        .find(|l| l.starts_with("NODE cluster "))
+        .expect("cluster node line");
+    assert!(!cluster_line.contains("learning="), "{cluster_line}");
+}
+
+#[test]
+fn test_subgraph_to_text_marks_stale_status() {
+    let mut g = make_graph();
+    g.graph_attrs.insert(
+        "_learning_overlay".to_string(),
+        json!({ "n1": { "status": "contested", "stale": true } }),
+    );
+    let nodes: std::collections::HashSet<String> = ["n1".to_string()].into_iter().collect();
+    let text = subgraph_to_text(&g, &nodes, &[], 1000, None);
+    assert!(text.contains("learning=contested:stale]"), "{text}");
 }

@@ -360,3 +360,70 @@ fn load_validated_returns_errors_for_invalid_shape() {
     assert!(fragment.is_none());
     assert!(!errors.is_empty());
 }
+
+// ── #1561: hyperedge member-alias keys (members / node_ids) ──────────────────
+
+#[test]
+fn validate_accepts_alias_keyed_hyperedge() {
+    // A hyperedge using `members` instead of `nodes` must not be rejected.
+    let frag = json!({
+        "nodes": [], "edges": [],
+        "hyperedges": [{"id": "h1", "members": ["n1", "n2"]}]
+    });
+    let errors = validate_semantic_fragment(&frag);
+    assert!(
+        !errors.iter().any(|e| e.contains("must be a list")),
+        "alias-keyed hyperedge should validate: {errors:?}"
+    );
+}
+
+#[test]
+fn sanitize_folds_alias_members_to_nodes() {
+    let mut frag = json!({
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": "n2", "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [],
+        "hyperedges": [{"id": "h1", "members": ["n1", "n1", "n2"], "source_file": "a.py"}]
+    })
+    .as_object()
+    .expect("object")
+    .clone();
+    sanitize_semantic_fragment(&mut frag);
+    let hes = frag
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .expect("hyperedges");
+    assert_eq!(hes.len(), 1);
+    let he = hes[0].as_object().expect("he");
+    // Folded onto `nodes`, deduped (n1 once), alias keys removed.
+    let nodes = he.get("nodes").and_then(Value::as_array).expect("nodes");
+    assert_eq!(nodes.len(), 2);
+    assert!(!he.contains_key("members") && !he.contains_key("node_ids"));
+}
+
+#[test]
+fn sanitize_nodes_already_list_wins_and_drops_aliases() {
+    let mut frag = json!({
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": "n2", "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [],
+        "hyperedges": [{"id": "h1", "nodes": ["n1", "n2"], "members": ["x"], "node_ids": ["y"], "source_file": "a.py"}]
+    })
+    .as_object()
+    .expect("object")
+    .clone();
+    sanitize_semantic_fragment(&mut frag);
+    let he = frag
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .expect("hyperedges")[0]
+        .as_object()
+        .expect("he");
+    let nodes = he.get("nodes").and_then(Value::as_array).expect("nodes");
+    assert_eq!(nodes.len(), 2);
+    assert!(!he.contains_key("members") && !he.contains_key("node_ids"));
+}

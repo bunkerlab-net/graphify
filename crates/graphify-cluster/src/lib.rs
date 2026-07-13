@@ -35,6 +35,7 @@ mod cohesion;
 mod constants;
 mod edge_list;
 mod hubs;
+mod labels;
 mod leiden;
 mod louvain;
 mod remap;
@@ -42,4 +43,5 @@ mod splits;
 
 pub use cluster::cluster;
 pub use cohesion::{cohesion_score, score_all};
+pub use labels::{community_member_sigs, label_communities_by_hub};
 pub use remap::remap_communities_to_previous;

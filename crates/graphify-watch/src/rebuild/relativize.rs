@@ -7,15 +7,18 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// Convert absolute `source_file` paths in a payload to project-relative paths.
+/// Convert absolute `source_file` paths in a payload to `root`-relative paths.
 ///
-/// Iterates over `nodes`, `edges`, and `hyperedges` in `payload`.  Any item
-/// whose `source_file` field is an absolute path that can be made relative to
-/// `root` is rewritten in-place.  Items with relative or unresolvable paths
-/// are left unchanged.
+/// Iterates over `nodes`, `edges`, and `hyperedges` in `payload`. Any item
+/// whose `source_file` is an absolute path that can be made relative to `root`
+/// is rewritten in-place. When `scope` is `Some`, an absolute path whose
+/// resolved form lies OUTSIDE `scope` is left untouched — so a preserved node
+/// from a sibling project (identity outside the watched root) is not
+/// mis-relativised against this run's root (#8d8d2b8). Items with relative or
+/// unresolvable paths are left unchanged.
 ///
-/// Ports `_relativize_source_files` from `watch.py:131-143`.
-pub fn relativize_source_files(payload: &mut Value, root: &Path) {
+/// Ports `_relativize_source_files` (with the `scope` keyword).
+pub fn relativize_source_files(payload: &mut Value, root: &Path, scope: Option<&Path>) {
     let Some(obj) = payload.as_object_mut() else {
         return;
     };
@@ -40,6 +43,12 @@ pub fn relativize_source_files(payload: &mut Value, root: &Path) {
             let resolved = source_path
                 .canonicalize()
                 .unwrap_or_else(|_| source_path.clone());
+            // `scope` gate: skip a resolved path outside the watched subtree.
+            if let Some(scope) = scope
+                && resolved.strip_prefix(scope).is_err()
+            {
+                continue;
+            }
             if let Ok(rel) = resolved.strip_prefix(root) {
                 // `.as_posix()` parity: emit forward slashes so graph.json paths
                 // are stable across platforms.

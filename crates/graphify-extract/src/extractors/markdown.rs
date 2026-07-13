@@ -75,6 +75,7 @@ pub fn extract_markdown(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
@@ -200,6 +201,7 @@ fn handle_heading(
             source_location: Some(format!("L{line_num}")),
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
     }
     while heading_stack.last().is_some_and(|(lvl, _)| *lvl >= level) {
@@ -219,6 +221,8 @@ fn handle_heading(
         weight: 1.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
     heading_stack.push((level, h_nid));
 }
@@ -278,6 +282,8 @@ fn add_markdown_link(ctx: &mut LineCtx<'_>, raw: &str, line_num: usize) {
         weight: 1.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 }
 

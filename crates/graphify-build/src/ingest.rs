@@ -27,15 +27,16 @@ const PARALLEL_EDGE_THRESHOLD: usize = 1024;
 fn language_family(ext: &str) -> Option<&'static str> {
     match ext {
         "py" | "pyi" => Some("py"),
-        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => Some("js"),
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "mts" | "cts" => Some("js"),
         "go" => Some("go"),
         "rs" => Some("rs"),
         "java" | "kt" | "scala" | "groovy" => Some("jvm"),
-        "c" | "h" => Some("c"),
-        // Divergence from graphify-py `build.py` (#1466): its family map omits
-        // `.cxx`, yet `.cxx` is extracted as C++ and is in `analyze`'s family map.
-        // Including it here keeps cross-language call filtering consistent.
-        "cc" | "cpp" | "cxx" | "hpp" | "cu" | "cuh" | "metal" => Some("cpp"),
+        // C, C++, and Objective-C interoperate within one compilation unit: a
+        // method declared in a shared `.h` is defined/called from a `.c`/`.cpp`/
+        // `.m` sibling, so the whole family is ONE key — a cross-file impl→header
+        // call/reference is legitimate, not a phantom (#1547/#1556/#1749).
+        "c" | "h" | "cc" | "cpp" | "hpp" | "cxx" | "hh" | "hxx" | "cu" | "cuh" | "metal" | "m"
+        | "mm" => Some("c"),
         "rb" => Some("rb"),
         "php" => Some("php"),
         "cs" => Some("cs"),
@@ -236,12 +237,22 @@ pub(crate) fn merge_ghost_duplicates(graph: &mut Graph) -> IndexMap<String, Stri
     // directories, e.g. `render` in two `index.ts`), the key is ambiguous:
     // merging a ghost onto it would pick an arbitrary winner via iteration
     // order (#1257). Such keys are tracked so Pass 2 leaves their ghosts intact.
+    // Iterate in a deterministic (sorted) order so the canonical winner and the
+    // ambiguity decisions match graphify-py byte-for-byte (#1753); Rust's IndexMap
+    // is already process-stable, but Python sorts to defeat its hash-seed, and we
+    // sort to pick the same survivor.
+    let mut sorted_ids: Vec<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
+    sorted_ids.sort();
+
     let mut loc_nodes: IndexMap<(String, String), String> = IndexMap::new();
     let mut loc_collisions: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
     let mut loc_ast_keys: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
-    for (nid, attrs) in graph.nodes() {
+    for nid in &sorted_ids {
+        let Some(attrs) = graph.node_data(nid) else {
+            continue;
+        };
         let Some(key) = ghost_key(attrs) else {
             continue;
         };
@@ -258,15 +269,46 @@ pub(crate) fn merge_ghost_duplicates(graph: &mut Graph) -> IndexMap<String, Stri
             }
             loc_ast_keys.insert(key.clone());
             loc_nodes.insert(key, nid.clone());
-        } else if !loc_nodes.contains_key(&key) {
-            loc_nodes.insert(key, nid.clone());
+        } else {
+            match loc_nodes.get(&key) {
+                None => {
+                    loc_nodes.insert(key, nid.clone());
+                }
+                Some(existing) => {
+                    // Two NON-AST nodes sharing (basename, label) but from DIFFERENT
+                    // files are distinct concepts (e.g. dir_a/update.md vs
+                    // dir_b/update.md), not an AST ghost/canonical twin — mark the
+                    // key ambiguous so Pass 2 leaves both (#1753). A genuine
+                    // same-file duplicate still collapses; an AST canonical with a
+                    // non-AST ghost is the normal ghost case (not flagged).
+                    let existing_data = graph.node_data(existing);
+                    let existing_is_ast = existing_data
+                        .and_then(|a| a.get("_origin"))
+                        .and_then(Value::as_str)
+                        == Some("ast");
+                    let existing_sf = existing_data
+                        .and_then(|a| a.get("source_file"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let sf = attrs
+                        .get("source_file")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if !existing_is_ast && existing_sf != sf {
+                        loc_collisions.insert(key.clone());
+                    }
+                }
+            }
         }
     }
 
     // Pass 2: a non-AST node sharing a key with a different canonical node is a
-    // ghost (last ghost per key, mirroring the Python dict overwrite).
+    // ghost (deterministic sorted order, mirroring Pass 1).
     let mut noloc_nodes: IndexMap<(String, String), String> = IndexMap::new();
-    for (nid, attrs) in graph.nodes() {
+    for nid in &sorted_ids {
+        let Some(attrs) = graph.node_data(nid) else {
+            continue;
+        };
         if attrs.get("_origin").and_then(Value::as_str) == Some("ast") {
             continue; // AST nodes are never ghosts
         }
@@ -331,6 +373,25 @@ fn snapshot_source_files(graph: &Graph) -> IndexMap<String, String> {
         .collect()
 }
 
+/// Snapshot each node's `label` (id → label) for the legacy-id alias index's
+/// label-based file-node detection (#1556), without re-borrowing `graph`.
+#[must_use]
+fn snapshot_labels(graph: &Graph) -> IndexMap<String, String> {
+    graph
+        .nodes()
+        .map(|(id, attrs)| {
+            (
+                id.clone(),
+                attrs
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
 /// Resolve an edge's `source_file`: keep an explicit truthy value, otherwise
 /// backfill from the source then target node (#1279). The result is relativised
 /// against `root_str`. Returns `None` only when the edge carries a non-string
@@ -365,10 +426,11 @@ pub(crate) fn add_edges(
     let node_ids: IndexSet<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
     let mut norm_to_id = build_norm_to_id(&node_ids, ghost_remap);
     let node_source_files = snapshot_source_files(graph);
+    let node_labels = snapshot_labels(graph);
     // Pre-migration alias index (#1504): register each canonical node's OLD-stem
     // id forms so a stale-id edge endpoint from an un-re-keyed fragment still
     // resolves to the migrated node instead of dangling.
-    crate::migrate::register_legacy_id_aliases(&mut norm_to_id, &node_source_files);
+    crate::migrate::register_legacy_id_aliases(&mut norm_to_id, &node_source_files, &node_labels);
 
     // Per-edge resolution is pure read-only work over `node_ids` and
     // `norm_to_id` — fan out across Rayon. We collect the resolved
@@ -406,20 +468,36 @@ pub(crate) fn add_edges(
         if !node_ids.contains(&resolved_src) || !node_ids.contains(&resolved_tgt) {
             return None;
         }
-        // Drop cross-language INFERRED `calls` edges — same short names
-        // (`render`, `parse`, ...) appear across language boundaries in
-        // multi-language chunks, producing phantom edges that don't
-        // represent real call relationships. Mirrors the dispatcher added
-        // in graphify-py `build.py` `build_from_json`.
+        // Drop cross-language phantom edges: the same short names (`render`,
+        // `parse`, `time`, ...) recur across language boundaries, so an unresolved
+        // target can bind to a same-named node in another language. Forbidden for
+        // `calls` and equally invalid for imports/references (a Python `import
+        // time` must not bind to a `time.ts`, #1749). Mirrors graphify-py
+        // `build_from_json`.
         let relation = canonical_map.get("relation").and_then(Value::as_str);
-        let confidence = canonical_map.get("confidence").and_then(Value::as_str);
-        if relation == Some("calls") && confidence == Some("INFERRED") {
+        if matches!(
+            relation,
+            Some("calls" | "imports" | "imports_from" | "references")
+        ) {
             let src_ext = source_file_ext(&node_source_files, &resolved_src);
             let tgt_ext = source_file_ext(&node_source_files, &resolved_tgt);
-            if !src_ext.is_empty()
-                && !tgt_ext.is_empty()
-                && language_family(&src_ext) != language_family(&tgt_ext)
-            {
+            let src_fam = language_family(&src_ext);
+            let tgt_fam = language_family(&tgt_ext);
+            if relation == Some("calls") {
+                // Unchanged (#1547/#1556): only INFERRED calls, drop as soon as the
+                // families differ (an unknown ext counts as different).
+                let confidence = canonical_map.get("confidence").and_then(Value::as_str);
+                if confidence == Some("INFERRED")
+                    && !src_ext.is_empty()
+                    && !tgt_ext.is_empty()
+                    && src_fam != tgt_fam
+                {
+                    return None;
+                }
+            } else if src_fam.is_some() && tgt_fam.is_some() && src_fam != tgt_fam {
+                // imports/references: drop only when BOTH endpoints are known code
+                // languages of different families, so a config→code reference
+                // (unknown ext, e.g. a manifest) is never mistaken for a phantom.
                 return None;
             }
         }

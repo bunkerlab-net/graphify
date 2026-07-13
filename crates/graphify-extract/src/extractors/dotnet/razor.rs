@@ -76,6 +76,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -100,6 +101,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         edges.push(Edge {
@@ -113,6 +115,8 @@ pub fn extract_razor(path: &Path) -> FileResult {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     };
 
@@ -184,6 +188,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     source_location: Some(format!("L{i}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
                 edges.push(Edge {
                     external: false,
@@ -196,6 +201,8 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }
@@ -257,6 +264,7 @@ pub fn extract_razor(path: &Path) -> FileResult {
                     source_location: Some(format!("L{method_line}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
             }
             edges.push(Edge {
@@ -270,6 +278,8 @@ pub fn extract_razor(path: &Path) -> FileResult {
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
     }

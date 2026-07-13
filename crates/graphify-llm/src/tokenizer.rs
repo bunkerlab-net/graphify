@@ -21,22 +21,30 @@ pub const CHARS_PER_TOKEN: usize = 4;
 ///
 /// Uses `tiktoken-rs` (`cl100k_base`) when available; falls back to
 /// `text.len() / CHARS_PER_TOKEN`.
+///
+/// Uses `encode_ordinary`, which treats tiktoken special-token strings (e.g.
+/// `<|endoftext|>`) as ordinary text rather than recognizing them as special
+/// ids. This mirrors graphify-py's `encode(..., disallowed_special=())` (#1685):
+/// a doc that merely mentions such a string is counted, not special-cased, and
+/// never crashes the estimate.
 #[must_use]
 pub fn estimate_tokens(text: &str) -> usize {
     match TOKENIZER.as_ref() {
-        Some(enc) => enc.encode_with_special_tokens(text).len(),
+        Some(enc) => enc.encode_ordinary(text).len(),
         None => text.len() / CHARS_PER_TOKEN,
     }
 }
 
 /// Estimate tokens for a file's content (already capped at `char_cap` chars)
 /// plus the per-file overhead of the `=== rel ===\n` separator.
+///
+/// Like [`estimate_tokens`], uses `encode_ordinary` so special-token strings in
+/// the content are tolerated as ordinary text (#1685).
 #[must_use]
 pub fn estimate_file_tokens(content: &str, per_file_overhead_chars: usize) -> usize {
     match TOKENIZER.as_ref() {
         Some(enc) => {
-            enc.encode_with_special_tokens(content).len()
-                + (per_file_overhead_chars / CHARS_PER_TOKEN)
+            enc.encode_ordinary(content).len() + (per_file_overhead_chars / CHARS_PER_TOKEN)
         }
         None => (content.len() + per_file_overhead_chars) / CHARS_PER_TOKEN,
     }

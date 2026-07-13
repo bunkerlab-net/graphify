@@ -4,7 +4,7 @@ use std::fs;
 
 use graphify_build::build_from_json;
 use graphify_cluster::cluster;
-use graphify_export::to_obsidian;
+use graphify_export::{to_canvas, to_obsidian};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -247,5 +247,47 @@ fn obsidian_community_of_only_dangling_members_does_not_crash() -> TestResult {
         .transpose()?;
     let ghost = ghost.ok_or("expected ghost community note to exist")?;
     assert!(ghost.contains("**Members:** 0 nodes"));
+    Ok(())
+}
+
+#[test]
+fn canvas_dangling_community_member_does_not_crash() -> TestResult {
+    // #1236 follow-up: the guard landed in to_obsidian but not to_canvas, so
+    // `graphify export obsidian` (which also writes graph.canvas) still emitted
+    // a spurious card / over-sized box for a dangling member. Real members get
+    // cards; the dangling id does not.
+    let graph = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n0", "label": "Alpha", "file_type": "code", "source_file": "a.py"},
+                {"id": "n1", "label": "Beta", "file_type": "code", "source_file": "b.py"},
+            ],
+            "edges": [
+                {"source": "n0", "target": "n1", "relation": "calls", "confidence": "EXTRACTED"}
+            ]
+        }),
+        false,
+        None,
+    )?;
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(
+        0,
+        vec!["n0".to_string(), "n1".to_string(), "agents_doc".to_string()],
+    );
+
+    let tmp = tempdir()?;
+    let out = tmp.path().join("graph.canvas");
+    to_canvas(&graph, &communities, &out, None, None)?;
+    assert!(out.exists());
+
+    let canvas: Value = serde_json::from_str(&fs::read_to_string(&out)?)?;
+    let node_ids: std::collections::HashSet<&str> = canvas["nodes"]
+        .as_array()
+        .ok_or("nodes array")?
+        .iter()
+        .filter_map(|n| n.get("id").and_then(Value::as_str))
+        .collect();
+    assert!(node_ids.contains("n_n0") && node_ids.contains("n_n1"));
+    assert!(!node_ids.contains("n_agents_doc"));
     Ok(())
 }

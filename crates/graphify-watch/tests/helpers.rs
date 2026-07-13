@@ -115,7 +115,7 @@ fn relativize_rewrites_absolute_paths() {
         "edges": [{"source": "a", "target": "b", "source_file": file.to_string_lossy()}],
         "hyperedges": [],
     });
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     let new_path = payload["nodes"][0]["source_file"]
         .as_str()
         .expect("string field");
@@ -132,7 +132,7 @@ fn relativize_leaves_relative_paths_alone() {
         "edges": [],
     });
     let root = std::env::current_dir().expect("test invariant");
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     assert_eq!(payload["nodes"][0]["source_file"], "rel/path.py");
 }
 
@@ -143,7 +143,7 @@ fn relativize_handles_missing_source_file() {
         "edges": [],
     });
     let root = std::env::current_dir().expect("test invariant");
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     // Should remain unchanged.
     assert!(payload["nodes"][0].get("source_file").is_none());
 }
@@ -152,7 +152,7 @@ fn relativize_handles_missing_source_file() {
 fn relativize_noop_on_non_object_payload() {
     let mut payload = json!([1, 2, 3]);
     let root = std::env::current_dir().expect("test invariant");
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     assert_eq!(payload, json!([1, 2, 3]));
 }
 

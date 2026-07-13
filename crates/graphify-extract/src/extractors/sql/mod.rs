@@ -146,6 +146,7 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -232,6 +233,8 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }

@@ -16,7 +16,8 @@ use graphify_hooks::platform::{
     devin_project_uninstall, devin_uninstall, gemini_install, gemini_uninstall,
     install_kilo_skill_and_command, install_platform_skill, install_platform_skill_project,
     kilo_install, kilo_uninstall, kiro_install, kiro_uninstall, pi_install, pi_uninstall,
-    uninstall_all, uninstall_platform_skill_project, vscode_install, vscode_uninstall,
+    refresh_all_version_stamps, uninstall_all, uninstall_platform_skill_project, vscode_install,
+    vscode_uninstall,
 };
 
 use crate::cli::args::PlatformCmd;
@@ -103,6 +104,8 @@ pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
     // `graphify kilo install` (see `cmd_kilo`).
     if platform == "kilo" {
         let msg = install_kilo_skill_and_command()?;
+        // #1568: keep other platforms' version stamps current after a global install.
+        refresh_all_version_stamps(env!("CARGO_PKG_VERSION"));
         println!("{msg}");
         return Ok(());
     }
@@ -110,7 +113,12 @@ pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
         let cwd = std::env::current_dir()?;
         install_platform_skill_project(platform, &cwd)?
     } else {
-        install_platform_skill(platform)?
+        let m = install_platform_skill(platform)?;
+        // #1568: re-stamp all other installed skill dirs so a prior-version
+        // platform doesn't keep warning after this upgrade (global only, matching
+        // graphify-py `install()`'s non-project branch).
+        refresh_all_version_stamps(env!("CARGO_PKG_VERSION"));
+        m
     };
     println!("{msg}");
     Ok(())

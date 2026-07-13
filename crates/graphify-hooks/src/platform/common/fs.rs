@@ -12,21 +12,31 @@ use crate::HooksError;
 ///
 /// Mirrors Python `_replace_or_append_section` byte-for-byte.
 ///
-/// If `marker` is not in `content`, appends `new_section` (with a blank-line
-/// separator if existing content is non-empty). If `marker` IS present,
-/// replaces the existing section in place (from the first line containing
-/// `marker` to the line before the next `## ` heading or EOF).
+/// If no line is exactly `marker` (the heading, after trimming), appends
+/// `new_section` (with a blank-line separator when existing content is
+/// non-empty). When a real `marker` heading exists, replaces that section in
+/// place — from the LAST exact heading to the line before the next `## `
+/// heading or EOF. Matching the heading as a substring (#1688) used to anchor
+/// the replace on an inline mention or a longer heading and delete unrelated
+/// content in CLAUDE.md / AGENTS.md.
 #[must_use]
 pub fn replace_or_append_section(content: &str, marker: &str, new_section: &str) -> String {
-    if !content.contains(marker) {
+    let lines: Vec<&str> = content.split('\n').collect();
+    // #1688: match the section heading EXACTLY (a whole line equal to `marker`
+    // after trimming), never as a substring — an inline `## graphify` mention in
+    // a bullet, or a longer heading like `## graphify internals`, must not anchor
+    // the replace and truncate unrelated content. Prefer the LAST exact heading,
+    // since graphify's section is always appended.
+    let starts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim() == marker)
+        .map(|(i, _)| i)
+        .collect();
+    let Some(&start) = starts.last() else {
         if content.trim().is_empty() {
             return new_section.trim_start().to_string();
         }
-        return format!("{}\n\n{}", content.trim_end(), new_section.trim_start());
-    }
-
-    let lines: Vec<&str> = content.split('\n').collect();
-    let Some(start) = lines.iter().position(|l| l.contains(marker)) else {
         return format!("{}\n\n{}", content.trim_end(), new_section.trim_start());
     };
 
@@ -112,6 +122,14 @@ pub(in crate::platform) fn install_skill(
         fs::create_dir_all(parent)?;
     }
     write_atomic(dst, skill_content)?;
+    // #1568: stamp the version beside the skill so the startup check can flag a
+    // stale skill. Best-effort — a stamp write failure must not fail the install.
+    if let Some(parent) = dst.parent() {
+        let _ = fs::write(
+            parent.join(super::skill_version::VERSION_STAMP),
+            env!("CARGO_PKG_VERSION"),
+        );
+    }
     Ok(dst.to_path_buf())
 }
 

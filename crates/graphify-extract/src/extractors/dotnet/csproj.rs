@@ -46,6 +46,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -113,6 +114,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                                 source_location: None,
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         edges.push(Edge {
@@ -126,6 +128,8 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                     "ProjectReference" => {
@@ -154,6 +158,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                                 source_location: None,
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         edges.push(Edge {
@@ -167,6 +172,8 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                     _ => {}
@@ -231,6 +238,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                 source_location: None,
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
             edges.push(Edge {
                 external: false,
@@ -243,6 +251,8 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
     }
@@ -275,6 +285,7 @@ fn add_framework_node(
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
     edges.push(Edge {
         external: false,
@@ -287,6 +298,8 @@ fn add_framework_node(
         weight: 1.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 }
 

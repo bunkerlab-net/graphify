@@ -16,6 +16,7 @@ mod csharp;
 mod java;
 mod kotlin;
 mod php;
+mod ruby;
 mod scala;
 mod swift;
 mod ts;
@@ -25,6 +26,7 @@ pub(crate) use csharp::*;
 pub(crate) use java::*;
 pub(crate) use kotlin::*;
 pub(crate) use php::*;
+pub(crate) use ruby::*;
 pub(crate) use scala::*;
 pub(crate) use swift::*;
 pub(crate) use ts::*;
@@ -58,6 +60,7 @@ pub(crate) fn emit_base_node(
             source_location: None,
             metadata: None,
             origin_file: Some(str_path.to_string()),
+            node_type: None,
         });
     }
     nid2

@@ -116,6 +116,7 @@ pub fn extract_verilog(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -178,6 +179,7 @@ fn push_node_once(ctx: &mut VerilogWalkCtx<'_>, nid: &str, label: &str, line: us
             source_location: Some(format!("L{line}")),
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
     }
 }
@@ -195,6 +197,8 @@ fn push_edge(ctx: &mut VerilogWalkCtx<'_>, src: &str, tgt: &str, relation: &str,
         weight: 1.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 }
 
@@ -384,8 +388,14 @@ static SV_FUNC_BODY_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 #[allow(clippy::expect_used)] // static literal pattern (field declaration, MULTILINE)
 static SV_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*([A-Za-z_]\w*(?:\s*#\s*\([^;]+?\))?)\s+\w+\s*;")
-        .expect("static SV_FIELD_RE regex")
+    // Optional leading class-property qualifiers (rand/local/protected/etc.) are
+    // consumed so a qualified field like `rand Config x;` (three tokens) still
+    // matches the `<type> <name>;` shape and its type reference is not dropped
+    // (297075c). Group 1 remains the type token (after any qualifiers).
+    Regex::new(
+        r"(?m)^\s*(?:(?:rand|randc|local|protected|static|const|automatic|var)\s+)*([A-Za-z_]\w*(?:\s*#\s*\([^;]+?\))?)\s+\w+\s*;",
+    )
+    .expect("static SV_FIELD_RE regex")
 });
 
 #[allow(clippy::expect_used)] // static literal pattern (one level of balanced parens)
@@ -527,6 +537,7 @@ impl SvAug<'_> {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         self.label_to_nid.insert(label.to_string(), nid.to_string());
@@ -564,6 +575,8 @@ impl SvAug<'_> {
             weight: 1.0,
             context: context.map(str::to_string),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -580,6 +593,8 @@ impl SvAug<'_> {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 }

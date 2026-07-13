@@ -142,6 +142,8 @@ fn add_psd1_import_edge(
         weight: 1.0,
         context: Some("import".to_string()),
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 }
 
@@ -242,6 +244,7 @@ pub fn extract_powershell_manifest(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     walk_psd1_manifest(tree.root_node(), &source, &file_nid, &str_path, &mut edges);

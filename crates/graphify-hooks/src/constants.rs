@@ -106,6 +106,23 @@ fi
     };
 }
 
+/// Cap hook-triggered rebuild parallelism on Git for Windows / MSYS (#879c058).
+/// Those shells inherit fragile pipe handles from GUI clients and agent shells,
+/// so default rebuilds to sequential; an explicit `GRAPHIFY_MAX_WORKERS` wins.
+macro_rules! windows_worker_cap_block {
+    () => {
+        "\
+# Git for Windows/MSYS hooks can inherit fragile pipe handles from GUI clients
+# and agent shells. Keep hook-triggered rebuilds sequential by default there;
+# explicit GRAPHIFY_MAX_WORKERS still wins for users who want parallelism.
+if [ -n \"${WINDIR:-}\" ] || [ -n \"${MSYSTEM:-}\" ]; then
+    export GRAPHIFY_MAX_WORKERS=\"${GRAPHIFY_MAX_WORKERS:-1}\"
+fi
+
+"
+    };
+}
+
 /// The full post-commit hook script. Mirrors Python's `_HOOK_SCRIPT` (with the
 /// `_detached_launch` launcher expanded inline) except for the 1 MiB
 /// rebuild-log cap (see the module-level note).
@@ -140,6 +157,7 @@ if [ -z \"$_NON_GRAPH\" ]; then
 fi
 
 ",
+    windows_worker_cap_block!(),
     python_detect_block!(),
     "
 export GRAPHIFY_CHANGED=\"$CHANGED\"
@@ -259,6 +277,7 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 [ \"${GRAPHIFY_SKIP_HOOK:-0}\" = \"1\" ] && exit 0
 
 ",
+    windows_worker_cap_block!(),
     python_detect_block!(),
     "
 _GRAPHIFY_LOG=\"${HOME}/.cache/graphify-rebuild.log\"

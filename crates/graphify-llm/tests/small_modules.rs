@@ -5,7 +5,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use graphify_llm::{LlmResponse, neutralise_injection_sentinels, read_files, wrap_untrusted};
+use graphify_llm::{
+    LlmResponse, build_image_refs, neutralise_injection_sentinels, read_files, wrap_untrusted,
+};
 use serde_json::json;
 
 #[test]
@@ -80,7 +82,9 @@ fn read_files_caps_at_char_limit() {
 }
 
 #[test]
-fn read_files_handles_paths_outside_root() {
+fn read_files_skips_paths_outside_root() {
+    // Containment (009a98b): a file whose resolved path escapes the corpus root
+    // is skipped, not shipped to the LLM — so its content never appears.
     let tmp = tempfile::tempdir().expect("tempdir");
     let outside = tmp
         .path()
@@ -89,8 +93,10 @@ fn read_files_handles_paths_outside_root() {
         .join("graphify_test_outside.py");
     fs::write(&outside, "x = 1").expect("write fixture");
     let result = read_files(std::slice::from_ref(&outside), tmp.path());
-    // strip_prefix fails, so the full path is used.
-    assert!(result.contains("graphify_test_outside.py"));
+    assert!(
+        !result.contains("graphify_test_outside.py") && !result.contains("x = 1"),
+        "out-of-root file must be skipped: {result:?}"
+    );
     let _ = fs::remove_file(outside);
 }
 
@@ -186,4 +192,45 @@ fn wrap_untrusted_stamps_sha_and_defangs() {
     assert!(wrapped.ends_with("</untrusted_source>"));
     // A breakout attempt embedded in the content is defanged inside the block.
     assert!(wrapped.contains("<\u{200b}/untrusted_source> world"));
+}
+// ── 009a98b: symlink containment ────────────────────────────────────────────
+
+#[cfg(unix)]
+#[test]
+fn read_files_skips_out_of_root_symlink() {
+    // A symlink inside root pointing at a secret outside root must never reach
+    // the prompt (009a98b).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("root");
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&root).expect("mkdir root");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    let secret = outside.join("secret.md");
+    fs::write(&secret, "SECRET SHOULD NOT REACH THE PROMPT").expect("write secret");
+    let link = root.join("secret.md");
+    std::os::unix::fs::symlink(&secret, &link).expect("symlink");
+
+    let out = read_files(std::slice::from_ref(&link), &root);
+    assert!(
+        out.is_empty(),
+        "out-of-root symlink must be skipped: {out:?}"
+    );
+    assert!(!out.contains("SECRET SHOULD NOT REACH THE PROMPT"));
+}
+
+#[cfg(unix)]
+#[test]
+fn build_image_refs_skips_out_of_root_symlink() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("root");
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&root).expect("mkdir root");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    let secret = outside.join("secret.png");
+    fs::write(&secret, [0x89, b'P', b'N', b'G']).expect("write secret");
+    let link = root.join("secret.png");
+    std::os::unix::fs::symlink(&secret, &link).expect("symlink");
+
+    let refs = build_image_refs(std::slice::from_ref(&link), &root, true);
+    assert!(refs.is_empty(), "out-of-root image symlink must be skipped");
 }

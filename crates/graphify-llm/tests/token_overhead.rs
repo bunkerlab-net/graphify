@@ -22,3 +22,24 @@ fn empty_file_estimate_is_overhead_only() -> Result<(), Box<dyn std::error::Erro
     assert_eq!(estimate_file_tokens(&empty), PER_FILE_OVERHEAD_CHARS / 4);
     Ok(())
 }
+
+#[test]
+fn special_token_text_is_counted_as_ordinary() -> Result<(), Box<dyn std::error::Error>> {
+    // #1685: a doc that mentions a tiktoken special token (`<|endoftext|>`) must
+    // be tokenized as ordinary text, not crash and not collapse to a single
+    // special id. `encode_ordinary` mirrors Python's `disallowed_special=()`.
+    let tmp = tempfile::tempdir()?;
+    let f = tmp.path().join("tokenizer-notes.md");
+    std::fs::write(
+        &f,
+        "The GPT end-of-text token is <|endoftext|> in the vocab.\n",
+    )?;
+    let n = estimate_file_tokens(&f);
+    // Content tokens are counted on top of the per-file overhead, so the estimate
+    // exceeds overhead-only (proving the text was neither dropped nor errored).
+    assert!(
+        n > PER_FILE_OVERHEAD_CHARS / 4,
+        "special-token text is counted as ordinary content: {n}"
+    );
+    Ok(())
+}

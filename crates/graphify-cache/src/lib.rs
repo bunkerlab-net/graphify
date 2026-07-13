@@ -27,7 +27,7 @@ mod stat_index;
 mod store;
 
 pub use error::CacheError;
-pub use hash::{body_content, file_hash};
+pub use hash::{body_content, cached_word_count, file_hash};
 pub use paths::{EXTRACTOR_VERSION, cache_dir, cache_dir_versioned};
 pub use semantic::{
     SemanticCacheSplit, check_semantic_cache, prune_semantic_cache, save_semantic_cache,

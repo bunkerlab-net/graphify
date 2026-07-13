@@ -54,6 +54,9 @@ pub(crate) struct ExtractOptions<'a> {
     pub introspect: IntrospectOptions<'a>,
     /// Print per-stage wall-clock timings to stderr (#1490).
     pub timing: bool,
+    /// `--code-only`: index code (local AST, no LLM key) and skip doc/paper/image
+    /// files, so a mixed repo builds a code graph without a semantic backend (#1734).
+    pub code_only: bool,
 }
 
 /// Run the headless full extraction pipeline (AST + optional LLM semantic enrichment).
@@ -82,6 +85,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         global,
         introspect,
         timing,
+        code_only,
     } = opts;
     let LlmOptions {
         backend,
@@ -117,15 +121,30 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
 
     let start = std::time::Instant::now();
     let mut stages = super::timer::StageTimer::new(timing);
-    let out_dir = out.map_or_else(
-        || path.join(graphify_out_dir()),
-        std::path::Path::to_path_buf,
+    // Cache/relativisation root for detect, AST, and the semantic cache (#1747):
+    // the `--out` dir (resolved absolute, matching Python `Path.resolve()`) when
+    // given, else the corpus. Keeps the word-count, AST, and semantic caches —
+    // and the #1033 file-node-id relativisation — out of the scanned corpus.
+    // `canonicalize` needs the dir to exist; fall back to a lexical absolute path
+    // (Python's `resolve()` is non-strict) so a fresh `--out scratch` still lands
+    // an absolute root instead of a relative one.
+    let out_root = out.map_or_else(
+        || path.to_path_buf(),
+        |o| {
+            o.canonicalize()
+                .or_else(|_| std::path::absolute(o))
+                .unwrap_or_else(|_| o.to_path_buf())
+        },
     );
+    // Artifacts (graph.json, GRAPH_REPORT.md, labels, analysis, html) land under
+    // `<out_root>/graphify-out/` — the user-facing "<out>/graphify-out/" contract
+    // (an absolute configured output name replaces the base via `join`).
+    let out_dir = out_root.join(graphify_out_dir());
 
-    let detect = run_detect_phase(path, &out_dir, extra_excludes);
+    let detect = run_detect_phase(path, &out_dir, extra_excludes, Some(&out_root));
     stages.mark("detect");
-    let files = collect_extract_files(path, &detect);
-    let extraction = run_ast_extract_phase(&files, path);
+    let files = collect_extract_files(path, &detect, code_only);
+    let extraction = run_ast_extract_phase(&files, &out_root);
     stages.mark("AST extract");
     let cfg = SemanticConfig {
         backend: effective_backend.as_deref(),
@@ -134,12 +153,13 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         max_workers,
         token_budget,
         max_concurrency,
+        code_only,
     };
     let SemanticOutcome {
         mut extraction_json,
         sem_input_tokens,
         sem_output_tokens,
-    } = run_semantic_phase(path, &files, &extraction, &cfg)?;
+    } = run_semantic_phase(path, &out_root, &files, &extraction, &cfg)?;
     stages.mark("semantic extract");
 
     // Merge opt-in structural introspection (Cargo manifests / live PostgreSQL)
@@ -182,7 +202,14 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         return Ok(());
     }
 
-    run_analysis_phase(&graph, &communities, path, &out_dir)?;
+    run_analysis_phase(
+        &graph,
+        &communities,
+        path,
+        &out_dir,
+        sem_input_tokens,
+        sem_output_tokens,
+    )?;
     stages.mark("analyze");
     let labels = sync_labels_file(&out_dir, &communities)?;
     render_html_viz(&graph, &communities, &out_dir, &labels);
@@ -308,6 +335,7 @@ fn run_detect_phase(
     path: &std::path::Path,
     resolved_out_dir: &std::path::Path,
     extra_excludes: Option<&[String]>,
+    cache_root: Option<&std::path::Path>,
 ) -> graphify_detect::DetectResult {
     // Mirrors Python's `incremental_mode = manifest_path.exists() and graph_path.exists()`
     // at `__main__.py:2611`.
@@ -318,8 +346,15 @@ fn run_detect_phase(
             "[1/6] incremental scan of {} (manifest present) ...",
             path.display()
         );
-        let prev = graphify_detect::load_manifest(path).unwrap_or_default();
-        match graphify_detect::detect_incremental(path, &prev) {
+        // #1747: the manifest lives beside the graph under `resolved_out_dir`
+        // (matching graphify-py's `manifest_path=graphify_out/manifest.json`),
+        // NOT in the scanned corpus — so an external `--out` incremental run
+        // reads the real prior manifest and computes a genuine diff instead of
+        // re-extracting everything. Keys are re-anchored to the corpus root.
+        let manifest_file = resolved_out_dir.join("manifest.json");
+        let prev = graphify_detect::load_manifest_from_path_with_root(&manifest_file, Some(path))
+            .unwrap_or_default();
+        match graphify_detect::detect_incremental_with_cache_root(path, &prev, cache_root) {
             Ok(inc) => {
                 let new_total: usize = inc.changed_files.values().map(Vec::len).sum();
                 let unchanged_total: usize = inc.unchanged_files.values().map(Vec::len).sum();
@@ -331,10 +366,10 @@ fn run_detect_phase(
             }
             Err(e) => eprintln!("      incremental scan failed ({e}); falling back to full scan"),
         }
-        graphify_detect::detect(path, None, extra_excludes)
+        graphify_detect::detect_with_cache_root(path, None, extra_excludes, cache_root)
     } else {
         eprintln!("[1/6] detecting files in {} ...", path.display());
-        graphify_detect::detect(path, None, extra_excludes)
+        graphify_detect::detect_with_cache_root(path, None, extra_excludes, cache_root)
     }
 }
 
@@ -375,6 +410,11 @@ fn detect_result_from_incremental(
         needs_graph: true,
         warning: None,
         skipped_sensitive: Vec::new(),
+        // Incremental reconstruction performs no fresh filesystem walk, so it
+        // re-classifies nothing and surfaces no unclassified files.
+        unclassified: Vec::new(),
+        // Incremental reconstruction performs no fresh filesystem walk.
+        walk_errors: Vec::new(),
         graphifyignore_patterns: 0,
         scan_root: path.to_string_lossy().into_owned(),
     }
@@ -384,6 +424,7 @@ fn detect_result_from_incremental(
 fn collect_extract_files(
     path: &std::path::Path,
     detect: &graphify_detect::DetectResult,
+    code_only: bool,
 ) -> Vec<std::path::PathBuf> {
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut by_kind: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
@@ -395,10 +436,30 @@ fn collect_extract_files(
         // extensions, so it skips them (empty result) — they contribute nodes
         // only via the LLM. Mirrors graphify-py's `semantic_files = doc + paper +
         // image`.
-        if kind == "code" || kind == "document" || kind == "image" {
+        //
+        // `--code-only` (#1734): index just the code (local AST, no LLM key) and
+        // skip the doc/paper/image buckets entirely, so a mixed repo builds a code
+        // graph without a semantic backend.
+        let include = if code_only {
+            kind == "code"
+        } else {
+            matches!(kind.as_str(), "code" | "document" | "paper" | "image")
+        };
+        if include {
             for p in paths {
                 files.push(path.join(p));
             }
+        }
+    }
+    if code_only {
+        let n = |k: &str| detect.files.get(k).map_or(0, Vec::len);
+        let (docs, papers, images) = (n("document"), n("paper"), n("image"));
+        let skipped = docs + papers + images;
+        if skipped > 0 {
+            eprintln!(
+                "[graphify extract] --code-only: skipping {skipped} non-code file(s) \
+                 ({docs} docs, {papers} papers, {images} images) — no LLM extraction"
+            );
         }
     }
     let kinds_summary = by_kind
@@ -411,6 +472,33 @@ fn collect_extract_files(
         detect.total_files,
         files.len()
     );
+    // Surface files that were seen but not classified (extensionless non-shebang
+    // project files like Dockerfile/Makefile, or unsupported extensions), so they
+    // are no longer invisible in graphify's own output (#1692).
+    if !detect.unclassified.is_empty() {
+        let names: Vec<String> = detect
+            .unclassified
+            .iter()
+            .filter_map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .take(6)
+            .collect();
+        let total = detect.unclassified.len();
+        let more = if total > 6 {
+            format!(" (+{} more)", total - 6)
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "[graphify extract] {total} file(s) not classified (no supported extension or shebang), skipped: {}{more}",
+            names.join(", ")
+        );
+    }
     files
 }
 
@@ -439,6 +527,9 @@ struct SemanticConfig<'a> {
     max_workers: Option<usize>,
     token_budget: usize,
     max_concurrency: usize,
+    /// `--code-only`: skip the semantic (LLM) pass entirely so code is indexed by
+    /// local AST alone — no LLM call even when a backend is configured (#1734).
+    code_only: bool,
 }
 
 /// Output of [`run_semantic_phase`]: merged JSON plus token totals.
@@ -452,12 +543,16 @@ struct SemanticOutcome {
 ///
 /// When no backend is configured, returns the AST extraction as-is.
 fn run_semantic_phase(
-    path: &std::path::Path,
+    source_root: &std::path::Path,
+    cache_root: &std::path::Path,
     files: &[std::path::PathBuf],
     extraction: &graphify_extract::ExtractOutput,
     cfg: &SemanticConfig<'_>,
 ) -> Result<SemanticOutcome> {
-    let Some(b) = cfg.backend else {
+    // `--code-only` skips the LLM pass entirely (AST-only), even with a backend
+    // configured — mirrors graphify-py emptying `semantic_files` (#1734). The
+    // no-backend path degrades to the same AST-only result.
+    let Some(b) = cfg.backend.filter(|_| !cfg.code_only) else {
         let extraction_json = serde_json::json!({
             "nodes": extraction.nodes,
             "edges": extraction.edges,
@@ -488,7 +583,7 @@ fn run_semantic_phase(
             ..Default::default()
         }
     } else {
-        graphify_cache::check_semantic_cache(&sem_paths, path)
+        graphify_cache::check_semantic_cache(&sem_paths, cache_root)
     };
     let cache_hits = sem_paths
         .len()
@@ -510,7 +605,7 @@ fn run_semantic_phase(
         backend: b,
         api_key: None,
         model: cfg.model.filter(|s| !s.is_empty()),
-        root: path,
+        root: source_root,
         chunk_size,
         token_budget: Some(cfg.token_budget),
         max_concurrency: cfg.max_concurrency,
@@ -552,13 +647,13 @@ fn run_semantic_phase(
         );
     }
 
-    save_semantic_cache_safe(&sem_result, path);
+    save_semantic_cache_safe(&sem_result, cache_root);
     // Prune orphaned semantic cache entries against the FULL live document set
     // (sem_paths), NOT the incremental cache-miss subset, which would delete every
     // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
     // unversioned, so it is never swept by the AST version-cleanup: every content
     // change or file deletion leaves a permanent orphan otherwise (#1527).
-    prune_semantic_cache_safe(path, &sem_paths);
+    prune_semantic_cache_safe(cache_root, &sem_paths);
     merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);
     let extraction_json = serde_json::json!({
         "nodes": sem_result.nodes,
@@ -581,6 +676,7 @@ fn save_semantic_cache_safe(sem_result: &graphify_llm::LlmResponse, path: &std::
             &sem_result.edges,
             &sem_result.hyperedges,
             path,
+            false,
         )
     {
         eprintln!("      warning: failed to save semantic cache: {e}");
@@ -752,16 +848,23 @@ fn run_analysis_phase(
     communities: &indexmap::IndexMap<i64, Vec<String>>,
     path: &std::path::Path,
     out_dir: &std::path::Path,
+    sem_input_tokens: u64,
+    sem_output_tokens: u64,
 ) -> Result<()> {
     eprintln!("[5/6] analyzing (god nodes, surprising connections, suggested questions) ...");
     let analyze_start = std::time::Instant::now();
-    let analysis = build_analysis(graph, communities, path);
+    let analysis = build_analysis(
+        graph,
+        communities,
+        path,
+        (sem_input_tokens, sem_output_tokens),
+    );
     eprintln!(
         "      analysis done in {:.1}s",
         analyze_start.elapsed().as_secs_f64()
     );
     let report_path = out_dir.join("GRAPH_REPORT.md");
-    graphify_report::write_report(graph, &analysis, &report_path)?;
+    graphify_report::write_report(graph, &analysis, &report_path, false)?;
     eprintln!("      wrote {}", report_path.display());
 
     let analysis_path = out_dir.join(".graphify_analysis.json");
@@ -923,6 +1026,7 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
         force: effective_force,
         no_cluster,
         lock: graphify_watch::LockPolicy::BlockOn, // interactive
+        follow_symlinks: false,
     };
     let ok = graphify_watch::rebuild_code(&watch_path, None, opts)?;
     if ok {

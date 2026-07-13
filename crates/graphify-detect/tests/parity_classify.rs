@@ -17,6 +17,14 @@ fn classify_typescript() {
     assert_eq!(classify_file(Path::new("bar.ts")), Some(FileType::Code));
 }
 
+/// 1226c34: `.mts` / `.cts` are the TypeScript module extensions (ESM / CJS) and
+/// must classify as code so they route to the JS/TS extractor.
+#[test]
+fn classify_typescript_module_extensions() {
+    assert_eq!(classify_file(Path::new("mod.mts")), Some(FileType::Code));
+    assert_eq!(classify_file(Path::new("mod.cts")), Some(FileType::Code));
+}
+
 /// #1315: `.psm1` PowerShell modules were never indexed (a `CODE_EXTENSIONS` gap).
 #[test]
 fn classify_powershell_module() {

@@ -14,6 +14,7 @@ chrono = { workspace = true }
 graphify-analyze = { workspace = true }
 graphify-build = { workspace = true }
 graphify-prs = { workspace = true }
+graphify-reflect = { workspace = true }
 graphify-security = { workspace = true }
 indexmap = { workspace = true }
 regex = { workspace = true }

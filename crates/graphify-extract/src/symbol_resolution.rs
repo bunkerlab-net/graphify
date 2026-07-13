@@ -38,9 +38,15 @@ pub fn node_is_resolvable_symbol(node: &Node) -> bool {
     if label.is_empty() {
         return false;
     }
-    if [".py", ".js", ".ts", ".tsx", ".java", ".go", ".rs"]
-        .iter()
-        .any(|suffix| label.ends_with(suffix))
+    // DIVERGENCE from graphify-py: `.mts`/`.cts` are added here. graphify-py's
+    // node_is_resolvable_symbol lists only `.ts`/`.tsx`, so a `.mts`/`.cts` file
+    // node's filename label leaks into the callable symbol index unlike every
+    // other TS file — fixed per AGENTS.md (reference bugs are not requirements).
+    if [
+        ".py", ".js", ".ts", ".tsx", ".mts", ".cts", ".java", ".go", ".rs",
+    ]
+    .iter()
+    .any(|suffix| label.ends_with(suffix))
     {
         return false;
     }

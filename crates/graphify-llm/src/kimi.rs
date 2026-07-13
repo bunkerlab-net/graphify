@@ -5,8 +5,9 @@
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::call::UsageSink;
 use crate::openai_compat::{
-    OpenAiRequest, api_timeout, call_openai_compat, plain_messages, resolve_max_tokens,
+    OaiUsage, OpenAiRequest, api_timeout, call_openai_compat, plain_messages, resolve_max_tokens,
 };
 use crate::{LlmBackend, LlmError, LlmResponse};
 
@@ -40,6 +41,8 @@ pub fn base_url() -> String {
 #[derive(Deserialize)]
 struct PlainResp {
     choices: Vec<PlainChoice>,
+    #[serde(default)]
+    usage: Option<OaiUsage>,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +145,8 @@ pub(crate) struct PlainOpenAiRequest<'a> {
     /// the request's `extra_body`, overriding [`Self::disable_thinking`].
     pub extra_body: Option<&'a serde_json::Value>,
     pub max_tokens: u32,
+    /// Optional token-usage accumulator (#1694); recorded from the response.
+    pub usage: Option<&'a UsageSink>,
 }
 
 /// Low-level plain-text `OpenAI`-compat call (returns raw content string).
@@ -176,6 +181,10 @@ pub(crate) fn call_plain_openai_compat(req: &PlainOpenAiRequest<'_>) -> Result<S
         body["extra_body"] = custom.clone();
     } else if req.disable_thinking {
         body["extra_body"] = json!({"thinking": {"type": "disabled"}});
+    } else if crate::openai_compat::thinking_disabled_via_env() {
+        // Opt-in GRAPHIFY_DISABLE_THINKING (#1621); loses to an explicit
+        // provider extra_body and to the forced kimi/moonshot disable.
+        body["extra_body"] = json!({"thinking": {"type": "disabled"}});
     }
 
     let endpoint = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
@@ -196,6 +205,18 @@ pub(crate) fn call_plain_openai_compat(req: &PlainOpenAiRequest<'_>) -> Result<S
     .read_json()
     .map_err(|e| LlmError::Parse(e.to_string()))?;
 
+    if let Some(sink) = req.usage {
+        sink.record(
+            resp.usage
+                .as_ref()
+                .and_then(|u| u.prompt_tokens)
+                .unwrap_or(0),
+            resp.usage
+                .as_ref()
+                .and_then(|u| u.completion_tokens)
+                .unwrap_or(0),
+        );
+    }
     Ok(resp
         .choices
         .into_iter()

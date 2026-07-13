@@ -423,10 +423,15 @@ fn cross_file_call_promoted_to_extracted_with_import_evidence() {
 }
 
 #[test]
-fn cross_file_call_remains_inferred_without_import_evidence() {
+fn js_cross_file_call_without_import_emits_no_edge() {
+    // A JS/TS call with no local definition and no import must NOT bind to a
+    // same-named export in another file (#1659). JS/TS modules have no implicit
+    // cross-module scope, so name collision alone is not a real call — it used to
+    // produce a phantom INFERRED edge that fabricated cross-package dependencies.
     let tmp = tempfile::tempdir().expect("tempdir");
     let caller_path = tmp.path().join("caller.js");
     let callee_path = tmp.path().join("lib.js");
+    // Caller does NOT require lib — a same-name function happens to exist elsewhere.
     std::fs::write(&caller_path, "function run() { doUnique(); }\n").expect("test invariant");
     std::fs::write(
         &callee_path,
@@ -455,12 +460,10 @@ fn cross_file_call_remains_inferred_without_import_evidence() {
             }
         })
         .collect();
-    assert_eq!(call_edges.len(), 1);
-    let confidence = call_edges[0]
-        .get("confidence")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    assert_eq!(confidence, "INFERRED");
+    assert!(
+        call_edges.is_empty(),
+        "unimported cross-file JS call should not resolve: {call_edges:?}"
+    );
 }
 
 // ── TSX ───────────────────────────────────────────────────────────────────────
@@ -887,7 +890,9 @@ fn extract_ts_tsconfig_subdirectory_baseurl_resolves_existing_ts_file() {
 fn tsconfig_alias_excess_parent_dirs_clamp_at_root() {
     // A `paths` target with more `..` segments than the tsconfig is deep must
     // clamp at the filesystem root (os.path.normpath semantics) rather than
-    // leaving a stray `..`, which would break alias resolution downstream.
+    // leaving a stray `..`. Post-#927 the alias key retains its `*` and the target
+    // pattern retains `..`/`*` at load; the clamp happens when `resolve` substitutes
+    // the captured segment and normalises the concrete path.
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path();
     std::fs::write(
@@ -897,14 +902,20 @@ fn tsconfig_alias_excess_parent_dirs_clamp_at_root() {
     )
     .expect("write tsconfig");
     let aliases = graphify_extract::tsconfig::load_tsconfig_aliases(root);
-    let target = &aliases.get("@top").expect("@top alias present")[0];
+    assert!(
+        aliases.contains_key("@top/*"),
+        "the wildcard alias key retains its `*`: {aliases:?}"
+    );
+    let cand = graphify_extract::tsconfig::resolve_tsconfig_alias("@top/foo", &aliases)
+        .expect("wildcard alias resolves to a candidate");
+    let target = cand.to_string_lossy();
     assert!(
         !target.contains(".."),
         "excess `..` left a stray parent component: {target}"
     );
     assert!(
-        target.ends_with("src"),
-        "clamped alias should still end at the `src` target: {target}"
+        target.ends_with("src/foo") || target.ends_with("src\\foo"),
+        "clamped alias should substitute the capture under `src`: {target}"
     );
 }
 
@@ -1217,6 +1228,27 @@ fn extract_json_extends_resolved() {
 }
 
 #[test]
+fn extract_json_extends_target_is_concept_node() {
+    // #1764: each external `extends` ref target now has a real `file_type=concept`
+    // node, so the edge isn't dangling.
+    let result = extract_json(&fixtures().join("sample_tsconfig.json"));
+    let extends: Vec<&str> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "extends")
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(!extends.is_empty(), "expected an extends edge");
+    for tgt in extends {
+        let node = result.nodes.iter().find(|n| n.id == tgt);
+        assert!(
+            node.is_some_and(|n| n.file_type == "concept"),
+            "extends target {tgt} must be a concept node"
+        );
+    }
+}
+
+#[test]
 fn extract_json_large_file_skipped() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let big = tmp.path().join("big.json");
@@ -1432,5 +1464,31 @@ fn extract_astro_handles_tsconfig_path_alias() {
     assert!(
         targets.contains(&make_id1(&hero_canon.to_string_lossy())),
         "hero not in targets: {targets:?}"
+    );
+}
+
+#[test]
+fn extract_js_dynamic_import_is_deferred() {
+    // #1241: a dynamic `import('./x')` stays an `imports_from` edge (the
+    // dependency stays visible in the graph) but is marked `deferred`, so
+    // import-cycle detection does not treat it as a static import and report a
+    // phantom circular dependency.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("actions.js");
+    std::fs::write(
+        &f,
+        "export async function lazy() {\n  const m = await import(\"./modal\");\n  return m.open();\n}\n",
+    )
+    .expect("write fixture");
+    let result = extract_js(&f);
+    let deferred: Vec<_> = result.edges.iter().filter(|e| e.deferred).collect();
+    assert!(
+        !deferred.is_empty(),
+        "a dynamic import() must emit a deferred edge: {:?}",
+        result.edges
+    );
+    assert!(
+        deferred.iter().all(|e| e.relation == "imports_from"),
+        "deferred import() edges must keep relation `imports_from`"
     );
 }

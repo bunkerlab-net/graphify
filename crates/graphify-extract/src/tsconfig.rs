@@ -37,6 +37,9 @@ pub fn strip_jsonc(text: &str) -> String {
 /// declared order until one resolves on disk (#1531).
 pub type AliasMap = IndexMap<String, Vec<String>>;
 
+/// A matched tsconfig alias: `((rank, -prefix_len), captured_segment, is_wildcard)`.
+type AliasMatch = ((i32, i32), String, bool);
+
 // Cache: tsconfig path string → alias map
 static ALIAS_CACHE: LazyLock<Mutex<IndexMap<String, AliasMap>>> =
     LazyLock::new(|| Mutex::new(IndexMap::new()));
@@ -123,23 +126,18 @@ pub fn read_tsconfig_aliases<S: std::hash::BuildHasher>(
             if arr.is_empty() {
                 continue;
             }
-            let alias_prefix = alias.trim_end_matches("/*");
-            // Keep ALL targets in declared order — tsc tries each until one
-            // resolves on disk. Discarding the fallbacks (#1531) misresolved or
-            // dropped imports whose file lived at a non-first target.
-            // Empty / non-string entries are skipped.
-            let target_bases: Vec<String> = arr
+            // Preserve the `*` token in BOTH the alias key and each target pattern
+            // (declared order kept, tsc tries each until one resolves on disk).
+            // The resolver substitutes the captured segment, then normalises the
+            // concrete path (#927/#1531). Empty / non-string entries are skipped.
+            let target_patterns: Vec<String> = arr
                 .iter()
                 .filter_map(serde_json::Value::as_str)
                 .filter(|t| !t.is_empty())
-                .map(|t| {
-                    normpath(&paths_base.join(t.trim_end_matches("/*")))
-                        .to_string_lossy()
-                        .into_owned()
-                })
+                .map(|t| paths_base.join(t).to_string_lossy().into_owned())
                 .collect();
-            if !target_bases.is_empty() {
-                aliases.insert(alias_prefix.to_string(), target_bases);
+            if !target_patterns.is_empty() {
+                aliases.insert(alias.clone(), target_patterns);
             }
         }
     }
@@ -221,38 +219,89 @@ pub fn load_tsconfig_aliases(start_dir: &Path) -> AliasMap {
     IndexMap::new()
 }
 
-/// Resolve `raw` against tsconfig path aliases (#1531). Try each target in
-/// declared order; return the first whose candidate resolves to a real file on
-/// disk (tsc parity). If none exist, return the first candidate (no false edge
-/// is fabricated; the prior single-target behaviour is preserved). Returns
-/// `None` when no alias prefix matches.
+/// `(specificity, captured, is_wildcard)` when `pattern` matches `raw`, else
+/// `None`. Specificity orders exact matches (rank 0) before single-`*` wildcards
+/// (rank 1, longest literal prefix) before the legacy directory-prefix form
+/// (rank 2, longest prefix); the second tuple element is the negated prefix
+/// length so a longer prefix sorts first. Mirrors `_match_tsconfig_alias`.
+fn match_tsconfig_alias(raw: &str, pattern: &str) -> Option<AliasMatch> {
+    let neg = |n: usize| -i32::try_from(n).unwrap_or(i32::MAX);
+    if pattern.contains('*') {
+        if pattern.matches('*').count() != 1 {
+            return None;
+        }
+        let (prefix, suffix) = pattern.split_once('*')?;
+        if !raw.starts_with(prefix) || !raw.ends_with(suffix) {
+            return None;
+        }
+        let end = if suffix.is_empty() {
+            raw.len()
+        } else {
+            raw.len() - suffix.len()
+        };
+        if end < prefix.len() {
+            return None;
+        }
+        return Some((
+            (1, neg(prefix.len())),
+            raw[prefix.len()..end].to_string(),
+            true,
+        ));
+    }
+    if raw == pattern {
+        return Some(((0, neg(pattern.len())), String::new(), false));
+    }
+    let prefix = pattern.trim_end_matches('/');
+    if !prefix.is_empty() && raw.starts_with(&format!("{prefix}/")) {
+        return Some((
+            (2, neg(prefix.len())),
+            raw[prefix.len()..].trim_start_matches('/').to_string(),
+            false,
+        ));
+    }
+    None
+}
+
+/// Resolve `raw` against tsconfig path aliases (#927/#1531). Pick the single
+/// most-specific matching pattern (see [`match_tsconfig_alias`]), then try that
+/// pattern's targets in declared order, substituting the captured segment into a
+/// wildcard target and returning the first candidate that resolves to a real file
+/// on disk (tsc parity). If none exist, return the first candidate (no false edge
+/// fabricated). Returns `None` when no pattern matches.
 ///
 /// Mirrors Python `_resolve_tsconfig_alias`.
 #[must_use]
 pub fn resolve_tsconfig_alias(raw: &str, aliases: &AliasMap) -> Option<PathBuf> {
-    // Collect every alias prefix that matches `raw`, longest first: tsc resolves
-    // the most specific (longest) prefix, so `@/feature/*` wins over `@/*` for
-    // `@/feature/x`. Divergence from graphify-py (extract.py:291), which returns
-    // the first match in declaration order and so lets a broad prefix shadow a
-    // more specific one. The first-candidate fallback is kept, but taken from the
-    // longest matching prefix.
-    let mut matched: Vec<(&String, &Vec<String>)> = aliases
-        .iter()
-        .filter(|(prefix, _)| raw == prefix.as_str() || raw.starts_with(&format!("{prefix}/")))
-        .collect();
-    matched.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
+    let mut best: Option<(AliasMatch, &Vec<String>)> = None;
+    for (pattern, targets) in aliases {
+        if let Some(m) = match_tsconfig_alias(raw, pattern)
+            && best.as_ref().is_none_or(|(bm, _)| m.0 < bm.0)
+        {
+            best = Some((m, targets));
+        }
+    }
+    let ((_, captured, is_wild), targets) = best?;
     let mut first: Option<PathBuf> = None;
-    for (alias_prefix, alias_bases) in matched {
-        let rest = raw[alias_prefix.len()..].trim_start_matches('/');
-        for base in alias_bases {
-            let cand = normpath(&Path::new(base).join(rest));
-            let resolved = resolve_js_module_path(&cand);
-            if resolved.is_file() {
-                return Some(resolved);
-            }
-            if first.is_none() {
-                first = Some(cand);
-            }
+    for target in targets {
+        let cand = if is_wild {
+            // tsc substitutes the star only when the captured segment is non-empty.
+            let substituted = if captured.is_empty() {
+                target.clone()
+            } else {
+                target.replacen('*', &captured, 1)
+            };
+            normpath(Path::new(&substituted))
+        } else if captured.is_empty() {
+            PathBuf::from(target)
+        } else {
+            normpath(&Path::new(target).join(&captured))
+        };
+        let resolved = resolve_js_module_path(&cand);
+        if resolved.is_file() {
+            return Some(resolved);
+        }
+        if first.is_none() {
+            first = Some(cand);
         }
     }
     first
@@ -280,7 +329,9 @@ pub fn resolve_js_module_path(p: &Path) -> PathBuf {
         }
     }
     // Try appending extensions
-    let exts = [".ts", ".tsx", ".svelte", ".js", ".jsx", ".mjs"];
+    let exts = [
+        ".ts", ".tsx", ".mts", ".cts", ".svelte", ".js", ".jsx", ".mjs",
+    ];
     if let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) {
         for ext in exts {
             let c = p.with_file_name(format!("{name}{ext}"));
@@ -289,13 +340,19 @@ pub fn resolve_js_module_path(p: &Path) -> PathBuf {
             }
         }
     }
-    // Directory imports. Order mirrors graphify-py `_JS_INDEX_FILES`,
-    // which includes `index.svelte` and `index.mjs` so Svelte + ESM
-    // workspaces resolve their barrel files correctly.
+    // Directory imports. Mirrors graphify-py `_JS_INDEX_FILES` (which adds
+    // index.svelte + index.mjs for Svelte/ESM barrels) but ALSO adds
+    // index.mts/index.cts. DIVERGENCE from graphify-py: it lists `.mts`/`.cts`
+    // in `_JS_RESOLVE_EXTS` yet omits them from `_JS_INDEX_FILES`, so a directory
+    // import can't resolve to a `.mts`/`.cts` barrel even though its `.mjs`
+    // counterpart resolves — an obvious oversight fixed here per AGENTS.md (bugs
+    // in the reference are not requirements). Order matches `_JS_RESOLVE_EXTS`.
     if p.is_dir() {
         for idx in [
             "index.ts",
             "index.tsx",
+            "index.mts",
+            "index.cts",
             "index.svelte",
             "index.js",
             "index.jsx",
