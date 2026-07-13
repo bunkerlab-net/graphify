@@ -1410,3 +1410,25 @@ fn rebuild_incremental_rename_preserves_symlink_source_path() {
         "current symlink path present: {sources:?}"
     );
 }
+
+/// `rebuild_code` must never mutate the caller's working directory: path
+/// resolution now roots relative paths explicitly rather than `chdir`-ing, so a
+/// concurrent caller's CWD is never disturbed (`CodeRabbit` review follow-up).
+#[test]
+#[serial_test::serial]
+fn rebuild_code_does_not_mutate_cwd() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_python_project(tmp.path());
+    let before = std::env::current_dir().expect("cwd");
+    let opts = RebuildOptions {
+        no_cluster: true,
+        ..RebuildOptions::default()
+    };
+    // Pass the tempdir as an absolute path so the rebuild does real work.
+    assert!(rebuild_code(tmp.path(), None, opts).expect("rebuild"));
+    let after = std::env::current_dir().expect("cwd");
+    assert_eq!(
+        before, after,
+        "rebuild_code must not change the process CWD"
+    );
+}

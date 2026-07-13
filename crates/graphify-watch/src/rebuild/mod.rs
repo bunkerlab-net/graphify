@@ -88,14 +88,14 @@ pub(crate) fn rebuild_code_impl(
     opts: RebuildOptions,
     check_shrink_fn: ShrinkChecker,
 ) -> Result<bool, WatchError> {
-    if !stabilize_rebuild_cwd(watch_path) {
+    let Some(effective) = effective_watch_path(watch_path) else {
         return Ok(false);
-    }
-    let out = watch_path.join(graphify_security::graphify_out());
+    };
+    let out = effective.join(graphify_security::graphify_out());
 
     match opts.lock {
         LockPolicy::None => rebuild_code_inner(
-            watch_path,
+            &effective,
             changed_paths,
             opts.force,
             opts.no_cluster,
@@ -129,7 +129,7 @@ pub(crate) fn rebuild_code_impl(
             // own change set, then loop to absorb any late arrivals.
             let result = pending::rebuild_with_pending(&out, changed_paths, |paths| {
                 rebuild_code_inner(
-                    watch_path,
+                    &effective,
                     paths,
                     opts.force,
                     opts.no_cluster,
@@ -143,31 +143,38 @@ pub(crate) fn rebuild_code_impl(
     }
 }
 
-/// Ensure relative rebuild paths have a usable CWD before queue/lock setup.
+/// Resolve the watch path to use for a rebuild WITHOUT mutating the process
+/// working directory.
 ///
 /// Detached git hooks can inherit a transient working directory that is deleted
 /// before the background rebuild starts; in that state `current_dir()` and the
-/// relative `graphify-out` mkdirs fail before the normal rebuild error handling
-/// can run. Hooks that know the repo root export `GRAPHIFY_REPO_ROOT`, so the
-/// rebuild recovers by chdir'ing there. Mirrors graphify-py
-/// `_stabilize_rebuild_cwd`; returns `false` (skip the rebuild) when the CWD is
-/// gone and no repo root is available.
-fn stabilize_rebuild_cwd(watch_path: &Path) -> bool {
+/// relative `graphify-out` mkdirs fail. Rather than `chdir`-ing (which mutates
+/// process-global state shared by any concurrent caller), this resolves the
+/// path: a valid CWD keeps the caller-supplied (often relative) path as-is so
+/// the committed `.graphify_root` marker stays portable (#777); only when the
+/// CWD is gone does it fall back to rooting the path under `GRAPHIFY_REPO_ROOT`.
+/// Returns `None` (skip the rebuild) when neither is available.
+///
+/// Divergence from graphify-py `_stabilize_rebuild_cwd`: the reference `chdir`s
+/// to `GRAPHIFY_REPO_ROOT` unconditionally; here it is a CWD-gone fallback so a
+/// valid working directory is preferred (git hooks run from the repo root, so
+/// the two agree) and the process CWD is never disturbed.
+fn effective_watch_path(watch_path: &Path) -> Option<PathBuf> {
     if watch_path.is_absolute() {
-        return true;
+        return Some(watch_path.to_path_buf());
+    }
+    if std::env::current_dir().is_ok() {
+        return Some(watch_path.to_path_buf());
     }
     if let Ok(root) = std::env::var("GRAPHIFY_REPO_ROOT") {
         let root = root.trim();
-        if !root.is_empty() && Path::new(root).is_dir() && std::env::set_current_dir(root).is_ok() {
-            return true;
+        if !root.is_empty() && Path::new(root).is_dir() {
+            return Some(Path::new(root).join(watch_path));
         }
-    }
-    if std::env::current_dir().is_ok() {
-        return true;
     }
     eprintln!(
         "[graphify watch] Rebuild failed: current working directory no longer \
          exists and GRAPHIFY_REPO_ROOT is not set."
     );
-    false
+    None
 }
