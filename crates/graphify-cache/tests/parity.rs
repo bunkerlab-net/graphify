@@ -1089,3 +1089,40 @@ fn nonexistent_cache_root_keys_by_normalized_absolute_path() {
     );
     _reset_stat_index_for_tests();
 }
+
+/// `flush_stat_index` must persist every dirty root even when one fails: a
+/// single unwritable cache dir cannot strand another root's entries.
+#[test]
+#[serial]
+fn flush_continues_past_a_failing_root() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let fb = corpus.path().join("b.txt");
+    let fa = corpus.path().join("a.txt");
+    write_text(&fb, "beta");
+    write_text(&fa, "alpha");
+    // Root B's cache dir cannot be created — an ancestor is a regular file.
+    let blocker = tmp.path().join("blocker");
+    write_text(&blocker, "not a dir");
+    let root_bad = blocker.join("sub");
+    let root_good = tmp.path().join("good");
+
+    // Populate the bad root first so it is flushed before the good one.
+    cached_word_count(&fb, corpus.path(), |_| 5, Some(&root_bad));
+    cached_word_count(&fa, corpus.path(), |_| 3, Some(&root_good));
+
+    assert!(
+        flush_stat_index().is_err(),
+        "the failing root's error must be surfaced"
+    );
+    let good_idx = root_good
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    assert!(
+        good_idx.exists(),
+        "the healthy root must still be flushed despite the failing one"
+    );
+    _reset_stat_index_for_tests();
+}

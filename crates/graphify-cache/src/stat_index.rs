@@ -107,23 +107,38 @@ pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) -> PathB
 /// cannot be written, or [`CacheError::Json`] if serialisation fails.
 pub fn flush_stat_index() -> Result<(), CacheError> {
     let mut index = lock_index();
+    let mut first_err: Option<CacheError> = None;
     for (path, state) in &mut index.roots {
         if !state.dirty {
             continue;
         }
-        let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent_dir)?;
-        let mut tmp = tempfile::Builder::new()
-            .prefix("stat-index.")
-            .suffix(".tmp")
-            .tempfile_in(parent_dir)?;
-        let serialized = serde_json::to_vec(&state.entries)?;
-        tmp.write_all(&serialized)?;
-        tmp.flush()?;
-        tmp.persist(path.as_path())
-            .map_err(|e| CacheError::Io(e.error))?;
-        state.dirty = false;
+        // Attempt every dirty root: one root's I/O failure must not strand the
+        // other roots' in-memory entries. A failed root stays dirty (so a later
+        // flush retries it); the first error is surfaced after the whole sweep.
+        match persist_root(path, &state.entries) {
+            Ok(()) => state.dirty = false,
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
     }
+    first_err.map_or(Ok(()), Err)
+}
+
+/// Persist one root's entries to its `stat-index.json` via a temp file + rename.
+fn persist_root(path: &Path, entries: &IndexMap<String, StatEntry>) -> Result<(), CacheError> {
+    let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent_dir)?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix("stat-index.")
+        .suffix(".tmp")
+        .tempfile_in(parent_dir)?;
+    let serialized = serde_json::to_vec(entries)?;
+    tmp.write_all(&serialized)?;
+    tmp.flush()?;
+    tmp.persist(path).map_err(|e| CacheError::Io(e.error))?;
     Ok(())
 }
 
