@@ -35,8 +35,9 @@ pub fn estimate_tokens(text: &str) -> usize {
     }
 }
 
-/// Estimate tokens for a file's content (already capped at `char_cap` chars)
-/// plus the per-file overhead of the `=== rel ===\n` separator.
+/// Estimate tokens for a file's (caller-capped) `content` plus
+/// `per_file_overhead_chars` for the fixed `<untrusted_source …>` wrapper the
+/// packer adds around each file.
 ///
 /// Like [`estimate_tokens`], uses `encode_ordinary` so special-token strings in
 /// the content are tolerated as ordinary text (#1685).
