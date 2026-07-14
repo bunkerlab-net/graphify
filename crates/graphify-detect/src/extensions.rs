@@ -257,7 +257,3 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
 
     None
 }
-
-#[cfg(test)]
-#[path = "extensions_tests.rs"]
-mod extensions_tests;

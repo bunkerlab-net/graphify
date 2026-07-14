@@ -3,7 +3,7 @@
 //! Mirrors `graphify-py/tests/test_detect.py` — ignore pattern tests.
 #![allow(clippy::expect_used)]
 
-use graphify_detect::{is_ignored, load_graphifyignore};
+use graphify_detect::{is_ignored, load_graphifyignore, parse_gitignore_line};
 use tempfile::tempdir;
 
 #[test]
@@ -334,4 +334,73 @@ fn is_ignored_cache_evaluates_each_dir_once() {
     }
     // ancestors: a, a/b, a/c (3) + 5 files = 8 unique entries, no duplicates.
     assert_eq!(cache.len(), 8);
+}
+
+// -- ignore.rs helper units (migrated from the former inline `ignore_tests`) --
+
+/// Lines that start with `#` are comments (parse to empty).
+#[test]
+fn parse_comment_line() {
+    assert_eq!(parse_gitignore_line("# this is a comment"), "");
+}
+
+/// Empty input parses to empty output without error.
+#[test]
+fn parse_blank_line() {
+    assert_eq!(parse_gitignore_line(""), "");
+}
+
+/// Trailing-slash directory patterns pass through untouched.
+#[test]
+fn parse_normal_pattern() {
+    assert_eq!(parse_gitignore_line("vendor/"), "vendor/");
+}
+
+/// Backslash-escaped hashes (`\#`) survive so literal `#` names still match.
+#[test]
+fn parse_escaped_hash() {
+    assert_eq!(parse_gitignore_line("path\\#hash.py"), "path#hash.py");
+}
+
+/// `*` matches within a single path component but NOT across `/`. Anchored
+/// `/*.py` pins this through the public `is_ignored` (keeping `glob_match`
+/// crate-private): a root-level `.py` is ignored, a nested one is not.
+#[test]
+fn star_matches_within_segment_not_across_slash() {
+    let tmp = tempdir().expect("tempdir");
+    // Canonicalise so the anchored strip_prefix survives macOS `/var → /private/var` (#1087).
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let root = root.as_path();
+    let top = root.join("foo.py");
+    let nested = root.join("foo").join("bar.py");
+    std::fs::create_dir_all(nested.parent().expect("parent")).expect("create_dir_all");
+    std::fs::write(&top, "x = 1").expect("write fixture");
+    std::fs::write(&nested, "x = 1").expect("write fixture");
+    std::fs::write(root.join(".graphifyignore"), "/*.py\n").expect("test invariant");
+    let patterns = load_graphifyignore(root);
+    assert!(
+        is_ignored(&top, root, &patterns),
+        "/*.py must ignore a root-level .py"
+    );
+    assert!(
+        !is_ignored(&nested, root, &patterns),
+        "/*.py must NOT match across a slash into foo/bar.py"
+    );
+}
+
+/// `**` is the cross-segment wildcard: `/**/*.py` matches a deeply nested file.
+#[test]
+fn double_star_matches_across_segments() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let root = root.as_path();
+    let nested = root.join("a").join("b").join("c.py");
+    std::fs::create_dir_all(nested.parent().expect("parent")).expect("create_dir_all");
+    std::fs::write(&nested, "x = 1").expect("write fixture");
+    std::fs::write(root.join(".graphifyignore"), "/**/*.py\n").expect("test invariant");
+    let patterns = load_graphifyignore(root);
+    assert!(
+        is_ignored(&nested, root, &patterns),
+        "/**/*.py must match a/b/c.py across segments"
+    );
 }

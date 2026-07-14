@@ -349,7 +349,3 @@ pub fn is_noise_dir(name: &str, dir_path: Option<&Path>) -> bool {
     }
     false
 }
-
-#[cfg(test)]
-#[path = "sensitive_tests.rs"]
-mod sensitive_tests;
