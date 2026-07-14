@@ -3,6 +3,7 @@
 
 #![allow(clippy::expect_used, unsafe_code)]
 
+use graphify_llm::UsageSink;
 use graphify_llm::bedrock::{call_bedrock, call_bedrock_plain, resolve_region};
 use serde_json::json;
 
@@ -210,10 +211,12 @@ fn call_bedrock_plain_via_mock() {
     g.set("AWS_ACCESS_KEY_ID", "fake");
     g.set("AWS_SECRET_ACCESS_KEY", "fake");
 
-    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32, None).expect("test invariant");
-    // call_bedrock_plain returns the first nodes[].label string, which may be
-    // empty since the JSON we returned isn't extraction-shaped — just verify
-    // the function runs without panicking.
+    let sink = UsageSink::new();
+    let _ = call_bedrock_plain("test-model", "us-east-1", "hi", 32, Some(&sink))
+        .expect("test invariant");
+    // The mock returns usage 1/2; the always-record sink contract must capture it.
+    assert_eq!(sink.input(), 1, "input tokens recorded from the response");
+    assert_eq!(sink.output(), 2, "output tokens recorded from the response");
 }
 
 // ── 5xx error path ─────────────────────────────────────────────────────────
