@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 /// Per-node degree over the full graph (edge incidence; a self-loop counts
 /// twice, matching `NetworkX` `Graph.degree`).
+#[must_use]
 fn degree_map(graph: &Graph) -> IndexMap<&str, usize> {
     let mut degrees: IndexMap<&str, usize> = IndexMap::with_capacity(graph.node_count());
     for edge in graph.edges() {
