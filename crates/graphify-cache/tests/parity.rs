@@ -941,6 +941,29 @@ fn cache_root_is_per_invocation_not_first_seen() {
     assert!(!text_b.contains("a.txt"), "root B must not hold a.txt");
 }
 
+/// Restores a `GRAPHIFY_OUT` override on drop so a panic mid-test cannot leak
+/// it into other serial tests sharing the process environment.
+struct GraphifyOutGuard {
+    prev: Option<String>,
+}
+
+impl GraphifyOutGuard {
+    fn set(value: &Path) -> Self {
+        let prev = std::env::var("GRAPHIFY_OUT").ok();
+        unsafe { std::env::set_var("GRAPHIFY_OUT", value) };
+        Self { prev }
+    }
+}
+
+impl Drop for GraphifyOutGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
+            None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
+        }
+    }
+}
+
 /// #1747 / root-keyed stat index: with an ABSOLUTE `GRAPHIFY_OUT`, `out_base`
 /// ignores the cache root, so every root resolves to the SAME stat-index file.
 /// The two runs must then SHARE one state and merge into that single file, not
@@ -949,10 +972,9 @@ fn cache_root_is_per_invocation_not_first_seen() {
 #[serial]
 fn absolute_graphify_out_shares_one_index_across_roots() {
     _reset_stat_index_for_tests();
-    let prev = std::env::var("GRAPHIFY_OUT").ok();
     let out = tempfile::tempdir().expect("tempdir");
     let out_abs = out.path().join("shared-out");
-    unsafe { std::env::set_var("GRAPHIFY_OUT", &out_abs) };
+    let _out_guard = GraphifyOutGuard::set(&out_abs);
 
     let corpus = tempfile::tempdir().expect("tempdir");
     let root_a = tempfile::tempdir().expect("tempdir");
@@ -971,12 +993,6 @@ fn absolute_graphify_out_shares_one_index_across_roots() {
         5
     );
     flush_stat_index().expect("flush");
-
-    // Restore the env before asserting so a failure never leaks it to other tests.
-    match prev {
-        Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
-        None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
-    }
 
     let idx = out_abs.join("cache").join("stat-index.json");
     let text = std::fs::read_to_string(&idx).expect("the shared index file must exist");
