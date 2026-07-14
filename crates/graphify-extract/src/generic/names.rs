@@ -116,6 +116,7 @@ pub(crate) struct CsharpTypeName {
 // (the namespace prefix string) name two distinct fields; renaming either to
 // appease the lint would blur the flag/prefix distinction.
 #[allow(clippy::similar_names)]
+#[must_use]
 pub(crate) fn read_csharp_type_name(
     node: Option<Node<'_>>,
     source: &[u8],
