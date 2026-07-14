@@ -53,8 +53,12 @@ fn decl_names<'t>(var_decl: Node<'t>, source: &[u8]) -> Vec<(String, Node<'t>)> 
     out
 }
 
-/// Type of `var v = new T()` recovered from the declarator's
-/// `object_creation_expression`. Mirrors `_new_type`.
+/// Type of `var v = new T()` recovered from the declarator's direct
+/// `object_creation_expression` child. Ports `_new_type`, which likewise scans
+/// the declarator's immediate children. Verified against the pinned
+/// tree-sitter-c-sharp by the `csharp_local_var_receiver_resolves` test (its
+/// `var = new T() local` case resolves `v.Save()` through this typing), so a
+/// deeper `equals_value_clause` traversal is unnecessary and would diverge.
 fn new_type(declarator: Node<'_>, source: &[u8]) -> Option<String> {
     let mut cur = declarator.walk();
     if cur.goto_first_child() {

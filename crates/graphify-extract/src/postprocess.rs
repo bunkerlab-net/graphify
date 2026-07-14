@@ -725,6 +725,10 @@ pub fn merge_decl_def_classes(nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
         return;
     }
 
+    // Ids that actually collapsed (dropped duplicates share the keeper's id). The
+    // edge cleanup below is scoped to these so it never touches unrelated edges.
+    let merged_ids: HashSet<String> = drop_idx.iter().map(|&i| nodes[i].id.clone()).collect();
+
     // Drop the redundant duplicate nodes (the surviving header keeps its own
     // label/source_file; edges are unchanged because the id is identical).
     let mut idx = 0usize;
@@ -734,9 +738,17 @@ pub fn merge_decl_def_classes(nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
         keep
     });
 
-    // De-dup any now-identical edges and drop self-loops the collapse created.
+    // De-dup now-identical edges and drop self-loops the collapse created, scoped
+    // to edges touching a merged id. graphify-py sweeps ALL edges, but that is
+    // corpus-dependent: it runs only when some merge happened, so an unrelated
+    // file's pre-existing self-loop / duplicate would be dropped only in the
+    // presence of an unrelated header/impl pair. Normalise only what the merge
+    // actually affected (DIVERGENCE from the reference's global sweep).
     let mut seen: HashSet<(String, String, String, Option<String>)> = HashSet::new();
     edges.retain(|e| {
+        if !merged_ids.contains(&e.source) && !merged_ids.contains(&e.target) {
+            return true;
+        }
         if e.source == e.target {
             return false;
         }

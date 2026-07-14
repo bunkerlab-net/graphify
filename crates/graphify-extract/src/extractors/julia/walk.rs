@@ -612,17 +612,20 @@ pub(super) fn walk_julia(
             }
             for name in names {
                 let imp_nid = make_id1(&name);
-                ctx.seen_ids.insert(imp_nid.clone());
-                ctx.nodes.push(Node {
-                    id: imp_nid.clone(),
-                    label: name.clone(),
-                    file_type: "code".to_string(),
-                    source_file: ctx.str_path.to_string(),
-                    source_location: Some(format!("L{line}")),
-                    metadata: None,
-                    origin_file: None,
-                    node_type: None,
-                });
+                // Dedup the imported-symbol node: repeated `using`/`import` of the
+                // same name (or scoped re-imports) must not emit duplicate nodes.
+                if ctx.seen_ids.insert(imp_nid.clone()) {
+                    ctx.nodes.push(Node {
+                        id: imp_nid.clone(),
+                        label: name.clone(),
+                        file_type: "code".to_string(),
+                        source_file: ctx.str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        metadata: None,
+                        origin_file: None,
+                        node_type: None,
+                    });
+                }
                 ctx.edges.push(Edge {
                     external: false,
                     source: scope_nid.to_string(),

@@ -787,6 +787,11 @@ fn extract_pascal_regex(path: &Path) -> FileResult {
         let qualified = cap.name("qual").map_or("", |m| m.as_str());
         let line = lineno(&stripped, impl_off + impl_pos + fm.start());
 
+        // Qualified `TClass.Method` impl headers match the class by exact-case id,
+        // porting graphify-py (`_make_id(stem, cls_part)` + `cls_nid in seen_ids`).
+        // Pascal is case-insensitive, so a differently-cased `tclass.Method` would
+        // fall back to the module; that matches the reference and consistent casing
+        // is the norm, so it is left as-is rather than diverging with a folded index.
         let (container, relation, label, name_lower) = if let Some(dot) = qualified.find('.') {
             let cls_part = &qualified[..dot];
             let method_part = &qualified[dot + 1..];

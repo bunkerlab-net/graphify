@@ -190,6 +190,10 @@ pub(super) fn ruby_extra_walk<'tree>(
         ctx.nodes,
         ctx.seen_ids,
     );
+    // A class is callable via its constructor — register it like every other
+    // class/function def site so indirect dispatch can resolve it (parity with
+    // graphify-py's `_ruby_extra_walk`, which adds the synthesized class here).
+    ctx.callable_def_nids.insert(class_nid.clone());
     // Mirror the generic class branch: containment always hangs off the file node.
     add_edge(
         ctx.file_nid,

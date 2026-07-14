@@ -155,20 +155,26 @@ pub(crate) fn emit_csharp_inheritance(
                                                             &r.name, line, stem, str_path, nodes,
                                                             seen_ids,
                                                         );
-                                                        add_edge_meta(
-                                                            class_nid,
-                                                            &target,
-                                                            "references",
-                                                            line,
-                                                            str_path,
-                                                            Some("generic_arg"),
-                                                            cs_ref_meta(
-                                                                &r.name,
-                                                                r.qualified,
-                                                                &r.qualifier,
-                                                            ),
-                                                            edges,
-                                                        );
+                                                        // `class Foo : Base<Foo>`
+                                                        // yields a generic arg Foo;
+                                                        // skip the self-reference
+                                                        // (not a real edge Foo->Foo).
+                                                        if target != class_nid {
+                                                            add_edge_meta(
+                                                                class_nid,
+                                                                &target,
+                                                                "references",
+                                                                line,
+                                                                str_path,
+                                                                Some("generic_arg"),
+                                                                cs_ref_meta(
+                                                                    &r.name,
+                                                                    r.qualified,
+                                                                    &r.qualifier,
+                                                                ),
+                                                                edges,
+                                                            );
+                                                        }
                                                     }
                                                 }
                                                 if !acur.goto_next_sibling() {

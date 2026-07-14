@@ -535,6 +535,9 @@ fn emit_rust_enum_variant(
             let mut fcur = vc.walk();
             if fcur.goto_first_child() {
                 loop {
+                    // Struct variant field: take its `type` field directly, porting
+                    // graphify-py `rust.py` (which also reads `child_by_field_name("type")`
+                    // per `field_declaration`, without a fallback resolver).
                     if fcur.node().kind() == "field_declaration"
                         && let Some(tn) = fcur.node().child_by_field_name("type")
                     {

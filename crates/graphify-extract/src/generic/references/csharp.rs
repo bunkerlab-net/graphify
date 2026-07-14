@@ -249,7 +249,9 @@ fn csharp_collect_type_refs_inner(
 ///
 /// `[Authorize, Route("/api")]` on a method produces `["Authorize", "Route"]`.
 #[must_use]
-#[allow(clippy::similar_names)] // `qualified`/`qualifier` mirror graphify-py
+// `qualified` (bool flag) vs `qualifier` (prefix string) are distinct fields;
+// renaming either to satisfy the lint would obscure the flag/prefix roles.
+#[allow(clippy::similar_names)]
 pub(crate) fn csharp_attribute_names(method_node: Node<'_>, source: &[u8]) -> Vec<CsharpTypeRef> {
     let mut out = Vec::new();
     let mut cur = method_node.walk();

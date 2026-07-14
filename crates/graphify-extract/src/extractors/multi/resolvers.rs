@@ -102,7 +102,7 @@ pub(super) fn default_resolvers() -> [LanguageResolver; 9] {
             resolve: objc_pass,
         },
         LanguageResolver {
-            suffixes: &[".ts", ".tsx", ".js", ".jsx"],
+            suffixes: &[".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
             resolve: typescript_pass,
         },
         LanguageResolver {

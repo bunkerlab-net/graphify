@@ -477,7 +477,9 @@ fn walk_ps(
                 // Base type(s) after `:`. PowerShell has no syntactic base-vs-
                 // interface split, so (matching the C# convention) the first base
                 // is `inherits` and the rest `implements`; bases are the
-                // `simple_name` children following the `:` token (a129ff2).
+                // `simple_name` children following the `:` token (a129ff2). A generic
+                // base (`IComparer[Object]`, a different node kind) is skipped, matching
+                // graphify-py's simple_name-only base scan.
                 {
                     let mut rc = PsRefCtx {
                         stem,

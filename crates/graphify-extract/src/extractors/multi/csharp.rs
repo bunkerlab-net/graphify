@@ -635,7 +635,13 @@ pub(super) fn resolve_csharp_member_calls(
         }
     }
 
-    // (owner_type_nid, method_key) -> method id (last wins), and method -> owner.
+    // (owner_type_nid, method_key) -> method id. Last-wins on a duplicate key,
+    // porting graphify-py `_resolve_csharp_member_calls` (whose `method_index`
+    // also overwrites). `all_edges` is assembled in a fixed per-file index order
+    // (parallel results are placed back by index), so last-wins is deterministic,
+    // not input-order-dependent. This intentionally differs from the Java
+    // resolver's unique-or-skip map: the C# reference resolves the call to a
+    // single overload node (`RawCall` carries no signature to disambiguate on).
     let mut method_index: HashMap<(String, String), String> = HashMap::new();
     let mut enclosing_type: HashMap<String, String> = HashMap::new();
     for e in all_edges.iter() {

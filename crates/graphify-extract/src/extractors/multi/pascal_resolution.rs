@@ -100,6 +100,9 @@ pub(super) fn resolve_pascal_inherited_calls(
         let Some(&owner) = owner_of.get(rc.caller_nid.as_str()) else {
             continue;
         };
+        // `rc.callee` is already lowercased at emission (`extractors/pascal` lowercases
+        // the call name), so it satisfies `resolve_up_chain`'s `name_lower` contract
+        // and matches the lowercased `class_procs` keys — no re-fold needed here.
         let Some(target) = resolve_up_chain(owner, &rc.callee, &class_bases, &class_procs) else {
             continue;
         };
