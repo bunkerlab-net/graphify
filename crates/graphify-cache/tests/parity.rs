@@ -1,5 +1,5 @@
 //! Parity tests against `graphify-py/tests/test_cache.py`.
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use std::collections::HashSet;
 use std::fs;
@@ -939,4 +939,51 @@ fn cache_root_is_per_invocation_not_first_seen() {
     assert!(!text_a.contains("b.txt"), "root A must not hold b.txt");
     assert!(text_b.contains("b.txt"), "root B must cache b.txt");
     assert!(!text_b.contains("a.txt"), "root B must not hold a.txt");
+}
+
+/// #1747 / root-keyed stat index: with an ABSOLUTE `GRAPHIFY_OUT`, `out_base`
+/// ignores the cache root, so every root resolves to the SAME stat-index file.
+/// The two runs must then SHARE one state and merge into that single file, not
+/// compete and clobber each other.
+#[test]
+#[serial]
+fn absolute_graphify_out_shares_one_index_across_roots() {
+    _reset_stat_index_for_tests();
+    let prev = std::env::var("GRAPHIFY_OUT").ok();
+    let out = tempfile::tempdir().expect("tempdir");
+    let out_abs = out.path().join("shared-out");
+    unsafe { std::env::set_var("GRAPHIFY_OUT", &out_abs) };
+
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let root_a = tempfile::tempdir().expect("tempdir");
+    let root_b = tempfile::tempdir().expect("tempdir");
+    let fa = corpus.path().join("a.txt");
+    let fb = corpus.path().join("b.txt");
+    write_text(&fa, "alpha");
+    write_text(&fb, "beta");
+
+    assert_eq!(
+        cached_word_count(&fa, corpus.path(), |_| 3, Some(root_a.path())),
+        3
+    );
+    assert_eq!(
+        cached_word_count(&fb, corpus.path(), |_| 5, Some(root_b.path())),
+        5
+    );
+    flush_stat_index().expect("flush");
+
+    // Restore the env before asserting so a failure never leaks it to other tests.
+    match prev {
+        Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
+        None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
+    }
+
+    let idx = out_abs.join("cache").join("stat-index.json");
+    let text = std::fs::read_to_string(&idx).expect("the shared index file must exist");
+    assert!(text.contains("a.txt"), "shared index must hold a.txt");
+    assert!(
+        text.contains("b.txt"),
+        "shared index must hold b.txt too (merged, not clobbered)"
+    );
+    _reset_stat_index_for_tests();
 }

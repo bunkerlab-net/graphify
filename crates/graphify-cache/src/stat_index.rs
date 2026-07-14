@@ -32,15 +32,16 @@ pub(crate) struct StatEntry {
     pub(crate) word_count: Option<u64>,
 }
 
-/// Process-wide stat index. Each cache-file root's on-disk index is loaded
-/// once and kept under its resolved key, so two invocations with different
-/// roots (e.g. distinct `--out` dirs in one process) never share — and thus
-/// never clobber — one in-memory index.
+/// Process-wide stat index. Each on-disk index is loaded once and kept under
+/// its resolved FILE path, so two invocations with different cache roots that
+/// resolve to different index files never share one in-memory state — while
+/// two that resolve to the SAME file (an absolute `GRAPHIFY_OUT` override)
+/// correctly share it instead of clobbering each other.
 static STAT_INDEX: LazyLock<Mutex<StatIndex>> = LazyLock::new(|| Mutex::new(StatIndex::default()));
 
 #[derive(Default)]
 pub(crate) struct StatIndex {
-    /// Per-root states keyed by the resolved cache-file root.
+    /// Per-index states keyed by the resolved `stat-index.json` file path.
     pub(crate) roots: HashMap<PathBuf, RootState>,
 }
 
@@ -49,7 +50,7 @@ pub(crate) struct StatIndex {
 pub(crate) struct RootState {
     pub(crate) entries: IndexMap<String, StatEntry>,
     pub(crate) dirty: bool,
-    /// Whether this root's on-disk index has been loaded yet.
+    /// Whether this index's on-disk file has been loaded yet.
     loaded: bool,
 }
 
@@ -62,24 +63,24 @@ pub(crate) fn lock_index() -> std::sync::MutexGuard<'static, StatIndex> {
     STAT_INDEX.lock().expect("STAT_INDEX mutex poisoned")
 }
 
-/// Resolve the cache-file root and lazily load its on-disk index, returning
-/// the resolved root key.
+/// Resolve the stat-index file for `root`/`cache_root` and lazily load it,
+/// returning that file path as the state key.
 ///
-/// Callers thread the returned key through their per-root lookups so distinct
-/// roots each read and write their OWN index rather than the first-seen one.
-/// The index only determines the cache FILE location (entry keys are absolute
-/// paths), so honouring an explicit `cache_root` keeps `detect()`'s word-count
-/// cache under the requested `--out` dir instead of polluting the scanned
-/// corpus with a stray graphify-out/ (#1747).
+/// Callers thread the returned key through their per-index lookups. The key is
+/// the resolved index FILE path (not the cache root): honouring an explicit
+/// `cache_root` keeps `detect()`'s word-count cache under the requested `--out`
+/// dir rather than polluting the scanned corpus (#1747), and keying by the file
+/// means an absolute `GRAPHIFY_OUT` — where `out_base` ignores the root and every
+/// root maps to one file — shares a single state instead of competing.
 pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) -> PathBuf {
     let base = cache_root.unwrap_or(root);
-    let key = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let base_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let key = stat_index_file(&base_resolved);
     let mut index = lock_index();
     let state = index.roots.entry(key.clone()).or_default();
     if !state.loaded {
         state.loaded = true;
-        let path = stat_index_file(&key);
-        if let Ok(text) = fs::read_to_string(&path)
+        if let Ok(text) = fs::read_to_string(&key)
             && let Ok(parsed) = serde_json::from_str::<IndexMap<String, StatEntry>>(&text)
         {
             state.entries = parsed;
@@ -99,11 +100,10 @@ pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) -> PathB
 /// cannot be written, or [`CacheError::Json`] if serialisation fails.
 pub fn flush_stat_index() -> Result<(), CacheError> {
     let mut index = lock_index();
-    for (root, state) in &mut index.roots {
+    for (path, state) in &mut index.roots {
         if !state.dirty {
             continue;
         }
-        let path = stat_index_file(root);
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent_dir)?;
         let mut tmp = tempfile::Builder::new()
@@ -113,7 +113,8 @@ pub fn flush_stat_index() -> Result<(), CacheError> {
         let serialized = serde_json::to_vec(&state.entries)?;
         tmp.write_all(&serialized)?;
         tmp.flush()?;
-        tmp.persist(&path).map_err(|e| CacheError::Io(e.error))?;
+        tmp.persist(path.as_path())
+            .map_err(|e| CacheError::Io(e.error))?;
         state.dirty = false;
     }
     Ok(())
