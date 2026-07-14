@@ -35,10 +35,38 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-/// Commands for which the startup skill-version check is suppressed: install /
-/// uninstall re-stamp the skill, and the hook gates run on every editor tool
-/// use and must stay silent (#1568). Matches graphify-py's `_silent_cmds`.
+/// Top-level commands for which the startup skill-version check is suppressed:
+/// install / uninstall re-stamp the skill, and the hook gates run on every
+/// editor tool use and must stay silent (#1568). Mirrors graphify-py's
+/// `_silent_cmds`, but matched at a command POSITION (see [`is_silent_invocation`]).
 const SKILL_CHECK_SILENT_CMDS: [&str; 4] = ["install", "uninstall", "hook-check", "hook-guard"];
+
+/// `true` when this invocation is a skill-silent command: a top-level
+/// [`SKILL_CHECK_SILENT_CMDS`] entry, or a platform group's `install`/`uninstall`
+/// subcommand (`graphify claude install`). Positions are validated against clap's
+/// command tree so a free-text argument to another command
+/// (`graphify query install`) is not mistaken for the `install` command (#1568).
+/// `Cli` has no global flags, so argv[1] is always the command token.
+fn is_silent_invocation(raw_args: &[String]) -> bool {
+    use clap::CommandFactory;
+    let Some(top) = raw_args.get(1).map(String::as_str) else {
+        return false;
+    };
+    if SKILL_CHECK_SILENT_CMDS.contains(&top) {
+        return true;
+    }
+    let Some(second) = raw_args.get(2).map(String::as_str) else {
+        return false;
+    };
+    if !matches!(second, "install" | "uninstall") {
+        return false;
+    }
+    // Only a real platform group (`claude`, `gemini`, ...) has an `install`/
+    // `uninstall` child; `query`/`extract`/... do not.
+    args::Cli::command()
+        .find_subcommand(top)
+        .is_some_and(|sub| sub.find_subcommand(second).is_some())
+}
 
 /// Configure runtime services, parse argv, and dispatch the selected subcommand.
 ///
@@ -53,19 +81,11 @@ pub(crate) fn run() -> Result<()> {
         .init();
 
     // #1568: warn about a stale on-disk skill (a `.graphify_version` stamp that
-    // mismatches this package). Skipped for install/uninstall (they re-stamp) and
-    // the silent hook gates (run on every editor tool use). Checked on raw argv
-    // before clap parsing so `--version`/`--help` still surface the warning, and
-    // platform subcommands (`graphify claude install`) are caught by the "install"
-    // token — matching graphify-py's `sys.argv` scan.
-    // The scan is token-wide (not positional) to mirror graphify-py's `sys.argv`
-    // scan; a stray arg value that happens to equal a silent-command name is an
-    // accepted, harmless false-negative on a warning, not worth positional parsing.
-    let raw_args: Vec<String> = std::env::args().collect();
-    if !raw_args
-        .iter()
-        .any(|a| SKILL_CHECK_SILENT_CMDS.contains(&a.as_str()))
-    {
+    // mismatches this package). Suppressed for the commands that re-stamp the skill
+    // (install/uninstall) or run silently on every editor tool use
+    // (hook-check/hook-guard) - see `is_silent_invocation`. Checked on raw argv so
+    // `--version`/`--help` still surface the warning before clap intercepts them.
+    if !is_silent_invocation(&std::env::args().collect::<Vec<_>>()) {
         graphify_hooks::check_skill_versions(env!("CARGO_PKG_VERSION"));
     }
 

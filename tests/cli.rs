@@ -1052,7 +1052,8 @@ fn cluster_only_graph_in_graphify_out_writes_beside_it() {
 #[test]
 fn startup_warns_on_newer_skill_and_skips_silent_commands() {
     // #1568: a non-silent command surfaces the direction-aware stale-skill
-    // warning; a silent command (argv contains `install`) suppresses it.
+    // warning; a silent command (install/uninstall/hook at a command POSITION)
+    // suppresses it, while a free-text arg that merely equals a command name does not.
     let home = tempfile::tempdir().unwrap();
     let skill_dir = home.path().join(".claude").join("skills").join("graphify");
     fs::create_dir_all(&skill_dir).unwrap();
@@ -1069,10 +1070,33 @@ fn startup_warns_on_newer_skill_and_skips_silent_commands() {
         .success()
         .stderr(contains("downgrade").and(contains("Upgrade the package")));
 
-    // Silent (`install`): argv contains the `install` token, so the check is skipped.
+    // Silent (`install`): a top-level silent command suppresses the check.
     cli()
         .env("HOME", home.path())
         .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("install")
+        .arg("--help")
+        .assert()
+        .success()
+        .stderr(contains("downgrade").not());
+
+    // `query install`: `install` is the query text, not the command, so the
+    // warning MUST still fire (positional matching, #1568).
+    cli()
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("query")
+        .arg("install")
+        .arg("--help")
+        .assert()
+        .success()
+        .stderr(contains("downgrade"));
+
+    // A real platform install (`claude install`) is silent.
+    cli()
+        .env("HOME", home.path())
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .arg("claude")
         .arg("install")
         .arg("--help")
         .assert()
