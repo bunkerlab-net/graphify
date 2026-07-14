@@ -126,6 +126,29 @@ fn relativize_rewrites_absolute_paths() {
 }
 
 #[test]
+fn relativize_scope_skips_paths_outside_watched_subtree() {
+    // #8d8d2b8: with a `scope`, an absolute path resolving OUTSIDE the scope is
+    // left untouched (a preserved sibling-project node), while one inside scope
+    // and under root is relativised. Non-existent paths fall back to their literal
+    // form (canonicalize is best-effort), which suffices to exercise the gate.
+    let root = std::path::PathBuf::from("/proj/watched");
+    let mut payload = json!({
+        "nodes": [
+            {"id": "inside", "source_file": "/proj/watched/src/a.py"},
+            {"id": "outside", "source_file": "/other/project/b.py"},
+        ],
+        "edges": [],
+        "hyperedges": [],
+    });
+    relativize_source_files(&mut payload, &root, Some(root.as_path()));
+    assert_eq!(payload["nodes"][0]["source_file"], "src/a.py");
+    assert_eq!(
+        payload["nodes"][1]["source_file"], "/other/project/b.py",
+        "a path outside the scope must not be relativised"
+    );
+}
+
+#[test]
 fn relativize_leaves_relative_paths_alone() {
     let mut payload = json!({
         "nodes": [{"id": "a", "source_file": "rel/path.py"}],
