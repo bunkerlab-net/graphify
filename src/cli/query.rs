@@ -203,7 +203,8 @@ fn learning_lesson_line(g: &graphify_build::Graph, node_id: &str) -> Option<Stri
         ),
     };
     if entry.get("stale").and_then(serde_json::Value::as_bool) == Some(true) {
-        lesson.push_str(" [code changed since this verdict — re-verify]");
+        // Exact string is asserted by graphify-py `test_explain_cli.py` — keep verbatim.
+        lesson.push_str(" [code changed since — re-verify]");
     }
     Some(lesson)
 }

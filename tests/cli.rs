@@ -902,6 +902,56 @@ fn explain_surfaces_work_memory_lesson() {
 }
 
 #[test]
+fn explain_shows_contested_and_stale_lesson() {
+    // #1441 parity: a contested node whose `source_file` no longer resolves is
+    // marked stale. The exact `[code changed since — re-verify]` suffix is pinned
+    // by graphify-py `test_explain_cli.py` and must stay verbatim.
+    let dir = tempfile::tempdir().unwrap();
+    let graph_path = dir.path().join("graph.json");
+    fs::write(
+        &graph_path,
+        r#"{"directed":true,"multigraph":false,"nodes":[{"id":"fn1","label":"doThing","source_file":"a.py","source_location":"L1"}],"links":[]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join(".graphify_learning.json"),
+        r#"{"version":1,"generated_at":"2026-06-01T00:00:00+00:00","nodes":{"fn1":{"status":"contested","label":"doThing","uses":2,"neg":1,"score":-0.1,"verdict":"dead end","source_file":"server/does-not-exist.ts","code_fingerprint":"deadbeef","provenance":[]}}}"#,
+    )
+    .unwrap();
+    cli()
+        .arg("explain")
+        .arg("doThing")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success()
+        .stdout(
+            contains("Lesson: contested (useful 2 / dead-end 1)")
+                .and(contains("[code changed since — re-verify]")),
+        );
+}
+
+#[test]
+fn explain_no_lesson_line_for_unannotated_node() {
+    // #1441: no sidecar => no Lesson line (output identical to pre-feature).
+    let dir = tempfile::tempdir().unwrap();
+    let graph_path = dir.path().join("graph.json");
+    fs::write(
+        &graph_path,
+        r#"{"directed":true,"multigraph":false,"nodes":[{"id":"fn1","label":"doThing","source_file":"a.py","source_location":"L1"}],"links":[]}"#,
+    )
+    .unwrap();
+    cli()
+        .arg("explain")
+        .arg("doThing")
+        .arg("--graph")
+        .arg(&graph_path)
+        .assert()
+        .success()
+        .stdout(contains("Lesson:").not());
+}
+
+#[test]
 fn extract_out_does_not_pollute_corpus() {
     // #1747 Case 1: `extract <corpus> --out <elsewhere>` must not leave a stray
     // graphify-out/ (cache, stat-index) inside the scanned corpus.
