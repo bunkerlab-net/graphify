@@ -722,6 +722,32 @@ fn test_attach_hyperedges_deduplicates() {
 }
 
 #[test]
+fn test_attach_hyperedges_deduplicates_within_one_batch() {
+    // graphify-py records each accepted id into `seen_ids` as it appends, so a
+    // duplicate id in the SAME batch is dropped too — not only across calls.
+    let val: Value = serde_json::from_str(EXTRACTION_JSON).expect("valid JSON");
+    let mut g = build_from_json(val, false, None).expect("build_from_json");
+    let batch = vec![
+        json!({"id": "dup", "label": "first"}),
+        json!({"id": "dup", "label": "second"}),
+        json!({"id": "unique", "label": "third"}),
+    ];
+    attach_hyperedges(&mut g, &batch);
+    let stored = g.graph_attrs["hyperedges"].as_array().expect("array field");
+    assert_eq!(
+        stored.len(),
+        2,
+        "the duplicate `dup` within one batch must collapse to a single entry"
+    );
+    // The first occurrence wins (append-then-record order).
+    let dup = stored
+        .iter()
+        .find(|h| h.get("id").and_then(Value::as_str) == Some("dup"))
+        .expect("dup present");
+    assert_eq!(dup.get("label").and_then(Value::as_str), Some("first"));
+}
+
+#[test]
 fn test_to_html_aggregated_remaps_hyperedges_to_communities() {
     // graphify-py #1006: when the graph exceeds the viz limit and is aggregated
     // into a community meta-graph, hyperedges must be remapped from semantic

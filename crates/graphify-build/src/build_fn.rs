@@ -537,12 +537,19 @@ fn attach_carried_hyperedges(graph: &mut Graph, carried: Vec<Value>) {
         .filter_map(|h| h.get("id").and_then(Value::as_str).map(str::to_string))
         .collect();
     for he in carried {
-        if let Some(id) = he.get("id").and_then(Value::as_str)
-            && !seen.insert(id.to_string())
-        {
+        // An id-less or empty-id hyperedge is not carried: hyperedges are
+        // identified (and deduped) by a non-empty id, matching graphify-py's
+        // `attach_hyperedges` and graphify-export (a truthy-id guard).
+        let Some(id) = he
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
             continue;
+        };
+        if seen.insert(id.to_string()) {
+            arr.push(he);
         }
-        arr.push(he);
     }
 }
 

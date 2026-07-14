@@ -54,7 +54,7 @@ pub fn attach_hyperedges(graph: &mut Graph, hyperedges: &[Value]) {
         .cloned()
         .unwrap_or_else(|| json!([]));
 
-    let seen_ids: IndexSet<String> = existing_val
+    let mut seen_ids: IndexSet<String> = existing_val
         .as_array()
         .map(|arr| {
             arr.iter()
@@ -67,7 +67,9 @@ pub fn attach_hyperedges(graph: &mut Graph, hyperedges: &[Value]) {
 
     for h in hyperedges {
         let hid = h.get("id").and_then(Value::as_str).unwrap_or("");
-        if !hid.is_empty() && !seen_ids.contains(hid) {
+        // `insert` records the id as we accept it, so a duplicate id WITHIN this
+        // batch is also deduped — matching graphify-py's per-append `seen_ids.add`.
+        if !hid.is_empty() && seen_ids.insert(hid.to_string()) {
             merged.push(h.clone());
         }
     }

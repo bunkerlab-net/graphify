@@ -1442,3 +1442,51 @@ fn test_build_merge_preserves_unchanged_hyperedges() {
         "unchanged-file hyperedge preserved, got {hyper:?}"
     );
 }
+
+#[test]
+fn build_merge_drops_idless_carried_hyperedge() {
+    // A carried hyperedge with no (or empty) id is not merged: hyperedges are
+    // identified by a non-empty id, matching graphify-py `attach_hyperedges`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graph.json");
+    let graph_json = json!({
+        "nodes": [
+            {"id": "a", "label": "A", "file_type": "document", "source_file": "keep.md"},
+        ],
+        "links": [],
+        "hyperedges": [
+            {"id": "arch", "label": "Arch", "nodes": ["a"], "relation": "participate_in",
+             "confidence": "INFERRED", "source_file": "keep.md"},
+            {"label": "NoId", "nodes": ["a"], "relation": "participate_in",
+             "confidence": "INFERRED", "source_file": "keep.md"},
+        ],
+    });
+    std::fs::write(
+        &graph_path,
+        serde_json::to_string(&graph_json).expect("ser"),
+    )
+    .expect("write");
+
+    // No new extractions: every existing hyperedge is a carry candidate.
+    let g = build_merge(&[], &graph_path, None, false, false, None).expect("build_merge");
+    let hes = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ids: Vec<_> = hes
+        .iter()
+        .filter_map(|h| h.get("id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["arch"],
+        "only the id-bearing hyperedge is carried"
+    );
+    assert_eq!(
+        hes.len(),
+        1,
+        "the id-less hyperedge must be dropped: {hes:?}"
+    );
+}
