@@ -28,6 +28,13 @@ use serde_json::Value;
 use crate::error::ServeError;
 use crate::server::McpServerState;
 
+/// Hard upper bound on one request's blocking dispatch, so a hung graph load
+/// (e.g. a stalled network filesystem) returns a timely error instead of tying
+/// up the connection indefinitely. Generous enough for a legitimate large-graph
+/// load under the size cap; it trips only on a genuine hang. `session_timeout`
+/// stays a no-op (graphify keeps no per-session state).
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
+
 /// Options for the Streamable HTTP transport (mirrors graphify-py `serve_http`).
 pub struct HttpOptions {
     /// Bind host. `0.0.0.0`/`::`/empty exposes the server beyond localhost.
@@ -190,16 +197,23 @@ async fn mcp_post(State(ctx): State<Arc<HttpCtx>>, headers: HeaderMap, body: Byt
     // `handle` does synchronous graph I/O, so dispatch it on the blocking pool to
     // keep the async executor free. `McpServerState` locks per-project internally
     // (not one global mutex), so concurrent requests to DIFFERENT projects run in
-    // parallel; only same-graph calls serialise.
+    // parallel; only same-graph calls serialise. A per-request timeout bounds a
+    // hung load — the blocking task is NOT cancelled (it runs to completion and
+    // still populates the cache); we simply stop waiting and report the timeout.
     let ctx_for_handle = Arc::clone(&ctx);
-    let Ok(response) = tokio::task::spawn_blocking(move || {
+    let dispatch = tokio::task::spawn_blocking(move || {
         ctx_for_handle
             .state
             .handle(&msg, &ctx_for_handle.graph_path)
-    })
-    .await
-    else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "handler task failed").into_response();
+    });
+    let response = match tokio::time::timeout(REQUEST_TIMEOUT, dispatch).await {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(_)) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "handler task failed").into_response();
+        }
+        Err(_) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "request timed out").into_response();
+        }
     };
 
     let Some(resp) = response else {
