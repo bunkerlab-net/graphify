@@ -123,6 +123,21 @@ fn resolves_member_call_by_type() -> TestResult {
 }
 
 #[test]
+fn resolves_member_call_uppercase_ext() -> TestResult {
+    // #1671: uppercase `.RB` files are still Ruby, so the cross-file resolver's
+    // suffix guard must resolve their member calls too.
+    let tmp = tempdir()?;
+    write(tmp.path(), "HELPER.RB", HELPER_RB)?;
+    let main = write(tmp.path(), "MAIN.RB", MAIN_RB)?;
+    let graph = extract(&[main, tmp.path().join("HELPER.RB")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    let (_, conf) = call_edge(&graph, &labels, "process_all", "run")
+        .ok_or("uppercase-.RB member call must resolve")?;
+    assert_eq!(conf, "EXTRACTED");
+    Ok(())
+}
+
+#[test]
 fn resolution_is_type_based_not_name_luck() -> TestResult {
     // The differentiator: adding an unrelated Worker#run must NOT break the edge.
     // A name-match resolver drops this (two `run` defs => ambiguous); a type-based

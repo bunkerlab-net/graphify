@@ -1556,6 +1556,28 @@ fn java_explicit_type_receiver_resolves_to_owned_method() {
     );
 }
 
+/// #1671: uppercase `.JAVA` files still resolve cross-file member calls.
+#[test]
+fn java_uppercase_ext_member_call_resolves() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (calls, result) = java_calls(
+        tmp.path(),
+        &[
+            ("Services.JAVA", JAVA_AMBIGUOUS_METHODS),
+            (
+                "Checkout.JAVA",
+                "class Checkout { void run() { PaymentGateway.ping(); } }\n",
+            ),
+        ],
+    );
+    let run = jfind(&result, ".run()", "checkout");
+    let gateway_ping = jfind(&result, ".ping()", "paymentgateway");
+    assert!(
+        calls.contains(&(run, gateway_ping)),
+        "uppercase-.JAVA run -> PaymentGateway.ping: {calls:?}"
+    );
+}
+
 #[test]
 fn java_field_receiver_resolves_to_declared_type() {
     let tmp = tempfile::tempdir().expect("tempdir");

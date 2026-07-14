@@ -194,6 +194,25 @@ fn ts_local_new_binding_receiver() {
     );
 }
 
+/// #1671: uppercase `.TS` files still resolve cross-file member calls.
+#[test]
+fn ts_uppercase_ext_member_call_resolves() {
+    let (_t, out) = corpus(&[
+        ("SVC.TS", SVC),
+        (
+            "DIRECT.TS",
+            "import { Svc } from \"./SVC\";\nconst s = new Svc();\nexport function usesDirect(): number { return s.doThing(); }\n",
+        ),
+    ]);
+    assert!(
+        calls(&out)
+            .iter()
+            .any(|(s, t)| s.contains("usesDirect") && t.contains("doThing")),
+        "uppercase-.TS member call must resolve: {:?}",
+        calls(&out)
+    );
+}
+
 /// A closure over a typed parameter (`register(svc: Svc): () => svc.doThing()`)
 /// resolves — the returned arrow's call attributes to the enclosing function.
 #[test]
