@@ -237,6 +237,12 @@ async fn server_tools_carry_optional_project_path() {
             "tool {} missing optional project_path",
             t["name"]
         );
+        let required = t["inputSchema"]["required"].as_array();
+        assert!(
+            required.is_none_or(|r| !r.iter().any(|v| v.as_str() == Some("project_path"))),
+            "tool {} must not list the optional project_path as required",
+            t["name"]
+        );
     }
 }
 
@@ -283,8 +289,12 @@ async fn server_bad_project_path_errors_without_killing_server() {
     // still answers the next call against the default graph.
     let tmp = tempfile::tempdir().expect("tempdir");
     let gp = write_graph(tmp.path());
-    let input = "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"get_node\",\"arguments\":{\"label\":\"alpha\",\"project_path\":\"/no/such/project/xyz\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{\"name\":\"get_node\",\"arguments\":{\"label\":\"alpha\"}}}\n";
-    let responses = run_with_input(&gp, input).await;
+    let missing = tmp.path().join("no-such-project");
+    let missing_json = serde_json::to_string(&missing.to_string_lossy()).expect("json");
+    let input = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_node\",\"arguments\":{{\"label\":\"alpha\",\"project_path\":{missing_json}}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_node\",\"arguments\":{{\"label\":\"alpha\"}}}}}}\n"
+    );
+    let responses = run_with_input(&gp, &input).await;
     let text_of = |id: i64| -> String {
         responses
             .iter()
@@ -306,5 +316,38 @@ async fn server_bad_project_path_errors_without_killing_server() {
         text_of(24).contains("alpha"),
         "server still serving default: {}",
         text_of(24)
+    );
+}
+
+#[tokio::test]
+async fn server_non_string_project_path_is_a_tool_error() {
+    // A non-string project_path (here a number) must surface a tool error, not
+    // silently fall back to the default graph — matching graphify-py, where
+    // `Path(project_path)` raises on a non-str.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let gp = write_graph(tmp.path());
+    let input = "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"get_node\",\"arguments\":{\"label\":\"alpha\",\"project_path\":123}}}\n{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tools/call\",\"params\":{\"name\":\"get_node\",\"arguments\":{\"label\":\"alpha\"}}}\n";
+    let responses = run_with_input(&gp, input).await;
+    let text_of = |id: i64| -> String {
+        responses
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| {
+                r["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    };
+    assert!(
+        text_of(30).contains("project_path must be a string"),
+        "non-string project_path should error: {}",
+        text_of(30)
+    );
+    assert!(
+        text_of(31).contains("alpha"),
+        "server still serves the default graph afterwards: {}",
+        text_of(31)
     );
 }

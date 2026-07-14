@@ -957,6 +957,50 @@ fn test_idf_common_term_gets_low_weight() {
     assert!(idf["handle"] < 1.0, "common term IDF should be < 1.0");
 }
 
+#[test]
+fn idf_cache_is_stale_across_graphs_so_reload_must_clear_it() {
+    // A term's IDF weight depends on the graph (node count + document frequency),
+    // so a cache populated for one graph returns a WRONG weight for another.
+    // `GraphCtx::reload` clears `idf_cache` for exactly this reason; this pins the
+    // hazard a persisted cache would cause after a hot reload.
+    // Graph A: `widget` is rare (1 of 5) → high IDF.
+    let mut nodes_a = vec![json!({"id": "w", "label": "widget", "source_file": "w.py"})];
+    for i in 0..4_u64 {
+        nodes_a.push(json!({"id": format!("n{i}"), "label": format!("common_{i}"), "source_file": format!("f{i}.py")}));
+    }
+    let g_a =
+        build_from_json(json!({"nodes": nodes_a, "edges": []}), false, None).expect("graph A");
+    // Graph B: `widget` is common (every node) → low IDF.
+    let mut nodes_b = vec![];
+    for i in 0..5_u64 {
+        nodes_b.push(json!({"id": format!("n{i}"), "label": format!("widget_{i}"), "source_file": format!("f{i}.py")}));
+    }
+    let g_b =
+        build_from_json(json!({"nodes": nodes_b, "edges": []}), false, None).expect("graph B");
+
+    let mut cache = HashMap::new();
+    let idf_a = compute_idf(&g_a, &["widget"], &mut cache)["widget"];
+    // Reuse the A-populated cache against B: compute_idf skips cached terms, so
+    // this returns A's stale weight rather than B's.
+    let idf_b_stale = compute_idf(&g_b, &["widget"], &mut cache)["widget"];
+    // A fresh cache (what reload's clear() yields) computes B's true weight.
+    let mut fresh = HashMap::new();
+    let idf_b_fresh = compute_idf(&g_b, &["widget"], &mut fresh)["widget"];
+
+    assert!(
+        (idf_b_stale - idf_a).abs() < 1e-9,
+        "a persisted cache returns graph A's weight for graph B"
+    );
+    assert!(
+        (idf_b_stale - idf_b_fresh).abs() > 1e-9,
+        "stale weight {idf_b_stale} differs from B's true weight {idf_b_fresh} — reload MUST clear the cache"
+    );
+    assert!(
+        idf_b_fresh < idf_a,
+        "widget is rare in A (high IDF) but common in B (low IDF)"
+    );
+}
+
 // ── _pick_seeds (issue #897) ──────────────────────────────────────────────────
 
 #[test]

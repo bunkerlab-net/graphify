@@ -428,12 +428,19 @@ impl GraphCtx {
 
     /// Reload from disk when the file's `(mtime, size)` changed.
     fn reload(&mut self, graph_path: &str) {
-        maybe_reload(
+        // A successful reload swaps in a new graph, so `idf_cache` — keyed only
+        // by term but derived from node count and document frequency — is stale
+        // and must be dropped. graphify-py stores `_idf_cache` ON the graph so a
+        // swap invalidates it for free; the Rust holds it separately, so clear it
+        // explicitly so a hot reload cannot rank queries with stale IDF weights.
+        if maybe_reload(
             graph_path,
             &mut self.graph,
             &mut self.communities,
             &mut self.reload_state,
-        );
+        ) {
+            self.idf_cache.clear();
+        }
     }
 }
 
@@ -467,6 +474,11 @@ fn stat_mtime_size(graph_path: &str) -> (u64, u64) {
 pub(crate) struct McpServerState {
     default_path: String,
     default_ctx: Option<GraphCtx>,
+    /// Per-project graph cache keyed by the resolved `graph.json` path. Keys are
+    /// NOT canonicalised and the map is unbounded, mirroring graphify-py's
+    /// `_ctx_cache` (a plain dict on the same resolved string): two aliases to one
+    /// graph merely load twice (benign), and a server sees a bounded set of real
+    /// project roots. Canonicalising/evicting is declined to keep routing parity.
     project_ctxs: HashMap<String, GraphCtx>,
 }
 
@@ -500,6 +512,13 @@ impl McpServerState {
 
     /// Get (loading + hot-reloading) the context for `resolved`, or an error
     /// string when the graph cannot be loaded (a tool error, never a crash).
+    ///
+    /// Loads run under the caller's `&mut self` borrow (and, in the HTTP
+    /// transport, its state `Mutex`). graphify-py uses a lock-free hot path and
+    /// locks only to build; the Rust keeps one borrow/lock per message — simpler
+    /// and adequate for the MCP server's low request rate (HTTP is an off-by-
+    /// default feature). A lock-free fast path fights the `&mut GraphCtx` borrow
+    /// the tool dispatch requires, for no real-world throughput gain here.
     fn select_ctx(&mut self, resolved: &str) -> Result<&mut GraphCtx, String> {
         if resolved == self.default_path {
             if self.default_ctx.is_none() {
@@ -526,6 +545,12 @@ impl McpServerState {
     /// Handle a `tools/call`: pop `project_path`, select the target graph, and
     /// dispatch, returning the tool's text output (or an error string when the
     /// project's graph cannot be loaded — a tool error, never a crash).
+    ///
+    /// Errors are returned as ordinary text content, not with an `isError: true`
+    /// flag, mirroring graphify-py's handler (it yields `TextContent(text="Error
+    /// executing …")` and never sets `isError`). Matching that keeps the MCP wire
+    /// output identical to the reference; adding a structured error status is a
+    /// deliberate non-change for parity.
     fn call_tool(&mut self, params: &serde_json::Map<String, Value>) -> String {
         let name = params
             .get("name")
@@ -537,11 +562,18 @@ impl McpServerState {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        // Pop `project_path` before the tool sees the args; route the call to
-        // that project's graph (or the default when absent).
-        let project_path = arguments
-            .remove("project_path")
-            .and_then(|v| v.as_str().map(str::to_string));
+        // Match graphify-py: absent / null / empty → the default graph; a
+        // non-empty string routes to that project; any other JSON type is a
+        // caller error (Python's `Path(project_path)` raises on a non-str, which
+        // surfaces as a tool error) rather than silently falling back to default.
+        let project_path = match arguments.remove("project_path") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if s.is_empty() => None,
+            Some(Value::String(s)) => Some(s),
+            Some(other) => {
+                return format!("Error: project_path must be a string, got: {other}");
+            }
+        };
         let resolved = self.resolve_graph_path(project_path.as_deref());
         match self.select_ctx(&resolved) {
             Ok(ctx) => dispatch_tool(

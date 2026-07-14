@@ -727,17 +727,19 @@ pub fn load_community_labels(
 
 /// Check if `graph_path` has changed (`mtime_ns` + size), and if so reload.
 ///
-/// Mirrors Python `_maybe_reload`.
+/// Mirrors Python `_maybe_reload`. Returns `true` when the file changed and was
+/// successfully reloaded, so callers can invalidate derived caches (e.g. IDF).
+#[must_use]
 pub fn maybe_reload(
     graph_path: &str,
     graph: &mut Graph,
     communities: &mut IndexMap<i64, Vec<String>>,
     reload_state: &mut ReloadState,
-) {
+) -> bool {
     use crate::graph::{communities_from_graph, load_graph};
 
     let Ok(meta) = std::fs::metadata(graph_path) else {
-        return;
+        return false;
     };
     let mtime = meta
         .modified()
@@ -748,7 +750,7 @@ pub fn maybe_reload(
         });
     let size = meta.len();
     if (mtime, size) == (reload_state.mtime_ns, reload_state.size) {
-        return;
+        return false;
     }
     // Reload.
     if let Ok(new_g) = load_graph(graph_path) {
@@ -757,5 +759,7 @@ pub fn maybe_reload(
         *communities = new_comms;
         reload_state.mtime_ns = mtime;
         reload_state.size = size;
+        return true;
     }
+    false
 }
