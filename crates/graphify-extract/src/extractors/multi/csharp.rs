@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::ids::make_id;
+use crate::lang_configs::ends_with_suffix_ci;
 use crate::types::{Edge, Node, RawCall};
 use serde_json::Value;
 
@@ -80,7 +81,7 @@ fn build_csharp_type_def_index(all_nodes: &[Node]) -> HashMap<(String, String), 
         }
         if n.id.is_empty()
             || n.label.is_empty()
-            || !n.source_file.ends_with(".cs")
+            || !ends_with_suffix_ci(&n.source_file, &[".cs"])
             || n.file_type != "code"
             || n.label.ends_with(')')
             || n.label.starts_with('.')
@@ -442,7 +443,7 @@ pub(super) fn resolve_csharp_type_references(
         }
         if n.node_type.as_deref() == Some("namespace")
             || n.source_file.is_empty()
-            || n.source_file.ends_with(".cs")
+            || ends_with_suffix_ci(&n.source_file, &[".cs"])
         {
             cs_relevant.insert(n.id.clone());
         }
@@ -451,7 +452,7 @@ pub(super) fn resolve_csharp_type_references(
     let mut ns_usings: NsUsings = HashMap::new();
     let mut aliases: Aliases = HashMap::new();
     for e in all_edges.iter() {
-        if e.relation != "imports" || !e.source_file.ends_with(".cs") {
+        if e.relation != "imports" || !ends_with_suffix_ci(&e.source_file, &[".cs"]) {
             continue;
         }
         let Some(target_fqn) = edge_meta_str(e, "target_fqn") else {
@@ -497,7 +498,7 @@ pub(super) fn resolve_csharp_type_references(
     let mut new_stubs: Vec<Node> = Vec::new();
     for e in all_edges.iter_mut() {
         if !CSHARP_REPOINT_RELATIONS.contains(&e.relation.as_str())
-            || !e.source_file.ends_with(".cs")
+            || !ends_with_suffix_ci(&e.source_file, &[".cs"])
             || !cs_relevant.contains(&e.target)
         {
             continue;
@@ -671,7 +672,7 @@ pub(super) fn resolve_csharp_member_calls(
 
     let mut new_edges: Vec<Edge> = Vec::new();
     for rc in all_raw_calls {
-        if !rc.source_file.ends_with(".cs") || !rc.is_member_call {
+        if !ends_with_suffix_ci(&rc.source_file, &[".cs"]) || !rc.is_member_call {
             continue;
         }
         let receiver = match rc.receiver.as_deref() {

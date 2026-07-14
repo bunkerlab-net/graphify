@@ -81,7 +81,9 @@ pub(super) fn resolve_typescript_member_calls(
 
     let mut new_edges: Vec<Edge> = Vec::new();
     for rc in all_raw_calls {
-        if !rc.is_member_call || !TS_JS_SUFFIXES.iter().any(|s| rc.source_file.ends_with(s)) {
+        if !rc.is_member_call
+            || !crate::lang_configs::ends_with_suffix_ci(&rc.source_file, &TS_JS_SUFFIXES)
+        {
             continue;
         }
         let receiver = match rc.receiver.as_deref() {

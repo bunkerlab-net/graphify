@@ -151,6 +151,14 @@ pub(crate) fn emit_csharp_inheritance(
                                                         &mut refs,
                                                     );
                                                     for r in &refs {
+                                                        // A type parameter used as a
+                                                        // generic arg (`Box<T> : Base<T>`)
+                                                        // is a type variable, not a real
+                                                        // type — skip it (matches the base
+                                                        // exclusion; no ref or phantom node).
+                                                        if type_params.contains(&r.name) {
+                                                            continue;
+                                                        }
                                                         let target = emit_base_node(
                                                             &r.name, line, stem, str_path, nodes,
                                                             seen_ids,

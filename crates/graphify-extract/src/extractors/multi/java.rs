@@ -3,6 +3,7 @@
 
 use super::PARALLEL_THRESHOLD;
 use crate::ids::make_id1;
+use crate::lang_configs::ends_with_suffix_ci;
 use crate::types::{Edge, FileResult, Node, RawCall};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -479,7 +480,7 @@ pub(super) fn resolve_java_member_calls(
 
     let mut new_edges: Vec<Edge> = Vec::new();
     for rc in all_raw_calls {
-        if !rc.source_file.ends_with(".java") || !rc.is_member_call {
+        if !ends_with_suffix_ci(&rc.source_file, &[".java"]) || !rc.is_member_call {
             continue;
         }
         let receiver = match rc.receiver.as_deref() {

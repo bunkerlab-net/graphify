@@ -1898,6 +1898,30 @@ fn csharp_local_var_receiver_resolves() {
     );
 }
 
+/// #1671: an uppercase `.CS` file is dispatched and extracted as C#, so its
+/// cross-file member calls must resolve too — the resolver's suffix guards are
+/// case-insensitive. A case-sensitive `.cs` guard would silently drop the edge.
+#[test]
+fn csharp_uppercase_ext_member_call_resolves() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (calls, _) = java_calls(
+        tmp.path(),
+        &[(
+            "S.CS",
+            "public class Server { public bool Save() => true; }\n\
+             public class R {\n\
+             \x20   public bool B() { var v = new Server(); return v.Save(); }\n\
+             }\n",
+        )],
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|(s, t)| s.contains("_r_b") && t.contains("server_save")),
+        "uppercase-.CS member call must resolve: {calls:?}"
+    );
+}
+
 #[test]
 fn csharp_cross_file_receiver_resolves() {
     let tmp = tempfile::tempdir().expect("tempdir");

@@ -105,7 +105,7 @@ pub(super) fn resolve_ruby_member_calls(
         .map(|e| e.target.as_str())
         .collect();
     for n in all_nodes {
-        if n.source_file.ends_with(".rb")
+        if crate::lang_configs::ends_with_suffix_ci(&n.source_file, &[".rb"])
             && contained.contains(n.id.as_str())
             && is_type_like_definition(n)
             && n.label.chars().next().is_some_and(char::is_uppercase)
@@ -124,7 +124,7 @@ pub(super) fn resolve_ruby_member_calls(
             continue;
         }
         if let Some(cnode) = node_by_id.get(e.source.as_str())
-            && cnode.source_file.ends_with(".rb")
+            && crate::lang_configs::ends_with_suffix_ci(&cnode.source_file, &[".rb"])
         {
             class_def_nids
                 .entry(key(&cnode.label))
@@ -149,7 +149,9 @@ pub(super) fn resolve_ruby_member_calls(
     for rc in all_raw_calls {
         // Scope to Ruby raw_calls (mirrors Python `_ruby_raw_calls`); only member
         // calls are resolved here (the shared pass already handled the rest).
-        if !rc.source_file.ends_with(".rb") || !rc.is_member_call {
+        if !crate::lang_configs::ends_with_suffix_ci(&rc.source_file, &[".rb"])
+            || !rc.is_member_call
+        {
             continue;
         }
         if rc.caller_nid.is_empty() || rc.callee.is_empty() {
