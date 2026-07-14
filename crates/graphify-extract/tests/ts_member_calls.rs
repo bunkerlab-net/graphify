@@ -194,16 +194,15 @@ fn ts_local_new_binding_receiver() {
     );
 }
 
-/// #1671: uppercase `.TS` files still resolve cross-file member calls.
+/// #1671: an uppercase `.TS` source is still TS, so the member-call resolver's
+/// suffix guard must act on its raw_calls. Single-file to isolate that guard
+/// from JS module-path resolution (which probes lowercase candidates by design).
 #[test]
 fn ts_uppercase_ext_member_call_resolves() {
-    let (_t, out) = corpus(&[
-        ("SVC.TS", SVC),
-        (
-            "DIRECT.TS",
-            "import { Svc } from \"./SVC\";\nconst s = new Svc();\nexport function usesDirect(): number { return s.doThing(); }\n",
-        ),
-    ]);
+    let (_t, out) = corpus(&[(
+        "APP.TS",
+        "export class Svc {\n  doThing(): number { return 1; }\n}\nconst s = new Svc();\nexport function usesDirect(): number { return s.doThing(); }\n",
+    )]);
     assert!(
         calls(&out)
             .iter()
