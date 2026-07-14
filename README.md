@@ -134,6 +134,14 @@ graphify query "how do we authenticate users"
 graphify explain "AuthMiddleware"
 ```
 
+No LLM key? Build a code-only graph from the local AST alone — it skips the
+semantic (LLM) pass and the doc/paper/image files, so a mixed repo still gets a
+full code graph offline:
+
+```bash
+graphify extract . --code-only
+```
+
 Wire it into your AI assistant in one command:
 
 ```bash
