@@ -315,17 +315,17 @@ fn source_file(node: &Value) -> &str {
 /// from a different `source_file` than the node already kept. Same-file
 /// duplicates (`existing_sf == new_sf`) are silent. The dropped node is always
 /// the later one (first-writer-wins), so this surfaces otherwise-silent data
-/// loss from two same-named files in different directories.
+/// loss when two distinct source files resolve to the same node id.
 fn warn_cross_chunk_collision(nid: &str, existing_sf: &str, new_sf: &str) {
     if existing_sf == new_sf {
         return;
     }
     eprintln!(
-        "[graphify] WARNING: node '{nid}' from '{new_sf}' collides with \
-         node from '{existing_sf}' — the second node will be dropped. \
-         This is a cross-chunk ID collision caused by two files with the \
-         same name in different directories. To avoid data loss, run \
-         'graphify extract' per subfolder and merge with \
+        "[graphify] WARNING: node '{nid}' from '{new_sf}' collides with a node \
+         already kept from '{existing_sf}' — the second node will be dropped. \
+         This is a cross-chunk ID collision between two different source files \
+         (commonly two files sharing a base name across directories). To avoid \
+         data loss, run 'graphify extract' per subfolder and merge with \
          'graphify merge-graphs'."
     );
 }
