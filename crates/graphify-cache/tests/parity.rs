@@ -6,9 +6,9 @@ use std::fs;
 use std::path::Path;
 
 use graphify_cache::{
-    _reset_stat_index_for_tests, body_content, cache_dir, cache_dir_versioned, cached_files,
-    cached_word_count, clear_cache, ensure_atexit_flush_registered, file_hash, flush_stat_index,
-    load_cached, load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
+    _reset_stat_index_for_tests, StatIndexFlushGuard, body_content, cache_dir, cache_dir_versioned,
+    cached_files, cached_word_count, clear_cache, file_hash, flush_stat_index, load_cached,
+    load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
     save_semantic_cache,
 };
 use serde_json::{Value, json};
@@ -223,15 +223,59 @@ fn cache_dir_creates_kind_subdir() {
     assert!(dir.ends_with("semantic"));
 }
 
-// ── ensure_atexit_flush_registered ───────────────────────────────────────────
+// ── StatIndexFlushGuard: flush on normal process exit (#1656) ─────────────────
 
 #[test]
-fn ensure_atexit_flush_registered_is_idempotent() {
-    // Calling multiple times must not panic or have visible side-effects.
-    ensure_atexit_flush_registered();
-    ensure_atexit_flush_registered();
-    ensure_atexit_flush_registered();
-    // No assertion needed beyond "did not panic".
+fn stat_index_flush_guard_persists_on_process_exit() {
+    // The #1656 cache only helps if it survives to disk between runs. The guard
+    // must flush when it drops at scope/process exit, with NO explicit
+    // `flush_stat_index()` call. A real subprocess proves this: the prior
+    // `static`-owned sentinel would never drop and so never write the index.
+    const ROOT_ENV: &str = "GRAPHIFY_FLUSH_TEST_ROOT";
+    const FILE_ENV: &str = "GRAPHIFY_FLUSH_TEST_FILE";
+
+    if let (Ok(root), Ok(file)) = (std::env::var(ROOT_ENV), std::env::var(FILE_ENV)) {
+        // CHILD: mutate the index, then return so the guard drops on exit.
+        let _guard = StatIndexFlushGuard::new();
+        let root = std::path::PathBuf::from(root);
+        let file = std::path::PathBuf::from(&file);
+        let parent = file.parent().unwrap_or_else(|| Path::new("."));
+        assert_eq!(cached_word_count(&file, parent, |_| 7, Some(&root)), 7);
+        return;
+    }
+
+    // PARENT: re-exec ourselves as the child with a fresh temp root + corpus.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("out");
+    let file = tmp.path().join("corpus").join("note.txt");
+    std::fs::create_dir_all(file.parent().expect("parent")).expect("create_dir_all");
+    write_text(&file, "some words here");
+
+    let exe = std::env::current_exe().expect("current_exe");
+    let status = std::process::Command::new(exe)
+        .args([
+            "stat_index_flush_guard_persists_on_process_exit",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(ROOT_ENV, &root)
+        .env(FILE_ENV, &file)
+        .env_remove("GRAPHIFY_OUT")
+        .status()
+        .expect("spawn child test process");
+    assert!(status.success(), "child test process must exit 0");
+
+    // The child never called flush_stat_index(); only the guard's drop did.
+    let idx = root
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let text = std::fs::read_to_string(&idx)
+        .expect("the stat index must be flushed to disk on the child's normal exit");
+    assert!(
+        text.contains("note.txt"),
+        "the flushed index must hold the counted file: {text}"
+    );
 }
 
 // ── #1259: frontmatter delimiters must be whole `---` lines ──────────────────

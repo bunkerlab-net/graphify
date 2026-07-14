@@ -74,7 +74,9 @@ fn is_silent_invocation(raw_args: &[String]) -> bool {
 /// parses [`args::Cli`] and forwards to [`dispatch::dispatch`]. When no
 /// subcommand is supplied, prints a help hint and returns `Ok(())`.
 pub(crate) fn run() -> Result<()> {
-    graphify_cache::ensure_atexit_flush_registered();
+    // Hold the flush guard for the whole run so the stat index is persisted on
+    // return (a `static` guard would never drop at process exit).
+    let _stat_index_flush = graphify_cache::StatIndexFlushGuard::new();
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -120,38 +120,39 @@ pub fn flush_stat_index() -> Result<(), CacheError> {
     Ok(())
 }
 
-/// RAII sentinel that flushes the stat index on `drop`.
+/// RAII guard that flushes the stat index to disk when dropped.
 ///
-/// Used with `OnceLock` so registration is idempotent: calling
-/// [`ensure_atexit_flush_registered`] multiple times is safe.
+/// Bind it for the lifetime of the process's work (e.g. in the CLI `run`); it
+/// persists the index on a normal return, an error return, or a `panic="unwind"`,
+/// mirroring graphify-py's `atexit`-registered flush.
 ///
-/// **Trade-off**: `Drop` runs when Rust's normal stack unwinding happens
-/// (e.g. on `panic="unwind"`). It does NOT run on `std::process::exit()`,
-/// SIGKILL, or `panic="abort"`. For the common case (graceful shutdown)
-/// this is sufficient to persist the stat index.
-struct FlushSentinel;
+/// A `static` guard does NOT work here: Rust never drops `static` items at
+/// process exit, so the flush must be owned by a live stack frame.
+///
+/// **Trade-off**: `Drop` does NOT run on `std::process::exit()`, SIGKILL, or
+/// `panic="abort"`. For graceful shutdown this suffices to persist the index.
+#[must_use = "the stat index is flushed when this guard drops; bind it for the process's lifetime"]
+pub struct StatIndexFlushGuard(());
 
-impl Drop for FlushSentinel {
-    /// Flush the stat index to disk on drop, discarding any error
-    /// silently — the cache is a performance optimisation, not critical
-    /// data.
-    fn drop(&mut self) {
-        let _ = flush_stat_index();
+impl StatIndexFlushGuard {
+    /// Create a guard that flushes the stat index when it goes out of scope.
+    pub fn new() -> Self {
+        Self(())
     }
 }
 
-static ATEXIT: OnceLock<FlushSentinel> = OnceLock::new();
+impl Default for StatIndexFlushGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-/// Register a process-exit flush of the stat index.
-///
-/// Idempotent — safe to call more than once. The flush is best-effort;
-/// errors are silently discarded.
-///
-/// # Limitations
-///
-/// Does NOT flush on `std::process::exit()`, SIGKILL, or `panic="abort"`.
-pub fn ensure_atexit_flush_registered() {
-    ATEXIT.get_or_init(|| FlushSentinel);
+impl Drop for StatIndexFlushGuard {
+    /// Flush the stat index to disk, discarding any error silently — the cache
+    /// is a performance optimisation, not critical data.
+    fn drop(&mut self) {
+        let _ = flush_stat_index();
+    }
 }
 
 /// Reset the global stat index. Test-only; not part of the public
