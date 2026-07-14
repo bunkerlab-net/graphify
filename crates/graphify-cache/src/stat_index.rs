@@ -4,6 +4,7 @@
 //! When `file_hash` is called on a path whose `(size, mtime_ns)` matches
 //! the cached entry, we skip rehashing entirely.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,54 +32,60 @@ pub(crate) struct StatEntry {
     pub(crate) word_count: Option<u64>,
 }
 
-/// Process-wide stat index, lazily initialised per root.
-static STAT_INDEX: LazyLock<Mutex<StatIndexState>> =
-    LazyLock::new(|| Mutex::new(StatIndexState::default()));
+/// Process-wide stat index. Each cache-file root's on-disk index is loaded
+/// once and kept under its resolved key, so two invocations with different
+/// roots (e.g. distinct `--out` dirs in one process) never share — and thus
+/// never clobber — one in-memory index.
+static STAT_INDEX: LazyLock<Mutex<StatIndex>> = LazyLock::new(|| Mutex::new(StatIndex::default()));
 
 #[derive(Default)]
-pub(crate) struct StatIndexState {
+pub(crate) struct StatIndex {
+    /// Per-root states keyed by the resolved cache-file root.
+    pub(crate) roots: HashMap<PathBuf, RootState>,
+}
+
+/// One cache-file root's in-memory index.
+#[derive(Default)]
+pub(crate) struct RootState {
     pub(crate) entries: IndexMap<String, StatEntry>,
-    pub(crate) root: Option<PathBuf>,
     pub(crate) dirty: bool,
+    /// Whether this root's on-disk index has been loaded yet.
+    loaded: bool,
 }
 
 /// Acquire the global stat-index mutex, panicking if it is poisoned.
 ///
 /// Mutex poisoning here is unrecoverable: it indicates a previous panic
 /// while the index was being mutated, so the index state may be torn.
-pub(crate) fn lock_index() -> std::sync::MutexGuard<'static, StatIndexState> {
+pub(crate) fn lock_index() -> std::sync::MutexGuard<'static, StatIndex> {
     #[allow(clippy::expect_used)] // mutex poisoning here is unrecoverable; surface the panic loudly
     STAT_INDEX.lock().expect("STAT_INDEX mutex poisoned")
 }
 
-/// Load the stat index from disk into the global state if it has not
-/// already been initialised for `root`.
+/// Resolve the cache-file root and lazily load its on-disk index, returning
+/// the resolved root key.
 ///
-/// The first call to `file_hash` per process loads the index; subsequent
-/// calls hit the in-memory state.
-///
-/// **Single-root per process**: `state.root` is set on the first call and
-/// later calls with a different `root` are silently ignored. The index
-/// file at `stat_index_file(root)` is loaded only once, so callers must
-/// not expect per-call rooting.
-pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) {
-    let mut state = lock_index();
-    if state.root.is_some() {
-        return;
-    }
-    // The stat index only determines the cache FILE location (entry keys are
-    // absolute paths), so honouring an explicit `cache_root` keeps detect()'s
-    // word-count cache under the requested `--out` dir instead of polluting the
-    // scanned corpus with a stray graphify-out/ (#1747).
+/// Callers thread the returned key through their per-root lookups so distinct
+/// roots each read and write their OWN index rather than the first-seen one.
+/// The index only determines the cache FILE location (entry keys are absolute
+/// paths), so honouring an explicit `cache_root` keeps `detect()`'s word-count
+/// cache under the requested `--out` dir instead of polluting the scanned
+/// corpus with a stray graphify-out/ (#1747).
+pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) -> PathBuf {
     let base = cache_root.unwrap_or(root);
-    let root_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
-    state.root = Some(root_resolved.clone());
-    let path = stat_index_file(&root_resolved);
-    if let Ok(text) = fs::read_to_string(&path)
-        && let Ok(parsed) = serde_json::from_str::<IndexMap<String, StatEntry>>(&text)
-    {
-        state.entries = parsed;
+    let key = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let mut index = lock_index();
+    let state = index.roots.entry(key.clone()).or_default();
+    if !state.loaded {
+        state.loaded = true;
+        let path = stat_index_file(&key);
+        if let Ok(text) = fs::read_to_string(&path)
+            && let Ok(parsed) = serde_json::from_str::<IndexMap<String, StatEntry>>(&text)
+        {
+            state.entries = parsed;
+        }
     }
+    key
 }
 
 /// Flush the in-memory stat index to disk if dirty.
@@ -91,25 +98,24 @@ pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) {
 /// Returns [`CacheError::Io`] if the index file or its parent directory
 /// cannot be written, or [`CacheError::Json`] if serialisation fails.
 pub fn flush_stat_index() -> Result<(), CacheError> {
-    let mut state = lock_index();
-    if !state.dirty {
-        return Ok(());
+    let mut index = lock_index();
+    for (root, state) in &mut index.roots {
+        if !state.dirty {
+            continue;
+        }
+        let path = stat_index_file(root);
+        let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent_dir)?;
+        let mut tmp = tempfile::Builder::new()
+            .prefix("stat-index.")
+            .suffix(".tmp")
+            .tempfile_in(parent_dir)?;
+        let serialized = serde_json::to_vec(&state.entries)?;
+        tmp.write_all(&serialized)?;
+        tmp.flush()?;
+        tmp.persist(&path).map_err(|e| CacheError::Io(e.error))?;
+        state.dirty = false;
     }
-    let Some(root) = state.root.clone() else {
-        return Ok(());
-    };
-    let path = stat_index_file(&root);
-    let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent_dir)?;
-    let mut tmp = tempfile::Builder::new()
-        .prefix("stat-index.")
-        .suffix(".tmp")
-        .tempfile_in(parent_dir)?;
-    let serialized = serde_json::to_vec(&state.entries)?;
-    tmp.write_all(&serialized)?;
-    tmp.flush()?;
-    tmp.persist(&path).map_err(|e| CacheError::Io(e.error))?;
-    state.dirty = false;
     Ok(())
 }
 
@@ -151,8 +157,5 @@ pub fn ensure_atexit_flush_registered() {
 /// contract.
 #[doc(hidden)]
 pub fn _reset_stat_index_for_tests() {
-    let mut state = lock_index();
-    state.entries.clear();
-    state.root = None;
-    state.dirty = false;
+    lock_index().roots.clear();
 }

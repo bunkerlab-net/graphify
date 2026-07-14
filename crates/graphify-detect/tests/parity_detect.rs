@@ -219,6 +219,19 @@ fn detect_skips_snapshots_dir() {
             .any(|f| f.contains(&format!("{sep}snapshots{sep}")))
     );
     assert!(all_files.iter().any(|f| f.contains("app.ts")));
+    // A pruned artefact dir must not resurface as unclassified either (#1666).
+    assert!(
+        !result
+            .unclassified
+            .iter()
+            .any(|f| f.contains("__snapshots__"))
+    );
+    assert!(
+        !result
+            .unclassified
+            .iter()
+            .any(|f| f.contains(&format!("{sep}snapshots{sep}")))
+    );
 }
 
 #[test]
@@ -396,6 +409,28 @@ fn detect_follows_symlinked_directory() {
         result_yes.files["code"]
             .iter()
             .any(|f| f.contains("linked_lib"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn detect_records_unstattable_sidecar_entry_as_walk_error() {
+    // The `graphify-out/memory` sidecar is walked by the sequential `walk_dir`
+    // (the main tree uses the parallel walker). A dangling symlink there cannot
+    // be stat'd when symlinks are followed; `walk_dir` must SURFACE it in
+    // walk_errors, not silently drop the entry.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("real.py"), "x = 1").expect("test invariant");
+    let memory = tmp.path().join("graphify-out").join("memory");
+    std::fs::create_dir_all(&memory).expect("create_dir_all");
+    std::os::unix::fs::symlink(memory.join("does-not-exist"), memory.join("dangling.md"))
+        .expect("test invariant");
+
+    let result = detect(tmp.path(), Some(true), None);
+    assert!(
+        result.walk_errors.iter().any(|e| e.contains("dangling.md")),
+        "a dangling sidecar symlink must be recorded as a walk error, got {:?}",
+        result.walk_errors
     );
 }
 

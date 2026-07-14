@@ -84,7 +84,7 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
         return Err(CacheError::NotAFile(p));
     }
 
-    ensure_stat_index(&root, None);
+    let key = ensure_stat_index(&root, None);
     let abs_key = p.canonicalize().unwrap_or_else(|_| p.clone());
     let abs_key_str = abs_key.to_string_lossy().to_string();
 
@@ -98,9 +98,10 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
         .unwrap_or_default();
 
     {
-        let state = lock_index();
+        let index = lock_index();
         // Word-count-only entries carry no hash — require one for the fastpath.
-        if let Some(entry) = state.entries.get(&abs_key_str)
+        if let Some(state) = index.roots.get(&key)
+            && let Some(entry) = state.entries.get(&abs_key_str)
             && entry.size == size
             && entry.mtime_ns == mtime_ns
             && let Some(hash) = &entry.hash
@@ -132,7 +133,8 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
     let digest = hex::encode(hasher.finalize());
 
     {
-        let mut state = lock_index();
+        let mut index = lock_index();
+        let state = index.roots.entry(key).or_default();
         // Preserve a co-located word_count when the (size, mtime_ns) signature is
         // still current; otherwise replace the stale entry outright.
         match state.entries.get_mut(&abs_key_str) {
@@ -175,7 +177,7 @@ pub fn cached_word_count<P: AsRef<Path>>(
 ) -> u64 {
     let p = normalize_path(path.as_ref());
     let root = normalize_path(root);
-    ensure_stat_index(&root, cache_root);
+    let key = ensure_stat_index(&root, cache_root);
     let abs_key = p.canonicalize().unwrap_or_else(|_| p.clone());
     let abs_key_str = abs_key.to_string_lossy().to_string();
 
@@ -191,8 +193,9 @@ pub fn cached_word_count<P: AsRef<Path>>(
         .unwrap_or_default();
 
     {
-        let state = lock_index();
-        if let Some(entry) = state.entries.get(&abs_key_str)
+        let index = lock_index();
+        if let Some(state) = index.roots.get(&key)
+            && let Some(entry) = state.entries.get(&abs_key_str)
             && entry.size == size
             && entry.mtime_ns == mtime_ns
             && let Some(wc) = entry.word_count
@@ -204,7 +207,8 @@ pub fn cached_word_count<P: AsRef<Path>>(
     let wc = compute(&p);
 
     {
-        let mut state = lock_index();
+        let mut index = lock_index();
+        let state = index.roots.entry(key).or_default();
         // Augment an existing hash entry in place when its signature is current;
         // otherwise create a word-count-only entry (no hash).
         match state.entries.get_mut(&abs_key_str) {

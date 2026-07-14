@@ -7,8 +7,8 @@ use std::path::Path;
 
 use graphify_cache::{
     _reset_stat_index_for_tests, body_content, cache_dir, cache_dir_versioned, cached_files,
-    cached_word_count, clear_cache, ensure_atexit_flush_registered, file_hash, load_cached,
-    load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
+    cached_word_count, clear_cache, ensure_atexit_flush_registered, file_hash, flush_stat_index,
+    load_cached, load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
     save_semantic_cache,
 };
 use serde_json::{Value, json};
@@ -891,4 +891,52 @@ fn word_count_augments_existing_hash_entry() {
     assert_eq!(wc, 3);
     // The hash entry survives alongside the word_count (fastpath still returns it).
     assert_eq!(file_hash(&f, tmp.path()).expect("hash"), h);
+}
+
+/// #1747 / root-keyed stat index: two `cached_word_count` invocations with
+/// DIFFERENT `cache_root`s must each persist to their OWN cache-file root, not
+/// share the first-seen one. Before the fix the process-global index ignored
+/// every root after the first, so the second file's entry was written into the
+/// first root's index.
+#[test]
+#[serial]
+fn cache_root_is_per_invocation_not_first_seen() {
+    _reset_stat_index_for_tests();
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let root_a = tempfile::tempdir().expect("tempdir");
+    let root_b = tempfile::tempdir().expect("tempdir");
+    let fa = corpus.path().join("a.txt");
+    let fb = corpus.path().join("b.txt");
+    write_text(&fa, "alpha");
+    write_text(&fb, "beta");
+
+    // Two runs, two distinct cache roots.
+    assert_eq!(
+        cached_word_count(&fa, corpus.path(), |_| 3, Some(root_a.path())),
+        3
+    );
+    assert_eq!(
+        cached_word_count(&fb, corpus.path(), |_| 5, Some(root_b.path())),
+        5
+    );
+    flush_stat_index().expect("flush");
+
+    let idx_a = root_a
+        .path()
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let idx_b = root_b
+        .path()
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let text_a = std::fs::read_to_string(&idx_a).expect("root A index must exist");
+    let text_b = std::fs::read_to_string(&idx_b).expect("root B index must exist");
+
+    // Each root's index holds ONLY its own file — no cross-contamination.
+    assert!(text_a.contains("a.txt"), "root A must cache a.txt");
+    assert!(!text_a.contains("b.txt"), "root A must not hold b.txt");
+    assert!(text_b.contains("b.txt"), "root B must cache b.txt");
+    assert!(!text_b.contains("a.txt"), "root B must not hold a.txt");
 }

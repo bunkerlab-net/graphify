@@ -110,10 +110,9 @@ pub fn detect_incremental_with_cache_root(
     let had_manifest = manifest_path.exists() || !prev.is_empty();
 
     // Walk once and reuse the result both for the first-run "everything
-    // changed" branch and the per-type bucketing below. This is the process's
-    // first stat-index user, so its `cache_root` fixes the cache-file location
-    // for the whole run (the index root is set once); the manifest walk below
-    // reuses it (#1747).
+    // changed" branch and the per-type bucketing below. `cache_root` is threaded
+    // through the corpus walk's word-count cache so this run's stat index is
+    // keyed to the `--out` root, not the scanned corpus (#1747).
     let full = walk::detect_with_cache_root(root, None, None, cache_root);
 
     let (changed_paths, deleted_files, manifest) = if manifest_path.exists() {

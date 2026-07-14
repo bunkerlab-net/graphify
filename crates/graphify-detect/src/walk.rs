@@ -373,15 +373,30 @@ fn walk_dir(
     let mut file_paths: Vec<PathBuf> = Vec::new();
     let mut seen_in_dir: HashSet<PathBuf> = HashSet::new();
 
-    for entry in rd.flatten() {
+    for entry in rd {
+        // Surface — not swallow — a per-entry read failure or a stat failure, so a
+        // file we cannot enumerate/classify is reported rather than silently
+        // vanishing (the walk-errors contract). Python's `os.walk` classifies via
+        // scandir's d_type and never stats per entry, so this is Rust-specific.
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                record_walk_error(&dir.display().to_string(), &e.to_string(), walk_errors);
+                continue;
+            }
+        };
         let path = entry.path();
         let meta = if ctx.follow_symlinks {
             std::fs::metadata(&path)
         } else {
             std::fs::symlink_metadata(&path)
         };
-        let Ok(m) = meta else {
-            continue;
+        let m = match meta {
+            Ok(m) => m,
+            Err(e) => {
+                record_walk_error(&path.display().to_string(), &e.to_string(), walk_errors);
+                continue;
+            }
         };
 
         if m.is_dir() {
