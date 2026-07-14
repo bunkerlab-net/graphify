@@ -415,7 +415,12 @@ fn sanitize_folds_alias_members_to_nodes() {
     let he = hes[0].as_object().expect("he");
     // Folded onto `nodes`, deduped (n1 once), alias keys removed.
     let nodes = he.get("nodes").and_then(Value::as_array).expect("nodes");
-    assert_eq!(nodes.len(), 2);
+    let ids: Vec<&str> = nodes.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        ids,
+        ["n1", "n2"],
+        "alias members fold to the canonical ids, deduped in order"
+    );
     assert!(!he.contains_key("members") && !he.contains_key("node_ids"));
 }
 
@@ -440,6 +445,11 @@ fn sanitize_nodes_already_list_wins_and_drops_aliases() {
         .as_object()
         .expect("he");
     let nodes = he.get("nodes").and_then(Value::as_array).expect("nodes");
-    assert_eq!(nodes.len(), 2);
+    let ids: Vec<&str> = nodes.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        ids,
+        ["n1", "n2"],
+        "the existing `nodes` list wins verbatim over the aliases"
+    );
     assert!(!he.contains_key("members") && !he.contains_key("node_ids"));
 }
