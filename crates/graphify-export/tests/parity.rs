@@ -483,6 +483,34 @@ fn test_to_canvas_no_communities_still_populates() {
     );
 }
 
+#[test]
+fn test_to_canvas_all_dangling_communities_synthesize_real_cards() {
+    // A non-empty community whose members ALL dangle (stale index / merge artifact)
+    // must not leave an empty group box; the graph's real nodes are synthesized
+    // into a single all-nodes community instead (#1324 applied to the filtered map).
+    let g = make_graph();
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(7, vec!["ghost_a".to_string(), "ghost_b".to_string()]);
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.canvas");
+    to_canvas(&g, &communities, &out, None, None).expect("test invariant");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    let nodes = data["nodes"].as_array().expect("array field");
+    let file_cards = nodes.iter().filter(|n| n["type"] == "file").count();
+    assert_eq!(
+        file_cards,
+        g.node_count(),
+        "each real node appears once as a card (no duplication): {file_cards} vs {}",
+        g.node_count()
+    );
+    let group_count = nodes.iter().filter(|n| n["type"] == "group").count();
+    assert_eq!(
+        group_count, 1,
+        "only the synthesized all-nodes group should remain, not the dangling one"
+    );
+}
+
 // ── backup_if_protected ───────────────────────────────────────────────────────
 
 #[test]
@@ -865,6 +893,21 @@ fn test_to_json_refuses_shrink() {
     assert!(
         to_json(&make_graph_n(2), &communities, &out, true, None, None).expect("to_json"),
         "force=true overrides the shrink guard"
+    );
+}
+
+#[test]
+fn test_to_json_refuses_unreadable_existing() {
+    // An existing path that cannot be read as a file (here a directory) must fail
+    // SAFE — refuse the overwrite rather than treat it as empty. Fail-open would be
+    // the silent data-loss path #479 guards against.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::create_dir(&out).expect("mkdir");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        !to_json(&make_graph_n(5), &communities, &out, false, None, None).expect("to_json"),
+        "an unreadable existing path must be refused when force=false"
     );
 }
 

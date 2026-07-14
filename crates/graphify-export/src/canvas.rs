@@ -72,28 +72,15 @@ pub fn to_canvas(
         &owned_filenames
     };
 
-    // Fallback (#1324): with no community data (e.g. --no-cluster builds or a
-    // missing analysis sidecar) the grid below produces nothing and the canvas
-    // is written as an empty 32-byte shell on an otherwise populated graph.
-    // Emit every node into one synthetic community so the canvas always
-    // reflects the graph.
-    let owned_communities: IndexMap<i64, Vec<String>>;
-    let communities: &IndexMap<i64, Vec<String>> =
-        if communities.is_empty() && graph.node_count() > 0 {
-            let all_ids: Vec<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
-            owned_communities = std::iter::once((0_i64, all_ids)).collect();
-            &owned_communities
-        } else {
-            communities
-        };
-
-    // #1236 follow-up: drop community members absent from the graph or without a
-    // filename (stale community index / merge artifacts). Filtering once up front
-    // keeps the box sizing, card layout, and edge set all consistent with the
-    // cards actually emitted — mirrors the two-loop guard in graphify-py to_canvas.
-    let filtered_communities: IndexMap<i64, Vec<String>> = communities
+    // #1236: drop community MEMBERS absent from the graph or without a filename
+    // (stale community index / merge artifacts), and drop any community left with
+    // no kept members, so box sizing, card layout, and the edge set all match the
+    // cards actually emitted. DIVERGENCE from graphify-py to_canvas, which still
+    // emits an empty `group` box for a fully-dangling community — an empty labelled
+    // box is canvas noise, so it is dropped here.
+    let mut filtered: IndexMap<i64, Vec<String>> = communities
         .iter()
-        .map(|(&cid, members)| {
+        .filter_map(|(&cid, members)| {
             let kept: Vec<String> = members
                 .iter()
                 .filter(|m| {
@@ -101,10 +88,25 @@ pub fn to_canvas(
                 })
                 .cloned()
                 .collect();
-            (cid, kept)
+            (!kept.is_empty()).then_some((cid, kept))
         })
         .collect();
-    let communities: &IndexMap<i64, Vec<String>> = &filtered_communities;
+    // #1324: when NO community survives — no cluster data (`--no-cluster` / missing
+    // analysis sidecar), or every member dangled — synthesize one all-nodes
+    // community from the renderable nodes so the canvas still reflects a populated
+    // graph instead of an empty 32-byte shell. Applied to the FILTERED result (not
+    // the raw input) so an all-dangling input recovers real cards, not empty boxes.
+    if filtered.is_empty() && graph.node_count() > 0 {
+        let all_ids: Vec<String> = graph
+            .nodes()
+            .map(|(id, _)| id.clone())
+            .filter(|id| node_filenames.contains_key(id.as_str()))
+            .collect();
+        if !all_ids.is_empty() {
+            filtered.insert(0, all_ids);
+        }
+    }
+    let communities: &IndexMap<i64, Vec<String>> = &filtered;
 
     let sorted_cids: Vec<i64> = {
         let mut v: Vec<i64> = communities.keys().copied().collect();

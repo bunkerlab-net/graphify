@@ -169,9 +169,26 @@ fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
         );
         return true;
     }
-    // Read failure or an empty/whitespace file: no nodes to lose, so any new graph
-    // is a growth — proceed (Python treats an unreadable existing file as empty).
-    let raw = std::fs::read_to_string(output_path).unwrap_or_default();
+    // A genuinely missing file has no nodes to lose, so any new graph is a growth
+    // — proceed. But a read FAILURE on an existing file (permission / transient IO)
+    // must NOT be treated as empty: that is the fail-OPEN data-loss path #479
+    // guards against (a transiently unreadable graph.json letting a partial rebuild
+    // clobber a good one). Fail SAFE, matching the parse-error branch below.
+    // DIVERGENCE from graphify-py, whose read-error branch sets `raw = ""`
+    // (fail-open) while its parse-error branch fails closed — an inconsistency.
+    let raw = match std::fs::read_to_string(output_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            eprintln!(
+                "[graphify] WARNING: existing graph.json at {} could not be read to \
+                 verify the new graph is not smaller ({e}). Refusing to overwrite. \
+                 Pass force=True to override.",
+                output_path.display()
+            );
+            return true;
+        }
+    };
     if raw.trim().is_empty() {
         return false;
     }
