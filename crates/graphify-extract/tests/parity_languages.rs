@@ -1820,6 +1820,30 @@ fn julia_qualified_import_emits_edge() -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+/// The imported-symbol node must be deduplicated: importing the same module in
+/// two statements emits one node, not a duplicate with the same id (CodeRabbit
+/// follow-up - the `seen_ids` insert previously did not guard the node push).
+#[test]
+fn julia_repeated_import_emits_one_node() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let source = tmp.path().join("mod.jl");
+    std::fs::write(&source, "using Base.Threads\nusing Base.Threads\n")?;
+    let result = extract_julia(&source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let threads_nodes = result
+        .nodes
+        .iter()
+        .filter(|n| n.id.contains("base_threads"))
+        .count();
+    assert_eq!(
+        threads_nodes,
+        1,
+        "repeated import must emit exactly one node: {:?}",
+        result.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
 #[test]
 fn php_extractor_produces_nodes() {
     let result = extract_php(&fixtures().join("sample.php"));
