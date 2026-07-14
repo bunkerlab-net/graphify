@@ -70,9 +70,15 @@ fn is_silent_invocation(raw_args: &[String]) -> bool {
 
 /// Configure runtime services, parse argv, and dispatch the selected subcommand.
 ///
-/// Registers the `graphify-cache` atexit flush, initialises `tracing`, then
-/// parses [`args::Cli`] and forwards to [`dispatch::dispatch`]. When no
-/// subcommand is supplied, prints a help hint and returns `Ok(())`.
+/// Holds a `graphify-cache` [`StatIndexFlushGuard`] for the whole call so the
+/// stat index is flushed when `run` returns, initialises `tracing`, then parses
+/// [`args::Cli`] and forwards to [`dispatch::dispatch`]. When no subcommand is
+/// supplied, prints a help hint and returns `Ok(())`. The guard is a scope
+/// guard, not a true `atexit` hook: clap's `--help`/`--version`/parse-error
+/// paths call `std::process::exit` and bypass it, but those never mutate the
+/// index, so nothing is lost.
+///
+/// [`StatIndexFlushGuard`]: graphify_cache::StatIndexFlushGuard
 pub(crate) fn run() -> Result<()> {
     // Hold the flush guard for the whole run so the stat index is persisted on
     // return (a `static` guard would never drop at process exit).
