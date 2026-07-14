@@ -74,7 +74,14 @@ pub(crate) fn lock_index() -> std::sync::MutexGuard<'static, StatIndex> {
 /// root maps to one file — shares a single state instead of competing.
 pub(crate) fn ensure_stat_index(root: &Path, cache_root: Option<&Path>) -> PathBuf {
     let base = cache_root.unwrap_or(root);
-    let base_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    // Resolve to a stable absolute key. `canonicalize` needs the dir to exist
+    // (it may not yet on a first `--out` run); fall back to `absolute` (lexical,
+    // no existence needed) so a relative and an absolute spelling of the same
+    // dir still map to one key — never the raw, possibly-relative path.
+    let base_resolved = base
+        .canonicalize()
+        .or_else(|_| std::path::absolute(base))
+        .unwrap_or_else(|_| base.to_path_buf());
     let key = stat_index_file(&base_resolved);
     let mut index = lock_index();
     let state = index.roots.entry(key.clone()).or_default();

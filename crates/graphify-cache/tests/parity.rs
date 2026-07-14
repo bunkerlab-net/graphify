@@ -1047,3 +1047,45 @@ fn absolute_graphify_out_shares_one_index_across_roots() {
     );
     _reset_stat_index_for_tests();
 }
+
+/// When the cache dir does not exist yet (`canonicalize` fails), two spellings
+/// of the same absolute dir must still share ONE stat index: the key is a
+/// normalized absolute path, not the raw string. A relative/raw fallback would
+/// split `<d>/out` and `<d>/out/.` into competing indexes.
+#[test]
+#[serial]
+fn nonexistent_cache_root_keys_by_normalized_absolute_path() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let fa = corpus.path().join("a.txt");
+    let fb = corpus.path().join("b.txt");
+    write_text(&fa, "alpha");
+    write_text(&fb, "beta");
+    // Neither exists yet — canonicalize fails, exercising the absolute fallback.
+    let root_plain = tmp.path().join("out");
+    let root_dotted = tmp.path().join("out").join(".");
+
+    assert_eq!(
+        cached_word_count(&fa, corpus.path(), |_| 3, Some(&root_plain)),
+        3
+    );
+    assert_eq!(
+        cached_word_count(&fb, corpus.path(), |_| 5, Some(&root_dotted)),
+        5
+    );
+    flush_stat_index().expect("flush");
+
+    let idx = tmp
+        .path()
+        .join("out")
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let text = std::fs::read_to_string(&idx).expect("the single normalized index must exist");
+    assert!(
+        text.contains("a.txt") && text.contains("b.txt"),
+        "both spellings must share one index: {text}"
+    );
+    _reset_stat_index_for_tests();
+}
