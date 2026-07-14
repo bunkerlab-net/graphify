@@ -146,6 +146,13 @@ graphify update . --force         # rebuild even if the new graph has fewer node
 graphify update . --no-cluster    # skip clustering pass
 ```
 
+On an incremental rebuild, a hyperedge carried forward from an unchanged file is
+dropped when any of its member nodes belonged to a file that was deleted or
+re-extracted: `graphify-py` keeps such dangling hyperedges verbatim, but graphify
+drops them to preserve referential integrity. A hyperedge whose member list is
+malformed (a non-array `members` / `node_ids` alias) is reported on stderr rather
+than being silently emptied.
+
 ### `watch <path>`
 
 Watch a folder and rebuild on file changes (Code/docs/images). Runs until interrupted.
@@ -574,6 +581,15 @@ exits with an error. Flags: `--host` / `--port` (bind address, default
 stream), `--stateless` (skip per-session ids), and `--session-timeout`
 (accepted for compatibility; a no-op since graphify keeps no per-session state).
 Binding `0.0.0.0` without an `--api-key` prints a warning.
+
+Multi-project routing: a tool call may include an optional absolute `project_path`
+to target that project's `graph.json` (an absent or empty value uses the default
+graph; a non-string value is a tool error). Loaded project graphs are cached by
+canonical path and bounded — the oldest-loaded is evicted past the cap — so a
+remote client cannot pin unbounded graphs in memory. A tool call that cannot load
+its graph returns a result with `isError: true`, and a failing `resources/read`
+returns a JSON-RPC error; `graphify-py` reports both as plain text, so this is an
+intentional, MCP-spec-aligned divergence.
 
 ### Per-platform installers
 
