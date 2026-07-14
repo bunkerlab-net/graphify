@@ -35,9 +35,11 @@ pub(super) struct LanguageResolver {
 }
 
 /// Run every resolver whose suffix appears in `paths`, in registration order.
-/// Behaviorally identical to the prior hand-wired sequence of suffix-gated
-/// passes: same activation rule (suffix present) and execution order. Mirrors
-/// graphify-py `run_language_resolvers`.
+/// Same activation rule (suffix present) and execution order as the prior
+/// hand-wired sequence. Ports graphify-py `run_language_resolvers`, but the
+/// activation gate matches extensions ASCII-case-insensitively (#1671) — an
+/// uppercase `.PAS`/`.CS` is dispatched to its extractor, so its cross-file pass
+/// must run too; graphify-py's registry lookup is case-sensitive.
 pub(super) fn run_language_resolvers(
     paths: &[PathBuf],
     nodes: &[Node],
@@ -45,12 +47,15 @@ pub(super) fn run_language_resolvers(
     raw_calls: &[RawCall],
     resolvers: &[LanguageResolver],
 ) {
+    // Case-insensitive dispatch (#1671): an uppercase `.PAS`/`.CS` is still that
+    // language (get_extractor already routes it), so the resolver-activation gate
+    // must lowercase too — otherwise the cross-file pass silently never runs.
     let present: HashSet<String> = paths
         .iter()
         .filter_map(|p| {
             p.extension()
                 .and_then(|e| e.to_str())
-                .map(|e| format!(".{e}"))
+                .map(|e| format!(".{}", e.to_ascii_lowercase()))
         })
         .collect();
     for resolver in resolvers {

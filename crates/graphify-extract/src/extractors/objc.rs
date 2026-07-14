@@ -75,9 +75,10 @@ fn objc_declarator_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<St
 }
 
 /// Collect `var -> ClassName` from Objective-C local declarations (`Foo *f = ...;`) in a
-/// method body into `table` (first-binding-wins). Only a capitalized
-/// `type_identifier` with a single named declarator is recorded (precision over
-/// recall). Mirrors graphify-py `_objc_local_var_types`.
+/// method body into `table` (first-binding-wins in source order). Only a
+/// capitalized `type_identifier` with a single named declarator is recorded
+/// (precision over recall). Objective-C analogue of the C-family local-var pass;
+/// graphify-py has no dedicated Objective-C variant.
 fn collect_objc_local_var_types(
     body: tree_sitter::Node<'_>,
     source: &[u8],
@@ -117,30 +118,18 @@ fn collect_objc_local_var_types(
                 }
             }
         }
+        // Source-order visitation (cursor walked backwards) so a shadowed
+        // local's FIRST declaration wins, honouring the contract above.
         let mut cur = n.walk();
-        for c in n.children(&mut cur) {
-            stack.push(c);
+        if cur.goto_last_child() {
+            loop {
+                stack.push(cur.node());
+                if !cur.goto_previous_sibling() {
+                    break;
+                }
+            }
         }
     }
-}
-
-/// File-wide Objective-C `var -> ClassName` table: run [`collect_objc_local_var_types`]
-/// on every `method_definition` body (each body must be the traversal root, since
-/// the collector skips *nested* method definitions). First-binding-wins.
-fn build_objc_type_table(root: tree_sitter::Node<'_>, source: &[u8]) -> HashMap<String, String> {
-    let mut table = HashMap::new();
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "method_definition" {
-            collect_objc_local_var_types(n, source, &mut table);
-            continue;
-        }
-        let mut cur = n.walk();
-        for c in n.children(&mut cur) {
-            stack.push(c);
-        }
-    }
-    table
 }
 
 /// Extract interfaces, implementations, protocols, methods, and imports from `.m`/`.mm`/`.h` files.
@@ -249,9 +238,20 @@ pub fn extract_objc(path: &Path) -> FileResult {
     // both `[self foo]` and `self.foo` the same sibling. DIVERGENCE from
     // graphify-py, which shares one relation-blind set and drops the second edge.
     let mut seen_accesses: HashSet<(String, String)> = HashSet::new();
-    // #1556: file-wide `var -> ClassName` table from `Foo *f = ...;` locals, and
-    // a `raw_calls` buffer for the cross-file ObjC resolver.
-    let objc_type_table = build_objc_type_table(tree.root_node(), &source);
+    // #1556: PER-METHOD `var -> ClassName` tables from `Foo *f = ...;` locals.
+    // Locals are method-scoped, so a local in one method must never type a
+    // same-named receiver in another (that would be cross-method contamination,
+    // not resolution). Keyed by the method's nid; the resolver consults the
+    // caller's own table only.
+    let objc_type_tables: HashMap<String, HashMap<String, String>> = method_bodies
+        .iter()
+        .filter_map(|(caller_nid, start, end, _)| {
+            let body = tree.root_node().descendant_for_byte_range(*start, *end)?;
+            let mut table = HashMap::new();
+            collect_objc_local_var_types(body, &source, &mut table);
+            Some((caller_nid.clone(), table))
+        })
+        .collect();
     let mut raw_calls: Vec<RawCall> = Vec::new();
     {
         let mut call_ctx = ObjcCallCtx {
@@ -265,7 +265,7 @@ pub fn extract_objc(path: &Path) -> FileResult {
             class_method_nids: &class_method_nids,
             seen_accesses: &mut seen_accesses,
             raw_calls: &mut raw_calls,
-            objc_type_table: &objc_type_table,
+            objc_type_tables: &objc_type_tables,
         };
         for (caller_nid, body_start, body_end, container_nid) in &method_bodies {
             walk_calls_objc(
@@ -915,8 +915,9 @@ struct ObjcCallCtx<'a> {
     seen_accesses: &'a mut HashSet<(String, String)>,
     /// Deferred message sends for the cross-file Objective-C resolver (#1556).
     raw_calls: &'a mut Vec<RawCall>,
-    /// File-wide `var -> ClassName` table for typing `[f doThing]` receivers.
-    objc_type_table: &'a HashMap<String, String>,
+    /// Per-method `var -> ClassName` tables (keyed by method nid) so a receiver
+    /// is typed by the CALLER's own locals, never another method's (#1556).
+    objc_type_tables: &'a HashMap<String, HashMap<String, String>>,
 }
 
 // Linear message-send/dot-access dispatch; crossed 100 lines only because each
@@ -1034,7 +1035,11 @@ fn walk_calls_objc(
             {
                 let recv_text = read_text(recv, source).to_string();
                 let line = node.start_position().row + 1;
-                let receiver_type = ctx.objc_type_table.get(&recv_text).cloned();
+                let receiver_type = ctx
+                    .objc_type_tables
+                    .get(caller_nid)
+                    .and_then(|t| t.get(&recv_text))
+                    .cloned();
                 ctx.raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: method_name.clone(),

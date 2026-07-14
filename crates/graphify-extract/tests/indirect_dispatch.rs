@@ -246,8 +246,14 @@ fn cross_file_indirect_survives_id_relativization() {
         out_rels(&out, "indirect_call")
             .contains(&(nid["schedule"].clone(), nid["on_event"].clone()))
     );
-    // the internal callable marker must never ship to graph.json
-    assert!(out.nodes.iter().all(|n| !n.contains_key("_callable")));
+    // the internal callable marker must never ship to graph.json — it is stamped
+    // inside a node's nested `metadata` map, so check there (and the top level).
+    assert!(out.nodes.iter().all(|n| {
+        !n.contains_key("_callable")
+            && n.get("metadata")
+                .and_then(serde_json::Value::as_object)
+                .is_none_or(|m| !m.contains_key("_callable"))
+    }));
 }
 
 #[test]
@@ -273,7 +279,12 @@ fn cross_file_indirect_survives_ast_cache_roundtrip() {
             out_rels(out, "indirect_call").contains(&pair),
             "cross-file indirect_call must survive the AST cache round-trip"
         );
-        assert!(out.nodes.iter().all(|n| !n.contains_key("_callable")));
+        assert!(out.nodes.iter().all(|n| {
+            !n.contains_key("_callable")
+                && n.get("metadata")
+                    .and_then(serde_json::Value::as_object)
+                    .is_none_or(|m| !m.contains_key("_callable"))
+        }));
     }
 }
 

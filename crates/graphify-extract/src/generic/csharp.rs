@@ -72,7 +72,12 @@ fn new_type(declarator: Node<'_>, source: &[u8]) -> Option<String> {
 }
 
 /// Build the file-wide `name -> Type` table (fields, properties, parameters,
-/// locals), first-binding-wins. Mirrors graphify-py `_csharp_member_type_table`.
+/// locals), first-binding-wins. Ports graphify-py `_csharp_member_type_table`,
+/// including its forward-push LIFO walk (later siblings are reached first) so a
+/// method's local/parameter can shadow an earlier class field — the C# lexical
+/// rule. `CodeRabbit` suggested a "source-order" walk, but that would let an earlier
+/// field permanently beat a later local (wrong C# scoping) and diverge from the
+/// reference; nested local redeclaration is illegal C#, so no legal case wants it.
 #[must_use]
 pub(super) fn build_csharp_type_table(root: Node<'_>, source: &[u8]) -> HashMap<String, String> {
     let mut table: HashMap<String, String> = HashMap::new();

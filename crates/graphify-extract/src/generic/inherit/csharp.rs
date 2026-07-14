@@ -7,7 +7,9 @@ use crate::generic::walk::add_edge_meta;
 
 /// Build C# type-reference edge metadata `{ref_token, [qualified], [ref_qualifier]}`
 /// (sanitised), or `None` (#1562).
-#[allow(clippy::similar_names)] // `qualified`/`qualifier` mirror graphify-py
+// `qualified` (bool flag) and `qualifier` (prefix string) are distinct fields;
+// renaming either to satisfy the lint would obscure the flag/prefix roles.
+#[allow(clippy::similar_names)]
 fn cs_ref_meta(
     token: &str,
     qualified: bool,

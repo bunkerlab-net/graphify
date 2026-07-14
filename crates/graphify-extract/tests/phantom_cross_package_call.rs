@@ -80,6 +80,38 @@ fn unimported_cross_package_call_emits_no_edge() -> TestResult {
     Ok(())
 }
 
+/// #1659 + #1671: the phantom-edge guard is case-insensitive, matching
+/// `get_extractor`'s dispatch. Uppercase `.TS` files are still JS/TS, so an
+/// unimported cross-package call must stay unresolved (a lowercase-only suffix
+/// check would leak the phantom edge here).
+#[test]
+fn unimported_cross_package_call_uppercase_ext_emits_no_edge() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("pkg-a/src/index.TS"),
+        "declare function validate(x: number): boolean;\nexport function run(x: number): boolean { return validate(x); }\n",
+    )?;
+    write(
+        &root.join("pkg-b/src/index.TS"),
+        "export function validate(name: string): boolean { return name.length > 0; }\n",
+    )?;
+    let calls = call_triples(
+        root,
+        &[
+            root.join("pkg-a/src/index.TS"),
+            root.join("pkg-b/src/index.TS"),
+        ],
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|(s, t, _)| s.contains("run") && t.contains("validate")),
+        "uppercase-ext unimported cross-package call resolved: {calls:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn many_files_do_not_collapse_onto_one_export() -> TestResult {
     // The real-world symptom: N packages importing nothing all showed edges to a

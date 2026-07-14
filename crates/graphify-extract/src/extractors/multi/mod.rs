@@ -1026,10 +1026,10 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         // languages keep single-candidate resolution: C/C++ headers, Ruby autoload,
         // and same-package implicit scope legitimately call across files with no
         // explicit import.
+        // Match get_extractor's case-insensitive dispatch (#1659): a `.JS`/`.TS`
+        // file is still JS/TS, so the phantom-edge guard must catch it too.
         if !has_import_evidence
-            && JS_TS_CALL_SUFFIXES
-                .iter()
-                .any(|s| rc.source_file.ends_with(s))
+            && crate::lang_configs::ends_with_suffix_ci(&rc.source_file, &JS_TS_CALL_SUFFIXES)
         {
             continue;
         }

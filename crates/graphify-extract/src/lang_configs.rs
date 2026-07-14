@@ -25,6 +25,19 @@ fn ext_lower(source_file: &str) -> Option<String> {
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
 }
 
+/// `true` when `path` ends with any of `suffixes`, compared ASCII
+/// case-insensitively without allocating. File extensions are ASCII, so a
+/// trailing byte-slice compare is correct and avoids lowercasing the whole path
+/// on every call in the hot resolution loops.
+#[must_use]
+pub(crate) fn ends_with_suffix_ci(path: &str, suffixes: &[&str]) -> bool {
+    let bytes = path.as_bytes();
+    suffixes.iter().any(|s| {
+        let s = s.as_bytes();
+        bytes.len() >= s.len() && bytes[bytes.len() - s.len()..].eq_ignore_ascii_case(s)
+    })
+}
+
 /// True when the file's language resolves identifiers case-insensitively (#1581):
 /// PHP, SQL, Nim. Everywhere else case is semantic (`Path` the class vs `PATH`
 /// the env var are distinct), so folding manufactures false edges / super-hubs.

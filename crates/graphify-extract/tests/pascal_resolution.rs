@@ -158,3 +158,22 @@ fn cross_file_calls_do_not_cross_unrelated_classes() {
         "Run() must not resolve to the unrelated TOtherGadget.Prepare"
     );
 }
+
+/// Case-insensitive dispatch (#1671): uppercase `.PAS` files are still Pascal, so
+/// the inherited-call post-pass must resolve across them. The resolver-activation
+/// gate and the raw-call suffix guard both lowercase; a case-sensitive gate would
+/// skip the whole pass and drop the `Run() -> Prepare()` edge.
+#[test]
+fn uppercase_pas_extension_still_resolves_inherited_call() {
+    let tmp = tempdir().expect("tempdir");
+    let paths = write_fixtures(
+        tmp.path(),
+        &[
+            ("BaseGadget.PAS", BASE_GADGET),
+            ("DerivedGadget.PAS", DERIVED_GADGET),
+        ],
+    );
+    let out = extract(&paths, Some(tmp.path()));
+    call_edge(&out, "Run()", "Prepare()")
+        .expect("uppercase-.PAS cross-file inherited call must resolve");
+}

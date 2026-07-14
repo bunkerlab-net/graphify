@@ -234,18 +234,24 @@ pub(crate) fn extract_generic_with_source(
     } else {
         HashMap::new()
     };
-    // C++: a file-wide `var -> ClassName` table from local declarations in every
+    // C++: a per-*body* `var -> ClassName` table from local declarations in that
     // function body, so member-call raw_calls carry a `receiver_type` for
-    // type-based cross-file resolution (#1547). First-binding-wins across bodies
-    // (a later `Foo f;` doesn't clobber an earlier binding). Empty for non-C++.
-    let cpp_var_types: HashMap<String, String> = if config.lang_id == LangId::Cpp {
-        let mut table = HashMap::new();
-        for (_, body) in &function_bodies {
-            cpp::collect_cpp_local_var_types(*body, source, &mut table);
-        }
-        table
+    // type-based cross-file resolution (#1547). Keyed per body (like Java) so a
+    // local in one function never types a same-named local in another. DIVERGENCE
+    // from graphify-py, which accumulates one file-scoped table across bodies:
+    // that mis-resolves a same-named local to the first function's type (wrong C++
+    // scoping — locals are function-scoped). Empty for non-C++.
+    let cpp_body_types: Vec<HashMap<String, String>> = if config.lang_id == LangId::Cpp {
+        function_bodies
+            .iter()
+            .map(|(_, body)| {
+                let mut table = HashMap::new();
+                cpp::collect_cpp_local_var_types(*body, source, &mut table);
+                table
+            })
+            .collect()
     } else {
-        HashMap::new()
+        Vec::new()
     };
     // TS/JS: a file-wide `name -> TypeName` table (constructor-injected
     // `this.field` types, local `new` bindings, typed params), so member-call
@@ -277,7 +283,7 @@ pub(crate) fn extract_generic_with_source(
             ruby_var_types: &ruby_var_types,
             java_var_types: java_body_types.get(i).unwrap_or(&empty_java),
             csharp_var_types: &csharp_var_types,
-            cpp_var_types: &cpp_var_types,
+            cpp_var_types: cpp_body_types.get(i).unwrap_or(&empty_java),
             ts_var_types: &ts_var_types,
             tracked_body_ids: &tracked_body_ids,
             label_to_nid_exact: &label_to_nid_exact,

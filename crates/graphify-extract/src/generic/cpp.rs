@@ -1,9 +1,9 @@
-//! C++ file-wide receiver-type inference for member-call resolution (#1547).
+//! C++ per-function-body receiver-type inference for member-call resolution (#1547).
 //!
 //! A C++ member call (`f.bar()` / `f->bar()`) resolved by bare method name
 //! silently mis-binds across same-named methods in the corpus. This collects a
-//! file-wide, first-binding-wins `var -> ClassName` table from local variable
-//! declarations in each function body (`Foo f;`, `Foo* f;`, `Foo *f = ...;`,
+//! per-function-body, first-binding-wins `var -> ClassName` table from local
+//! variable declarations in that body (`Foo f;`, `Foo* f;`, `Foo *f = ...;`,
 //! `Foo f = Foo();`) so each member-call `RawCall` carries a `receiver_type` for
 //! `resolve_cpp_member_calls` to bind by the receiver's declared type.
 //!
@@ -45,9 +45,9 @@ fn cpp_declarator_name(node: Node<'_>, source: &[u8]) -> Option<String> {
 }
 
 /// Collect `var -> ClassName` from local variable declarations in a C++ function
-/// body into `table` (first-binding-wins: a later body's `Foo f;` never clobbers
-/// an earlier binding). Skips nested functions / lambdas so their locals don't
-/// pollute this body's scope. Mirrors `_cpp_local_var_types`.
+/// body into `table` (first-binding-wins: a later `Foo f;` never clobbers an
+/// earlier binding). Skips nested functions / lambdas so their locals don't
+/// pollute this body's scope. Ports `_cpp_local_var_types`.
 pub(super) fn collect_cpp_local_var_types(
     body: Node<'_>,
     source: &[u8],
@@ -94,9 +94,19 @@ pub(super) fn collect_cpp_local_var_types(
                 table.insert(var, type_name);
             }
         }
+        // Visit children in source order so a shadowed local's FIRST declaration
+        // wins, honouring the first-binding-wins contract above. Divergence from
+        // graphify-py `_cpp_local_var_types`: its forward-push LIFO stack reaches
+        // later siblings first (an accidental order no test pins); walking the
+        // cursor backwards restores source order.
         let mut cur = n.walk();
-        for c in n.children(&mut cur) {
-            stack.push(c);
+        if cur.goto_last_child() {
+            loop {
+                stack.push(cur.node());
+                if !cur.goto_previous_sibling() {
+                    break;
+                }
+            }
         }
     }
 }

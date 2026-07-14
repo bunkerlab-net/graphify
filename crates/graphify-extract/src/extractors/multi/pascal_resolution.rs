@@ -88,7 +88,10 @@ pub(super) fn resolve_pascal_inherited_calls(
 
     let mut new_edges: Vec<Edge> = Vec::new();
     for rc in all_raw_calls {
-        if !PASCAL_SUFFIXES.iter().any(|s| rc.source_file.ends_with(s)) {
+        // Case-insensitive suffix match to mirror get_extractor's dispatch (#1671):
+        // an uppercase `Foo.PAS` is still Pascal, so its inherited calls resolve.
+        // Divergence from graphify-py's case-sensitive `.endswith(_PASCAL_SUFFIXES)`.
+        if !crate::lang_configs::ends_with_suffix_ci(&rc.source_file, &PASCAL_SUFFIXES) {
             continue;
         }
         if rc.caller_nid.is_empty() || rc.callee.is_empty() {
@@ -125,9 +128,16 @@ pub(super) fn resolve_pascal_inherited_calls(
     all_edges.extend(new_edges);
 }
 
-/// Walk `owner`'s `inherits` chain (BFS) for the nearest class declaring
-/// `name_lower`. Returns its method nid when that level has exactly one owner,
-/// `None` when ambiguous (bail) or the name is nowhere in the chain.
+/// Walk `owner`'s `inherits` chain (BFS) for the nearest base declaring
+/// `name_lower`. Returns that base's method nid when it declares the name exactly
+/// once, `None` when it declares the name more than once (a genuine same-class
+/// ambiguity) or the name is nowhere in the chain. Ports graphify-py `_resolve`:
+/// the FIRST base reached in BFS (declaration) order wins. Delphi lists the
+/// parent class before any implemented interfaces (`class(TParent, IFace, ...)`),
+/// so the first base is the parent whose implementation should own the call.
+/// Aggregating same-depth bases into a "multiple owners -> bail" check would
+/// regress that: an interface re-declaring an inherited name would suppress the
+/// real parent-method call. Kept nearest-base-first to match the reference.
 fn resolve_up_chain<'a>(
     owner: &'a str,
     name_lower: &str,

@@ -111,7 +111,10 @@ pub(crate) fn csharp_collect_type_refs(
     csharp_collect_type_refs_inner(node, source, generic, &skip, out);
 }
 
-#[allow(clippy::too_many_lines, clippy::similar_names)] // linear dispatch; `qualified`/`qualifier` mirror graphify-py
+// `too_many_lines`: a single linear tree-sitter node dispatch reads clearer than
+// fragmenting it. `similar_names`: `qualified` (bool flag) vs `qualifier` (prefix
+// string) are distinct fields; renaming either would obscure the flag/prefix roles.
+#[allow(clippy::too_many_lines, clippy::similar_names)]
 fn csharp_collect_type_refs_inner(
     node: Node<'_>,
     source: &[u8],

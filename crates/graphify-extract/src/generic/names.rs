@@ -112,7 +112,10 @@ pub(crate) struct CsharpTypeName {
 /// Handles `identifier`, `predefined_type`, `qualified_name`, `generic_name`,
 /// and falls back to recursing into child nodes. Returns `None` when no
 /// recognisable name can be extracted (e.g. array/pointer type modifiers).
-#[allow(clippy::similar_names)] // `qualified` (bool) vs `qualifier` (prefix) mirror graphify-py
+// `qualified` (a bool: was the type written with a namespace?) and `qualifier`
+// (the namespace prefix string) name two distinct fields; renaming either to
+// appease the lint would blur the flag/prefix distinction.
+#[allow(clippy::similar_names)]
 pub(crate) fn read_csharp_type_name(
     node: Option<Node<'_>>,
     source: &[u8],

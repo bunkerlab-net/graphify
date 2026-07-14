@@ -2483,6 +2483,49 @@ fn cpp_instance_member_call_resolves() {
     assert_eq!(bar_calls, 1, "exactly one bar call from main");
 }
 
+/// #1547 receiver types are per-function-body and source-ordered:
+///  - `main`: `Foo f; { Bar f; } f.shared();` — the outer (source-first) `Foo f`
+///    owns the post-block call, so it resolves to `Foo::shared` (a reverse walk
+///    would pick the nested `Bar f`, which has no `shared`).
+///  - `other`: declares its OWN `Bar f` (no `shared`), so `f.shared()` stays
+///    UNRESOLVED — `main`'s `Foo f` must not leak across bodies (the old
+///    file-scoped table would have typed it `Foo` and fabricated the edge).
+#[test]
+fn cpp_receiver_types_are_per_body_and_source_ordered() {
+    let (_tmp, out) = corpus(&[
+        ("src/Foo.h", "class Foo {\npublic:\n  void shared();\n};\n"),
+        ("src/Foo.cpp", "#include \"Foo.h\"\nvoid Foo::shared() {}\n"),
+        (
+            "src/Bar.h",
+            "class Bar {\npublic:\n  void unrelated();\n};\n",
+        ),
+        (
+            "src/Bar.cpp",
+            "#include \"Bar.h\"\nvoid Bar::unrelated() {}\n",
+        ),
+        (
+            "src/Main.cpp",
+            "#include \"Foo.h\"\n#include \"Bar.h\"\nint main() { Foo f; { Bar f; } f.shared(); }\nvoid other() { Bar f; f.shared(); }\n",
+        ),
+    ]);
+    let calls = call_edges(&out, &["calls"]);
+    assert!(
+        calls.contains(&(
+            "main()".into(),
+            "calls".into(),
+            "shared".into(),
+            "INFERRED".into()
+        )),
+        "outer `Foo f` (source-first) must own main's `f.shared()`; got {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|(s, _, t, _)| s == "other()" && t == "shared"),
+        "`other`'s own `Bar f` lacks `shared`; main's `Foo f` must not leak in: {calls:?}"
+    );
+}
+
 /// `Foo* f = new Foo(); f->bar();` resolves the same way via pointer-arrow access.
 #[test]
 fn cpp_pointer_member_call_resolves() {
@@ -2644,6 +2687,45 @@ fn objc_instance_message_send_resolves() {
         "-doThing".into(),
         "INFERRED".into()
     )));
+}
+
+/// #1547/#1556 (Objective-C) receiver typing is per-method and source-ordered:
+///  - `inner`: an outer `Foo *f` then a nested `{ Bar *f }` — the outer (source
+///    -first) binding owns `[f doThing]`, so it resolves to `Foo::doThing`.
+///  - `isolated`: declares its OWN `Bar *f` (Bar has no `doThing`), so `[f doThing]`
+///    stays UNRESOLVED — `inner`'s `Foo *f` must not leak across methods (the old
+///    file-wide table would have typed it `Foo` and fabricated the edge).
+#[test]
+fn objc_receiver_types_are_per_method_and_source_ordered() {
+    let (_tmp, out) = corpus(&[
+        ("src/Foo.h", OBJC_FOO_H),
+        ("src/Foo.m", OBJC_FOO_M),
+        (
+            "src/Bar.h",
+            "@interface Bar : NSObject\n- (void)other;\n@end\n",
+        ),
+        (
+            "src/Bar.m",
+            "#import \"Bar.h\"\n@implementation Bar\n- (void)other {}\n@end\n",
+        ),
+        (
+            "src/Caller.m",
+            "#import \"Foo.h\"\n#import \"Bar.h\"\n@implementation Caller\n- (void)inner {\n  Foo *f = [[Foo alloc] init];\n  { Bar *f = [[Bar alloc] init]; }\n  [f doThing];\n}\n- (void)isolated {\n  Bar *f = [[Bar alloc] init];\n  [f doThing];\n}\n@end\n",
+        ),
+    ]);
+    let calls = call_edges(&out, &["calls"]);
+    assert!(
+        calls
+            .iter()
+            .any(|(s, _, t, _)| s == "-inner" && t == "-doThing"),
+        "nested `Bar f` must not clobber the outer source-first `Foo f`: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|(s, _, t, _)| s == "-isolated" && t == "-doThing"),
+        "`isolated`'s own `Bar f` lacks `doThing`; `inner`'s `Foo f` must not leak in: {calls:?}"
+    );
 }
 
 /// `[self render]` inside Foo resolves to Foo's `-render` -> EXTRACTED.

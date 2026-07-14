@@ -618,8 +618,6 @@ pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &
     *edges = rewritten;
 }
 
-/// Header file-extension pairing for the decl/def class merge (without the dot).
-const DECLDEF_HEADER_SUFFIXES: [&str; 4] = ["h", "hpp", "hh", "hxx"];
 /// Implementation file-extension pairing for the decl/def class merge.
 const DECLDEF_IMPL_SUFFIXES: [&str; 6] = ["m", "mm", "cpp", "cc", "cxx", "c"];
 
@@ -634,7 +632,7 @@ fn decldef_class_stem(source_file: &str) -> Option<(String, String)> {
     }
     let p = Path::new(source_file);
     let suffix = p.extension()?.to_string_lossy().to_lowercase();
-    if !DECLDEF_HEADER_SUFFIXES.contains(&suffix.as_str())
+    if !HEADER_SUFFIXES.contains(&suffix.as_str())
         && !DECLDEF_IMPL_SUFFIXES.contains(&suffix.as_str())
     {
         return None;
@@ -657,9 +655,9 @@ fn decldef_class_stem(source_file: &str) -> Option<(String, String)> {
 
 /// `true` when a source file carries a header extension.
 fn is_decldef_header(source_file: &str) -> bool {
-    Path::new(source_file).extension().is_some_and(|e| {
-        DECLDEF_HEADER_SUFFIXES.contains(&e.to_string_lossy().to_lowercase().as_str())
-    })
+    Path::new(source_file)
+        .extension()
+        .is_some_and(|e| HEADER_SUFFIXES.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
 /// Merge a class (and its methods) declared in a header with its definition in a

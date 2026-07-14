@@ -48,8 +48,8 @@ pub(super) struct CallWalkCtx<'a> {
     /// locals). Lets member-call `raw_calls` carry a `receiver_type` for
     /// type-based cross-file resolution (#1609). Empty for non-C# files.
     pub csharp_var_types: &'a HashMap<String, String>,
-    /// File-wide `var -> ClassName` table for C++ (local declarations across all
-    /// function bodies). Lets member-call `raw_calls` carry a `receiver_type` for
+    /// Current function body's `var -> ClassName` table for C++ (its local
+    /// declarations). Lets member-call `raw_calls` carry a `receiver_type` for
     /// type-based cross-file resolution (#1547). Empty for non-C++ files.
     pub cpp_var_types: &'a HashMap<String, String>,
     /// File-wide `name -> TypeName` table for TS/JS (constructor-injected
