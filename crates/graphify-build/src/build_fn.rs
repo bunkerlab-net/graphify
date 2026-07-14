@@ -250,6 +250,14 @@ fn normalize_hyperedge_members(he: &mut serde_json::Map<String, Value>) {
             eprintln!(
                 "[graphify] WARNING: hyperedge '{id}' uses field '{alias}' instead of 'nodes'; normalizing."
             );
+        } else if let Some(&alias) = HE_MEMBER_ALIASES.iter().find(|&&a| he.contains_key(a)) {
+            // graphify-py silently drops a malformed (non-array) alias, leaving the
+            // hyperedge member-less; warn instead so a producer typo like
+            // `"members": "n1"` surfaces rather than a quietly empty hyperedge.
+            let id = he.get("id").and_then(Value::as_str).unwrap_or("?");
+            eprintln!(
+                "[graphify] WARNING: hyperedge '{id}' field '{alias}' is not an array; ignoring it."
+            );
         }
     }
     for alias in HE_MEMBER_ALIASES {
@@ -450,33 +458,22 @@ pub fn build_merge_with_graph_cap(
         }
     }
 
-    // Carry forward hyperedges from files neither re-extracted nor deleted
-    // (#1574): build() only sees the new chunks' hyperedges, so without this
-    // every --update collapses the hyperedge set to just the changed files'.
-    // Re-extracted files' prior hyperedges are dropped (their new version is
-    // already on the graph); deleted files' are dropped via prune_set; id-dedup
-    // so a carried hyperedge never duplicates a re-emitted one.
-    if !existing_hyperedges.is_empty() {
-        let carried: Vec<Value> = std::mem::take(&mut existing_hyperedges)
-            .into_iter()
-            .filter(|he| {
-                let Some(map) = he.as_object() else {
-                    return false;
-                };
-                let sf = map.get("source_file").and_then(Value::as_str).unwrap_or("");
-                let norm = crate::normalize::norm_source_file(sf, eff_root.as_deref());
-                !(new_sources.contains(sf)
-                    || new_sources.contains(&norm)
-                    || prune_set.contains(sf)
-                    || prune_set.contains(&norm))
-            })
-            .collect();
-        attach_carried_hyperedges(&mut graph, carried);
-    }
-
+    // Prune deleted sources FIRST so carried hyperedges can be validated against
+    // the FINAL node set below: a hyperedge whose own file survives can still
+    // reference a member node from a file that was pruned or re-extracted.
     if !pruned.is_empty() {
         prune_deleted_sources(&mut graph, pruned, eff_root.as_deref().map(Path::new));
     }
+
+    // Carry forward hyperedges from files neither re-extracted nor deleted, and
+    // drop any left dangling by the prune above (#1574); see the helper.
+    carry_forward_hyperedges(
+        &mut graph,
+        std::mem::take(&mut existing_hyperedges),
+        &new_sources,
+        &prune_set,
+        eff_root.as_deref(),
+    );
 
     // Refuse to silently shrink the graph (#479). Shrinkage is intentional when
     // dedup or prune_sources is active, so only guard otherwise.
@@ -491,6 +488,59 @@ pub fn build_merge_with_graph_cap(
     }
 
     Ok(graph)
+}
+
+/// Carry forward hyperedges (#1574) from files neither re-extracted nor deleted.
+///
+/// `build()` only sees the new chunks' hyperedges, so without this every
+/// `--update` collapses the hyperedge set to just the changed files'.
+/// Re-extracted files' prior hyperedges are dropped (their new version is
+/// already on the graph); deleted files' are dropped via `prune_set`; id-dedup
+/// (in [`attach_carried_hyperedges`]) so a carried hyperedge never duplicates a
+/// re-emitted one. A hyperedge is ALSO dropped when any `nodes` member no longer
+/// resolves to a live node — a dangling member (from a co-referenced file that
+/// was pruned or re-extracted under a new id) breaks referential integrity.
+/// graphify-py carries such hyperedges verbatim; fixing it is a deliberate
+/// divergence per AGENTS.md (fix reference bugs, don't replicate them). Call
+/// AFTER pruning so members are validated against the final graph.
+fn carry_forward_hyperedges(
+    graph: &mut Graph,
+    existing_hyperedges: Vec<Value>,
+    new_sources: &std::collections::HashSet<String>,
+    prune_set: &std::collections::HashSet<String>,
+    eff_root: Option<&str>,
+) {
+    if existing_hyperedges.is_empty() {
+        return;
+    }
+    let live_nodes: std::collections::HashSet<String> =
+        graph.nodes().map(|(id, _)| id.clone()).collect();
+    let carried: Vec<Value> = existing_hyperedges
+        .into_iter()
+        .filter(|he| {
+            let Some(map) = he.as_object() else {
+                return false;
+            };
+            let sf = map.get("source_file").and_then(Value::as_str).unwrap_or("");
+            let norm = crate::normalize::norm_source_file(sf, eff_root);
+            if new_sources.contains(sf)
+                || new_sources.contains(&norm)
+                || prune_set.contains(sf)
+                || prune_set.contains(&norm)
+            {
+                return false;
+            }
+            // Every declared member must still resolve to a live node.
+            map.get("nodes")
+                .and_then(Value::as_array)
+                .is_none_or(|members| {
+                    members
+                        .iter()
+                        .all(|m| m.as_str().is_some_and(|id| live_nodes.contains(id)))
+                })
+        })
+        .collect();
+    attach_carried_hyperedges(graph, carried);
 }
 
 /// Best-effort scan root for relativizing paths in [`build_merge`] when the

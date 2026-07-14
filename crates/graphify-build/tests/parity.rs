@@ -1490,3 +1490,90 @@ fn build_merge_drops_idless_carried_hyperedge() {
         "the id-less hyperedge must be dropped: {hes:?}"
     );
 }
+
+#[test]
+fn build_merge_drops_carried_hyperedge_with_pruned_member() {
+    // #1574 + referential integrity: a carried hyperedge whose OWN source
+    // survives is still dropped when one of its member nodes came from a pruned
+    // file and no longer exists in the merged graph.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graph.json");
+    let graph_json = json!({
+        "nodes": [
+            {"id": "a", "label": "A", "file_type": "document", "source_file": "keep.md"},
+            {"id": "b", "label": "B", "file_type": "document", "source_file": "gone.md"},
+        ],
+        "links": [],
+        "hyperedges": [
+            {"id": "cross", "label": "Cross", "nodes": ["a", "b"],
+             "relation": "participate_in", "confidence": "INFERRED", "source_file": "keep.md"},
+            {"id": "local", "label": "Local", "nodes": ["a"],
+             "relation": "participate_in", "confidence": "INFERRED", "source_file": "keep.md"},
+        ],
+    });
+    std::fs::write(
+        &graph_path,
+        serde_json::to_string(&graph_json).expect("ser"),
+    )
+    .expect("write");
+
+    // Delete gone.md: node `b` is pruned, orphaning the `cross` hyperedge.
+    let pruned = ["gone.md".to_string()];
+    let g = build_merge(&[], &graph_path, Some(&pruned), false, false, None).expect("build_merge");
+
+    assert!(g.node_data("a").is_some(), "node a survives");
+    assert!(g.node_data("b").is_none(), "node b is pruned");
+    let hes = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ids: Vec<&str> = hes
+        .iter()
+        .filter_map(|h| h.get("id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["local"],
+        "the cross-file hyperedge with a pruned member must be dropped"
+    );
+}
+
+#[test]
+fn malformed_hyperedge_alias_warns_on_stderr() {
+    // #1561 follow-up: a non-array member alias (e.g. `members: "a"`) leaves the
+    // hyperedge member-less. Unlike graphify-py (silent) we surface it on stderr;
+    // capture it from a child process since the warning goes to the real fd.
+    const CHILD: &str = "GRAPHIFY_ALIAS_WARN_CHILD";
+    if std::env::var(CHILD).is_ok() {
+        // CHILD: build a graph whose hyperedge uses a malformed `members` alias.
+        let ext = json!({
+            "nodes": [{"id": "a", "label": "A", "file_type": "code", "source_file": "x.py"}],
+            "edges": [],
+            "hyperedges": [
+                {"id": "bad_he", "label": "Bad", "members": "a",
+                 "relation": "participate_in", "confidence": "INFERRED", "source_file": "x.py"},
+            ],
+        });
+        let _ = build_from_json(ext, false, None).expect("build_from_json");
+        return;
+    }
+
+    let exe = std::env::current_exe().expect("current_exe");
+    let output = std::process::Command::new(exe)
+        .args([
+            "malformed_hyperedge_alias_warns_on_stderr",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("spawn child test process");
+    assert!(output.status.success(), "child test process must exit 0");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bad_he") && stderr.contains("members") && stderr.contains("not an array"),
+        "the malformed-alias warning must name the id, alias, and reason: {stderr}"
+    );
+}
