@@ -13,7 +13,7 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::FILE_CHAR_CAP;
-use crate::file_slice::{Unit, read_slice_text, unit_path};
+use crate::file_slice::{Unit, read_slice_text_from, unit_path};
 
 /// Known prompt-injection / chat-template sentinels a hostile source file might
 /// embed to break out of the `untrusted_source` block or impersonate a
@@ -160,7 +160,9 @@ pub fn read_units(units: &[Unit], root: &Path) -> String {
             Path::to_path_buf,
         );
         let content = match u {
-            Unit::Slice(fs) => read_slice_text(fs),
+            // Read the slice from the containment-checked `safe_path`, not the
+            // slice's stored path, so it never re-follows a symlink at read time.
+            Unit::Slice(fs) => read_slice_text_from(&safe_path, fs),
             Unit::Whole(_) => file_to_text(&safe_path),
         };
         let Some(content) = content else {

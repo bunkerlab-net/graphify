@@ -41,7 +41,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// Like [`estimate_tokens`], uses `encode_ordinary` so special-token strings in
 /// the content are tolerated as ordinary text (#1685).
 #[must_use]
-pub fn estimate_file_tokens(content: &str, per_file_overhead_chars: usize) -> usize {
+pub(crate) fn estimate_content_tokens(content: &str, per_file_overhead_chars: usize) -> usize {
     match TOKENIZER.as_ref() {
         Some(enc) => {
             enc.encode_ordinary(content).len() + (per_file_overhead_chars / CHARS_PER_TOKEN)

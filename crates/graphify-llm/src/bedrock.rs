@@ -453,13 +453,17 @@ pub fn call_bedrock_plain(
             }
         }
     }
-    if let Some(sink) = usage
-        && let Some(u) = output.usage()
-    {
-        sink.record(
-            u64::try_from(u.input_tokens()).unwrap_or(0),
-            u64::try_from(u.output_tokens()).unwrap_or(0),
-        );
+    if let Some(sink) = usage {
+        // Record on every call the sink is configured for, matching the other
+        // backends (e.g. azure): a response missing usage data counts as (0, 0)
+        // rather than being dropped from the tally.
+        let (input, output_t) = output.usage().map_or((0, 0), |u| {
+            (
+                u64::try_from(u.input_tokens()).unwrap_or(0),
+                u64::try_from(u.output_tokens()).unwrap_or(0),
+            )
+        });
+        sink.record(input, output_t);
     }
     Ok(text)
 }

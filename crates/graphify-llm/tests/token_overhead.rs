@@ -30,16 +30,17 @@ fn special_token_text_is_counted_as_ordinary() -> Result<(), Box<dyn std::error:
     // special id. `encode_ordinary` mirrors Python's `disallowed_special=()`.
     let tmp = tempfile::tempdir()?;
     let f = tmp.path().join("tokenizer-notes.md");
-    std::fs::write(
-        &f,
-        "The GPT end-of-text token is <|endoftext|> in the vocab.\n",
-    )?;
+    // Only the special-token string, so content tokens isolate its encoding.
+    std::fs::write(&f, "<|endoftext|>")?;
     let n = estimate_file_tokens(&f);
-    // Content tokens are counted on top of the per-file overhead, so the estimate
-    // exceeds overhead-only (proving the text was neither dropped nor errored).
+    // Content tokens on top of the per-file overhead. `<|endoftext|>` encodes as
+    // SEVERAL ordinary tokens; a value of 1 would mean it collapsed to a single
+    // special id, and 0 would mean it was dropped — both regressions of #1685.
+    let content_tokens = n - PER_FILE_OVERHEAD_CHARS / 4;
     assert!(
-        n > PER_FILE_OVERHEAD_CHARS / 4,
-        "special-token text is counted as ordinary content: {n}"
+        content_tokens > 1,
+        "special-token text must encode as multiple ordinary tokens, not a single \
+         special id nor be dropped: {content_tokens}"
     );
     Ok(())
 }
