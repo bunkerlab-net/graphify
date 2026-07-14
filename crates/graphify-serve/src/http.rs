@@ -14,8 +14,8 @@
 //! `initialize` (unless `--stateless`) so spec-conformant clients have one to
 //! echo, but it is not validated on later requests.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -62,7 +62,7 @@ impl Default for HttpOptions {
 
 /// Shared request context for the HTTP handlers.
 struct HttpCtx {
-    state: Mutex<McpServerState>,
+    state: McpServerState,
     graph_path: String,
     api_key: Option<String>,
     json_response: bool,
@@ -154,7 +154,7 @@ pub fn build_app(graph_path: &str, opts: &HttpOptions) -> Result<Router, ServeEr
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let ctx = Arc::new(HttpCtx {
-        state: Mutex::new(McpServerState::load(graph_path)),
+        state: McpServerState::load(graph_path),
         graph_path: graph_path.to_string(),
         api_key,
         json_response: opts.json_response,
@@ -187,20 +187,15 @@ async fn mcp_post(State(ctx): State<Arc<HttpCtx>>, headers: HeaderMap, body: Byt
     };
 
     let is_initialize = msg.get("method").and_then(Value::as_str) == Some("initialize");
-    // `handle` runs synchronous graph I/O under the state mutex; dispatch it on
-    // the blocking pool so a slow or large graph load never stalls the async
-    // executor. The mutex still serialises concurrent requests — which also
-    // coordinates cache misses down to a single load — and that is acceptable for
-    // this off-by-default, low-QPS HTTP transport.
+    // `handle` does synchronous graph I/O, so dispatch it on the blocking pool to
+    // keep the async executor free. `McpServerState` locks per-project internally
+    // (not one global mutex), so concurrent requests to DIFFERENT projects run in
+    // parallel; only same-graph calls serialise.
     let ctx_for_handle = Arc::clone(&ctx);
     let Ok(response) = tokio::task::spawn_blocking(move || {
-        // Recover from a poisoned lock rather than panicking: a prior panic in a
-        // handler must not take the whole server down.
-        let mut state = ctx_for_handle
+        ctx_for_handle
             .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.handle(&msg, &ctx_for_handle.graph_path)
+            .handle(&msg, &ctx_for_handle.graph_path)
     })
     .await
     else {

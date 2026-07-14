@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use graphify_build::Graph;
 use indexmap::IndexMap;
@@ -377,7 +378,7 @@ where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let mut state = McpServerState::load(graph_path);
+    let state = McpServerState::load(graph_path);
 
     let buf_reader = BufReader::new(reader);
     let mut lines = buf_reader.lines();
@@ -442,6 +443,11 @@ impl GraphCtx {
     }
 }
 
+/// A shared, independently-lockable graph context. Each resolved graph path maps
+/// to one of these; a request locks only its own project's handle, so unrelated
+/// projects dispatch concurrently and one slow load never blocks the others.
+type CtxHandle = Arc<Mutex<GraphCtx>>;
+
 /// Read a graph file's `(mtime_ns, size)` for hot-reload bookkeeping; a missing
 /// or unreadable file reports `(0, 0)`.
 fn stat_mtime_size(graph_path: &str) -> (u64, u64) {
@@ -476,13 +482,16 @@ const MAX_PROJECT_CTXS: usize = 64;
 /// two share one dispatch path and one reload contract.
 pub(crate) struct McpServerState {
     default_path: String,
-    default_ctx: Option<GraphCtx>,
+    /// The startup graph, lazily (re)loadable and pinned. `None` until a load
+    /// succeeds; a pure multi-project server keeps it `None`.
+    default_ctx: Mutex<Option<CtxHandle>>,
     /// Per-project graph cache keyed by the **canonicalised** resolved
     /// `graph.json` path, so path aliases (symlinks, `.`/`..`) to one project
     /// share a single loaded graph. Bounded at [`MAX_PROJECT_CTXS`] with FIFO
     /// eviction (hence `IndexMap`): `project_path` is remotely selectable, so an
     /// unbounded cache would let a client pin arbitrarily many graphs in memory.
-    project_ctxs: IndexMap<String, GraphCtx>,
+    /// The `Mutex` guards only lookups/inserts, never a load or a dispatch.
+    project_ctxs: Mutex<IndexMap<String, CtxHandle>>,
 }
 
 impl McpServerState {
@@ -491,12 +500,14 @@ impl McpServerState {
     /// A missing or unloadable default graph yields a pure multi-project server
     /// (`default_ctx == None`) rather than a startup failure, so `project_path`
     /// calls still resolve (#1594).
-    #[must_use]
     pub(crate) fn load(graph_path: &str) -> Self {
+        let default_ctx = GraphCtx::load(graph_path)
+            .ok()
+            .map(|c| Arc::new(Mutex::new(c)));
         Self {
             default_path: graph_path.to_string(),
-            default_ctx: GraphCtx::load(graph_path).ok(),
-            project_ctxs: IndexMap::new(),
+            default_ctx: Mutex::new(default_ctx),
+            project_ctxs: Mutex::new(IndexMap::new()),
         }
     }
 
@@ -513,48 +524,61 @@ impl McpServerState {
         }
     }
 
-    /// Get (loading + hot-reloading) the context for `resolved`, or an error
-    /// string when the graph cannot be loaded (a tool error, never a crash).
-    ///
-    /// Loads run under the caller's `&mut self` borrow; in the HTTP transport
-    /// that borrow sits behind the state `Mutex`, which serialises requests and so
-    /// coordinates concurrent cache misses down to a single load. The blocking
-    /// dispatch is moved off the async executor (see `http::mcp_post`'s
-    /// `spawn_blocking`), so a slow load never stalls it. graphify-py's lock-free
-    /// hot path is a throughput optimisation not needed at this request rate.
-    fn select_ctx(&mut self, resolved: &str) -> Result<&mut GraphCtx, String> {
+    /// Resolve the shared [`GraphCtx`] handle for `resolved`, loading it on first
+    /// use. Returns an `Arc<Mutex<GraphCtx>>` the caller locks for reload +
+    /// dispatch, so only calls to the SAME graph serialise — unrelated projects
+    /// run concurrently. The map/default locks are held only to look up or insert
+    /// a handle, never across a graph load or a tool dispatch, so one slow load
+    /// cannot block other projects (nor pile up on the blocking pool).
+    fn select_ctx(&self, resolved: &str) -> Result<CtxHandle, String> {
         if resolved == self.default_path {
-            if self.default_ctx.is_none() {
-                self.default_ctx = Some(GraphCtx::load(resolved).map_err(|e| e.to_string())?);
+            let mut slot = self
+                .default_ctx
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.is_none() {
+                // Lazily (re)load a default absent at startup; a failure is NOT
+                // cached, so a later-appearing graph still resolves.
+                let ctx = GraphCtx::load(resolved).map_err(|e| e.to_string())?;
+                *slot = Some(Arc::new(Mutex::new(ctx)));
             }
-            let Some(ctx) = &mut self.default_ctx else {
-                return Err("default graph unavailable".to_string());
-            };
-            ctx.reload(resolved);
-            Ok(ctx)
+            slot.as_ref()
+                .map(Arc::clone)
+                .ok_or_else(|| "default graph unavailable".to_string())
         } else {
-            // Canonicalise so aliases to one project share a ctx; fall back to the
-            // raw path when the file is absent (GraphCtx::load then reports it).
+            // Canonicalise so aliases to one project share a handle; fall back to
+            // the raw path when absent (GraphCtx::load then reports it).
             let key = std::fs::canonicalize(resolved).map_or_else(
                 |_| resolved.to_string(),
                 |p| p.to_string_lossy().into_owned(),
             );
-            #[allow(clippy::map_entry)]
-            // fallible load + FIFO eviction sit between the check and insert
-            if !self.project_ctxs.contains_key(&key) {
-                let ctx = GraphCtx::load(resolved).map_err(|err| err.to_string())?;
-                // Bound the cache: evict the oldest (FIFO) before inserting a new one.
-                if self.project_ctxs.len() >= MAX_PROJECT_CTXS {
-                    self.project_ctxs.shift_remove_index(0);
-                }
-                self.project_ctxs.insert(key.clone(), ctx);
-            }
-            let ctx = self
+            // Fast path: an already-cached handle, under a brief map lock.
+            if let Some(handle) = self
                 .project_ctxs
-                .get_mut(&key)
-                .ok_or_else(|| "project context missing after insert".to_string())?;
-            ctx.reload(resolved);
-            Ok(ctx)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&key)
+            {
+                return Ok(Arc::clone(handle));
+            }
+            // Miss: load OUTSIDE the map lock so a slow load blocks no one else.
+            let handle: CtxHandle = Arc::new(Mutex::new(
+                GraphCtx::load(resolved).map_err(|err| err.to_string())?,
+            ));
+            let mut map = self
+                .project_ctxs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Another thread may have inserted this path while we loaded — reuse it.
+            if let Some(existing) = map.get(&key) {
+                return Ok(Arc::clone(existing));
+            }
+            // Bound the cache: evict the oldest (FIFO) before inserting a new one.
+            if map.len() >= MAX_PROJECT_CTXS {
+                map.shift_remove_index(0);
+            }
+            map.insert(key, Arc::clone(&handle));
+            Ok(handle)
         }
     }
 
@@ -563,7 +587,7 @@ impl McpServerState {
     /// found" results); `Err` carries an infrastructure failure — a malformed
     /// `project_path` or an unloadable graph — that the caller reports as an
     /// `isError: true` tool result so MCP clients can detect it.
-    fn call_tool(&mut self, params: &serde_json::Map<String, Value>) -> Result<String, String> {
+    fn call_tool(&self, params: &serde_json::Map<String, Value>) -> Result<String, String> {
         let name = params
             .get("name")
             .and_then(Value::as_str)
@@ -587,42 +611,49 @@ impl McpServerState {
             }
         };
         let resolved = self.resolve_graph_path(project_path.as_deref());
-        match self.select_ctx(&resolved) {
-            Ok(ctx) => Ok(dispatch_tool(
-                &name,
-                &mut ctx.graph,
-                &ctx.communities,
-                &arguments,
-                &mut ctx.idf_cache,
-                &resolved,
-            )),
-            Err(e) => Err(format!(
+        let handle = self.select_ctx(&resolved).map_err(|e| {
+            format!(
                 "could not load graph for project_path '{}': {e}",
                 project_path.as_deref().unwrap_or("")
-            )),
-        }
+            )
+        })?;
+        let mut ctx = handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ctx.reload(&resolved);
+        let ctx = &mut *ctx; // deref the guard once so disjoint field borrows hold
+        Ok(dispatch_tool(
+            &name,
+            &mut ctx.graph,
+            &ctx.communities,
+            &arguments,
+            &mut ctx.idf_cache,
+            &resolved,
+        ))
     }
 
     /// Handle a `resources/read` against the default graph. `Ok` carries the
     /// resource text; `Err` carries a load failure the caller maps to a JSON-RPC
     /// error response.
-    fn read_resource(&mut self, uri: &str) -> Result<String, String> {
+    fn read_resource(&self, uri: &str) -> Result<String, String> {
         let resolved = self.resolve_graph_path(None);
-        match self.select_ctx(&resolved) {
-            Ok(ctx) => Ok(dispatch_resource(
-                uri,
-                &ctx.graph,
-                &ctx.communities,
-                &resolved,
-            )),
-            Err(e) => Err(e),
-        }
+        let handle = self.select_ctx(&resolved)?;
+        let mut ctx = handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ctx.reload(&resolved);
+        Ok(dispatch_resource(
+            uri,
+            &ctx.graph,
+            &ctx.communities,
+            &resolved,
+        ))
     }
 
     /// Route one JSON-RPC message. Returns `Some(response)` for requests and
     /// `None` for notifications. `_graph_path` is retained for transport
     /// signature stability; the default path is owned by the state.
-    pub(crate) fn handle(&mut self, msg: &Value, _graph_path: &str) -> Option<Value> {
+    pub(crate) fn handle(&self, msg: &Value, _graph_path: &str) -> Option<Value> {
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let empty_obj = serde_json::Map::new();
