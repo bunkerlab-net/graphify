@@ -934,6 +934,50 @@ fn provenance_capped_to_five_most_recent() {
 }
 
 #[test]
+fn provenance_excludes_dead_end_events() {
+    // graphify-py `_record_node` records provenance only for useful/corrected
+    // events; a `dead_end` updates the score (making this node contested) but
+    // leaves no provenance entry.
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    let src = tmp.path().join("auth.py");
+    std::fs::write(&src, "x\n").unwrap();
+    write_overlay_graph(&out, &[("auth_login", "login()", src.to_str().unwrap())]);
+    let mem = out.join("memory");
+    write_overlay_doc(&mem, "u.md", "2026-05-01", "useful", "worked", &["login()"]);
+    write_overlay_doc(
+        &mem,
+        "d1.md",
+        "2026-05-02",
+        "dead_end",
+        "nope1",
+        &["login()"],
+    );
+    write_overlay_doc(
+        &mem,
+        "d2.md",
+        "2026-05-03",
+        "dead_end",
+        "nope2",
+        &["login()"],
+    );
+    run_reflect_with_graph(&mem, &out);
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join(".graphify_learning.json")).unwrap(),
+    )
+    .unwrap();
+    let prov = sidecar["nodes"]["auth_login"]["provenance"]
+        .as_array()
+        .unwrap();
+    assert!(
+        prov.iter().all(|p| p["outcome"] != "dead_end"),
+        "dead_end events must not appear in provenance: {prov:?}"
+    );
+    assert_eq!(prov.len(), 1, "only the useful event is recorded: {prov:?}");
+    assert_eq!(prov[0]["outcome"], "useful");
+}
+
+#[test]
 fn ambiguous_or_unresolved_citation_is_skipped() {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("graphify-out");

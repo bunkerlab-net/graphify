@@ -191,11 +191,19 @@ fn record_node(
     if date > cur {
         b.node_last.insert(node.to_owned(), date.to_owned());
     }
-    b.node_provenance.entry(node.to_owned()).or_default().push((
-        date.to_owned(),
-        question.to_owned(),
-        outcome.to_owned(),
-    ));
+    // Provenance records only useful/corrected events (the experiential trail:
+    // what cited this node, and how it turned out), matching graphify-py
+    // `_record_node`. A `dead_end` (sign -1) updates the score but leaves no
+    // provenance entry, and a neutral `sign == 0` doc never reaches here
+    // (`apply_doc` gates the call) - recording either would diverge from the
+    // reference (contra CodeRabbit's "record even when sign == 0" suggestion).
+    if matches!(outcome, "useful" | "corrected") {
+        b.node_provenance.entry(node.to_owned()).or_default().push((
+            date.to_owned(),
+            question.to_owned(),
+            outcome.to_owned(),
+        ));
+    }
 }
 
 fn cmp_score_then_node(sa: f64, na: &str, sb: f64, nb: &str) -> Ordering {
