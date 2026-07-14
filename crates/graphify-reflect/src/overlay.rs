@@ -246,11 +246,10 @@ pub fn build_learning_overlay(agg: &AggResult, graph_path: &Path, now: DateTime<
             continue; // ambiguous or stale — can't display against a single node
         };
         if nodes_out.contains_key(&cid) {
-            // First status wins (preferred > tentative > contested). Provenance
-            // is taken from this first candidate only; a losing alias resolving to
-            // the same cid contributes nothing. Mirrors graphify-py's `_add`
-            // (`if cid in nodes_out: return`) - merging alias provenance would
-            // diverge from the reference's deterministic first-wins collision rule.
+            // First status wins (preferred > tentative > contested). A canonical
+            // id cited under both its id and label form collides here; the first
+            // candidate's status, score, and provenance win, resolved
+            // deterministically by iteration order. Ports graphify-py `_add`.
             continue;
         }
         let node = node_by_id.get(&cid);

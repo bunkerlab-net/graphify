@@ -191,12 +191,10 @@ fn record_node(
     if date > cur {
         b.node_last.insert(node.to_owned(), date.to_owned());
     }
-    // Provenance records only useful/corrected events (the experiential trail:
-    // what cited this node, and how it turned out), matching graphify-py
-    // `_record_node`. A `dead_end` (sign -1) updates the score but leaves no
-    // provenance entry, and a neutral `sign == 0` doc never reaches here
-    // (`apply_doc` gates the call) - recording either would diverge from the
-    // reference (contra CodeRabbit's "record even when sign == 0" suggestion).
+    // Provenance records only useful/corrected events - the actionable trail of
+    // what cited this node and how it turned out. A `dead_end` updates the score
+    // but adds no trail entry; a neutral (sign 0) doc never reaches `record_node`.
+    // Ports graphify-py `_record_node`.
     if matches!(outcome, "useful" | "corrected") {
         b.node_provenance.entry(node.to_owned()).or_default().push((
             date.to_owned(),
