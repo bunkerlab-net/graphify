@@ -461,6 +461,31 @@ fn class_affected_reaches_method_bound_caller() {
 }
 
 #[test]
+fn class_affected_reaches_contains_bound_caller() {
+    // The root's members are seeded via BOTH member-edge relations, so a caller
+    // bound to a `contains`-linked member is reachable too (not just `method`).
+    let hits = hits_from(
+        json!([
+            {"id": "proc", "label": "Processor"},
+            {"id": "proc_call", "label": ".call()"},
+            {"id": "runner", "label": "Runner"},
+            {"id": "runner_run", "label": ".run()"},
+        ]),
+        json!([
+            {"source": "proc", "target": "proc_call", "relation": "contains"},
+            {"source": "runner", "target": "runner_run", "relation": "method"},
+            {"source": "runner_run", "target": "proc_call", "relation": "calls"},
+        ]),
+        "proc",
+        2,
+    );
+    assert!(
+        hits.contains("runner_run"),
+        "a caller of a contains-bound member must be reachable from the class"
+    );
+}
+
+#[test]
 fn member_method_node_not_reported_as_hit() {
     let hits = hits_from(
         json!([
@@ -483,8 +508,9 @@ fn member_method_node_not_reported_as_hit() {
 
 #[test]
 fn method_contains_still_excluded_from_general_walk() {
-    // A node two method-hops away (a DIFFERENT class discovered during the walk)
-    // must NOT be pulled in: only the root's own members are seeded.
+    // `b` calls A's member `a_m`, so the reverse walk from A reaches `b` (a real
+    // caller). But `b`'s OWN member `b_m` must NOT be pulled in: member edges are
+    // seeded only for the ROOT class, never traversed mid-walk.
     let hits = hits_from(
         json!([
             {"id": "a", "label": "A"},
@@ -494,13 +520,20 @@ fn method_contains_still_excluded_from_general_walk() {
         ]),
         json!([
             {"source": "a", "target": "a_m", "relation": "method"},
-            {"source": "a_m", "target": "b", "relation": "calls"},
+            {"source": "b", "target": "a_m", "relation": "calls"},
             {"source": "b", "target": "b_m", "relation": "method"},
         ]),
         "a",
         3,
     );
-    assert!(hits.is_empty() || !hits.contains("b_m"));
+    assert!(
+        hits.contains("b"),
+        "b calls A.m, so it is an affected caller: {hits:?}"
+    );
+    assert!(
+        !hits.contains("b_m"),
+        "b's own member must not be pulled into the walk: {hits:?}"
+    );
 }
 
 #[test]
