@@ -426,21 +426,19 @@ impl GraphCtx {
         })
     }
 
-    /// Reload from disk when the file's `(mtime, size)` changed.
+    /// Reload from disk when the file's `(mtime, size)` changed, dropping the
+    /// now-stale `idf_cache` (keyed by term but derived from the graph) so a hot
+    /// reload cannot rank queries with the previous graph's IDF weights.
+    /// graphify-py stores `_idf_cache` ON the graph so a swap invalidates it for
+    /// free; the Rust holds it separately, so `maybe_reload` clears it on reload.
     fn reload(&mut self, graph_path: &str) {
-        // A successful reload swaps in a new graph, so `idf_cache` — keyed only
-        // by term but derived from node count and document frequency — is stale
-        // and must be dropped. graphify-py stores `_idf_cache` ON the graph so a
-        // swap invalidates it for free; the Rust holds it separately, so clear it
-        // explicitly so a hot reload cannot rank queries with stale IDF weights.
-        if maybe_reload(
+        maybe_reload(
             graph_path,
             &mut self.graph,
             &mut self.communities,
             &mut self.reload_state,
-        ) {
-            self.idf_cache.clear();
-        }
+            &mut self.idf_cache,
+        );
     }
 }
 
@@ -463,6 +461,11 @@ fn stat_mtime_size(graph_path: &str) -> (u64, u64) {
     })
 }
 
+/// Upper bound on cached per-project graph contexts. `project_path` is supplied
+/// remotely on each tool call, so the cache is capped (with FIFO eviction) to
+/// stop a client pinning unbounded large graphs in memory.
+const MAX_PROJECT_CTXS: usize = 64;
+
 /// In-memory MCP server state shared across messages.
 ///
 /// Holds the default graph (the one the server was started with, or `None` when
@@ -474,12 +477,12 @@ fn stat_mtime_size(graph_path: &str) -> (u64, u64) {
 pub(crate) struct McpServerState {
     default_path: String,
     default_ctx: Option<GraphCtx>,
-    /// Per-project graph cache keyed by the resolved `graph.json` path. Keys are
-    /// NOT canonicalised and the map is unbounded, mirroring graphify-py's
-    /// `_ctx_cache` (a plain dict on the same resolved string): two aliases to one
-    /// graph merely load twice (benign), and a server sees a bounded set of real
-    /// project roots. Canonicalising/evicting is declined to keep routing parity.
-    project_ctxs: HashMap<String, GraphCtx>,
+    /// Per-project graph cache keyed by the **canonicalised** resolved
+    /// `graph.json` path, so path aliases (symlinks, `.`/`..`) to one project
+    /// share a single loaded graph. Bounded at [`MAX_PROJECT_CTXS`] with FIFO
+    /// eviction (hence `IndexMap`): `project_path` is remotely selectable, so an
+    /// unbounded cache would let a client pin arbitrarily many graphs in memory.
+    project_ctxs: IndexMap<String, GraphCtx>,
 }
 
 impl McpServerState {
@@ -493,7 +496,7 @@ impl McpServerState {
         Self {
             default_path: graph_path.to_string(),
             default_ctx: GraphCtx::load(graph_path).ok(),
-            project_ctxs: HashMap::new(),
+            project_ctxs: IndexMap::new(),
         }
     }
 
@@ -513,12 +516,12 @@ impl McpServerState {
     /// Get (loading + hot-reloading) the context for `resolved`, or an error
     /// string when the graph cannot be loaded (a tool error, never a crash).
     ///
-    /// Loads run under the caller's `&mut self` borrow (and, in the HTTP
-    /// transport, its state `Mutex`). graphify-py uses a lock-free hot path and
-    /// locks only to build; the Rust keeps one borrow/lock per message — simpler
-    /// and adequate for the MCP server's low request rate (HTTP is an off-by-
-    /// default feature). A lock-free fast path fights the `&mut GraphCtx` borrow
-    /// the tool dispatch requires, for no real-world throughput gain here.
+    /// Loads run under the caller's `&mut self` borrow; in the HTTP transport
+    /// that borrow sits behind the state `Mutex`, which serialises requests and so
+    /// coordinates concurrent cache misses down to a single load. The blocking
+    /// dispatch is moved off the async executor (see `http::mcp_post`'s
+    /// `spawn_blocking`), so a slow load never stalls it. graphify-py's lock-free
+    /// hot path is a throughput optimisation not needed at this request rate.
     fn select_ctx(&mut self, resolved: &str) -> Result<&mut GraphCtx, String> {
         if resolved == self.default_path {
             if self.default_ctx.is_none() {
@@ -530,28 +533,37 @@ impl McpServerState {
             ctx.reload(resolved);
             Ok(ctx)
         } else {
-            use std::collections::hash_map::Entry;
-            let ctx = match self.project_ctxs.entry(resolved.to_string()) {
-                Entry::Occupied(e) => e.into_mut(),
-                Entry::Vacant(e) => {
-                    e.insert(GraphCtx::load(resolved).map_err(|err| err.to_string())?)
+            // Canonicalise so aliases to one project share a ctx; fall back to the
+            // raw path when the file is absent (GraphCtx::load then reports it).
+            let key = std::fs::canonicalize(resolved).map_or_else(
+                |_| resolved.to_string(),
+                |p| p.to_string_lossy().into_owned(),
+            );
+            #[allow(clippy::map_entry)]
+            // fallible load + FIFO eviction sit between the check and insert
+            if !self.project_ctxs.contains_key(&key) {
+                let ctx = GraphCtx::load(resolved).map_err(|err| err.to_string())?;
+                // Bound the cache: evict the oldest (FIFO) before inserting a new one.
+                if self.project_ctxs.len() >= MAX_PROJECT_CTXS {
+                    self.project_ctxs.shift_remove_index(0);
                 }
-            };
+                self.project_ctxs.insert(key.clone(), ctx);
+            }
+            let ctx = self
+                .project_ctxs
+                .get_mut(&key)
+                .ok_or_else(|| "project context missing after insert".to_string())?;
             ctx.reload(resolved);
             Ok(ctx)
         }
     }
 
     /// Handle a `tools/call`: pop `project_path`, select the target graph, and
-    /// dispatch, returning the tool's text output (or an error string when the
-    /// project's graph cannot be loaded — a tool error, never a crash).
-    ///
-    /// Errors are returned as ordinary text content, not with an `isError: true`
-    /// flag, mirroring graphify-py's handler (it yields `TextContent(text="Error
-    /// executing …")` and never sets `isError`). Matching that keeps the MCP wire
-    /// output identical to the reference; adding a structured error status is a
-    /// deliberate non-change for parity.
-    fn call_tool(&mut self, params: &serde_json::Map<String, Value>) -> String {
+    /// dispatch. `Ok` carries the tool's text output (including benign "not
+    /// found" results); `Err` carries an infrastructure failure — a malformed
+    /// `project_path` or an unloadable graph — that the caller reports as an
+    /// `isError: true` tool result so MCP clients can detect it.
+    fn call_tool(&mut self, params: &serde_json::Map<String, Value>) -> Result<String, String> {
         let name = params
             .get("name")
             .and_then(Value::as_str)
@@ -571,33 +583,39 @@ impl McpServerState {
             Some(Value::String(s)) if s.is_empty() => None,
             Some(Value::String(s)) => Some(s),
             Some(other) => {
-                return format!("Error: project_path must be a string, got: {other}");
+                return Err(format!("project_path must be a string, got: {other}"));
             }
         };
         let resolved = self.resolve_graph_path(project_path.as_deref());
         match self.select_ctx(&resolved) {
-            Ok(ctx) => dispatch_tool(
+            Ok(ctx) => Ok(dispatch_tool(
                 &name,
                 &mut ctx.graph,
                 &ctx.communities,
                 &arguments,
                 &mut ctx.idf_cache,
                 &resolved,
-            ),
-            Err(e) => format!(
-                "Error: could not load graph for project_path '{}': {e}",
+            )),
+            Err(e) => Err(format!(
+                "could not load graph for project_path '{}': {e}",
                 project_path.as_deref().unwrap_or("")
-            ),
+            )),
         }
     }
 
-    /// Handle a `resources/read` against the default graph, returning the
-    /// resource text (or an error string when the default graph is absent).
-    fn read_resource(&mut self, uri: &str) -> String {
+    /// Handle a `resources/read` against the default graph. `Ok` carries the
+    /// resource text; `Err` carries a load failure the caller maps to a JSON-RPC
+    /// error response.
+    fn read_resource(&mut self, uri: &str) -> Result<String, String> {
         let resolved = self.resolve_graph_path(None);
         match self.select_ctx(&resolved) {
-            Ok(ctx) => dispatch_resource(uri, &ctx.graph, &ctx.communities, &resolved),
-            Err(e) => format!("Error: {e}"),
+            Ok(ctx) => Ok(dispatch_resource(
+                uri,
+                &ctx.graph,
+                &ctx.communities,
+                &resolved,
+            )),
+            Err(e) => Err(e),
         }
     }
 
@@ -639,10 +657,15 @@ impl McpServerState {
                 if is_notification {
                     return None;
                 }
-                let text = self.call_tool(params);
+                // MCP: a tool-level failure is a result with `isError: true`, not
+                // a JSON-RPC error. Benign tool output (incl. "not found") is ok.
+                let (text, is_error) = match self.call_tool(params) {
+                    Ok(t) => (t, false),
+                    Err(e) => (format!("Error: {e}"), true),
+                };
                 Some(ok_response(
                     &id,
-                    json!({"content": [{"type": "text", "text": text}]}),
+                    json!({"content": [{"type": "text", "text": text}], "isError": is_error}),
                 ))
             }
             "resources/list" => {
@@ -660,11 +683,19 @@ impl McpServerState {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                let text = self.read_resource(&uri);
-                Some(ok_response(
-                    &id,
-                    json!({"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]}),
-                ))
+                // A resource load failure is a JSON-RPC error (internal error),
+                // distinct from a tool call's `isError` result.
+                match self.read_resource(&uri) {
+                    Ok(text) => Some(ok_response(
+                        &id,
+                        json!({"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]}),
+                    )),
+                    Err(e) => Some(error_response(
+                        &id,
+                        -32_603,
+                        &format!("Error reading resource: {e}"),
+                    )),
+                }
             }
             _ => {
                 if is_notification {

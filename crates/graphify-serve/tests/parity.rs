@@ -848,25 +848,70 @@ fn write_graph(path: &std::path::Path, node_ids: &[&str]) {
 }
 
 #[test]
-fn test_maybe_reload_detects_graph_change() {
+fn test_maybe_reload_reloads_and_clears_idf_cache() {
+    // A graph-file change triggers a reload that also clears the IDF cache (its
+    // per-term weights are stale once the graph is replaced); an unchanged file
+    // is a no-op that keeps the cache.
     let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("graphify-out");
     std::fs::create_dir_all(&out).expect("mkdir");
     let path = out.join("graph.json");
+    let path_s = path.to_str().expect("str").to_string();
 
     write_graph(&path, &["alpha", "beta"]);
-    let g1 = load_graph(path.to_str().expect("str")).expect("load");
-    let ids: Vec<_> = g1.nodes().map(|(id, _)| id.clone()).collect();
-    assert!(ids.contains(&"alpha".to_string()));
-    assert!(ids.contains(&"beta".to_string()));
+    let mut graph = load_graph(&path_s).expect("load");
+    let mut communities = graphify_serve::graph::communities_from_graph(&graph);
+    let meta = std::fs::metadata(&path).expect("stat");
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| {
+            u64::from(d.subsec_nanos()) + d.as_secs() * 1_000_000_000
+        });
+    let mut reload_state = graphify_serve::ReloadState {
+        mtime_ns,
+        size: meta.len(),
+    };
+    // Prime the IDF cache the way a query would.
+    let mut idf_cache = HashMap::new();
+    idf_cache.insert("alpha".to_string(), 1.23_f64);
 
-    // Simulate file changing.
+    // Unchanged file: no reload, cache retained.
+    assert!(
+        !graphify_serve::tools::maybe_reload(
+            &path_s,
+            &mut graph,
+            &mut communities,
+            &mut reload_state,
+            &mut idf_cache
+        ),
+        "an unchanged file must not reload"
+    );
+    assert!(idf_cache.contains_key("alpha"), "no reload keeps the cache");
+
+    // Change the file: reload fires and clears the stale cache.
     std::thread::sleep(std::time::Duration::from_millis(10));
     write_graph(&path, &["alpha", "beta", "gamma"]);
-
-    let g2 = load_graph(path.to_str().expect("str")).expect("load after write");
-    let ids2: Vec<_> = g2.nodes().map(|(id, _)| id.clone()).collect();
-    assert!(ids2.contains(&"gamma".to_string()));
+    assert!(
+        graphify_serve::tools::maybe_reload(
+            &path_s,
+            &mut graph,
+            &mut communities,
+            &mut reload_state,
+            &mut idf_cache
+        ),
+        "a changed file must reload"
+    );
+    assert!(
+        idf_cache.is_empty(),
+        "a successful reload MUST clear the stale IDF cache"
+    );
+    let ids: Vec<_> = graph.nodes().map(|(id, _)| id.clone()).collect();
+    assert!(
+        ids.contains(&"gamma".to_string()),
+        "the reloaded graph has the new node"
+    );
 }
 
 #[test]
@@ -955,50 +1000,6 @@ fn test_idf_common_term_gets_low_weight() {
     let mut cache = HashMap::new();
     let idf = compute_idf(&g, &["handle"], &mut cache);
     assert!(idf["handle"] < 1.0, "common term IDF should be < 1.0");
-}
-
-#[test]
-fn idf_cache_is_stale_across_graphs_so_reload_must_clear_it() {
-    // A term's IDF weight depends on the graph (node count + document frequency),
-    // so a cache populated for one graph returns a WRONG weight for another.
-    // `GraphCtx::reload` clears `idf_cache` for exactly this reason; this pins the
-    // hazard a persisted cache would cause after a hot reload.
-    // Graph A: `widget` is rare (1 of 5) → high IDF.
-    let mut nodes_a = vec![json!({"id": "w", "label": "widget", "source_file": "w.py"})];
-    for i in 0..4_u64 {
-        nodes_a.push(json!({"id": format!("n{i}"), "label": format!("common_{i}"), "source_file": format!("f{i}.py")}));
-    }
-    let g_a =
-        build_from_json(json!({"nodes": nodes_a, "edges": []}), false, None).expect("graph A");
-    // Graph B: `widget` is common (every node) → low IDF.
-    let mut nodes_b = vec![];
-    for i in 0..5_u64 {
-        nodes_b.push(json!({"id": format!("n{i}"), "label": format!("widget_{i}"), "source_file": format!("f{i}.py")}));
-    }
-    let g_b =
-        build_from_json(json!({"nodes": nodes_b, "edges": []}), false, None).expect("graph B");
-
-    let mut cache = HashMap::new();
-    let idf_a = compute_idf(&g_a, &["widget"], &mut cache)["widget"];
-    // Reuse the A-populated cache against B: compute_idf skips cached terms, so
-    // this returns A's stale weight rather than B's.
-    let idf_b_stale = compute_idf(&g_b, &["widget"], &mut cache)["widget"];
-    // A fresh cache (what reload's clear() yields) computes B's true weight.
-    let mut fresh = HashMap::new();
-    let idf_b_fresh = compute_idf(&g_b, &["widget"], &mut fresh)["widget"];
-
-    assert!(
-        (idf_b_stale - idf_a).abs() < 1e-9,
-        "a persisted cache returns graph A's weight for graph B"
-    );
-    assert!(
-        (idf_b_stale - idf_b_fresh).abs() > 1e-9,
-        "stale weight {idf_b_stale} differs from B's true weight {idf_b_fresh} — reload MUST clear the cache"
-    );
-    assert!(
-        idf_b_fresh < idf_a,
-        "widget is rare in A (high IDF) but common in B (low IDF)"
-    );
 }
 
 // ── _pick_seeds (issue #897) ──────────────────────────────────────────────────

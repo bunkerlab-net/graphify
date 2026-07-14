@@ -187,14 +187,24 @@ async fn mcp_post(State(ctx): State<Arc<HttpCtx>>, headers: HeaderMap, body: Byt
     };
 
     let is_initialize = msg.get("method").and_then(Value::as_str) == Some("initialize");
-    let response = {
+    // `handle` runs synchronous graph I/O under the state mutex; dispatch it on
+    // the blocking pool so a slow or large graph load never stalls the async
+    // executor. The mutex still serialises concurrent requests — which also
+    // coordinates cache misses down to a single load — and that is acceptable for
+    // this off-by-default, low-QPS HTTP transport.
+    let ctx_for_handle = Arc::clone(&ctx);
+    let Ok(response) = tokio::task::spawn_blocking(move || {
         // Recover from a poisoned lock rather than panicking: a prior panic in a
         // handler must not take the whole server down.
-        let mut state = ctx
+        let mut state = ctx_for_handle
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.handle(&msg, &ctx.graph_path)
+        state.handle(&msg, &ctx_for_handle.graph_path)
+    })
+    .await
+    else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "handler task failed").into_response();
     };
 
     let Some(resp) = response else {
