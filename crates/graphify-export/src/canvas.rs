@@ -47,6 +47,11 @@ fn safe_name(label: &str) -> String {
     }
 }
 
+/// Sentinel community id for the #1324 all-nodes fallback group. Chosen outside
+/// the natural cluster-id range (`>= 0`) so it can never match a real
+/// `community_labels` entry; `emit_community_nodes` renders it as `Community 0`.
+const SYNTHETIC_ALL_NODES_CID: i64 = i64::MIN;
+
 /// Export graph as an Obsidian Canvas file.
 ///
 /// Communities are laid out in a grid; nodes within each community are arranged
@@ -103,7 +108,7 @@ pub fn to_canvas(
             .filter(|id| node_filenames.contains_key(id.as_str()))
             .collect();
         if !all_ids.is_empty() {
-            filtered.insert(0, all_ids);
+            filtered.insert(SYNTHETIC_ALL_NODES_CID, all_ids);
         }
     }
     let communities: &IndexMap<i64, Vec<String>> = &filtered;
@@ -235,13 +240,20 @@ fn emit_community_nodes(
         node_filenames,
     } = *ctx;
     let (gx, gy, gw, gh, inner_cols) = rect;
-    let community_name = community_labels
-        .and_then(|cl| cl.get(&cid))
-        .cloned()
-        .unwrap_or_else(|| format!("Community {cid}"));
+    // The #1324 all-nodes fallback renders as `Community 0` / `g0` and never
+    // inherits a real community's label; natural communities use their own.
+    let (community_name, group_id) = if cid == SYNTHETIC_ALL_NODES_CID {
+        ("Community 0".to_string(), "g0".to_string())
+    } else {
+        let name = community_labels
+            .and_then(|cl| cl.get(&cid))
+            .cloned()
+            .unwrap_or_else(|| format!("Community {cid}"));
+        (name, format!("g{cid}"))
+    };
     let canvas_color = CANVAS_COLORS[idx % CANVAS_COLORS.len()];
     canvas_nodes.push(json!({
-        "id": format!("g{cid}"),
+        "id": group_id,
         "type": "group",
         "label": community_name,
         "x": gx,

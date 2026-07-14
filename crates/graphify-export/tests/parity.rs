@@ -511,6 +511,31 @@ fn test_to_canvas_all_dangling_communities_synthesize_real_cards() {
     );
 }
 
+#[test]
+fn test_to_canvas_fallback_group_ignores_stale_community_0_label() {
+    // #1324: the synthesized all-nodes fallback keys on a sentinel id, so a stale
+    // `community_labels` entry for community 0 never leaks into its group label.
+    let g = make_graph();
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new(); // triggers the fallback
+    let mut labels: IndexMap<i64, String> = IndexMap::new();
+    labels.insert(0, "AuthModule".to_string());
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.canvas");
+    to_canvas(&g, &communities, &out, Some(&labels), None).expect("test invariant");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    let nodes = data["nodes"].as_array().expect("array field");
+    let group = nodes
+        .iter()
+        .find(|n| n["type"] == "group")
+        .expect("a synthesized group");
+    assert_eq!(
+        group["label"].as_str(),
+        Some("Community 0"),
+        "the fallback group must not inherit the stale community-0 label"
+    );
+}
+
 // ── backup_if_protected ───────────────────────────────────────────────────────
 
 #[test]
