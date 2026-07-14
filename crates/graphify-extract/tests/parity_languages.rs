@@ -1821,7 +1821,7 @@ fn julia_qualified_import_emits_edge() -> Result<(), Box<dyn std::error::Error>>
 }
 
 /// The imported-symbol node must be deduplicated: importing the same module in
-/// two statements emits one node, not a duplicate with the same id (CodeRabbit
+/// two statements emits one node, not a duplicate with the same id (`CodeRabbit`
 /// follow-up - the `seen_ids` insert previously did not guard the node push).
 #[test]
 fn julia_repeated_import_emits_one_node() -> Result<(), Box<dyn std::error::Error>> {

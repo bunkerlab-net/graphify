@@ -195,7 +195,7 @@ fn ts_local_new_binding_receiver() {
 }
 
 /// #1671: an uppercase `.TS` source is still TS, so the member-call resolver's
-/// suffix guard must act on its raw_calls. Single-file to isolate that guard
+/// suffix guard must act on its `raw_calls`. Single-file to isolate that guard
 /// from JS module-path resolution (which probes lowercase candidates by design).
 #[test]
 fn ts_uppercase_ext_member_call_resolves() {
