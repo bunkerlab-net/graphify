@@ -170,11 +170,9 @@ pub fn validate_semantic_fragment(fragment: &Value) -> Vec<String> {
                 // Accept alias member keys (`members`/`node_ids`) as the list so
                 // an alias-keyed hyperedge is not rejected (#1561); sanitize/build
                 // fold them onto `nodes`.
-                let he_nodes = map
-                    .get("nodes")
-                    .or_else(|| map.get("members"))
-                    .or_else(|| map.get("node_ids"))
-                    .and_then(Value::as_array);
+                let he_nodes = ["nodes", "members", "node_ids"]
+                    .iter()
+                    .find_map(|k| map.get(*k).and_then(Value::as_array));
                 let Some(he_nodes) = he_nodes else {
                     errors.push(format!("hyperedges[{i}].nodes must be a list"));
                     continue;

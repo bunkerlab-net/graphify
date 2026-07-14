@@ -378,6 +378,22 @@ fn validate_accepts_alias_keyed_hyperedge() {
 }
 
 #[test]
+fn validate_accepts_non_array_nodes_with_alias_members() {
+    // #1561: `nodes` present but NOT an array must not veto a valid `members`
+    // alias — sanitize/build fold the alias onto `nodes`, so validation accepts
+    // it rather than rejecting on the stray non-array `nodes`.
+    let frag = json!({
+        "nodes": [], "edges": [],
+        "hyperedges": [{"id": "h1", "nodes": "oops", "members": ["n1", "n2"]}]
+    });
+    let errors = validate_semantic_fragment(&frag);
+    assert!(
+        !errors.iter().any(|e| e.contains("must be a list")),
+        "a non-array `nodes` with a valid `members` alias should validate: {errors:?}"
+    );
+}
+
+#[test]
 fn sanitize_folds_alias_members_to_nodes() {
     let mut frag = json!({
         "nodes": [
