@@ -203,7 +203,7 @@ fn learning_lesson_line(g: &graphify_build::Graph, node_id: &str) -> Option<Stri
         ),
     };
     if entry.get("stale").and_then(serde_json::Value::as_bool) == Some(true) {
-        lesson.push_str(" [code changed since — re-verify]");
+        lesson.push_str(" [code changed since this verdict — re-verify]");
     }
     Some(lesson)
 }

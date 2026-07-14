@@ -185,16 +185,23 @@ fn distinct_repo_tags(graph_paths: &[std::path::PathBuf]) -> Vec<String> {
             })
             .collect();
     }
-    // Index-suffix any remaining duplicates so every prefix is distinct.
-    let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    // Index-suffix any remaining duplicates so every prefix is distinct. Reserve
+    // each returned tag (base or suffixed) and advance the suffix until an UNUSED
+    // full tag is found, so a generated `foo-2` can't collide with an input repo
+    // literally tagged `foo-2`.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     tags.into_iter()
         .map(|t| {
-            let count = seen.entry(t.clone()).or_insert(0);
-            *count += 1;
-            if *count == 1 {
-                t
-            } else {
-                format!("{t}-{count}")
+            if seen.insert(t.clone()) {
+                return t;
+            }
+            let mut n = 2u32;
+            loop {
+                let candidate = format!("{t}-{n}");
+                if seen.insert(candidate.clone()) {
+                    return candidate;
+                }
+                n += 1;
             }
         })
         .collect()

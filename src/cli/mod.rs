@@ -58,6 +58,9 @@ pub(crate) fn run() -> Result<()> {
     // before clap parsing so `--version`/`--help` still surface the warning, and
     // platform subcommands (`graphify claude install`) are caught by the "install"
     // token — matching graphify-py's `sys.argv` scan.
+    // The scan is token-wide (not positional) to mirror graphify-py's `sys.argv`
+    // scan; a stray arg value that happens to equal a silent-command name is an
+    // accepted, harmless false-negative on a warning, not worth positional parsing.
     let raw_args: Vec<String> = std::env::args().collect();
     if !raw_args
         .iter()
