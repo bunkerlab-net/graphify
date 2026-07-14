@@ -4,7 +4,6 @@
 //! When `file_hash` is called on a path whose `(size, mtime_ns)` matches
 //! the cached entry, we skip rehashing entirely.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -41,8 +40,10 @@ static STAT_INDEX: LazyLock<Mutex<StatIndex>> = LazyLock::new(|| Mutex::new(Stat
 
 #[derive(Default)]
 pub(crate) struct StatIndex {
-    /// Per-index states keyed by the resolved `stat-index.json` file path.
-    pub(crate) roots: HashMap<PathBuf, RootState>,
+    /// Per-index states keyed by the resolved `stat-index.json` file path. An
+    /// `IndexMap` so flush order is deterministic (insertion order), not the
+    /// randomised `HashMap` order — tests and error handling can rely on it.
+    pub(crate) roots: IndexMap<PathBuf, RootState>,
 }
 
 /// One cache-file root's in-memory index.
