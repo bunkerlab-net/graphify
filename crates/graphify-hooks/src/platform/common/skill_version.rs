@@ -169,6 +169,10 @@ pub fn skill_version_warnings(skill_dst: &Path, current: &str) -> Vec<String> {
             // install` writes the package's OWN (older) bundled skill and
             // re-stamps the version, so the old "run install" advice would
             // silently DOWNGRADE it. Upgrade the package instead (#1568).
+            // `graphifyy` (double-y) is the real PyPI distribution name (graphify-py
+            // `pyproject.toml` `name = "graphifyy"`), NOT a typo: the upgrade command
+            // must name the installable package. graphify-py `__main__.py` emits the
+            // same string.
             warnings.push(format!(
                 "  warning: skill is from graphify {installed}, but the package is \
                  {current} (older). Upgrade the package (e.g. 'uv tool upgrade graphifyy' \

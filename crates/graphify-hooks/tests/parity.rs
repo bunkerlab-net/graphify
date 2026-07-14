@@ -713,6 +713,12 @@ fn test_uninstall_no_op_when_no_file() {
     let home = tempfile::tempdir().expect("tempdir");
     let msg = claude_uninstall_to(dir.path(), home.path());
     assert!(msg.contains("No CLAUDE.md") || msg.contains("nothing to do"));
+    // The absent-hook path contributes no message, so the output must not carry a
+    // trailing blank line (the empty hook message is skipped, matching Python).
+    assert!(
+        !msg.ends_with('\n'),
+        "uninstall output must not end with a blank line: {msg:?}"
+    );
 }
 
 #[test]

@@ -115,7 +115,13 @@ pub fn claude_uninstall(project_dir: &Path) -> Result<String, HooksError> {
         msgs.push("graphify section not found in CLAUDE.md - nothing to do".to_string());
     }
 
-    msgs.push(uninstall_claude_hook(project_dir)?);
+    // Python's `_strip_graphify_hook` prints only when a hook is actually removed
+    // and is silent otherwise; skip the empty message so uninstall output carries
+    // no stray blank line (and no "nothing to do" the reference never emits).
+    let hook_msg = uninstall_claude_hook(project_dir)?;
+    if !hook_msg.is_empty() {
+        msgs.push(hook_msg);
+    }
     Ok(msgs.join("\n"))
 }
 
