@@ -116,7 +116,7 @@ pub fn detect_incremental_with_cache_root(
     let full = walk::detect_with_cache_root(root, None, None, cache_root);
 
     let (changed_paths, deleted_files, manifest) = if manifest_path.exists() {
-        detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None)?
+        detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None, cache_root)?
     } else if prev.is_empty() {
         // No previous run at all — everything is new. Seed the returned
         // manifest with the current files so callers can persist it
@@ -145,7 +145,7 @@ pub fn detect_incremental_with_cache_root(
             .map_err(DetectError::Io)?;
         let json = serde_json::to_string_pretty(prev).map_err(DetectError::Json)?;
         std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(DetectError::Io)?;
-        detect_incremental_with_manifest(root, tmp.path(), None, "semantic", None)?
+        detect_incremental_with_manifest(root, tmp.path(), None, "semantic", None, cache_root)?
     };
 
     let changed_set: HashSet<PathBuf> = changed_paths.iter().cloned().collect();

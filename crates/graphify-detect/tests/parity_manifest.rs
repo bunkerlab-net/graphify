@@ -74,7 +74,7 @@ fn detect_incremental_all_new_when_no_manifest() {
     let manifest_path = tmp.path().join("manifest.json");
     // No manifest on disk → everything is new
     let (changed, deleted, _updated) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(!changed.is_empty());
     assert!(deleted.is_empty());
@@ -97,7 +97,7 @@ fn detect_incremental_nothing_changed_after_save() {
 
     // Second: incremental should see no changes
     let (changed, deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(changed.is_empty(), "nothing changed, but got: {changed:?}");
     assert!(deleted.is_empty());
@@ -118,7 +118,7 @@ fn detect_incremental_detects_new_file() {
     std::fs::write(tmp.path().join("new.py"), "y = 2").expect("test invariant");
 
     let (changed, _deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(
         changed
@@ -145,7 +145,7 @@ fn detect_incremental_detects_deleted_file() {
     std::fs::remove_file(&f2).expect("remove fixture");
 
     let (_changed, deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(
         deleted
@@ -173,9 +173,15 @@ fn detect_incremental_propagates_follow_symlinks() {
         .expect("test invariant");
 
     // Without following symlinks, the symlinked dir contents are invisible.
-    let (changed_no, _, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, Some(false), "semantic", None)
-            .expect("test invariant");
+    let (changed_no, _, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        Some(false),
+        "semantic",
+        None,
+        None,
+    )
+    .expect("test invariant");
     assert!(
         !changed_no
             .iter()
@@ -184,9 +190,15 @@ fn detect_incremental_propagates_follow_symlinks() {
     );
 
     // With follow_symlinks=true, the symlinked dir contents appear and are new.
-    let (changed_yes, _, updated) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, Some(true), "semantic", None)
-            .expect("test invariant");
+    let (changed_yes, _, updated) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        Some(true),
+        "semantic",
+        None,
+        None,
+    )
+    .expect("test invariant");
     assert!(
         changed_yes
             .iter()
@@ -206,9 +218,15 @@ fn detect_incremental_propagates_follow_symlinks() {
     save_manifest_to_path(&files, &manifest_path, "both").expect("test invariant");
     let _ = updated; // suppress unused warning
 
-    let (changed_second, _, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, Some(true), "semantic", None)
-            .expect("test invariant");
+    let (changed_second, _, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        Some(true),
+        "semantic",
+        None,
+        None,
+    )
+    .expect("test invariant");
     assert_eq!(
         changed_second.len(),
         0,
