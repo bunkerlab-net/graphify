@@ -18,7 +18,7 @@ use regex::Regex;
 
 use crate::LlmError;
 use crate::backends::detect_backend;
-use crate::call::call_llm_with_model;
+use crate::call::{UsageSink, call_llm_with_model, call_llm_with_model_usage};
 use crate::openai_compat::resolve_max_tokens;
 
 /// Legacy soft-cap on LLM-named communities; kept for callers that want to pin
@@ -85,6 +85,13 @@ impl Default for LabelOptions<'_> {
 #[allow(clippy::expect_used)]
 static LABEL_FENCE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"(?i)^\s*```(?:json)?\s*|\s*```\s*$").expect("static fence regex")
+});
+
+/// Salvage regex for complete `"<cid>": "<name>"` pairs from a reply that failed
+/// strict JSON parsing (#1690). Known-good literal pattern.
+#[allow(clippy::expect_used)]
+static LABEL_PAIR_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#""?(-?\d+)"?\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)""#).expect("static label-pair regex")
 });
 
 /// `{cid: "Community {cid}"}` for every community.
@@ -165,8 +172,19 @@ fn parse_label_response(
         _ => cleaned,
     };
 
-    let data: serde_json::Value =
-        serde_json::from_str(&cleaned).map_err(|e| LlmError::Parse(e.to_string()))?;
+    let data: serde_json::Value = match serde_json::from_str(&cleaned) {
+        Ok(v) => v,
+        Err(strict_err) => {
+            // #1690: a strict parse failure (e.g. a reply truncated mid-object)
+            // is salvaged for its complete `"cid": "name"` pairs rather than
+            // losing the whole batch; raise only when nothing recovers.
+            let salvaged = salvage_label_pairs(&cleaned, labeled_cids);
+            if salvaged.is_empty() {
+                return Err(LlmError::Parse(strict_err.to_string()));
+            }
+            return Ok(salvaged);
+        }
+    };
     let Some(obj) = data.as_object() else {
         return Err(LlmError::Parse(
             "label response is not a JSON object".to_string(),
@@ -185,6 +203,30 @@ fn parse_label_response(
         }
     }
     Ok(out)
+}
+
+/// Salvage complete `"<cid>": "<name>"` pairs (restricted to `labeled_cids`)
+/// from a reply that failed strict JSON parsing (#1690). Later duplicates win,
+/// mirroring Python's dict comprehension.
+fn salvage_label_pairs(text: &str, labeled_cids: &[i64]) -> IndexMap<i64, String> {
+    let wanted: std::collections::HashSet<i64> = labeled_cids.iter().copied().collect();
+    let mut out: IndexMap<i64, String> = IndexMap::new();
+    for cap in LABEL_PAIR_RE.captures_iter(text) {
+        let (Some(cid_m), Some(name_m)) = (cap.get(1), cap.get(2)) else {
+            continue;
+        };
+        let Ok(cid) = cid_m.as_str().parse::<i64>() else {
+            continue;
+        };
+        if !wanted.contains(&cid) {
+            continue;
+        }
+        let name = name_m.as_str().trim();
+        if !name.is_empty() {
+            out.insert(cid, name.to_string());
+        }
+    }
+    out
 }
 
 /// Label one batch of communities, splitting in half and retrying on a JSON
@@ -215,10 +257,11 @@ where
          its name - no prose, no markdown fences.\n\n{}",
         batch_lines.join("\n")
     );
-    // 24 tok/community covers a 2-5 word JSON entry (id, quotes, punctuation).
-    // Cap at 8192 for 16k-context models; honour GRAPHIFY_MAX_OUTPUT_TOKENS.
-    let default_tokens = 64usize
-        .saturating_add(24usize.saturating_mul(batch_cids.len()))
+    // #1690/#1694: 48 tok/community (was 24) + 256-tok preamble headroom (was 64)
+    // so a model that prepends a short preamble can still finish the JSON. Cap at
+    // 8192 for 16k-context models; honour GRAPHIFY_MAX_OUTPUT_TOKENS.
+    let default_tokens = 256usize
+        .saturating_add(48usize.saturating_mul(batch_cids.len()))
         .min(8192);
     let max_tokens = resolve_max_tokens(u32::try_from(default_tokens).unwrap_or(8192));
 
@@ -398,10 +441,22 @@ where
     Ok(labels)
 }
 
+/// Token usage accumulated while naming communities (#1694). Backends that do
+/// not report usage (e.g. the Claude Code CLI without a usage envelope)
+/// contribute nothing, so the totals are honest rather than estimated.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LabelUsage {
+    /// Prompt (input) tokens across every labeling call.
+    pub input: u64,
+    /// Completion (output) tokens across every labeling call.
+    pub output: u64,
+}
+
 /// CLI entry point: resolve a backend, name communities, and degrade to
 /// `Community N` placeholders on any failure (no backend, API error, malformed
 /// reply). `model` overrides the backend's default model (`--model`, #b304331).
-/// Returns `(labels, source)` where `source` is `"llm"` or `"placeholder"`.
+/// Returns `(labels, source, usage)` where `source` is `"llm"` or
+/// `"placeholder"` and `usage` totals the labeling token cost (#1694).
 /// Never errors.
 #[must_use]
 // Labeling entry point: graph data + backend auto-detect + tuning knobs; a
@@ -416,8 +471,12 @@ pub fn generate_community_labels(
     quiet: bool,
     max_concurrency: usize,
     batch_size: usize,
-) -> (IndexMap<i64, String>, &'static str) {
-    generate_community_labels_with(
+) -> (IndexMap<i64, String>, &'static str, LabelUsage) {
+    // Accumulate token usage from the real backend calls so cluster-only mode
+    // can report the labeling cost (#1694). The sink is `Sync`, so the rayon
+    // fan-out inside `label_communities_with` records into it concurrently.
+    let usage = UsageSink::new();
+    let (labels, source) = generate_community_labels_with(
         communities,
         node_labels,
         gods,
@@ -426,7 +485,15 @@ pub fn generate_community_labels(
         quiet,
         max_concurrency,
         batch_size,
-        |prompt, b, max, m| call_llm_with_model(prompt, b, max as usize, m),
+        |prompt, b, max, m| call_llm_with_model_usage(prompt, b, max as usize, m, Some(&usage)),
+    );
+    (
+        labels,
+        source,
+        LabelUsage {
+            input: usage.input(),
+            output: usage.output(),
+        },
     )
 }
 

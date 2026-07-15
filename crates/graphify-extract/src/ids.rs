@@ -44,6 +44,12 @@ pub fn make_id1(part: &str) -> String {
 /// IDs (#502). Mirrors Python `_file_stem(path)`.
 #[must_use]
 pub fn file_stem(path: &Path) -> String {
+    // A path with no file name (`Path(".")` — a `source_file` equal to the scan
+    // root) has no per-file stem. Return "" so callers leave such a project-level
+    // node's id untouched, matching Python `_file_stem`'s empty-name guard (#1618).
+    if path.file_name().is_none() {
+        return String::new();
+    }
     path.with_extension("").to_string_lossy().replace('\\', "/")
 }
 

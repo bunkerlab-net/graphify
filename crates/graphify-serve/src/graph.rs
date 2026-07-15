@@ -110,7 +110,19 @@ pub fn load_graph(graph_path: &str) -> Result<Graph, ServeError> {
         );
     }
 
-    graphify_build::build_from_json(data, true, None).map_err(|e| ServeError::Io(format!("{e}")))
+    let mut graph = graphify_build::build_from_json(data, true, None)
+        .map_err(|e| ServeError::Io(format!("{e}")))?;
+    // Stash the work-memory overlay (if any) so query text can annotate a node
+    // with its learned status (#1441). Best-effort — an absent/failed load leaves
+    // it empty; graph.json itself stays purely structural.
+    let overlay: serde_json::Map<String, Value> =
+        graphify_reflect::load_learning_overlay(&resolved)
+            .into_iter()
+            .collect();
+    graph
+        .graph_attrs
+        .insert("_learning_overlay".to_string(), Value::Object(overlay));
+    Ok(graph)
 }
 
 // ── Communities ───────────────────────────────────────────────────────────────
@@ -200,7 +212,16 @@ pub fn score_nodes<S: BuildHasher>(
     terms: &[&str],
     idf_cache: &mut HashMap<String, f64, S>,
 ) -> Vec<(f64, String)> {
-    let norm_terms: Vec<String> = terms.iter().flat_map(|t| search_tokens(t)).collect();
+    // Dedupe tokens order-preserving (as pick_seeds does): a repeated query word
+    // must not double-count every tier, and with the coverage scaling below it
+    // would also inflate the matched-term ratio (#1602).
+    let mut seen_terms: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let norm_terms: Vec<String> = terms
+        .iter()
+        .flat_map(|t| search_tokens(t))
+        .filter(|tok| seen_terms.insert(tok.clone()))
+        .collect();
+    let n_terms = norm_terms.len();
     let norm_term_refs: Vec<&str> = norm_terms.iter().map(String::as_str).collect();
     let idf = compute_idf(graph, &norm_term_refs, idf_cache);
 
@@ -246,19 +267,34 @@ pub fn score_nodes<S: BuildHasher>(
                 score += PREFIX_MATCH_BONUS * 10.0 * joined_w;
             }
         }
+        // Term coverage (#1602): scale the per-term exact/prefix tiers by the
+        // squared fraction of query terms the node's LABEL matches, so a lone
+        // generic word equal to a short label can't bury nodes matching several
+        // terms. Substring hits and source-file hits score directly (unscaled);
+        // source hits do NOT count toward coverage. Single-term / full-coverage
+        // queries are unchanged (coverage == 1).
+        let mut matched = 0_usize;
+        let mut tiered = 0.0_f64;
         for t in &norm_terms {
             let w = idf.get(t.as_str()).copied().unwrap_or(1.0);
             // Three-tier: exact > prefix > substring (take strongest per term).
             if t == &norm_label || t == &bare_label {
-                score += EXACT_MATCH_BONUS * w;
+                tiered += EXACT_MATCH_BONUS * w;
+                matched += 1;
             } else if norm_label.starts_with(t.as_str()) || bare_label.starts_with(t.as_str()) {
-                score += PREFIX_MATCH_BONUS * w;
+                tiered += PREFIX_MATCH_BONUS * w;
+                matched += 1;
             } else if norm_label.contains(t.as_str()) {
                 score += SUBSTRING_MATCH_BONUS * w;
+                matched += 1;
             }
             if source.contains(t.as_str()) {
                 score += SOURCE_MATCH_BONUS * w;
             }
+        }
+        if tiered > 0.0 && n_terms > 0 {
+            let coverage = matched as f64 / n_terms as f64;
+            score += tiered * coverage * coverage;
         }
         if score > 0.0 {
             // Tie-break toward the shorter label, then node id, so a concise
@@ -297,6 +333,69 @@ pub fn pick_seeds(scored: &[(f64, String)], max_k: usize, gap_ratio: f64) -> Vec
             break;
         }
         seeds.push(nid.clone());
+    }
+    seeds
+}
+
+/// [`pick_seeds`] plus the per-term seed guarantee (#1445).
+///
+/// After the gap-ratio cutoff, guarantees at least one seed per distinct query
+/// term that has any match at all, so one term's incidental exact-match
+/// collision cannot starve out the query's other, actually-relevant terms.
+/// Ties within a term break by graph degree (structural centrality), so an
+/// isolated incidental match doesn't out-rank a well-connected hub for that
+/// term. Mirrors Python `_pick_seeds(..., G=..., terms=...)`.
+#[must_use]
+pub fn pick_seeds_diverse<S: BuildHasher>(
+    scored: &[(f64, String)],
+    max_k: usize,
+    gap_ratio: f64,
+    graph: &Graph,
+    terms: &[&str],
+    idf_cache: &mut HashMap<String, f64, S>,
+) -> Vec<String> {
+    let mut seeds = pick_seeds(scored, max_k, gap_ratio);
+    // Distinct, sorted query tokens (BTreeSet mirrors Python `sorted({...})`).
+    let norm_terms: std::collections::BTreeSet<String> =
+        terms.iter().flat_map(|t| search_tokens(t)).collect();
+    for term in &norm_terms {
+        let term_scored = score_nodes(graph, &[term.as_str()], idf_cache);
+        let Some((best_score, first_nid)) = term_scored.first() else {
+            continue;
+        };
+        let best_score = *best_score;
+        let tied: Vec<&str> = term_scored
+            .iter()
+            .filter(|(s, _)| s.total_cmp(&best_score) == std::cmp::Ordering::Equal)
+            .map(|(_, n)| n.as_str())
+            .collect();
+        // On a tie, the highest-degree node wins; keep the FIRST such node
+        // (matches Python `max(tied, key=G.degree)`, which returns the first
+        // max). Degree here is endpoint incidence — a self-loop counts twice,
+        // matching NetworkX `G.degree`, not the once-counting `node_degree`.
+        let incidence = |n: &str| -> usize {
+            graph
+                .edges()
+                .map(|e| usize::from(e.source == n) + usize::from(e.target == n))
+                .sum()
+        };
+        let best_nid = if tied.len() > 1 {
+            let mut best = tied[0];
+            let mut best_deg = incidence(best);
+            for &n in &tied[1..] {
+                let d = incidence(n);
+                if d > best_deg {
+                    best = n;
+                    best_deg = d;
+                }
+            }
+            best.to_string()
+        } else {
+            first_nid.clone()
+        };
+        if !seeds.contains(&best_nid) {
+            seeds.push(best_nid);
+        }
     }
     seeds
 }
@@ -637,6 +736,28 @@ pub fn community_label(attrs: &IndexMap<String, Value>) -> Option<String> {
         })
 }
 
+/// Work-memory `learning=<status>[:stale]` suffix for a node's query-text NODE
+/// line, or `""` when the overlay has no entry / no status (#1441).
+fn node_learning_suffix(overlay: Option<&serde_json::Map<String, Value>>, nid: &str) -> String {
+    overlay
+        .and_then(|o| o.get(nid))
+        .and_then(Value::as_object)
+        .map_or_else(String::new, |e| {
+            let status = graphify_security::sanitize_label(
+                e.get("status").and_then(Value::as_str).or(Some("")),
+            );
+            if status.is_empty() {
+                return String::new();
+            }
+            let stale = if e.get("stale").and_then(Value::as_bool) == Some(true) {
+                ":stale"
+            } else {
+                ""
+            };
+            format!(" learning={status}{stale}")
+        })
+}
+
 /// Render subgraph as text, truncating at `token_budget` (approx 3 chars/token).
 ///
 /// Mirrors Python `_subgraph_to_text`.
@@ -665,12 +786,19 @@ pub fn subgraph_to_text<S: BuildHasher>(
     rest.sort_by_key(|n| std::cmp::Reverse(node_degree(graph, n)));
     ordered.extend(rest);
 
+    // Work-memory overlay (#1441): annotate a node with its learned status so the
+    // agent sees which sources past sessions found preferred/tentative/contested.
+    let overlay = graph
+        .graph_attrs
+        .get("_learning_overlay")
+        .and_then(Value::as_object);
     let mut lines: Vec<String> = Vec::new();
     for nid in &ordered {
         let empty = IndexMap::new();
         let d = graph.node_data(nid).unwrap_or(&empty);
+        let learning_suffix = node_learning_suffix(overlay, nid);
         let line = format!(
-            "NODE {} [src={} loc={} community={}]",
+            "NODE {} [src={} loc={} community={}{learning_suffix}]",
             sanitize_label(d.get("label").and_then(Value::as_str).or(Some(nid))),
             sanitize_label(d.get("source_file").and_then(Value::as_str).or(Some(""))),
             sanitize_label(
@@ -773,6 +901,13 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     // Trailing separators are trimmed so a path query keeps matching the file
     // (parity with the old tokenized compare, which dropped them) (#1503).
     let query_path = query_norm.trim_end_matches('/').to_string();
+    // Punctuation-PRESERVING normalized query (#1704): `term` tokenizes on \w+
+    // ("blockStream.ts" -> "blockstream ts") but a node's stored `norm_label`
+    // keeps punctuation ("blockstream.ts"). Matching `norm_query` against the raw
+    // `norm_label`/`bare_label` symmetrically resolves an exactly-typed punctuated
+    // label even when `label` and `norm_label` diverge. NOT slash-normalized —
+    // that is the separate #1503 path handled by `query_norm` above.
+    let norm_query = strip_diacritics(label).to_lowercase().trim().to_string();
     let mut source_exact: Vec<String> = Vec::new();
     let mut preferred: Vec<String> = Vec::new();
     let mut exact: Vec<String> = Vec::new();
@@ -780,10 +915,13 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
     let mut substring: Vec<String> = Vec::new();
 
     for (nid, attrs) in graph.nodes() {
-        // Token-join both sides; `search_tokens` already strips trailing `()`
-        // and other punctuation, so no separate `bare_label` is needed.
-        let node_term = search_tokens(&get_norm_label(attrs)).join(" ");
-        // `search_tokens` already lowercases, so pass `nid` directly.
+        // Fetch the stored norm_label once; derive the tokenized form from it and
+        // reuse the raw form for the punctuation-preserving norm_query compare.
+        let norm_label_raw = get_norm_label(attrs);
+        let bare_label_raw = norm_label_raw.trim_end_matches(['(', ')']);
+        // Token-join both sides for the #1503 tokenized match (`search_tokens`
+        // strips trailing `()`); `search_tokens` lowercases, so pass `nid` directly.
+        let node_term = search_tokens(&norm_label_raw).join(" ");
         let nid_term = search_tokens(nid).join(" ");
         // Match the source-file path on its slash-normalized full form, NOT
         // tokenized. graphify-py compares tokenized source paths (serve.py
@@ -802,15 +940,26 @@ pub fn find_node(graph: &Graph, label: &str) -> Vec<String> {
         if !source_path.is_empty() && query_path == source_path {
             source_exact.push(nid.clone());
             if attrs.get("source_location").and_then(Value::as_str) == Some("L1")
-                && get_norm_label(attrs) == query_basename
+                && norm_label_raw == query_basename
             {
                 preferred.push(nid.clone());
             }
-        } else if term == node_term || term == nid_term {
+        } else if term == node_term
+            || term == nid_term
+            || norm_query == norm_label_raw
+            || norm_query == bare_label_raw
+        {
             exact.push(nid.clone());
-        } else if node_term.starts_with(&term) || nid_term.starts_with(&term) {
+        } else if node_term.starts_with(&term)
+            || nid_term.starts_with(&term)
+            || norm_label_raw.starts_with(&norm_query)
+            || bare_label_raw.starts_with(&norm_query)
+        {
             prefix.push(nid.clone());
-        } else if node_term.contains(&term) || nid_term.contains(&term) {
+        } else if node_term.contains(&term)
+            || nid_term.contains(&term)
+            || norm_label_raw.contains(&norm_query)
+        {
             substring.push(nid.clone());
         }
     }
@@ -962,6 +1111,27 @@ fn is_searchable(term: &str) -> bool {
     true
 }
 
+/// English question/filler words dropped from query terms so content words
+/// drive BFS seeding: "how does the frontier cache work" seeds on
+/// `frontier`/`cache`, not `how`/`the`/`work` (which prefix-match prose labels
+/// at the 100x tier). Applied to query terms only — node text is never
+/// filtered, so a symbol literally named `work` stays findable via
+/// explain/path. `work`/`works`/`working` are included as the most common
+/// question phrasing ("how does X work").
+static QUERY_STOPWORDS: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "how", "what", "why", "when", "where", "which", "who", "whom", "whose", "does", "did",
+            "is", "are", "was", "were", "be", "been", "being", "can", "could", "should", "would",
+            "will", "shall", "may", "might", "must", "has", "have", "had", "the", "and", "but",
+            "not", "for", "from", "with", "without", "into", "onto", "off", "that", "this",
+            "these", "those", "there", "here", "its", "their", "them", "they", "about", "any",
+            "all", "some", "work", "works", "working",
+        ]
+        .into_iter()
+        .collect()
+    });
+
 /// Split a query string into searchable terms.
 ///
 /// Terms are lowercased; short tokens (≤ 2 chars) are dropped only when
@@ -991,7 +1161,14 @@ pub fn query_terms(question: &str) -> Vec<String> {
             }
         }
     }
-    out
+    // Drop question/filler words so content words drive seeding, falling back to
+    // the unfiltered terms when the query is all stopwords ("how does it work").
+    let content: Vec<String> = out
+        .iter()
+        .filter(|t| !QUERY_STOPWORDS.contains(t.as_str()))
+        .cloned()
+        .collect();
+    if content.is_empty() { out } else { content }
 }
 
 /// High-level graph query: search, traverse, and render as text.
@@ -1010,7 +1187,7 @@ pub fn query_graph_text<S: BuildHasher>(
     let terms: Vec<String> = query_terms(question);
     let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
     let scored = score_nodes(graph, &term_refs, idf_cache);
-    let start_nodes = pick_seeds(&scored, 3, 0.2);
+    let start_nodes = pick_seeds_diverse(&scored, 3, 0.2, graph, &term_refs, idf_cache);
     if start_nodes.is_empty() {
         return "No matching nodes found.".to_string();
     }

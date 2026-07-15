@@ -353,8 +353,12 @@ pub fn detect_incremental_with_manifest(
     follow_symlinks: Option<bool>,
     kind: &str,
     extra_excludes: Option<&[String]>,
+    cache_root: Option<&Path>,
 ) -> Result<IncrementalResult, DetectError> {
-    let full = crate::walk::detect(root, follow_symlinks, extra_excludes);
+    // #1747: route the word-count / stat-index cache under `cache_root` (the
+    // `--out` dir) rather than the scanned corpus on the incremental run too.
+    let full =
+        crate::walk::detect_with_cache_root(root, follow_symlinks, extra_excludes, cache_root);
     // Load with `root` so a manifest written with relative keys (post-#777) is
     // re-anchored to the absolute form the rest of this function compares
     // against. Legacy absolute-keyed manifests pass through unchanged.

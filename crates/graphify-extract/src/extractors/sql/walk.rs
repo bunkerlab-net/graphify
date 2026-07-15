@@ -49,6 +49,7 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                 source_location: Some(format!("L{ln}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
             edges.push(Edge {
                 external: false,
@@ -61,6 +62,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
     };
@@ -137,6 +140,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                                                 weight: 1.0,
                                                 context: None,
                                                 confidence_score: None,
+                                                deferred: false,
+                                                metadata: None,
                                             });
                                             seen_refs.insert(rn.to_lowercase());
                                         }
@@ -190,6 +195,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                                                             weight: 1.0,
                                                             context: None,
                                                             confidence_score: None,
+                                                            deferred: false,
+                                                            metadata: None,
                                                         });
                                                         seen_refs.insert(rn.to_lowercase());
                                                     }
@@ -227,6 +234,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                                             weight: 1.0,
                                             context: None,
                                             confidence_score: None,
+                                            deferred: false,
+                                            metadata: None,
                                         });
                                         seen_refs.insert(rn.to_lowercase());
                                     }
@@ -319,6 +328,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                                                 weight: 1.0,
                                                 context: None,
                                                 confidence_score: None,
+                                                deferred: false,
+                                                metadata: None,
                                             });
                                         }
                                     }
@@ -379,6 +390,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -415,6 +428,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
                 let mut seen_tbls: HashSet<String> = HashSet::new();
@@ -440,6 +455,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                 }
@@ -468,6 +485,8 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                 }

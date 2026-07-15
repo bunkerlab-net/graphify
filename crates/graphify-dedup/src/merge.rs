@@ -311,6 +311,25 @@ fn source_file(node: &Value) -> &str {
         .unwrap_or("")
 }
 
+/// Emit the cross-chunk id-collision WARNING (#1504) when a duplicate id comes
+/// from a different `source_file` than the node already kept. Same-file
+/// duplicates (`existing_sf == new_sf`) are silent. The dropped node is always
+/// the later one (first-writer-wins), so this surfaces otherwise-silent data
+/// loss when two distinct source files resolve to the same node id.
+fn warn_cross_chunk_collision(nid: &str, existing_sf: &str, new_sf: &str) {
+    if existing_sf == new_sf {
+        return;
+    }
+    eprintln!(
+        "[graphify] WARNING: node '{nid}' from '{new_sf}' collides with a node \
+         already kept from '{existing_sf}' — the second node will be dropped. \
+         This is a cross-chunk ID collision between two different source files \
+         (commonly two files sharing a base name across directories). To avoid \
+         data loss, run 'graphify extract' per subfolder and merge with \
+         'graphify merge-graphs'."
+    );
+}
+
 /// Block label-based merging of file-anchored non-code nodes across files (#1284).
 ///
 /// `rationale`/`document` nodes are docstring- and heading-derived and as
@@ -547,12 +566,18 @@ pub fn run(
         return Ok((nodes.to_vec(), edges.to_vec()));
     }
 
-    // Pre-dedup: keep first occurrence of each id.
+    // Pre-dedup: keep first occurrence of each id (first-writer-wins), warning
+    // on cross-chunk id collisions from differing source files (#1504).
     let mut seen_ids: IndexMap<String, &Value> = IndexMap::new();
     for node in nodes {
         let nid = node_id(node);
-        if !nid.is_empty() {
-            seen_ids.entry(nid.to_string()).or_insert(node);
+        if nid.is_empty() {
+            continue;
+        }
+        if let Some(&existing) = seen_ids.get(nid) {
+            warn_cross_chunk_collision(nid, source_file(existing), source_file(node));
+        } else {
+            seen_ids.insert(nid.to_string(), node);
         }
     }
     let unique_nodes: Vec<&Value> = seen_ids.values().copied().collect();

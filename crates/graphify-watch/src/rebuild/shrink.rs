@@ -13,6 +13,17 @@ use serde_json::Value;
 
 use crate::error::WatchError;
 
+/// A shrink-guard function: the production pipeline uses [`check_shrink`];
+/// `test_support` supplies a scoped rejecting variant so the marker-refusal
+/// contract can be exercised without global state or environment coupling.
+pub type ShrinkChecker = fn(
+    bool,
+    &Value,
+    &Value,
+    Option<&Path>,
+    bool,
+    Option<&HashSet<String>>,
+) -> Result<(), WatchError>;
 /// Return `Ok(())` when the node count is acceptable, `Err` when the new graph
 /// has shrunk relative to the existing one.
 ///

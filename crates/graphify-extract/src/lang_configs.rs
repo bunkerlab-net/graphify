@@ -13,9 +13,85 @@ use std::sync::LazyLock;
 
 use crate::generic::{LangConfig, LangId, get_c_func_name, get_cpp_func_name};
 use crate::import_handlers::{
-    import_c, import_csharp, import_java, import_js, import_kotlin, import_lua, import_php,
-    import_python, import_scala, import_swift,
+    import_c, import_java, import_js, import_kotlin, import_lua, import_php, import_python,
+    import_scala, import_swift,
 };
+
+/// Lower-cased file extension (no leading dot) of `source_file`, or `None` when
+/// it has none. Mirrors Python `Path(str(source_file)).suffix.lower()`.
+fn ext_lower(source_file: &str) -> Option<String> {
+    std::path::Path::new(source_file)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+}
+
+/// `true` when `path` ends with any of `suffixes`, compared ASCII
+/// case-insensitively without allocating. File extensions are ASCII, so a
+/// trailing byte-slice compare is correct and avoids lowercasing the whole path
+/// on every call in the hot resolution loops.
+#[must_use]
+pub(crate) fn ends_with_suffix_ci(path: &str, suffixes: &[&str]) -> bool {
+    let bytes = path.as_bytes();
+    suffixes.iter().any(|s| {
+        let s = s.as_bytes();
+        bytes.len() >= s.len() && bytes[bytes.len() - s.len()..].eq_ignore_ascii_case(s)
+    })
+}
+
+/// True when the file's language resolves identifiers case-insensitively (#1581):
+/// PHP, SQL, Nim. Everywhere else case is semantic (`Path` the class vs `PATH`
+/// the env var are distinct), so folding manufactures false edges / super-hubs.
+#[must_use]
+pub(crate) fn lang_is_case_insensitive(source_file: &str) -> bool {
+    matches!(
+        ext_lower(source_file).as_deref(),
+        Some(
+            "php"
+                | "phtml"
+                | "php3"
+                | "php4"
+                | "php5"
+                | "php7"
+                | "phps"
+                | "sql"
+                | "nim"
+                | "nims"
+                | "nimble"
+        )
+    )
+}
+
+/// Interop family of the file's language, or `None` when unknown / not code
+/// (bf7fa50). A call in one family never binds by name to a definition in
+/// another. Families are grouped by REAL interop so legitimate cross-language
+/// resolution keeps working: JVM (Kotlin/Java/Scala/Groovy), native
+/// (C/C++/Objective-C/CUDA + Swift↔ObjC bridging), and the JS/TS module graph
+/// (JS/TS variants plus Vue/Svelte/Astro SFCs). Extensions absent from the map
+/// resolve to `None` and are never filtered — the previous permissive default.
+#[must_use]
+pub(crate) fn lang_family(source_file: &str) -> Option<&'static str> {
+    Some(match ext_lower(source_file).as_deref()? {
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" | "vue" | "svelte"
+        | "astro" => "jsts",
+        "java" | "kt" | "kts" | "scala" | "groovy" | "gradle" => "jvm",
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" | "metal" | "m" | "mm"
+        | "swift" => "native",
+        "py" => "python",
+        "go" => "go",
+        "rs" => "rust",
+        "rb" => "ruby",
+        "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => "php",
+        "cs" | "razor" | "cshtml" | "xaml" => "dotnet",
+        "lua" | "luau" => "lua",
+        "zig" => "zig",
+        "ex" | "exs" => "elixir",
+        "jl" => "julia",
+        "dart" => "dart",
+        "sh" | "bash" => "shell",
+        "ps1" | "psm1" | "psd1" => "powershell",
+        _ => return None,
+    })
+}
 
 // ── Python ────────────────────────────────────────────────────────────────────
 
@@ -49,7 +125,11 @@ pub static PYTHON: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 pub static JAVASCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_javascript::LANGUAGE.into(),
     class_types: &["class_declaration"],
-    function_types: &["function_declaration", "method_definition"],
+    function_types: &[
+        "function_declaration",
+        "generator_function_declaration",
+        "method_definition",
+    ],
     // `export_statement` is intentionally treated as import-like so the JS
     // import handler can resolve re-exports — both `export { x } from '...'`
     // and `export * from '...'` reach module specifiers that need cross-file
@@ -66,6 +146,7 @@ pub static JAVASCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     call_accessor_field: "property",
     function_boundary_types: &[
         "function_declaration",
+        "generator_function_declaration",
         "arrow_function",
         "method_definition",
     ],
@@ -89,7 +170,12 @@ pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
         "enum_declaration",
         "type_alias_declaration",
     ],
-    function_types: &["function_declaration", "method_definition"],
+    function_types: &[
+        "function_declaration",
+        "generator_function_declaration",
+        "method_definition",
+        "method_signature",
+    ],
     // `export_statement` is intentionally treated as import-like so the JS
     // import handler can resolve re-exports — both `export { x } from '...'`
     // and `export * from '...'` reach module specifiers that need cross-file
@@ -106,6 +192,7 @@ pub static TYPESCRIPT: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     call_accessor_field: "property",
     function_boundary_types: &[
         "function_declaration",
+        "generator_function_declaration",
         "arrow_function",
         "method_definition",
     ],
@@ -129,7 +216,12 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
         "enum_declaration",
         "type_alias_declaration",
     ],
-    function_types: &["function_declaration", "method_definition"],
+    function_types: &[
+        "function_declaration",
+        "generator_function_declaration",
+        "method_definition",
+        "method_signature",
+    ],
     // `export_statement` is intentionally treated as import-like so the JS
     // import handler can resolve re-exports — both `export { x } from '...'`
     // and `export * from '...'` reach module specifiers that need cross-file
@@ -146,6 +238,7 @@ pub static TYPESCRIPT_TSX: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     call_accessor_field: "property",
     function_boundary_types: &[
         "function_declaration",
+        "generator_function_declaration",
         "arrow_function",
         "method_definition",
     ],
@@ -278,7 +371,12 @@ pub static CPP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
 /// Pre-built [`LangConfig`] for Ruby, using tree-sitter-ruby.
 pub static RUBY: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     language: tree_sitter_ruby::LANGUAGE.into(),
-    class_types: &["class"],
+    // `module Foo` is a container node like `class Foo` in tree-sitter's Ruby
+    // grammar (name in a `constant` child, body in `body_statement`), so it gets a
+    // node and its methods attach via `method` (#1640). Without it, plain
+    // utility/`module_function` modules produced no node and their methods hung off
+    // the file via `contains` with dot-less labels.
+    class_types: &["class", "module"],
     function_types: &["method", "singleton_method"],
     import_types: &[],
     call_types: &["call"],
@@ -324,7 +422,9 @@ pub static CSHARP: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     call_accessor_field: "name",
     function_boundary_types: &["method_declaration"],
     lang_id: LangId::CSharp,
-    import_handler: Some(import_csharp),
+    // C# `using` imports are handled in the structural walk (they need the
+    // namespace scope stack), not via the generic handler slot (#1562).
+    import_handler: None,
     resolve_function_name: None,
     helper_fn_names: &[],
     container_bind_methods: &[],
@@ -345,7 +445,7 @@ pub static KOTLIN: LazyLock<LangConfig> = LazyLock::new(|| LangConfig {
     name_field: "name",
     name_fallback_child_types: &["simple_identifier", "identifier"],
     body_field: "body",
-    body_fallback_child_types: &["function_body", "class_body"],
+    body_fallback_child_types: &["function_body", "class_body", "enum_class_body"],
     call_function_field: "",
     call_accessor_node_types: &["navigation_expression"],
     call_accessor_field: "",

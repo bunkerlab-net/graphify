@@ -115,7 +115,7 @@ fn relativize_rewrites_absolute_paths() {
         "edges": [{"source": "a", "target": "b", "source_file": file.to_string_lossy()}],
         "hyperedges": [],
     });
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     let new_path = payload["nodes"][0]["source_file"]
         .as_str()
         .expect("string field");
@@ -126,13 +126,45 @@ fn relativize_rewrites_absolute_paths() {
 }
 
 #[test]
+fn relativize_scope_skips_paths_outside_watched_subtree() {
+    // #8d8d2b8: `scope` (the watched subtree) is NARROWER than `root` (the
+    // project). A source inside `root` but OUTSIDE `scope` - a sibling project's
+    // preserved node - must stay absolute. Without the gate it would be wrongly
+    // relativised against `root` (to `sibling/b.py`).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("test invariant");
+    let watched = root.join("watched");
+    let inside = watched.join("src").join("a.py");
+    let sibling = root.join("sibling").join("b.py");
+    fs::create_dir_all(inside.parent().expect("parent")).expect("mkdir inside");
+    fs::create_dir_all(sibling.parent().expect("parent")).expect("mkdir sibling");
+    fs::write(&inside, "x = 1\n").expect("write inside");
+    fs::write(&sibling, "y = 2\n").expect("write sibling");
+    let mut payload = json!({
+        "nodes": [
+            {"id": "inside", "source_file": inside.to_string_lossy()},
+            {"id": "sibling", "source_file": sibling.to_string_lossy()},
+        ],
+        "edges": [],
+        "hyperedges": [],
+    });
+    relativize_source_files(&mut payload, &root, Some(watched.as_path()));
+    assert_eq!(payload["nodes"][0]["source_file"], "watched/src/a.py");
+    assert_eq!(
+        payload["nodes"][1]["source_file"].as_str(),
+        Some(sibling.to_string_lossy().as_ref()),
+        "a sibling path inside root but outside the watched scope must stay absolute"
+    );
+}
+
+#[test]
 fn relativize_leaves_relative_paths_alone() {
     let mut payload = json!({
         "nodes": [{"id": "a", "source_file": "rel/path.py"}],
         "edges": [],
     });
     let root = std::env::current_dir().expect("test invariant");
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     assert_eq!(payload["nodes"][0]["source_file"], "rel/path.py");
 }
 
@@ -143,7 +175,7 @@ fn relativize_handles_missing_source_file() {
         "edges": [],
     });
     let root = std::env::current_dir().expect("test invariant");
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     // Should remain unchanged.
     assert!(payload["nodes"][0].get("source_file").is_none());
 }
@@ -152,7 +184,7 @@ fn relativize_handles_missing_source_file() {
 fn relativize_noop_on_non_object_payload() {
     let mut payload = json!([1, 2, 3]);
     let root = std::env::current_dir().expect("test invariant");
-    relativize_source_files(&mut payload, &root);
+    relativize_source_files(&mut payload, &root, None);
     assert_eq!(payload, json!([1, 2, 3]));
 }
 

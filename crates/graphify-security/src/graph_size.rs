@@ -15,9 +15,9 @@ use crate::error::SecurityError;
 pub const MAX_GRAPH_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Resolve the graph-file size cap in bytes, honoring `GRAPHIFY_MAX_GRAPH_BYTES`.
-///
 /// The value may be plain bytes (`671088640`) or carry an `MB` / `GB` suffix
-/// (`640MB`, `2GB` — case-insensitive, 1024-based multipliers). Falls back to
+/// (`640MB`, `2GB` — case-insensitive, binary multipliers: `MB` = 1 MiB =
+/// 1024×1024 bytes, `GB` = 1 GiB = 1024×1024×1024 bytes). Falls back to
 /// [`MAX_GRAPH_FILE_BYTES`] when the var is unset, blank, or unparseable. Read
 /// fresh on every call so the var can be set before any cap check applies.
 #[must_use]

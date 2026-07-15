@@ -13,10 +13,16 @@ use super::is_file_node;
 use crate::safe_community_name;
 
 /// Render the "Community Hubs (Navigation)" section.
+///
+/// By default emits a plain `- {label}` list. With `obsidian == true` it emits
+/// `[[_COMMUNITY_{safe}|{label}]]` wikilinks, which resolve only against the
+/// `_COMMUNITY_*.md` notes the opt-in `--obsidian` export creates; a default
+/// build has no such notes, so the plain form avoids dangling wikilinks (#1712).
 pub(crate) fn render_nav_hubs(
     lines: &mut Vec<String>,
     non_empty: &[(i64, &Vec<&str>)],
     community_labels: &HashMap<i64, &str>,
+    obsidian: bool,
 ) {
     lines.push(String::new());
     lines.push("## Community Hubs (Navigation)".to_string());
@@ -25,8 +31,12 @@ pub(crate) fn render_nav_hubs(
             .get(cid)
             .copied()
             .map_or_else(|| format!("Community {cid}"), ToString::to_string);
-        let safe = safe_community_name(&label);
-        lines.push(format!("- [[_COMMUNITY_{safe}|{label}]]"));
+        if obsidian {
+            let safe = safe_community_name(&label);
+            lines.push(format!("- [[_COMMUNITY_{safe}|{label}]]"));
+        } else {
+            lines.push(format!("- {label}"));
+        }
     }
 }
 

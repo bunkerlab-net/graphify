@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use graphify_analyze::{god_nodes, suggest_questions, surprising_connections};
 use graphify_build::Graph;
-use graphify_detect::{DetectResult, FileType, classify_file, detect};
+use graphify_detect::{DetectResult, detect};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
@@ -45,6 +45,8 @@ pub(crate) fn build_analysis(
     graph: &Graph,
     communities: &IndexMap<i64, Vec<String>>,
     root: &Path,
+    // (input, output) LLM token cost (#1694); `(0, 0)` when no LLM ran.
+    token_cost: (u64, u64),
 ) -> Value {
     let perf = std::env::var("GRAPHIFY_PERF_LOG").is_ok();
     let mut communities_json = serde_json::Map::new();
@@ -100,10 +102,12 @@ pub(crate) fn build_analysis(
         "cohesion": Value::Object(cohesion_json.clone()),
         "gods": gods.clone(),
         "surprises": surprising.clone(),
-        "tokens": json!({"input": 0u64, "output": 0u64}),
+        "tokens": json!({"input": token_cost.0, "output": token_cost.1}),
         "cohesion_scores": Value::Object(cohesion_json),
         "god_nodes": gods,
         "surprising_connections": surprising,
+        // `token_cost` is the form `graphify_report::render_report` reads (#1694).
+        "token_cost": json!({"input": token_cost.0, "output": token_cost.1}),
         "suggested_questions": suggested,
         "min_community_size": 3,
     })
@@ -124,16 +128,14 @@ pub(crate) fn detect_code_files(
         .map(|v| v.iter().map(|s| watch_path.join(s)).collect())
         .unwrap_or_default();
 
-    // Include document files that have AST extractors (e.g. .md, .mdx, .qmd).
+    // Include document files that have an AST extractor (e.g. `.md`/`.mdx`/`.qmd`,
+    // case-insensitively). Mirrors graphify-py's `_get_extractor(p) is not None`
+    // filter (watch.py) — the shared predicate keeps the two in lockstep and
+    // catches capitalised extensions the old hard-coded list missed.
     if let Some(docs) = detected.files.get("document") {
         for doc in docs {
             let p = watch_path.join(doc);
-            // A file has an extractor if classify_file says it's Code or if
-            // the file itself is a markdown-family file we know we can parse.
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or_default();
-            let has_extractor = matches!(classify_file(&p), Some(FileType::Code))
-                || matches!(ext, "md" | "mdx" | "qmd");
-            if has_extractor {
+            if graphify_extract::has_extractor(&p) {
                 code_files.push(p);
             }
         }

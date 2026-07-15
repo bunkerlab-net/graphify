@@ -25,6 +25,10 @@ pub struct Node {
     /// empty so a real project definition can still be rewired onto it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_file: Option<String>,
+    /// Optional node category serialised as `"type"` (e.g. a C# `namespace` node,
+    /// #1562). Distinct from `file_type` (always `"code"` here). Omitted when None.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub node_type: Option<String>,
     /// Optional extractor-specific metadata (e.g. MCP config nodes carry
     /// `{"mcp_kind": "mcp_server"}`). Omitted from output when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,6 +63,17 @@ pub struct Edge {
     /// BYOND `#include` of a file outside the corpus). Serialised only when set,
     /// mirroring graphify-py, which adds the key solely for unresolved includes.
     pub external: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    /// `true` for a deferred `import(...)` dependency (a JS/TS dynamic import):
+    /// a real edge kept in the graph, but excluded from file-cycle detection so
+    /// a static→dynamic back-import is not reported as a phantom cycle (#1241).
+    pub deferred: bool,
+    /// Optional extractor-specific edge metadata (e.g. a C# `using` import edge
+    /// carries `{"using_kind","target_fqn","alias","scope_kind","scope_id"}`; a
+    /// qualified type reference carries `{"qualified","ref_qualifier","ref_token"}`).
+    /// Omitted from output when absent (#1562).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<IndexMap<String, Value>>,
 }
 
 /// serde `skip_serializing_if` predicate: omit a `bool` field when it is `false`.
@@ -67,8 +82,22 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Which bespoke resolver claims a [`RawCall`]. A `.h` header routes to either
+/// the C++ or the Objective-C extractor by content, and both cross-file
+/// member-call resolvers activate on `.h`, so the source-file suffix alone can't
+/// separate them; the extractor stamps this instead. `None` for every other
+/// language, whose resolver gates on the file suffix. Mirrors graphify-py's
+/// per-`raw_call` `"lang"` tag (#1547/#1556).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawCallLang {
+    /// Emitted by the C++ generic walk (`extract_cpp`).
+    Cpp,
+    /// Emitted by the Objective-C extractor (`extract_objc`).
+    ObjC,
+}
+
 /// An unresolved call saved for cross-file resolution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RawCall {
     /// Node ID of the calling function or method.
     pub caller_nid: String,
@@ -90,6 +119,21 @@ pub struct RawCall {
     /// globally-unique method name (#1499). `None` for other languages, non-member
     /// calls, and receivers whose type is unknown or ambiguous.
     pub receiver_type: Option<String>,
+    /// Extractor that produced this call, used to claim `.h` member calls
+    /// unambiguously across the C++/ObjC resolvers. `None` for all other
+    /// languages (which gate on the file suffix). See [`RawCallLang`].
+    pub lang: Option<RawCallLang>,
+    /// `true` for an INDIRECT-dispatch reference: a callable named BY NAME (passed
+    /// as a call argument, listed in a dispatch table, bound/returned) rather than
+    /// invoked. Deferred to the cross-file resolver when the name is defined in
+    /// another file; resolves to a distinct INFERRED `indirect_call` edge, never a
+    /// `calls` edge, and only when the target is a real callable. `false` for a
+    /// normal call. Mirrors graphify-py's `rc["indirect"]` flag (#1565/#1566).
+    pub indirect: bool,
+    /// Dispatch context for an `indirect` `raw_call`: `"argument"`, `"collection"`,
+    /// `"assignment"`, `"return"`, or `"getattr"`. Carried through to the emitted
+    /// `indirect_call` edge's `context`. `None` for a normal call.
+    pub context: Option<String>,
 }
 
 /// Result of extracting a single file.

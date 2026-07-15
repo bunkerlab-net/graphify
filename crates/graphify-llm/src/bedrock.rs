@@ -412,6 +412,7 @@ pub fn call_bedrock_plain(
     region: &str,
     prompt: &str,
     max_tokens: u32,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     let client = client_for(region);
     let messages = vec![
@@ -451,6 +452,18 @@ pub fn call_bedrock_plain(
                 text.push_str(t);
             }
         }
+    }
+    if let Some(sink) = usage {
+        // Record on every call the sink is configured for, matching the other
+        // backends (e.g. azure): a response missing usage data counts as (0, 0)
+        // rather than being dropped from the tally.
+        let (input, output_t) = output.usage().map_or((0, 0), |u| {
+            (
+                u64::try_from(u.input_tokens()).unwrap_or(0),
+                u64::try_from(u.output_tokens()).unwrap_or(0),
+            )
+        });
+        sink.record(input, output_t);
     }
     Ok(text)
 }

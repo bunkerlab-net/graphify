@@ -45,13 +45,14 @@ impl FileType {
 /// entry sits at the tail of the TypeScript-family run rather than in the
 /// middle of an unrelated group.
 pub const CODE_EXTENSIONS: &[&str] = &[
-    "py", "ts", "tsx", "js", "jsx", "mjs", "ejs", "ets", "go", "rs", "java", "groovy", "gradle",
-    "cpp", "cc", "cxx", "c", "h", "hpp", "cu", "cuh", "metal", "rb", "swift", "kt", "kts", "cs",
-    "scala", "php", "lua", "luau", "toc", "zig", "ps1", "psm1", "psd1", "ex", "exs", "m", "mm",
-    "jl", "vue", "svelte", "astro", "dart", "v", "sv", "svh", "sql", "r", "f", "F", "f90", "F90",
-    "f95", "F95", "f03", "F03", "f08", "F08", "pas", "pp", "dpr", "dpk", "lpr", "inc", "dfm",
-    "lfm", "lpk", "sh", "bash", "json", "tf", "tfvars", "hcl", "dm", "dme", "dmi", "dmm", "dmf",
-    "sln", "slnx", "csproj", "fsproj", "vbproj", "xaml", "razor", "cshtml", "cls", "trigger",
+    "py", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "ejs", "ets", "go", "rs", "java",
+    "groovy", "gradle", "cpp", "cc", "cxx", "c", "h", "hpp", "cu", "cuh", "metal", "rb", "swift",
+    "kt", "kts", "cs", "scala", "php", "lua", "luau", "toc", "zig", "ps1", "psm1", "psd1", "ex",
+    "exs", "m", "mm", "jl", "vue", "svelte", "astro", "dart", "v", "sv", "svh", "sql", "r", "f",
+    "F", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08", "pas", "pp", "dpr", "dpk", "lpr",
+    "inc", "dfm", "lfm", "lpk", "sh", "bash", "json", "tf", "tfvars", "hcl", "dm", "dme", "dmi",
+    "dmm", "dmf", "sln", "slnx", "csproj", "fsproj", "vbproj", "xaml", "razor", "cshtml", "cls",
+    "trigger",
 ];
 
 /// Package-manifest filename (lowercased) → ecosystem tag.
@@ -256,7 +257,3 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
 
     None
 }
-
-#[cfg(test)]
-#[path = "extensions_tests.rs"]
-mod extensions_tests;

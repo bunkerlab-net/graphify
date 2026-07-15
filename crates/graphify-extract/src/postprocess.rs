@@ -220,6 +220,13 @@ pub fn disambiguate_colliding_node_ids(
         {
             continue;
         }
+        // Canonical C# namespace nodes (#1562) likewise share one digest id
+        // across the files that declare the namespace; they are already
+        // deduplicated to a single node upstream, but exempt them here too so a
+        // future duplicate can never be scattered into file-qualified ids.
+        if node.node_type.as_deref() == Some("namespace") {
+            continue;
+        }
         if !node.id.is_empty() {
             by_id.entry(node.id.clone()).or_default().push(idx);
         }
@@ -378,17 +385,27 @@ fn rewrite_edge_endpoints(
 ///
 /// Mirrors `_rewire_unique_stub_nodes` in the Python source.
 pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
-    let mut real_by_label: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut real_by_label: HashMap<String, Vec<usize>> = HashMap::new(); // exact-case (all langs)
+    let mut real_by_label_ci: HashMap<String, Vec<usize>> = HashMap::new(); // case-INSENSITIVE-lang reals only
     let mut stub_indices: Vec<usize> = Vec::new();
 
     for (idx, node) in nodes.iter().enumerate() {
-        let key = node_label_key(&node.label);
+        let key = node_label_key(&node.label, false);
         if key.is_empty() {
             continue;
         }
         if !node.source_file.is_empty() {
             if is_type_like_definition(node) {
+                // Match stubs case-SENSITIVELY: a `Path` reference must not rewire to a
+                // `PATH` env var (#1581). Fold only for genuinely case-insensitive
+                // languages, where `foo` legitimately resolves to `Foo`.
                 real_by_label.entry(key).or_default().push(idx);
+                if crate::lang_configs::lang_is_case_insensitive(&node.source_file) {
+                    real_by_label_ci
+                        .entry(node_label_key(&node.label, true))
+                        .or_default()
+                        .push(idx);
+                }
             }
             continue;
         }
@@ -402,12 +419,21 @@ pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
         if stub.id.is_empty() {
             continue;
         }
-        let candidates = real_by_label
-            .get(&node_label_key(&stub.label))
+        let mut candidates = real_by_label
+            .get(&node_label_key(&stub.label, false))
             .cloned()
             .unwrap_or_default();
         if candidates.len() != 1 {
-            continue;
+            // No unique exact match — fall back to a case-insensitive match, but only
+            // against case-insensitive-language definitions (so a case-sensitive `PATH`
+            // can never absorb a `Path` reference).
+            candidates = real_by_label_ci
+                .get(&node_label_key(&stub.label, true))
+                .cloned()
+                .unwrap_or_default();
+            if candidates.len() != 1 {
+                continue;
+            }
         }
         let target_id = nodes[candidates[0]].id.clone();
         if !target_id.is_empty() && target_id != stub.id {
@@ -432,9 +458,14 @@ pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
     nodes.retain(|n| !drop_ids.contains(&n.id));
 }
 
-fn node_label_key(label: &str) -> String {
+fn node_label_key(label: &str, fold: bool) -> String {
     let trimmed = label.trim();
-    NON_ALNUM.replace_all(trimmed, "").to_lowercase()
+    let key = NON_ALNUM.replace_all(trimmed, "");
+    if fold {
+        key.to_lowercase()
+    } else {
+        key.into_owned()
+    }
 }
 
 fn is_type_like_definition(node: &Node) -> bool {
@@ -585,6 +616,149 @@ pub fn merge_swift_extensions(paths: &[PathBuf], nodes: &mut Vec<Node>, edges: &
         rewritten.push(edge);
     }
     *edges = rewritten;
+}
+
+/// Implementation file-extension pairing for the decl/def class merge.
+const DECLDEF_IMPL_SUFFIXES: [&str; 6] = ["m", "mm", "cpp", "cc", "cxx", "c"];
+
+/// `(dir, base_stem)` for a header/impl source file, else `None`. The base stem
+/// strips an Objective-C category suffix (`Foo+Cat.m` -> `Foo`) so a category impl pairs
+/// with its `Foo.h` declaration. Files whose extension is neither a header nor an
+/// impl extension return `None` and are never merged. Mirrors
+/// `_decldef_class_stem`.
+fn decldef_class_stem(source_file: &str) -> Option<(String, String)> {
+    if source_file.is_empty() {
+        return None;
+    }
+    let p = Path::new(source_file);
+    let suffix = p.extension()?.to_string_lossy().to_lowercase();
+    if !HEADER_SUFFIXES.contains(&suffix.as_str())
+        && !DECLDEF_IMPL_SUFFIXES.contains(&suffix.as_str())
+    {
+        return None;
+    }
+    let stem_full = p.file_stem()?.to_string_lossy().into_owned();
+    let stem = stem_full.split('+').next().unwrap_or_default().to_string();
+    if stem.is_empty() {
+        return None;
+    }
+    let dir = p.parent().map_or_else(String::new, |d| {
+        let s = d.to_string_lossy();
+        if s.is_empty() {
+            ".".to_string()
+        } else {
+            s.into_owned()
+        }
+    });
+    Some((dir, stem))
+}
+
+/// `true` when a source file carries a header extension.
+fn is_decldef_header(source_file: &str) -> bool {
+    Path::new(source_file)
+        .extension()
+        .is_some_and(|e| HEADER_SUFFIXES.contains(&e.to_string_lossy().to_lowercase().as_str()))
+}
+
+/// Merge a class (and its methods) declared in a header with its definition in a
+/// sibling impl file into ONE node, for C/C++/ObjC (#1547, #1556).
+///
+/// A class declared in `Foo.h` (`class Foo` / `@interface Foo`) and defined in
+/// the sibling `Foo.cpp` / `Foo.m` (`@implementation Foo`, plus — after the C++
+/// qualified-name fix — out-of-class method definitions `Foo::bar`) produces TWO
+/// nodes per symbol that share an id (both keyed off the extension-less file
+/// stem) and differ only in `source_file`/`label`. Left alone,
+/// `disambiguate_colliding_node_ids` SPLITS them by path, tripping every
+/// resolver's single-definition god-node guard. This pass runs BEFORE the id
+/// remap and collapses each such id-collision onto the header (declaration)
+/// variant; because the colliding nodes already share an id, no edge re-pointing
+/// is needed — only the redundant duplicate is dropped and now-identical edges
+/// de-duplicated. Mirrors graphify-py `_merge_decl_def_classes`.
+///
+/// GOD-NODE GUARD: the collapse fires ONLY when every node in an id-collision
+/// group is from one sibling header/impl family (same dir, same base stem, header
+/// paired with impl) AND the group has exactly ONE header. Two same-named classes
+/// in different directories never collide on id, so they are never merged.
+pub fn merge_decl_def_classes(nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
+    // Group every code node index by id.
+    let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, n) in nodes.iter().enumerate() {
+        if n.file_type != "code" || n.id.is_empty() || n.source_file.is_empty() {
+            continue;
+        }
+        by_id.entry(n.id.as_str()).or_default().push(i);
+    }
+
+    // Per id-collision, keep the (single) header node and drop the rest — but only
+    // for a clean single-header sibling family.
+    let mut drop_idx: HashSet<usize> = HashSet::new();
+    for group in by_id.values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let mut sibling_keys: HashSet<(String, String)> = HashSet::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut ok = true;
+        for &idx in group {
+            let sf = nodes[idx].source_file.as_str();
+            let Some(ds) = decldef_class_stem(sf) else {
+                ok = false;
+                break;
+            };
+            sibling_keys.insert(ds);
+            if is_decldef_header(sf) {
+                headers.push(idx);
+            }
+        }
+        if !ok || sibling_keys.len() != 1 || headers.len() != 1 {
+            continue;
+        }
+        let keeper = headers[0];
+        for &idx in group {
+            if idx != keeper {
+                drop_idx.insert(idx);
+            }
+        }
+    }
+
+    if drop_idx.is_empty() {
+        return;
+    }
+
+    // Ids that actually collapsed (dropped duplicates share the keeper's id). The
+    // edge cleanup below is scoped to these so it never touches unrelated edges.
+    let merged_ids: HashSet<String> = drop_idx.iter().map(|&i| nodes[i].id.clone()).collect();
+
+    // Drop the redundant duplicate nodes (the surviving header keeps its own
+    // label/source_file; edges are unchanged because the id is identical).
+    let mut idx = 0usize;
+    nodes.retain(|_| {
+        let keep = !drop_idx.contains(&idx);
+        idx += 1;
+        keep
+    });
+
+    // De-dup now-identical edges and drop self-loops the collapse created, scoped
+    // to edges touching a merged id. graphify-py sweeps ALL edges, but that is
+    // corpus-dependent: it runs only when some merge happened, so an unrelated
+    // file's pre-existing self-loop / duplicate would be dropped only in the
+    // presence of an unrelated header/impl pair. Normalise only what the merge
+    // actually affected (DIVERGENCE from the reference's global sweep).
+    let mut seen: HashSet<(String, String, String, Option<String>)> = HashSet::new();
+    edges.retain(|e| {
+        if !merged_ids.contains(&e.source) && !merged_ids.contains(&e.target) {
+            return true;
+        }
+        if e.source == e.target {
+            return false;
+        }
+        seen.insert((
+            e.source.clone(),
+            e.target.clone(),
+            e.relation.clone(),
+            e.context.clone(),
+        ))
+    });
 }
 
 fn collect_swift_extension_names(

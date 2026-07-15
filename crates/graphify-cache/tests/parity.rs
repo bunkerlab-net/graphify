@@ -1,14 +1,15 @@
 //! Parity tests against `graphify-py/tests/test_cache.py`.
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, unsafe_code)]
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 use graphify_cache::{
-    _reset_stat_index_for_tests, body_content, cache_dir, cache_dir_versioned, cached_files,
-    clear_cache, ensure_atexit_flush_registered, file_hash, load_cached, load_cached_versioned,
-    prune_semantic_cache, save_cached, save_cached_versioned,
+    _reset_stat_index_for_tests, StatIndexFlushGuard, body_content, cache_dir, cache_dir_versioned,
+    cached_files, cached_word_count, clear_cache, file_hash, flush_stat_index, load_cached,
+    load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
+    save_semantic_cache,
 };
 use serde_json::{Value, json};
 use serial_test::serial;
@@ -222,15 +223,59 @@ fn cache_dir_creates_kind_subdir() {
     assert!(dir.ends_with("semantic"));
 }
 
-// ── ensure_atexit_flush_registered ───────────────────────────────────────────
+// ── StatIndexFlushGuard: flush on normal process exit (#1656) ─────────────────
 
 #[test]
-fn ensure_atexit_flush_registered_is_idempotent() {
-    // Calling multiple times must not panic or have visible side-effects.
-    ensure_atexit_flush_registered();
-    ensure_atexit_flush_registered();
-    ensure_atexit_flush_registered();
-    // No assertion needed beyond "did not panic".
+fn stat_index_flush_guard_persists_on_process_exit() {
+    // The #1656 cache only helps if it survives to disk between runs. The guard
+    // must flush when it drops at scope/process exit, with NO explicit
+    // `flush_stat_index()` call. A real subprocess proves this: the prior
+    // `static`-owned sentinel would never drop and so never write the index.
+    const ROOT_ENV: &str = "GRAPHIFY_FLUSH_TEST_ROOT";
+    const FILE_ENV: &str = "GRAPHIFY_FLUSH_TEST_FILE";
+
+    if let (Ok(root), Ok(file)) = (std::env::var(ROOT_ENV), std::env::var(FILE_ENV)) {
+        // CHILD: mutate the index, then return so the guard drops on exit.
+        let _guard = StatIndexFlushGuard::new();
+        let root = std::path::PathBuf::from(root);
+        let file = std::path::PathBuf::from(&file);
+        let parent = file.parent().unwrap_or_else(|| Path::new("."));
+        assert_eq!(cached_word_count(&file, parent, |_| 7, Some(&root)), 7);
+        return;
+    }
+
+    // PARENT: re-exec ourselves as the child with a fresh temp root + corpus.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("out");
+    let file = tmp.path().join("corpus").join("note.txt");
+    std::fs::create_dir_all(file.parent().expect("parent")).expect("create_dir_all");
+    write_text(&file, "some words here");
+
+    let exe = std::env::current_exe().expect("current_exe");
+    let status = std::process::Command::new(exe)
+        .args([
+            "stat_index_flush_guard_persists_on_process_exit",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(ROOT_ENV, &root)
+        .env(FILE_ENV, &file)
+        .env_remove("GRAPHIFY_OUT")
+        .status()
+        .expect("spawn child test process");
+    assert!(status.success(), "child test process must exit 0");
+
+    // The child never called flush_stat_index(); only the guard's drop did.
+    let idx = root
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let text = std::fs::read_to_string(&idx)
+        .expect("the stat index must be flushed to disk on the child's normal exit");
+    assert!(
+        text.contains("note.txt"),
+        "the flushed index must hold the counted file: {text}"
+    );
 }
 
 // ── #1259: frontmatter delimiters must be whole `---` lines ──────────────────
@@ -749,4 +794,335 @@ fn semantic_prune_ignores_ast_and_tmp() {
     assert!(!semantic_dir.join("deadbeef.json").exists());
     assert!(tmp_entry.exists(), "*.tmp temporaries must not be swept");
     assert_eq!(ast_json(&ast_dir), 1, "AST entries must not be touched");
+}
+
+#[test]
+#[serial]
+fn test_save_semantic_cache_overwrites_by_default() {
+    // Default save_semantic_cache replaces a file's cached entry (the final,
+    // authoritative write in the extract pipeline).
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n");
+    save_semantic_cache(
+        &[json!({"id": "a", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        false,
+    )
+    .expect("save 1");
+    save_semantic_cache(
+        &[json!({"id": "b", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        false,
+    )
+    .expect("save 2");
+    let cached = load_cached(&f, tmp.path(), "semantic").expect("cached");
+    let ids: HashSet<&str> = cached["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        HashSet::from(["b"]),
+        "default must overwrite, not accumulate"
+    );
+}
+
+#[test]
+#[serial]
+fn test_save_semantic_cache_merge_existing_unions() {
+    // #1715: merge_existing=true concatenates (prev + new, ordered, no dedup)
+    // across all three arrays so a file split across chunks keeps every slice.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("big.md");
+    write_text(&f, "# Big\n");
+    save_semantic_cache(
+        &[json!({"id": "a", "source_file": "big.md"})],
+        &[json!({"source": "a", "target": "x", "source_file": "big.md"})],
+        &[json!({"id": "h1", "nodes": ["a"], "source_file": "big.md"})],
+        tmp.path(),
+        true,
+    )
+    .expect("chunk 1");
+    save_semantic_cache(
+        &[json!({"id": "b", "source_file": "big.md"})],
+        &[json!({"source": "b", "target": "y", "source_file": "big.md"})],
+        &[json!({"id": "h2", "nodes": ["b"], "source_file": "big.md"})],
+        tmp.path(),
+        true,
+    )
+    .expect("chunk 2");
+    let cached = load_cached(&f, tmp.path(), "semantic").expect("cached");
+    let field = |k: &str, id_key: &str| -> Vec<String> {
+        cached[k]
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|v| v[id_key].as_str().map(str::to_string))
+            .collect()
+    };
+    // Ordered prev + new, no dedup — verifies both accumulation and ordering.
+    assert_eq!(field("nodes", "id"), vec!["a", "b"]);
+    assert_eq!(field("edges", "source"), vec!["a", "b"]);
+    assert_eq!(field("hyperedges", "id"), vec!["h1", "h2"]);
+}
+
+// ── #1656: word-count caching ─────────────────────────────────────────────────
+// Ports `graphify-py/tests/test_word_count_cache.py`. Word counts are cached
+// against each file's stat signature so `detect()` doesn't re-parse every
+// unchanged PDF/docx on each run just to size the corpus.
+
+#[test]
+#[serial]
+fn word_count_cached_until_file_changes() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.txt");
+    write_text(&f, "one two three four five");
+
+    let calls = std::cell::Cell::new(0u32);
+    let compute = |p: &Path| -> u64 {
+        calls.set(calls.get() + 1);
+        fs::read_to_string(p)
+            .unwrap_or_default()
+            .split_whitespace()
+            .count() as u64
+    };
+
+    assert_eq!(cached_word_count(&f, tmp.path(), compute, None), 5);
+    assert_eq!(calls.get(), 1);
+    // Second call, file unchanged → served from cache, compute NOT re-run.
+    assert_eq!(cached_word_count(&f, tmp.path(), compute, None), 5);
+    assert_eq!(calls.get(), 1);
+
+    // Change the file → recompute.
+    write_text(&f, "only three words now");
+    bump_mtime(&f);
+    assert_eq!(cached_word_count(&f, tmp.path(), compute, None), 4);
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+#[serial]
+fn word_count_augments_existing_hash_entry() {
+    // `cached_word_count` must not clobber a hash already stored for the file: the
+    // hash still resolves from the fastpath afterwards, and the count is correct.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("m.py");
+    write_text(&f, "x = 1\n"); // -> ["x", "=", "1"] == 3 tokens
+    let h = file_hash(&f, tmp.path()).expect("hash");
+    assert!(!h.is_empty());
+    let wc = cached_word_count(
+        &f,
+        tmp.path(),
+        |p| {
+            fs::read_to_string(p)
+                .unwrap_or_default()
+                .split_whitespace()
+                .count() as u64
+        },
+        None,
+    );
+    assert_eq!(wc, 3);
+    // The hash entry survives alongside the word_count (fastpath still returns it).
+    assert_eq!(file_hash(&f, tmp.path()).expect("hash"), h);
+}
+
+/// #1747 / root-keyed stat index: two `cached_word_count` invocations with
+/// DIFFERENT `cache_root`s must each persist to their OWN cache-file root, not
+/// share the first-seen one. Before the fix the process-global index ignored
+/// every root after the first, so the second file's entry was written into the
+/// first root's index.
+#[test]
+#[serial]
+fn cache_root_is_per_invocation_not_first_seen() {
+    _reset_stat_index_for_tests();
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let root_a = tempfile::tempdir().expect("tempdir");
+    let root_b = tempfile::tempdir().expect("tempdir");
+    let fa = corpus.path().join("a.txt");
+    let fb = corpus.path().join("b.txt");
+    write_text(&fa, "alpha");
+    write_text(&fb, "beta");
+
+    // Two runs, two distinct cache roots.
+    assert_eq!(
+        cached_word_count(&fa, corpus.path(), |_| 3, Some(root_a.path())),
+        3
+    );
+    assert_eq!(
+        cached_word_count(&fb, corpus.path(), |_| 5, Some(root_b.path())),
+        5
+    );
+    flush_stat_index().expect("flush");
+
+    let idx_a = root_a
+        .path()
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let idx_b = root_b
+        .path()
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let text_a = std::fs::read_to_string(&idx_a).expect("root A index must exist");
+    let text_b = std::fs::read_to_string(&idx_b).expect("root B index must exist");
+
+    // Each root's index holds ONLY its own file — no cross-contamination.
+    assert!(text_a.contains("a.txt"), "root A must cache a.txt");
+    assert!(!text_a.contains("b.txt"), "root A must not hold b.txt");
+    assert!(text_b.contains("b.txt"), "root B must cache b.txt");
+    assert!(!text_b.contains("a.txt"), "root B must not hold a.txt");
+}
+
+/// Restores a `GRAPHIFY_OUT` override on drop so a panic mid-test cannot leak
+/// it into other serial tests sharing the process environment.
+struct GraphifyOutGuard {
+    prev: Option<String>,
+}
+
+impl GraphifyOutGuard {
+    fn set(value: &Path) -> Self {
+        let prev = std::env::var("GRAPHIFY_OUT").ok();
+        unsafe { std::env::set_var("GRAPHIFY_OUT", value) };
+        Self { prev }
+    }
+}
+
+impl Drop for GraphifyOutGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
+            None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
+        }
+    }
+}
+
+/// #1747 / root-keyed stat index: with an ABSOLUTE `GRAPHIFY_OUT`, `out_base`
+/// ignores the cache root, so every root resolves to the SAME stat-index file.
+/// The two runs must then SHARE one state and merge into that single file, not
+/// compete and clobber each other.
+#[test]
+#[serial]
+fn absolute_graphify_out_shares_one_index_across_roots() {
+    _reset_stat_index_for_tests();
+    let out = tempfile::tempdir().expect("tempdir");
+    let out_abs = out.path().join("shared-out");
+    let _out_guard = GraphifyOutGuard::set(&out_abs);
+
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let root_a = tempfile::tempdir().expect("tempdir");
+    let root_b = tempfile::tempdir().expect("tempdir");
+    let fa = corpus.path().join("a.txt");
+    let fb = corpus.path().join("b.txt");
+    write_text(&fa, "alpha");
+    write_text(&fb, "beta");
+
+    assert_eq!(
+        cached_word_count(&fa, corpus.path(), |_| 3, Some(root_a.path())),
+        3
+    );
+    assert_eq!(
+        cached_word_count(&fb, corpus.path(), |_| 5, Some(root_b.path())),
+        5
+    );
+    flush_stat_index().expect("flush");
+
+    let idx = out_abs.join("cache").join("stat-index.json");
+    let text = std::fs::read_to_string(&idx).expect("the shared index file must exist");
+    assert!(text.contains("a.txt"), "shared index must hold a.txt");
+    assert!(
+        text.contains("b.txt"),
+        "shared index must hold b.txt too (merged, not clobbered)"
+    );
+    _reset_stat_index_for_tests();
+}
+
+/// When the cache dir does not exist yet (`canonicalize` fails), two spellings
+/// of the same absolute dir must still share ONE stat index: the key is a
+/// normalized absolute path, not the raw string. A relative/raw fallback would
+/// split `<d>/out` and `<d>/out/.` into competing indexes.
+#[test]
+#[serial]
+fn nonexistent_cache_root_keys_by_normalized_absolute_path() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let fa = corpus.path().join("a.txt");
+    let fb = corpus.path().join("b.txt");
+    write_text(&fa, "alpha");
+    write_text(&fb, "beta");
+    // Neither exists yet — canonicalize fails, exercising the absolute fallback.
+    let root_plain = tmp.path().join("out");
+    let root_dotted = tmp.path().join("out").join(".");
+
+    assert_eq!(
+        cached_word_count(&fa, corpus.path(), |_| 3, Some(&root_plain)),
+        3
+    );
+    assert_eq!(
+        cached_word_count(&fb, corpus.path(), |_| 5, Some(&root_dotted)),
+        5
+    );
+    flush_stat_index().expect("flush");
+
+    let idx = tmp
+        .path()
+        .join("out")
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    let text = std::fs::read_to_string(&idx).expect("the single normalized index must exist");
+    assert!(
+        text.contains("a.txt") && text.contains("b.txt"),
+        "both spellings must share one index: {text}"
+    );
+    _reset_stat_index_for_tests();
+}
+
+/// `flush_stat_index` must persist every dirty root even when one fails: a
+/// single unwritable cache dir cannot strand another root's entries.
+#[test]
+#[serial]
+fn flush_continues_past_a_failing_root() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tempfile::tempdir().expect("tempdir");
+    let fb = corpus.path().join("b.txt");
+    let fa = corpus.path().join("a.txt");
+    write_text(&fb, "beta");
+    write_text(&fa, "alpha");
+    // Root B's cache dir cannot be created — an ancestor is a regular file.
+    let blocker = tmp.path().join("blocker");
+    write_text(&blocker, "not a dir");
+    let root_bad = blocker.join("sub");
+    let root_good = tmp.path().join("good");
+
+    // Populate the bad root first so it is flushed before the good one.
+    cached_word_count(&fb, corpus.path(), |_| 5, Some(&root_bad));
+    cached_word_count(&fa, corpus.path(), |_| 3, Some(&root_good));
+
+    assert!(
+        flush_stat_index().is_err(),
+        "the failing root's error must be surfaced"
+    );
+    let good_idx = root_good
+        .join("graphify-out")
+        .join("cache")
+        .join("stat-index.json");
+    assert!(
+        good_idx.exists(),
+        "the healthy root must still be flushed despite the failing one"
+    );
+    _reset_stat_index_for_tests();
 }

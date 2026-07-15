@@ -129,6 +129,7 @@ pub fn extract_package_manifest(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: Some(metadata),
         origin_file: None,
+        node_type: None,
     };
 
     let mut edges: Vec<Edge> = Vec::new();
@@ -157,6 +158,8 @@ pub fn extract_package_manifest(path: &Path) -> FileResult {
             weight: 1.0,
             context: Some("dependency".to_string()),
             confidence_score: Some(1.0),
+            deferred: false,
+            metadata: None,
         });
     }
 

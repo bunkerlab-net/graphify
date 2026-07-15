@@ -2,7 +2,7 @@
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
 use super::{get_extractor, with_xaml_extract_root};
-use crate::types::{Edge, FileResult, Node, RawCall};
+use crate::types::{Edge, FileResult, Node, RawCall, RawCallLang};
 use serde_json::Value;
 use std::path::Path;
 
@@ -33,6 +33,12 @@ fn file_result_to_value(result: &FileResult) -> Value {
                 "source_location": rc.source_location,
                 "receiver": rc.receiver,
                 "receiver_type": rc.receiver_type,
+                "lang": rc.lang.map(|l| match l {
+                    RawCallLang::Cpp => "cpp",
+                    RawCallLang::ObjC => "objc",
+                }),
+                "indirect": rc.indirect,
+                "context": rc.context,
             })
         })
         .collect();
@@ -107,6 +113,26 @@ fn value_to_file_result(v: &Value) -> FileResult {
                             .get("receiver_type")
                             .and_then(Value::as_str)
                             .map(str::to_string),
+                        // `lang` (#1547/#1556) claims a `.h` member call for the
+                        // C++ vs ObjC resolver; reads back as `None` when absent
+                        // (same version-namespaced cache invalidation as above).
+                        lang: rc
+                            .get("lang")
+                            .and_then(Value::as_str)
+                            .and_then(|s| match s {
+                                "cpp" => Some(RawCallLang::Cpp),
+                                "objc" => Some(RawCallLang::ObjC),
+                                _ => None,
+                            }),
+                        // `indirect`/`context` (#1565/#1566) carry a by-name
+                        // dispatch reference to the cross-file resolver; read back
+                        // as `false`/`None` when absent (same version-namespaced
+                        // cache invalidation as the fields above).
+                        indirect: rc.get("indirect").and_then(Value::as_bool).unwrap_or(false),
+                        context: rc
+                            .get("context")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     })
                 })
                 .collect()
@@ -133,8 +159,9 @@ fn value_to_file_result(v: &Value) -> FileResult {
 /// when a sibling `.cs` changes. The in-memory `clear_xaml_csharp_class_cache()` only
 /// covers staleness *within* one run; bypassing the on-disk cache covers it *across*
 /// runs too. graphify-py has the same disk-cache staleness bug here (it omits `.xaml`).
-const JS_CACHE_BYPASS_SUFFIXES: [&str; 8] =
-    ["js", "jsx", "mjs", "ts", "tsx", "vue", "svelte", "xaml"];
+const JS_CACHE_BYPASS_SUFFIXES: [&str; 10] = [
+    "js", "jsx", "mjs", "ts", "tsx", "mts", "cts", "vue", "svelte", "xaml",
+];
 
 /// Extract a single file, returning a cached result when available.
 ///
@@ -145,10 +172,12 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
     // JS/TS files bypass the AST cache so workspace/sibling import resolution is
     // recomputed each run (#9a7dbfb): a result cached while a sibling was absent
     // would otherwise pin a stale unresolved import edge.
+    // Case-insensitive extension (#1671): a capitalized `.Ts`/`.JS` must bypass the
+    // disk cache the same as its lowercase form.
     let bypass_cache = path
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|ext| JS_CACHE_BYPASS_SUFFIXES.contains(&ext));
+        .is_some_and(|ext| JS_CACHE_BYPASS_SUFFIXES.contains(&ext.to_ascii_lowercase().as_str()));
 
     if !bypass_cache && let Some(v) = graphify_cache::load_cached(path, effective_root, "ast") {
         return value_to_file_result(&v);
@@ -164,7 +193,12 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
     };
 
     let result = with_xaml_extract_root(Some(effective_root), || extractor(path));
-    if !bypass_cache && result.error.is_none() {
+    // Never cache a zero-node result for an extractable file. Every supported
+    // source produces at least a file node, so an empty node list is anomalous
+    // (e.g. a transient parallel hiccup); caching it makes the empty byte-stable
+    // across runs and silently blinds affected/explain to the file (#1666).
+    // Skipping the write lets a rerun self-heal.
+    if !bypass_cache && result.error.is_none() && !result.nodes.is_empty() {
         let v = file_result_to_value(&result);
         // best-effort save; ignore failures
         let _ = graphify_cache::save_cached(path, &v, effective_root, "ast");

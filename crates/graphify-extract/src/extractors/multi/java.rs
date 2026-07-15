@@ -3,9 +3,10 @@
 
 use super::PARALLEL_THRESHOLD;
 use crate::ids::make_id1;
-use crate::types::{Edge, FileResult, Node};
+use crate::lang_configs::ends_with_suffix_ci;
+use crate::types::{Edge, FileResult, Node, RawCall};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Recursively walk a Java AST collecting `import` declarations and resolving them to graph edges.
@@ -69,6 +70,8 @@ fn walk_java(
                     weight: 1.0,
                     context: None,
                     confidence_score: Some(1.0),
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }
@@ -265,8 +268,13 @@ fn collect_java_pkg_imports(
 // `resolve_java_type_references`. `imports` is included so a file-level import
 // edge that also landed on the shadow stub gets re-pointed too, leaving the stub
 // unreferenced (and dropped). External/stdlib imports never resolve, so their
-// edges correctly stay on their stub.
-const JAVA_REPOINT_RELATIONS: &[&str] = &["implements", "inherits", "extends", "imports"];
+// edges correctly stay on their stub. `references` (field/parameter/return-type
+// uses) is included so a cross-module reference to a same-named class doesn't
+// dangle on a sourceless phantom when two packages define the same simple name —
+// the node survives with a path-scoped id, but the reference must point at the
+// RIGHT one (#1744). Mirrors the C# resolver, whose set already covers it.
+const JAVA_REPOINT_RELATIONS: &[&str] =
+    &["implements", "inherits", "extends", "imports", "references"];
 
 /// Re-point dangling Java `implements`/`inherits`/`extends`/`imports` edges that
 /// bare-name resolution left on sourceless shadow stubs, using each referencing
@@ -395,4 +403,144 @@ pub(super) fn is_type_like_definition(node: &Node) -> bool {
         && !label.starts_with('.')
         && !label.contains('.')
         && node.file_type == "code"
+}
+
+// ── Cross-file Java member-call resolution (#1696) ────────────────────────────
+
+/// Normalise a Java type/method label to a comparison key: strip surrounding
+/// whitespace, a leading `.`, and a trailing `()`. Case-sensitive (Java types
+/// are). Mirrors the inner `key` of graphify-py `_resolve_java_member_calls`.
+fn mc_key(label: &str) -> String {
+    let s = label.trim();
+    let s = s.strip_prefix('.').unwrap_or(s);
+    s.strip_suffix("()").unwrap_or(s).to_string()
+}
+
+/// Resolve Java member calls (`gw.charge()`) against the receiver's declared
+/// type, so a call binds to the ONE owning class's method instead of every
+/// same-named method in the corpus (which produced phantom edges and god nodes).
+///
+/// `this` binds to the caller's enclosing type (exact); an explicit capitalised
+/// receiver is itself the type (exact); a typed field/parameter/local resolves
+/// via the extractor's method-scoped `receiver_type` (inferred). A missing,
+/// ambiguous, or non-unique target is skipped rather than guessed (the same
+/// single-owner god-node guard as the Swift/Ruby resolvers). Purely additive:
+/// only handles member calls the shared name-based pass deferred. Mirrors
+/// graphify-py `_resolve_java_member_calls`.
+pub(super) fn resolve_java_member_calls(
+    all_nodes: &[Node],
+    all_edges: &mut Vec<Edge>,
+    all_raw_calls: &[RawCall],
+) {
+    let node_by_id: HashMap<&str, &Node> = all_nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let contained: HashSet<&str> = all_edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .map(|e| e.target.as_str())
+        .collect();
+
+    // key(label) -> type-definition node ids (source-backed, contained, type-like).
+    let mut type_def_nids: HashMap<String, Vec<String>> = HashMap::new();
+    for n in all_nodes {
+        if !n.source_file.is_empty()
+            && contained.contains(n.id.as_str())
+            && is_type_like_definition(n)
+        {
+            type_def_nids
+                .entry(mc_key(&n.label))
+                .or_default()
+                .push(n.id.clone());
+        }
+    }
+
+    // (owner_type_nid, method_key) -> method ids, and method -> its owner type,
+    // both from `method` ownership edges.
+    let mut method_index: HashMap<(String, String), HashSet<String>> = HashMap::new();
+    let mut enclosing_type: HashMap<String, String> = HashMap::new();
+    for e in all_edges.iter() {
+        if e.relation != "method" {
+            continue;
+        }
+        let Some(mnode) = node_by_id.get(e.target.as_str()) else {
+            continue;
+        };
+        enclosing_type
+            .entry(e.target.clone())
+            .or_insert_with(|| e.source.clone());
+        method_index
+            .entry((e.source.clone(), mc_key(&mnode.label)))
+            .or_default()
+            .insert(e.target.clone());
+    }
+
+    let mut existing_pairs: HashSet<(String, String)> = all_edges
+        .iter()
+        .map(|e| (e.source.clone(), e.target.clone()))
+        .collect();
+
+    let mut new_edges: Vec<Edge> = Vec::new();
+    for rc in all_raw_calls {
+        if !ends_with_suffix_ci(&rc.source_file, &[".java"]) || !rc.is_member_call {
+            continue;
+        }
+        let receiver = match rc.receiver.as_deref() {
+            Some(r) if !r.is_empty() => r,
+            _ => continue,
+        };
+        if rc.callee.is_empty() || rc.caller_nid.is_empty() {
+            continue;
+        }
+        let caller = rc.caller_nid.as_str();
+
+        let (type_nid, exact): (String, bool) = if receiver == "this" {
+            match enclosing_type.get(caller) {
+                Some(t) => (t.clone(), true),
+                None => continue,
+            }
+        } else {
+            // Extractor-typed receiver -> INFERRED; a bare capitalised receiver is
+            // itself the type name -> EXTRACTED. No type -> skip.
+            let (type_name, exact) = match rc.receiver_type.as_deref() {
+                Some(t) => (t.to_string(), false),
+                None if receiver.chars().next().is_some_and(char::is_uppercase) => {
+                    (receiver.to_string(), true)
+                }
+                None => continue,
+            };
+            match type_def_nids.get(&mc_key(&type_name)) {
+                Some(defs) if defs.len() == 1 => (defs[0].clone(), exact),
+                _ => continue, // absent or ambiguous -> god-node guard
+            }
+        };
+
+        let Some(method_nids) = method_index.get(&(type_nid, mc_key(&rc.callee))) else {
+            continue;
+        };
+        if method_nids.len() != 1 {
+            continue;
+        }
+        let Some(method_nid) = method_nids.iter().next() else {
+            continue;
+        };
+        let method_nid = method_nid.clone();
+        if method_nid == caller || !existing_pairs.insert((caller.to_string(), method_nid.clone()))
+        {
+            continue;
+        }
+        new_edges.push(Edge {
+            external: false,
+            source: caller.to_string(),
+            target: method_nid,
+            relation: "calls".to_string(),
+            confidence: if exact { "EXTRACTED" } else { "INFERRED" }.to_string(),
+            source_file: rc.source_file.clone(),
+            source_location: Some(rc.source_location.clone()),
+            weight: 1.0,
+            context: Some("call".to_string()),
+            confidence_score: Some(if exact { 1.0 } else { 0.8 }),
+            deferred: false,
+            metadata: None,
+        });
+    }
+    all_edges.extend(new_edges);
 }

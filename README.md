@@ -21,6 +21,7 @@ graphify-out/
 ├── .graphify_root              marker so child runs find the project root
 ├── .graphify_analysis.json     analysis sidecar feeding GRAPH_REPORT.md
 ├── .graphify_labels.json       community label cache (skip the LLM next time)
+├── .graphify_learning.json     work-memory overlay — learned verdicts for report/serve/explain/viz (graphify reflect)
 ├── stage_02_extract.json       cached extraction output for incremental runs
 └── .graphify_semantic_marker   set when semantic extraction has already run
 ```
@@ -131,6 +132,14 @@ command line:
 ```bash
 graphify query "how do we authenticate users"
 graphify explain "AuthMiddleware"
+```
+
+No LLM key? Build a code-only graph from the local AST alone — it skips the
+semantic (LLM) pass and the doc/paper/image files, so a mixed repo still gets a
+full code graph offline:
+
+```bash
+graphify extract . --code-only
 ```
 
 Wire it into your AI assistant in one command:

@@ -1835,6 +1835,39 @@ fn make_cycle_graph(kind: GraphKind) -> Graph {
     g
 }
 
+/// #1241: a deferred `import(...)` edge must not manufacture a file cycle. A
+/// static A→B import plus a deferred B→A dynamic import is NOT a circular
+/// dependency (the dynamic import is lazy), so `find_import_cycles` skips it.
+#[test]
+fn find_import_cycles_skips_deferred_import_edges() {
+    let mut g = Graph::new(GraphKind::DiGraph);
+    cycle_node(&mut g, "a", "a.ts", Some("src/a.ts"));
+    cycle_node(&mut g, "b", "b.ts", Some("src/b.ts"));
+    cycle_edge(&mut g, "a", "b", "imports_from", "src/a.ts", "EXTRACTED");
+    // Deferred dynamic import b -> a: a real dependency, but not a static cycle.
+    let mut deferred = IndexMap::new();
+    deferred.insert("relation".to_string(), json!("imports_from"));
+    deferred.insert("source_file".to_string(), json!("src/b.ts"));
+    deferred.insert("confidence".to_string(), json!("EXTRACTED"));
+    deferred.insert("deferred".to_string(), json!(true));
+    g.add_edge("b", "a", deferred);
+    assert!(
+        find_import_cycles(&g).is_empty(),
+        "a deferred import() back-edge must not form a phantom file cycle"
+    );
+
+    // Control: the same back-edge WITHOUT `deferred` IS a 2-cycle.
+    let mut g2 = Graph::new(GraphKind::DiGraph);
+    cycle_node(&mut g2, "a", "a.ts", Some("src/a.ts"));
+    cycle_node(&mut g2, "b", "b.ts", Some("src/b.ts"));
+    cycle_edge(&mut g2, "a", "b", "imports_from", "src/a.ts", "EXTRACTED");
+    cycle_edge(&mut g2, "b", "a", "imports_from", "src/b.ts", "EXTRACTED");
+    assert!(
+        !find_import_cycles(&g2).is_empty(),
+        "control: a static back-edge IS a cycle"
+    );
+}
+
 /// `test_find_import_cycles_returns_structured_records`
 #[test]
 fn find_import_cycles_returns_structured_records() {

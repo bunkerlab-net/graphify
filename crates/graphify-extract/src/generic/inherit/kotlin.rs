@@ -41,6 +41,13 @@ pub(crate) fn emit_kotlin_inheritance(
                     user_type_node = Some(sub);
                     break;
                 }
+                if sub.kind() == "explicit_delegation" {
+                    // `class Foo : Bar by baz` wraps the delegated interface `Bar`
+                    // in an `explicit_delegation` node; grab its first `user_type`
+                    // so the implements edge (+ generic-arg recovery) still fire.
+                    user_type_node = first_child_kind(sub, "user_type");
+                    break;
+                }
             }
             let Some(ut) = user_type_node else { continue };
             // Skip empty base names (consistent with the PHP emitter) so a

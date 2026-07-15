@@ -21,6 +21,9 @@ const RATIONALE_PREFIXES: &[&str] = &[
 /// `file_type = "rationale"` connected via a `rationale_for` edge to the containing entity.
 /// Auto-generated files (migrations, protobuf, Alembic) are silently skipped.
 /// Mirrors Python `_extract_rationale`.
+// Crossed 100 lines only after each `Node`/`Edge` literal gained a `node_type` /
+// `metadata` field (#1562); still a linear rationale-extraction pass.
+#[allow(clippy::too_many_lines)]
 pub(super) fn extract_python_rationale(path: &Path, result: &mut FileResult) {
     use crate::ids::{file_stem, make_id, make_id1};
     use crate::types::{Edge, Node};
@@ -71,6 +74,7 @@ pub(super) fn extract_python_rationale(path: &Path, result: &mut FileResult) {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         edges.push(Edge {
@@ -84,6 +88,8 @@ pub(super) fn extract_python_rationale(path: &Path, result: &mut FileResult) {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     };
 

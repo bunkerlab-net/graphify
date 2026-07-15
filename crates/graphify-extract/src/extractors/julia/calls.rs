@@ -59,6 +59,8 @@ pub(super) fn walk_calls_julia(
                         weight: 1.0,
                         context: Some("call".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             } else if callee_node.kind() == "field_expression" && callee_node.child_count() >= 3 {
@@ -79,6 +81,8 @@ pub(super) fn walk_calls_julia(
                             weight: 1.0,
                             context: Some("call".to_string()),
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                 }

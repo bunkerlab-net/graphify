@@ -13,9 +13,10 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use crate::types::{Edge, RawCall};
+use crate::types::{Edge, RawCall, RawCallLang};
 
 use super::config::{LangConfig, LangId};
+use super::indirect::{self, IndirectState};
 use super::js_extra::dynamic_import_js;
 use super::names::read_text_owned;
 use super::walk::{named_children, php_class_const_scope};
@@ -38,11 +39,92 @@ pub(super) struct CallWalkCtx<'a> {
     /// to attach `receiver_type` to Ruby member-call `raw_calls` so the cross-file
     /// pass resolves `var.method` by type (#1499). Empty for non-Ruby files.
     pub ruby_var_types: &'a HashMap<String, HashMap<String, Option<String>>>,
+    /// Current method body's `receiver -> type` table for Java (current-class
+    /// fields plus method parameters and explicit locals, with `this.field`
+    /// entries). Lets member-call `raw_calls` carry a `receiver_type` for
+    /// type-based cross-file resolution (#1696). Empty for non-Java files.
+    pub java_var_types: &'a HashMap<String, String>,
+    /// File-wide `name -> Type` table for C# (fields / properties / params /
+    /// locals). Lets member-call `raw_calls` carry a `receiver_type` for
+    /// type-based cross-file resolution (#1609). Empty for non-C# files.
+    pub csharp_var_types: &'a HashMap<String, String>,
+    /// Current function body's `var -> ClassName` table for C++ (its local
+    /// declarations). Lets member-call `raw_calls` carry a `receiver_type` for
+    /// type-based cross-file resolution (#1547). Empty for non-C++ files.
+    pub cpp_var_types: &'a HashMap<String, String>,
+    /// File-wide `name -> TypeName` table for TS/JS (constructor-injected
+    /// `this.field` types, local `new` bindings, typed params). Lets member-call
+    /// `raw_calls` carry a `receiver_type` for cross-file resolution (#1316/#1630).
+    /// Empty for non-TS/JS files.
+    pub ts_var_types: &'a HashMap<String, String>,
+    /// Node ids of the bodies already walked with their own caller (const-assigned
+    /// arrows, methods). A JS/TS inline/returned closure NOT in this set is
+    /// descended with the enclosing caller so its calls aren't lost at the arrow
+    /// boundary (#1630). Empty for non-TS/JS files.
+    pub tracked_body_ids: &'a HashSet<usize>,
+    /// Case-sensitive `label -> nid` map for indirect refs (the call map above is
+    /// lowercased). Preserves case-sensitivity hardening (#1581).
+    pub label_to_nid_exact: &'a HashMap<String, String>,
+    /// `nid -> source_file`, so the indirect guard tells a same-named local
+    /// non-callable (reject) from an import-surfaced foreign symbol (defer).
+    pub nid_to_sf: &'a HashMap<String, String>,
+    /// Ids of function / method / class definitions in this file — the callable
+    /// targets an `indirect_call` reference may resolve to (#1565/#1566).
+    pub callable_def_nids: &'a HashSet<String>,
+    /// Python / JS-TS per-function local-binding shadow sets, keyed by caller nid.
+    pub local_bound_names: &'a HashMap<String, HashSet<String>>,
+    /// Dedup for emitted `indirect_call` pairs.
+    pub seen_indirect_pairs: &'a mut HashSet<(String, String)>,
+}
+
+impl CallWalkCtx<'_> {
+    /// Bundle the disjoint indirect-dispatch fields into an [`IndirectState`] for a
+    /// capture site. Fetch `enclosing_locals` from `local_bound_names` BEFORE
+    /// calling this (it mutably reborrows `self`).
+    fn indirect(&mut self) -> IndirectState<'_> {
+        IndirectState {
+            str_path: self.str_path,
+            label_to_nid_exact: self.label_to_nid_exact,
+            nid_to_sf: self.nid_to_sf,
+            callable_def_nids: self.callable_def_nids,
+            edges: &mut *self.edges,
+            raw_calls: &mut *self.raw_calls,
+            seen_call_pairs: &*self.seen_call_pairs,
+            seen_indirect_pairs: &mut *self.seen_indirect_pairs,
+        }
+    }
+}
+
+/// The declared type of a member call's receiver, for the languages that carry a
+/// type table: Ruby (`var = Const.new` inference, #1499), Java (fields / params /
+/// locals, #1696), C# (file-wide members, #1609), and C++ (local declarations,
+/// #1547). `None` for other languages, unknown, or ambiguous receivers.
+fn member_receiver_type(
+    ctx: &CallWalkCtx<'_>,
+    caller_nid: &str,
+    receiver: Option<&str>,
+) -> Option<String> {
+    let receiver = receiver?;
+    match ctx.config.lang_id {
+        LangId::Ruby => ctx
+            .ruby_var_types
+            .get(caller_nid)
+            .and_then(|m| m.get(receiver).cloned())
+            .flatten(),
+        LangId::Java => ctx.java_var_types.get(receiver).cloned(),
+        LangId::CSharp => ctx.csharp_var_types.get(receiver).cloned(),
+        LangId::Cpp => ctx.cpp_var_types.get(receiver).cloned(),
+        LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX => {
+            ctx.ts_var_types.get(receiver).cloned()
+        }
+        _ => None,
+    }
 }
 
 /// Stops descending into nested function definitions (`function_boundary_types`)
 /// so that calls from inner lambdas are attributed to the outer function.
 /// Mirrors Python `_walk_calls` from `extract.py`.
+#[allow(clippy::too_many_lines)] // linear boundary/call/recurse dispatch + JS/TS closure descent
 pub(super) fn walk_calls(
     ctx: &mut CallWalkCtx<'_>,
     node: Node<'_>,
@@ -50,6 +132,28 @@ pub(super) fn walk_calls(
     source: &[u8],
 ) {
     if ctx.config.function_boundary_types.contains(&node.kind()) {
+        // JS/TS: an inline/returned closure (`return () => svc.doThing()`) is a
+        // boundary but is NOT separately tracked in `function_bodies`, so its
+        // calls would be dropped here. Descend into it with the enclosing caller;
+        // a tracked closure (const-assigned arrow) is walked with its own nid and
+        // skipped to avoid double-counting (#1630).
+        if matches!(
+            ctx.config.lang_id,
+            LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+        ) && matches!(node.kind(), "arrow_function" | "function_expression")
+            && let Some(body) = node.child_by_field_name("body")
+            && !ctx.tracked_body_ids.contains(&body.id())
+        {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    walk_calls(ctx, cur.node(), caller_nid, source);
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -81,7 +185,7 @@ pub(super) fn walk_calls(
             return;
         }
 
-        let (callee_name, is_member_call, receiver) =
+        let (callee_name, is_member_call, receiver, is_this_field) =
             extract_callee(node, source, ctx.config, ctx.label_to_nid);
 
         if let Some(callee) = callee_name
@@ -94,16 +198,7 @@ pub(super) fn walk_calls(
             // Ruby: the receiver's inferred type from the method's local
             // `var = Const.new` bindings, when unambiguously known (#1499).
             // Computed up-front so it can also gate member-call deferral below.
-            let receiver_type = if ctx.config.lang_id == LangId::Ruby {
-                receiver.as_deref().and_then(|r| {
-                    ctx.ruby_var_types
-                        .get(caller_nid)
-                        .and_then(|m| m.get(r).cloned())
-                        .flatten()
-                })
-            } else {
-                None
-            };
+            let receiver_type = member_receiver_type(ctx, caller_nid, receiver.as_deref());
             let receiver_upper = receiver
                 .as_deref()
                 .is_some_and(|r| r.chars().next().is_some_and(char::is_uppercase));
@@ -116,10 +211,24 @@ pub(super) fn walk_calls(
             //     (#1499). graphify-py only defers upper-cased receivers
             //     (extract.py:3899); deferring the typed-instance case too keeps a
             //     `p.run` from being swallowed by a same-file `run`.
+            //   * Java: EVERY member call defers; `resolve_java_member_calls` binds
+            //     it by the receiver's declared type, never a bare name (#1696).
+            //   * C#: EVERY member call with a captured receiver defers to
+            //     `resolve_csharp_member_calls`, never a bare name (#1609).
             let defer_member = is_member_call
                 && ((ctx.config.lang_id == LangId::Python && receiver_upper)
                     || (ctx.config.lang_id == LangId::Ruby
-                        && (receiver_upper || receiver_type.is_some())));
+                        && (receiver_upper || receiver_type.is_some()))
+                    || ctx.config.lang_id == LangId::Java
+                    || ctx.config.lang_id == LangId::Cpp
+                    || (ctx.config.lang_id == LangId::CSharp && receiver.is_some())
+                    // JS/TS: defer a `ClassName.method()` (upper) or a
+                    // `this.field.method()` (constructor-injected type) call so the
+                    // cross-file resolver binds it by the receiver's type (#1316).
+                    || (matches!(
+                        ctx.config.lang_id,
+                        LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+                    ) && (receiver_upper || is_this_field)));
             let tgt_nid = if defer_member {
                 None
             } else {
@@ -141,6 +250,8 @@ pub(super) fn walk_calls(
                             weight: 1.0,
                             context: Some("call".to_string()),
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                 }
@@ -153,14 +264,18 @@ pub(super) fn walk_calls(
                     source_location: format!("L{}", node.start_position().row + 1),
                     receiver,
                     receiver_type,
+                    lang: (ctx.config.lang_id == LangId::Cpp).then_some(RawCallLang::Cpp),
+                    ..Default::default()
                 });
             }
 
             emit_php_call_relations(ctx, node, &callee, caller_nid, source);
         }
+        capture_call_indirect(ctx, node, caller_nid, source);
     }
 
     emit_php_ref_relations(ctx, node, caller_nid, source);
+    capture_node_indirect(ctx, node, caller_nid, source);
 
     let mut cur = node.walk();
     if cur.goto_first_child() {
@@ -232,10 +347,13 @@ fn extract_callee(
     source: &[u8],
     config: &LangConfig,
     _label_to_nid: &HashMap<String, String>,
-) -> (Option<String>, bool, Option<String>) {
+) -> (Option<String>, bool, Option<String>, bool) {
     let mut callee_name: Option<String> = None;
     let mut is_member_call = false;
     let mut receiver: Option<String> = None;
+    // JS/TS `this.field.method()`: the field-name receiver must always defer to
+    // the constructor-injection resolver, even when a same-file method matches.
+    let mut is_this_field = false;
 
     match config.lang_id {
         LangId::Swift => {
@@ -318,26 +436,53 @@ fn extract_callee(
             }
         }
         LangId::CSharp if node.kind() == "invocation_expression" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                callee_name = Some(read_text_owned(name_node, source));
-            } else {
-                let mut cur = node.walk();
-                if cur.goto_first_child() {
-                    loop {
-                        let child = cur.node();
-                        if child.is_named() {
-                            let raw = read_text_owned(child, source);
-                            if raw.contains('.') {
-                                callee_name =
-                                    Some(raw.split('.').next_back().unwrap_or("").to_string());
-                                is_member_call = true;
-                            } else {
-                                callee_name = Some(raw);
+            // The invoked function is the `function` field. A member call
+            // `recv.Method(...)` is a member_access_expression (receiver in
+            // `expression`, method in `name`). Capture a simple-identifier or
+            // `this` receiver + set is_member_call so `resolve_csharp_member_calls`
+            // binds by the receiver's declared type; a bare name mis-bound to any
+            // same-named method in the corpus (#1609).
+            match node.child_by_field_name("function").map(|f| (f, f.kind())) {
+                Some((fnn, "member_access_expression")) => {
+                    if let Some(mname) = fnn.child_by_field_name("name") {
+                        callee_name = Some(read_text_owned(mname, source));
+                        is_member_call = true;
+                        match fnn.child_by_field_name("expression").map(|r| (r, r.kind())) {
+                            Some((recv, "identifier")) => {
+                                receiver = Some(read_text_owned(recv, source));
                             }
-                            break;
+                            Some((_, "this_expression")) => receiver = Some("this".to_string()),
+                            _ => {}
                         }
-                        if !cur.goto_next_sibling() {
-                            break;
+                    }
+                }
+                Some((fnn, "identifier")) => callee_name = Some(read_text_owned(fnn, source)),
+                _ => {
+                    // Fallback: `name` field, else first-named-child dotted scan.
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        callee_name = Some(read_text_owned(name_node, source));
+                    } else {
+                        let mut cur = node.walk();
+                        if cur.goto_first_child() {
+                            loop {
+                                let child = cur.node();
+                                if child.is_named() {
+                                    let raw = read_text_owned(child, source);
+                                    if let Some((head, tail)) = raw.rsplit_once('.') {
+                                        callee_name = Some(tail.to_string());
+                                        is_member_call = true;
+                                        if !head.is_empty() && !head.contains('.') {
+                                            receiver = Some(head.to_string());
+                                        }
+                                    } else {
+                                        callee_name = Some(raw);
+                                    }
+                                    break;
+                                }
+                                if !cur.goto_next_sibling() {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -367,16 +512,34 @@ fn extract_callee(
             {
                 if func_node.kind() == "identifier" {
                     callee_name = Some(read_text_owned(func_node, source));
-                } else if matches!(
-                    func_node.kind(),
-                    "field_expression" | "qualified_identifier"
-                ) {
+                } else if func_node.kind() == "field_expression" {
+                    // `f.bar()` / `f->bar()` / `this->bar()`: receiver is the
+                    // `argument` (object) field, callee is the `field` (#1547).
+                    // Capture a simple-identifier or `this` receiver so the
+                    // cross-file pass can type it; a chained receiver (`a.b.m()`)
+                    // stays unset and the call is left to bail.
                     is_member_call = true;
-                    let name = func_node
-                        .child_by_field_name("field")
-                        .or_else(|| func_node.child_by_field_name("name"));
-                    if let Some(n) = name {
+                    if let Some(n) = func_node.child_by_field_name("field") {
                         callee_name = Some(read_text_owned(n, source));
+                    }
+                    match func_node.child_by_field_name("argument") {
+                        Some(obj) if obj.kind() == "identifier" => {
+                            receiver = Some(read_text_owned(obj, source));
+                        }
+                        Some(obj) if obj.kind() == "this" => {
+                            receiver = Some("this".to_string());
+                        }
+                        _ => {}
+                    }
+                } else if func_node.kind() == "qualified_identifier" {
+                    // `Foo::bar()`: the scope `Foo` names the receiver type
+                    // explicitly (EXTRACTED), the `name` is the callee.
+                    is_member_call = true;
+                    if let Some(n) = func_node.child_by_field_name("name") {
+                        callee_name = Some(read_text_owned(n, source));
+                    }
+                    if let Some(scope) = func_node.child_by_field_name("scope") {
+                        receiver = Some(read_text_owned(scope, source));
                     }
                 }
             }
@@ -394,6 +557,32 @@ fn extract_callee(
                 }
             }
         }
+        LangId::Java if node.kind() == "method_invocation" => {
+            // `recv.method(args)` — `name` is the method, `object` the receiver.
+            // Capture a simple / `this` / `this.field` receiver so cross-file
+            // member-call resolution can bind by the receiver's declared type
+            // (#1696). A chained/qualified receiver stays unset (deferred).
+            if let Some(name_node) = node.child_by_field_name("name") {
+                callee_name = Some(read_text_owned(name_node, source));
+            }
+            if let Some(recv) = node.child_by_field_name("object") {
+                is_member_call = true;
+                match recv.kind() {
+                    "identifier" => receiver = Some(read_text_owned(recv, source)),
+                    "this" => receiver = Some("this".to_string()),
+                    "field_access" => {
+                        if let (Some(owner), Some(field)) = (
+                            recv.child_by_field_name("object"),
+                            recv.child_by_field_name("field"),
+                        ) && owner.kind() == "this"
+                        {
+                            receiver = Some(format!("this.{}", read_text_owned(field, source)));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         LangId::Ruby => {
             // Ruby's `call` node carries `receiver` and `method` as direct fields
             // (no intermediate accessor node), so the generic accessor model
@@ -407,6 +596,47 @@ fn extract_callee(
                 is_member_call = true;
                 if matches!(recv.kind(), "identifier" | "constant") {
                     receiver = Some(read_text_owned(recv, source));
+                } else if recv.kind() == "scope_resolution" {
+                    // Namespaced receiver `Billing::Processor.call` — capture the last
+                    // constant so cross-file resolution binds it by the bare class name
+                    // (the god-node guard bails if ambiguous, #1634).
+                    let last = super::ruby::ruby_const_last_name(recv, source);
+                    if !last.is_empty() {
+                        receiver = Some(last);
+                    }
+                }
+            }
+        }
+        LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX => {
+            if let Some(func_node) = node.child_by_field_name("function") {
+                if func_node.kind() == "identifier" {
+                    callee_name = Some(read_text_owned(func_node, source));
+                } else if func_node.kind() == "member_expression" {
+                    is_member_call = true;
+                    if let Some(prop) = func_node.child_by_field_name("property") {
+                        callee_name = Some(read_text_owned(prop, source));
+                    }
+                    // `ClassName.method()` -> simple-identifier receiver (#1446).
+                    // `this.field.method()` -> the field name + a flag so the
+                    // constructor-injection type table resolves it (#1316). Deeper
+                    // chains (`a.b.method()`) stay unset.
+                    match func_node.child_by_field_name("object") {
+                        Some(obj) if obj.kind() == "identifier" => {
+                            receiver = Some(read_text_owned(obj, source));
+                        }
+                        Some(obj) if obj.kind() == "member_expression" => {
+                            if let Some(inner_obj) = obj.child_by_field_name("object")
+                                && inner_obj.kind() == "this"
+                                && let Some(inner_prop) = obj.child_by_field_name("property")
+                            {
+                                receiver = Some(read_text_owned(inner_prop, source));
+                                is_this_field = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                } else {
+                    callee_name = Some(read_text_owned(func_node, source));
                 }
             }
         }
@@ -442,7 +672,7 @@ fn extract_callee(
         }
     }
 
-    (callee_name, is_member_call, receiver)
+    (callee_name, is_member_call, receiver, is_this_field)
 }
 
 /// First string-literal argument of a PHP call's `arguments` (e.g. `'foo.bar'`
@@ -508,6 +738,8 @@ fn php_ref_edge(src: &str, tgt: &str, relation: &str, line: u32, str_path: &str)
         weight: 1.0,
         context: None,
         confidence_score: Some(1.0),
+        deferred: false,
+        metadata: None,
     }
 }
 
@@ -628,5 +860,116 @@ fn emit_php_ref_relations(
             line,
             ctx.str_path,
         ));
+    }
+}
+
+// ── Indirect-dispatch capture (#1565/#1566) ───────────────────────────────────
+
+/// Capture `indirect_call` references from a CALL node: identifier / keyword
+/// arguments passed by name, plus Python `getattr(obj, "name")` reflective
+/// dispatch. `node` is the call expression; `caller_nid` the enclosing function.
+fn capture_call_indirect(
+    ctx: &mut CallWalkCtx<'_>,
+    node: Node<'_>,
+    caller_nid: &str,
+    source: &[u8],
+) {
+    let is_python = ctx.config.lang_id == LangId::Python;
+    let is_js_ts = matches!(
+        ctx.config.lang_id,
+        LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+    );
+    if !is_python && !is_js_ts {
+        return;
+    }
+    let empty = HashSet::new();
+    let enclosing = ctx.local_bound_names.get(caller_nid).unwrap_or(&empty);
+    if let Some(args) = node.child_by_field_name("arguments") {
+        let mut cur = args.walk();
+        for arg in args.children(&mut cur) {
+            match arg.kind() {
+                "identifier" => {
+                    ctx.indirect()
+                        .emit_ref(Some(arg), caller_nid, enclosing, "argument", source);
+                }
+                // Python keyword arg `target=fn`; JS has no keyword args (named
+                // args are objects, handled by the collection pass).
+                "keyword_argument" if is_python => {
+                    ctx.indirect().emit_ref(
+                        arg.child_by_field_name("value"),
+                        caller_nid,
+                        enclosing,
+                        "argument",
+                        source,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    // Reflective dispatch: `getattr(obj, "handler")` — the string is an ATTRIBUTE
+    // name, never shadowed by a param/local, so it bypasses the identifier guard.
+    if is_python && let Some((name, loc)) = indirect::getattr_ref_name(node, source) {
+        ctx.indirect()
+            .emit_by_name(&name, loc, caller_nid, "getattr");
+    }
+}
+
+/// Capture `indirect_call` references from a non-call node inside a function body:
+/// dispatch-table values (dict/list/set/tuple or object/array), Python assignment
+/// RHS, and Python `return` values. Attributed to the enclosing `caller_nid`.
+fn capture_node_indirect(
+    ctx: &mut CallWalkCtx<'_>,
+    node: Node<'_>,
+    caller_nid: &str,
+    source: &[u8],
+) {
+    let empty = HashSet::new();
+    let enclosing = ctx.local_bound_names.get(caller_nid).unwrap_or(&empty);
+    match ctx.config.lang_id {
+        LangId::Python => match node.kind() {
+            "dictionary" | "list" | "set" | "tuple" => {
+                for ident in indirect::python_dispatch_value_idents(node) {
+                    ctx.indirect().emit_ref(
+                        Some(ident),
+                        caller_nid,
+                        enclosing,
+                        "collection",
+                        source,
+                    );
+                }
+            }
+            "assignment" => {
+                for ident in indirect::python_ref_value_idents(node.child_by_field_name("right")) {
+                    ctx.indirect().emit_ref(
+                        Some(ident),
+                        caller_nid,
+                        enclosing,
+                        "assignment",
+                        source,
+                    );
+                }
+            }
+            "return_statement" => {
+                let value = {
+                    let mut cur = node.walk();
+                    node.children(&mut cur).find(tree_sitter::Node::is_named)
+                };
+                for ident in indirect::python_ref_value_idents(value) {
+                    ctx.indirect()
+                        .emit_ref(Some(ident), caller_nid, enclosing, "return", source);
+                }
+            }
+            _ => {}
+        },
+        LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+            if matches!(node.kind(), "object" | "array") =>
+        {
+            for ident in indirect::js_dispatch_value_idents(node) {
+                ctx.indirect()
+                    .emit_ref(Some(ident), caller_nid, enclosing, "collection", source);
+            }
+        }
+        _ => {}
     }
 }

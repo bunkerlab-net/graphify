@@ -520,3 +520,146 @@ fn ts_reexported_type_alias_resolves_imported_symbol_to_origin() -> TestResult {
     ));
     Ok(())
 }
+
+/// c8c604d (#1552): `export * as ns from './foo'` binds the whole module under
+/// `ns` — a real symbol node the consumer's `import { ns }` targets, plus a
+/// file→file `re_exports` edge. Parametrised over `.ts` and `.js`.
+#[test]
+fn js_namespace_reexport_import_targets_real_binding() -> TestResult {
+    for suffix in ["ts", "js"] {
+        let tmp = tempdir()?;
+        let root = tmp.path();
+        write(
+            &root.join(format!("src/lib/foo.{suffix}")),
+            "export class Foo { id = '' }\n",
+        )?;
+        write(
+            &root.join(format!("src/lib/index.{suffix}")),
+            "export * as ns from './foo'\n",
+        )?;
+        write(
+            &root.join(format!("src/routes/page.{suffix}")),
+            "import { ns } from '../lib/index'\nexport const use = () => ns.Foo\n",
+        )?;
+        let out = extract(
+            &[
+                root.join(format!("src/lib/foo.{suffix}")),
+                root.join(format!("src/lib/index.{suffix}")),
+                root.join(format!("src/routes/page.{suffix}")),
+            ],
+            Some(root),
+        );
+        let index_rel = format!("src/lib/index.{suffix}");
+        let ns_id = make_id(&[&file_stem(Path::new(&index_rel)), "ns"]);
+        let node_ids: std::collections::HashSet<&str> = out
+            .nodes
+            .iter()
+            .filter_map(|n| n.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(
+            node_ids.contains(ns_id.as_str()),
+            "namespace node missing (.{suffix})"
+        );
+        assert!(
+            has_symbol_edge(&out, &format!("src/routes/page.{suffix}"), &index_rel, "ns"),
+            "consumer import must target the ns binding (.{suffix})"
+        );
+        assert!(
+            has_file_edge(
+                &out,
+                &index_rel,
+                &format!("src/lib/foo.{suffix}"),
+                "re_exports"
+            ),
+            "namespace re-export must emit re_exports index→foo (.{suffix})"
+        );
+        assert!(
+            edge_exists(
+                &out,
+                &file_node_id(Path::new(&index_rel)),
+                &ns_id,
+                "contains"
+            ),
+            "index must contain the ns binding (.{suffix})"
+        );
+        for e in &out.edges {
+            let s = e.get("source").and_then(Value::as_str).unwrap_or_default();
+            let t = e.get("target").and_then(Value::as_str).unwrap_or_default();
+            assert!(
+                node_ids.contains(s) && node_ids.contains(t),
+                "dangling edge (.{suffix}): {e:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// c8c604d (#1552): a re-export cycle (`first` ⇄ `second`) still resolves a
+/// symbol reachable through a non-cycle branch (`first` also `export * from './foo'`).
+#[test]
+fn ts_reexport_cycle_resolves_symbol_from_non_cycle_branch() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("src/lib/foo.ts"),
+        "export class Foo { id = '' }\n",
+    )?;
+    write(
+        &root.join("src/lib/first.ts"),
+        "export * from './second'\nexport * from './foo'\n",
+    )?;
+    write(&root.join("src/lib/second.ts"), "export * from './first'\n")?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import type { Foo } from '../lib/first'\nexport type X = Foo\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("src/lib/foo.ts"),
+            root.join("src/lib/first.ts"),
+            root.join("src/lib/second.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(root),
+    );
+    assert!(has_symbol_edge(
+        &out,
+        "src/routes/page.ts",
+        "src/lib/foo.ts",
+        "Foo"
+    ));
+    Ok(())
+}
+
+/// c8c604d (#1552): a re-export chain longer than 16 hops still resolves to the
+/// origin (the resolver's cycle guard is by visited-set, not a hop cap).
+#[test]
+fn ts_reexport_chain_beyond_sixteen_hops_resolves_origin() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path();
+    write(
+        &root.join("src/lib/foo.ts"),
+        "export class Foo { id = '' }\n",
+    )?;
+    let mut paths = vec![root.join("src/lib/foo.ts")];
+    let mut previous = String::from("foo");
+    for index in 0..20 {
+        let rel = format!("src/lib/barrel_{index}.ts");
+        write(&root.join(&rel), &format!("export * from './{previous}'\n"))?;
+        paths.push(root.join(&rel));
+        previous = format!("barrel_{index}");
+    }
+    write(
+        &root.join("src/routes/page.ts"),
+        "import type { Foo } from '../lib/barrel_19'\nexport type X = Foo\n",
+    )?;
+    paths.push(root.join("src/routes/page.ts"));
+    let out = extract(&paths, Some(root));
+    assert!(has_symbol_edge(
+        &out,
+        "src/routes/page.ts",
+        "src/lib/foo.ts",
+        "Foo"
+    ));
+    Ok(())
+}

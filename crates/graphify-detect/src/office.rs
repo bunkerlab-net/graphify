@@ -717,11 +717,12 @@ pub fn convert_office_file(path: &Path, out_dir: &Path) -> Result<Option<PathBuf
     // The sidecar name is derived from the source *path*, not its content, so a
     // modified source maps to the same sidecar. Skip rewriting only when the
     // existing sidecar is at least as new as the source: an unchanged source
-    // never churns its sidecar's mtime (#1226), but a modified source is
-    // regenerated so extraction sees the new content. graphify-py
-    // (`detect.py:_convert_office_file`) skips on existence alone, leaving a
-    // changed Office file's sidecar stale — fixed here. If either mtime can't be
-    // read, fall back to the existence-based skip.
+    // never churns its sidecar's mtime (#1226), but a source edited after its
+    // first conversion is re-converted so `detect_incremental` (which tracks the
+    // SIDECAR, not the Office source) sees the new content instead of reporting
+    // the doc unchanged forever (#1649). Mirrors graphify-py v0.9.12
+    // `convert_office_file`. If either mtime can't be read, fall back to the
+    // existence-based skip.
     if out_path.exists() {
         let source_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
         let sidecar_mtime = std::fs::metadata(&out_path)

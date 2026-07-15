@@ -400,6 +400,7 @@ impl DartExtractor {
                 source_location: None,
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
     }
@@ -416,6 +417,8 @@ impl DartExtractor {
             weight: 1.0,
             context: context.map(str::to_string),
             confidence_score: Some(1.0),
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -1041,6 +1044,7 @@ pub fn extract_dart(path: &Path) -> FileResult {
             source_location: None,
             metadata: None,
             origin_file: None,
+            node_type: None,
         });
     }
 

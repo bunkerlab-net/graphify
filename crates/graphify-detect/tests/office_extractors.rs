@@ -373,8 +373,9 @@ fn convert_office_file_does_not_rewrite_existing_sidecar() {
 #[test]
 fn convert_office_file_regenerates_when_source_is_newer() {
     // When the source Office file is modified after the sidecar was written, the
-    // stale sidecar must be regenerated so extraction sees the new content. This
-    // is a divergence from graphify-py, which skips on sidecar existence alone.
+    // stale sidecar must be regenerated so extraction (and `detect_incremental`,
+    // which tracks the sidecar) sees the new content. Matches graphify-py v0.9.12
+    // `convert_office_file`, which re-converts when the source is newer (#1649).
     let tmp = tempfile::tempdir().expect("tempdir");
     let out_dir = tmp.path().join("converted");
     let src = tmp.path().join("doc.docx");

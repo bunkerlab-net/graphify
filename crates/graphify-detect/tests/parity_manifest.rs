@@ -3,8 +3,9 @@
 //! Mirrors `graphify-py/tests/test_detect.py` — manifest / incremental tests.
 #![allow(clippy::expect_used)]
 
+use graphify_cache::{_reset_stat_index_for_tests, flush_stat_index};
 use graphify_detect::{
-    Manifest, detect_incremental,
+    Manifest, detect_incremental, detect_incremental_with_cache_root,
     manifest::{
         detect_incremental_with_manifest, load_manifest_from_path,
         load_manifest_from_path_with_root, save_manifest_to_path, save_manifest_to_path_with_root,
@@ -13,6 +14,7 @@ use graphify_detect::{
     walk::detect,
 };
 use indexmap::IndexMap;
+use serial_test::serial;
 use std::path::Path;
 use tempfile::tempdir;
 
@@ -72,7 +74,7 @@ fn detect_incremental_all_new_when_no_manifest() {
     let manifest_path = tmp.path().join("manifest.json");
     // No manifest on disk → everything is new
     let (changed, deleted, _updated) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(!changed.is_empty());
     assert!(deleted.is_empty());
@@ -95,7 +97,7 @@ fn detect_incremental_nothing_changed_after_save() {
 
     // Second: incremental should see no changes
     let (changed, deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(changed.is_empty(), "nothing changed, but got: {changed:?}");
     assert!(deleted.is_empty());
@@ -116,7 +118,7 @@ fn detect_incremental_detects_new_file() {
     std::fs::write(tmp.path().join("new.py"), "y = 2").expect("test invariant");
 
     let (changed, _deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(
         changed
@@ -143,7 +145,7 @@ fn detect_incremental_detects_deleted_file() {
     std::fs::remove_file(&f2).expect("remove fixture");
 
     let (_changed, deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None)
+        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
             .expect("test invariant");
     assert!(
         deleted
@@ -171,9 +173,15 @@ fn detect_incremental_propagates_follow_symlinks() {
         .expect("test invariant");
 
     // Without following symlinks, the symlinked dir contents are invisible.
-    let (changed_no, _, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, Some(false), "semantic", None)
-            .expect("test invariant");
+    let (changed_no, _, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        Some(false),
+        "semantic",
+        None,
+        None,
+    )
+    .expect("test invariant");
     assert!(
         !changed_no
             .iter()
@@ -182,9 +190,15 @@ fn detect_incremental_propagates_follow_symlinks() {
     );
 
     // With follow_symlinks=true, the symlinked dir contents appear and are new.
-    let (changed_yes, _, updated) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, Some(true), "semantic", None)
-            .expect("test invariant");
+    let (changed_yes, _, updated) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        Some(true),
+        "semantic",
+        None,
+        None,
+    )
+    .expect("test invariant");
     assert!(
         changed_yes
             .iter()
@@ -204,9 +218,15 @@ fn detect_incremental_propagates_follow_symlinks() {
     save_manifest_to_path(&files, &manifest_path, "both").expect("test invariant");
     let _ = updated; // suppress unused warning
 
-    let (changed_second, _, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, Some(true), "semantic", None)
-            .expect("test invariant");
+    let (changed_second, _, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        Some(true),
+        "semantic",
+        None,
+        None,
+    )
+    .expect("test invariant");
     assert_eq!(
         changed_second.len(),
         0,
@@ -629,5 +649,49 @@ fn save_manifest_in_root_symlink_roundtrips() {
     assert!(
         !keys.contains(&"sub/target.py"),
         "must not store resolved target, got {keys:?}"
+    );
+}
+
+/// #1747 / root-keyed stat index: two `detect_incremental_with_cache_root`
+/// runs with DIFFERENT cache roots must persist their word-count / stat-index
+/// cache to their OWN `--out` root. Before the fix the process-global index
+/// ignored every root after the first, so the second corpus's entries were
+/// written into the first root's index (a clobbered, shared cache).
+#[test]
+#[serial]
+fn incremental_cache_root_is_per_invocation() {
+    _reset_stat_index_for_tests();
+    let corpus_a = tempdir().expect("tempdir");
+    let corpus_b = tempdir().expect("tempdir");
+    let root_a = tempdir().expect("tempdir");
+    let root_b = tempdir().expect("tempdir");
+    std::fs::write(corpus_a.path().join("alpha.txt"), "one two three").expect("test invariant");
+    std::fs::write(corpus_b.path().join("beta.txt"), "four five six").expect("test invariant");
+
+    // Two first-run detections (empty manifest), each with its own cache root.
+    detect_incremental_with_cache_root(corpus_a.path(), &Manifest::new(), Some(root_a.path()))
+        .expect("detect A");
+    detect_incremental_with_cache_root(corpus_b.path(), &Manifest::new(), Some(root_b.path()))
+        .expect("detect B");
+    flush_stat_index().expect("flush");
+
+    let idx = |root: &Path| {
+        root.join("graphify-out")
+            .join("cache")
+            .join("stat-index.json")
+    };
+    let text_a = std::fs::read_to_string(idx(root_a.path())).expect("root A index must exist");
+    let text_b = std::fs::read_to_string(idx(root_b.path())).expect("root B index must exist");
+
+    // Each root caches ONLY its own corpus — no cross-contamination.
+    assert!(text_a.contains("alpha.txt"), "root A must cache alpha.txt");
+    assert!(
+        !text_a.contains("beta.txt"),
+        "root A must not hold beta.txt"
+    );
+    assert!(text_b.contains("beta.txt"), "root B must cache beta.txt");
+    assert!(
+        !text_b.contains("alpha.txt"),
+        "root B must not hold alpha.txt"
     );
 }

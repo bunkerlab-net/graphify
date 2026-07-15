@@ -123,6 +123,21 @@ fn resolves_member_call_by_type() -> TestResult {
 }
 
 #[test]
+fn resolves_member_call_uppercase_ext() -> TestResult {
+    // #1671: uppercase `.RB` files are still Ruby, so the cross-file resolver's
+    // suffix guard must resolve their member calls too.
+    let tmp = tempdir()?;
+    write(tmp.path(), "HELPER.RB", HELPER_RB)?;
+    let main = write(tmp.path(), "MAIN.RB", MAIN_RB)?;
+    let graph = extract(&[main, tmp.path().join("HELPER.RB")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    let (_, conf) = call_edge(&graph, &labels, "process_all", "run")
+        .ok_or("uppercase-.RB member call must resolve")?;
+    assert_eq!(conf, "EXTRACTED");
+    Ok(())
+}
+
+#[test]
 fn resolution_is_type_based_not_name_luck() -> TestResult {
     // The differentiator: adding an unrelated Worker#run must NOT break the edge.
     // A name-match resolver drops this (two `run` defs => ambiguous); a type-based
@@ -220,6 +235,250 @@ fn reassignment_to_untyped_value_clears_type() -> TestResult {
     assert_eq!(
         rc.receiver_type, None,
         "reassign to an untyped value poisons the type"
+    );
+    Ok(())
+}
+// ── #1640 node extraction + #1634 constant-receiver resolution ──────────────
+
+/// Distinct node labels of a single-file extraction.
+fn fr_labels(r: &FileResult) -> std::collections::HashSet<&str> {
+    r.nodes.iter().map(|n| n.label.as_str()).collect()
+}
+
+/// `(source_label, target_label)` pairs for edges of the given `relation`.
+fn fr_rel_pairs<'a>(
+    r: &'a FileResult,
+    relation: &str,
+) -> std::collections::HashSet<(&'a str, &'a str)> {
+    let by_id: HashMap<&str, &str> = r
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.label.as_str()))
+        .collect();
+    r.edges
+        .iter()
+        .filter(|e| e.relation == relation)
+        .map(|e| {
+            (
+                *by_id.get(e.source.as_str()).unwrap_or(&""),
+                *by_id.get(e.target.as_str()).unwrap_or(&""),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn plain_module_gets_a_node_with_methods() -> TestResult {
+    // #1640 shape 1: `module Foo` must get a node and own its methods.
+    let tmp = tempdir()?;
+    let f = write(
+        tmp.path(),
+        "tax.rb",
+        "module TaxCalculator\n  module_function\n  def rate_for(order)\n    0.2\n  end\nend\n",
+    )?;
+    let r = extract_ruby(&f);
+    assert!(fr_labels(&r).contains("TaxCalculator"));
+    assert!(fr_rel_pairs(&r, "method").contains(&("TaxCalculator", ".rate_for()")));
+    Ok(())
+}
+
+#[test]
+fn nested_modules_each_get_a_node() -> TestResult {
+    // #1640 shape 1, nested.
+    let tmp = tempdir()?;
+    let f = write(
+        tmp.path(),
+        "n.rb",
+        "module Billing\n  module Rounding\n    def round(x)\n      x.round(2)\n    end\n  end\nend\n",
+    )?;
+    let r = extract_ruby(&f);
+    let labels = fr_labels(&r);
+    assert!(labels.contains("Billing") && labels.contains("Rounding"));
+    assert!(fr_rel_pairs(&r, "method").contains(&("Rounding", ".round()")));
+    Ok(())
+}
+
+#[test]
+fn struct_new_constant_creates_class_with_methods() -> TestResult {
+    // #1640 shape 2: `Foo = Struct.new(...) do ... end`.
+    let tmp = tempdir()?;
+    let f = write(
+        tmp.path(),
+        "invoice.rb",
+        "Invoice = Struct.new(:total, :tax) do\n  def grand_total\n    total + tax\n  end\nend\n",
+    )?;
+    let r = extract_ruby(&f);
+    assert!(fr_labels(&r).contains("Invoice"));
+    assert!(fr_rel_pairs(&r, "method").contains(&("Invoice", ".grand_total()")));
+    Ok(())
+}
+
+#[test]
+fn class_new_constant_creates_class_and_inherits() -> TestResult {
+    // #1640 shape 3: `Foo = Class.new(Super)` — node + inherits edge.
+    let tmp = tempdir()?;
+    let f = write(
+        tmp.path(),
+        "err.rb",
+        "ApiError = Class.new(StandardError)\n",
+    )?;
+    let r = extract_ruby(&f);
+    assert!(fr_labels(&r).contains("ApiError"));
+    assert!(fr_rel_pairs(&r, "inherits").contains(&("ApiError", "StandardError")));
+    Ok(())
+}
+
+#[test]
+fn data_define_constant_creates_class() -> TestResult {
+    let tmp = tempdir()?;
+    let f = write(tmp.path(), "res.rb", "Result = Data.define(:ok, :value)\n")?;
+    let r = extract_ruby(&f);
+    assert!(fr_labels(&r).contains("Result"));
+    Ok(())
+}
+
+#[test]
+fn constant_receiver_singleton_call_resolves() -> TestResult {
+    // #1634: `Processor.call` (def self.call) resolves to the singleton method.
+    let tmp = tempdir()?;
+    write(
+        tmp.path(),
+        "processor.rb",
+        "class Processor\n  def self.call; end\nend\n",
+    )?;
+    let runner = write(
+        tmp.path(),
+        "runner.rb",
+        "class Runner\n  def run\n    Processor.call\n  end\nend\n",
+    )?;
+    let graph = extract(&[runner, tmp.path().join("processor.rb")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    assert!(call_edge(&graph, &labels, "run", "call").is_some());
+    Ok(())
+}
+
+#[test]
+fn constant_receiver_module_function_call_resolves() -> TestResult {
+    // #1634 + #1640: `TaxCalculator.rate_for` resolves across files to a
+    // module_function — needs both the module node (#1640) and the resolver (#1634).
+    let tmp = tempdir()?;
+    write(
+        tmp.path(),
+        "tax.rb",
+        "module TaxCalculator\n  module_function\n  def rate_for(o)\n    0.2\n  end\nend\n",
+    )?;
+    let pp = write(
+        tmp.path(),
+        "pp.rb",
+        "class PaymentProcessor\n  def process(order)\n    TaxCalculator.rate_for(order)\n  end\nend\n",
+    )?;
+    let graph = extract(&[pp, tmp.path().join("tax.rb")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    assert!(call_edge(&graph, &labels, "process", "rate_for").is_some());
+    Ok(())
+}
+
+#[test]
+fn constant_receiver_unknown_class_method_falls_back_to_class() -> TestResult {
+    // #1634: `Model.where` (no `where` def) still links to the class node for
+    // blast-radius rather than dropping the edge.
+    let tmp = tempdir()?;
+    write(
+        tmp.path(),
+        "model.rb",
+        "class Model\n  def self.create; end\nend\n",
+    )?;
+    let caller = write(
+        tmp.path(),
+        "svc.rb",
+        "class Svc\n  def run\n    Model.where(id: 1)\n  end\nend\n",
+    )?;
+    let graph = extract(&[caller, tmp.path().join("model.rb")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    // No `where` method node exists, so the edge lands on the class node itself.
+    assert!(call_edge(&graph, &labels, "run", "Model").is_some());
+    Ok(())
+}
+
+#[test]
+fn ambiguous_constant_receiver_emits_no_edge() -> TestResult {
+    // Two classes named `Processor` => ambiguous receiver => bail (no wrong edge).
+    let tmp = tempdir()?;
+    write(
+        tmp.path(),
+        "a.rb",
+        "module A\n  class Processor\n    def self.call; end\n  end\nend\n",
+    )?;
+    write(
+        tmp.path(),
+        "b.rb",
+        "module B\n  class Processor\n    def self.call; end\n  end\nend\n",
+    )?;
+    let caller = write(
+        tmp.path(),
+        "c.rb",
+        "class Runner\n  def run\n    Processor.call\n  end\nend\n",
+    )?;
+    let graph = extract(
+        &[caller, tmp.path().join("a.rb"), tmp.path().join("b.rb")],
+        Some(tmp.path()),
+    );
+    let labels = label_map(&graph);
+    assert!(call_edge(&graph, &labels, "run", "call").is_none());
+    Ok(())
+}
+
+#[test]
+fn constant_receiver_never_binds_across_language_families() -> TestResult {
+    // The Ruby class index is `.rb`-scoped: a Ruby `Model.where` must not bind to
+    // a same-named Java `Model` (#1634 / cross-language guard). Only a Java `Model`
+    // exists here, so the call resolves to nothing rather than a phantom edge.
+    let tmp = tempdir()?;
+    write(
+        tmp.path(),
+        "Model.java",
+        "public class Model {\n    public static void where() {}\n}\n",
+    )?;
+    let caller = write(
+        tmp.path(),
+        "svc.rb",
+        "class Svc\n  def run\n    Model.where\n  end\nend\n",
+    )?;
+    let graph = extract(&[caller, tmp.path().join("Model.java")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    // A regressed all-language index would bind either to the Java `Model` class
+    // (target label `Model`) OR to its `.where()` method (target label `.where()`),
+    // so reject both.
+    assert!(
+        call_edge(&graph, &labels, "run", "Model").is_none(),
+        "Ruby call must not bind to a Java class of the same name"
+    );
+    assert!(
+        call_edge(&graph, &labels, "run", "where").is_none(),
+        "Ruby call must not bind to a Java method of the same name"
+    );
+    Ok(())
+}
+#[test]
+fn namespaced_constant_receiver_resolves_by_last_constant() -> TestResult {
+    // `Billing::Processor.call` — a namespaced receiver resolves by its last
+    // constant (`Processor`), exercising the `scope_resolution` receiver capture.
+    let tmp = tempdir()?;
+    write(
+        tmp.path(),
+        "processor.rb",
+        "module Billing\n  class Processor\n    def self.call; end\n  end\nend\n",
+    )?;
+    let runner = write(
+        tmp.path(),
+        "runner.rb",
+        "class Runner\n  def run\n    Billing::Processor.call\n  end\nend\n",
+    )?;
+    let graph = extract(&[runner, tmp.path().join("processor.rb")], Some(tmp.path()));
+    let labels = label_map(&graph);
+    assert!(
+        call_edge(&graph, &labels, "run", "call").is_some(),
+        "a namespaced receiver must resolve by its last constant"
     );
     Ok(())
 }

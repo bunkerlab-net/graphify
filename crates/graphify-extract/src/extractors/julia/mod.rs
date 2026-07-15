@@ -17,6 +17,9 @@ fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 
 /// Extract modules, structs, functions, imports, and calls from a `.jl` file.
 #[must_use]
+// Crossed 100 lines only after each `Node`/`Edge` literal gained a `node_type` /
+// `metadata` field (#1562); still a linear per-node-kind extraction.
+#[allow(clippy::too_many_lines)]
 pub fn extract_julia(path: &Path) -> FileResult {
     let source = match std::fs::read(path) {
         Ok(b) => b,
@@ -72,6 +75,7 @@ pub fn extract_julia(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();

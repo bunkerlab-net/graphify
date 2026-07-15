@@ -209,6 +209,7 @@ pub fn extract_json(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     // Find root object
@@ -291,6 +292,24 @@ struct JsonWalkCtx<'a> {
     seen_ids: &'a mut HashSet<String>,
 }
 
+/// Emit a `file_type = "concept"` node (deduped) for an external ref/dep target
+/// so the `extends`/`imports` edge below points at a real node (#1764). Mirrors
+/// the `add_node(..., file_type="concept")` calls in Python `extract_json`.
+fn push_concept(ctx: &mut JsonWalkCtx<'_>, nid: &str, label: &str, line: usize) {
+    if ctx.seen_ids.insert(nid.to_string()) {
+        ctx.nodes.push(Node {
+            id: nid.to_string(),
+            label: label.to_string(),
+            file_type: "concept".to_string(),
+            source_file: ctx.str_path.to_string(),
+            source_location: Some(format!("L{line}")),
+            metadata: None,
+            origin_file: None,
+            node_type: None,
+        });
+    }
+}
+
 #[allow(clippy::too_many_lines)] // linear dispatch over JSON object/value shapes
 fn walk_json_object(
     ctx: &mut JsonWalkCtx<'_>,
@@ -347,6 +366,7 @@ fn walk_json_object(
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         ctx.edges.push(Edge {
@@ -360,6 +380,8 @@ fn walk_json_object(
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
 
         let val = child.child_by_field_name("value");
@@ -384,6 +406,7 @@ fn walk_json_object(
                                 if !r.is_empty() {
                                     let ref_nid = make_id(&["ref", r]);
                                     if !ref_nid.is_empty() {
+                                        push_concept(ctx, &ref_nid, r, line);
                                         ctx.edges.push(Edge {
                                             external: false,
                                             source: key_nid.clone(),
@@ -395,6 +418,8 @@ fn walk_json_object(
                                             weight: 1.0,
                                             context: Some("import".to_string()),
                                             confidence_score: None,
+                                            deferred: false,
+                                            metadata: None,
                                         });
                                     }
                                 }
@@ -415,6 +440,7 @@ fn walk_json_object(
                     if key == "extends" && !val_text.is_empty() {
                         let ref_nid = make_id(&["ref", val_text]);
                         if !ref_nid.is_empty() {
+                            push_concept(ctx, &ref_nid, val_text, line);
                             ctx.edges.push(Edge {
                                 external: false,
                                 source: ctx.file_nid.to_string(),
@@ -426,6 +452,8 @@ fn walk_json_object(
                                 weight: 1.0,
                                 context: Some("import".to_string()),
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     } else if key == "$ref" && !val_text.is_empty() {
@@ -442,6 +470,8 @@ fn walk_json_object(
                                 weight: 1.0,
                                 context: None,
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     } else if parent_key.is_some_and(|pk| DEP_KEYS.contains(pk))
@@ -449,6 +479,7 @@ fn walk_json_object(
                     {
                         let dep_nid = make_id1(key);
                         if !dep_nid.is_empty() {
+                            push_concept(ctx, &dep_nid, key, line);
                             ctx.edges.push(Edge {
                                 external: false,
                                 source: key_nid.clone(),
@@ -460,6 +491,8 @@ fn walk_json_object(
                                 weight: 1.0,
                                 context: Some("import".to_string()),
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     }

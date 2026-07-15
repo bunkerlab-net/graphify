@@ -222,6 +222,8 @@ pub(super) fn resolve_swift_member_calls(
             weight: 1.0,
             context: Some("call".to_string()),
             confidence_score: Some(if type_qualified { 1.0 } else { 0.8 }),
+            deferred: false,
+            metadata: None,
         });
     }
     all_edges.extend(new_edges);

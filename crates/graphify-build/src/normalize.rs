@@ -43,6 +43,14 @@ pub fn norm_source_file(p: &str, root: Option<&str>) -> String {
             let root_path = PathBuf::from(r);
             if let Ok(rel) = path.strip_prefix(&root_path) {
                 out = rel.to_string_lossy().replace('\\', "/");
+            } else if let (Ok(cp), Ok(cr)) = (path.canonicalize(), root_path.canonicalize()) {
+                // Symlinked scan root (macOS /var→/private/var, symlinked home or
+                // worktree): the lexical strip fails, so retry against the resolved
+                // forms (#1571 follow-up). Only on the failure path, so the common
+                // lexical match stays filesystem-free.
+                if let Ok(rel) = cp.strip_prefix(&cr) {
+                    out = rel.to_string_lossy().replace('\\', "/");
+                }
             }
         }
     }

@@ -535,7 +535,3 @@ pub fn could_contain_included_path(path: &Path, root: &Path, patterns: &IgnorePa
     }
     false
 }
-
-#[cfg(test)]
-#[path = "ignore_tests.rs"]
-mod ignore_tests;

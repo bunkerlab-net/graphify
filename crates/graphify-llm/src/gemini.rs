@@ -131,6 +131,7 @@ pub fn call_gemini_plain(
     model: &str,
     prompt: &str,
     max_tokens: u32,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
         base_url: &base_url(),
@@ -142,6 +143,7 @@ pub fn call_gemini_plain(
         disable_thinking: false,
         extra_body: None,
         max_tokens,
+        usage,
     })
 }
 

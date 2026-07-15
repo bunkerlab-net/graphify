@@ -24,7 +24,7 @@ pub fn estimate_file_tokens(path: &Path) -> usize {
     }
     if let Ok(content) = std::fs::read_to_string(path) {
         let capped: String = content.chars().take(FILE_CHAR_CAP).collect();
-        tokenizer::estimate_file_tokens(&capped, PER_FILE_OVERHEAD_CHARS)
+        tokenizer::estimate_content_tokens(&capped, PER_FILE_OVERHEAD_CHARS)
     } else {
         // Fallback: use file size.
         let size = path
@@ -49,7 +49,7 @@ pub fn estimate_unit_tokens(unit: &Unit) -> usize {
         Unit::Slice(fs) => match read_slice_text(fs) {
             Some(content) => {
                 let capped: String = content.chars().take(FILE_CHAR_CAP).collect();
-                tokenizer::estimate_file_tokens(&capped, PER_FILE_OVERHEAD_CHARS)
+                tokenizer::estimate_content_tokens(&capped, PER_FILE_OVERHEAD_CHARS)
             }
             None => 0,
         },

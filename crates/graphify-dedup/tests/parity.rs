@@ -620,3 +620,39 @@ fn test_dedup_still_merges_crossfile_true_duplicates() {
         deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
     assert_eq!(result_nodes.len(), 1);
 }
+
+// ── #1504: cross-chunk node ID collision (first-writer-wins) ──────────────────
+// Asserts the behavioural contract: on an id collision across differing source
+// files the first node survives. The accompanying stderr WARNING is emitted by
+// `deduplicate_entities`; its exact text is not asserted here (in-process stderr
+// capture is impractical for a library call).
+
+#[test]
+fn test_cross_chunk_id_collision_keeps_first_node() {
+    let nodes = vec![
+        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-a/README.md"}),
+        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-b/README.md"}),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(
+        result_nodes[0].get("source_file").and_then(Value::as_str),
+        Some("module-a/README.md")
+    );
+}
+
+#[test]
+fn test_same_id_same_source_file_dedups_to_first() {
+    let nodes = vec![
+        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-a/README.md"}),
+        json!({"id": "readme_booking_service", "label": "Booking Service (dupe)", "file_type": "concept", "source_file": "module-a/README.md"}),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(
+        result_nodes[0].get("label").and_then(Value::as_str),
+        Some("Booking Service")
+    );
+}

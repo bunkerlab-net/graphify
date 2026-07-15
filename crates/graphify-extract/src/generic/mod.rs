@@ -15,12 +15,17 @@
 
 mod calls;
 pub mod config;
+mod cpp;
+mod csharp;
 mod graph;
+mod indirect;
 mod inherit;
+mod java;
 mod js_extra;
 mod names;
 pub(crate) mod references;
 mod ruby;
+mod ts;
 pub(crate) mod walk;
 
 pub use config::{ImportHandlerFn, LangConfig, LangId, ResolveFnNameFn};
@@ -83,6 +88,8 @@ pub(crate) fn extract_generic_with_source(
     let mut seen_ids: HashSet<String> = HashSet::new();
     let mut function_bodies: Vec<(String, tree_sitter::Node<'_>)> = Vec::new();
     let mut pending_listen_edges: Vec<(String, String, u32)> = Vec::new();
+    let mut callable_def_nids: HashSet<String> = HashSet::new();
+    let mut local_bound_names: HashMap<String, HashSet<String>> = HashMap::new();
 
     let file_nid = make_id1(&str_path);
     let filename = path
@@ -116,6 +123,12 @@ pub(crate) fn extract_generic_with_source(
             (HashSet::new(), HashSet::new())
         };
 
+    // C# namespace/using scope stacks, threaded through the walk so C# type nodes
+    // fold the enclosing namespace into their id and carry `namespace`/`scope_chain`
+    // metadata (#1562). Empty for every other language.
+    let mut csharp_ns_stack: Vec<String> = Vec::new();
+    let mut csharp_scope_stack: Vec<String> = Vec::new();
+
     let mut cur = root.walk();
     if cur.goto_first_child() {
         let mut walk_ctx = walk::WalkCtx {
@@ -131,6 +144,10 @@ pub(crate) fn extract_generic_with_source(
             swift_protocol_names: &swift_protocol_names,
             swift_class_names: &swift_class_names,
             pending_listen_edges: &mut pending_listen_edges,
+            csharp_ns_stack: &mut csharp_ns_stack,
+            csharp_scope_stack: &mut csharp_scope_stack,
+            callable_def_nids: &mut callable_def_nids,
+            local_bound_names: &mut local_bound_names,
         };
         loop {
             let child = cur.node();
@@ -159,6 +176,27 @@ pub(crate) fn extract_generic_with_source(
     let mut raw_calls: Vec<RawCall> = Vec::new();
     let mut seen_ref_pairs: HashSet<(String, String, String)> = HashSet::new();
 
+    // Case-sensitive `label -> nid` map + `nid -> source_file` for the indirect
+    // capture: an `indirect_call` reference binds by EXACT name (never the
+    // lowercased call map), preserving case-sensitivity hardening (#1581), and the
+    // source-file map tells a same-named local non-callable (reject) from an
+    // import-surfaced foreign symbol (defer to the cross-file resolver).
+    let mut label_to_nid_exact: HashMap<String, String> = HashMap::new();
+    let mut nid_to_sf: HashMap<String, String> = HashMap::new();
+    for n in &nodes {
+        nid_to_sf.insert(n.id.clone(), n.source_file.clone());
+        if n.node_type.as_deref() == Some("namespace") {
+            continue;
+        }
+        let key = n
+            .label
+            .trim_end_matches("()")
+            .trim_start_matches('.')
+            .to_string();
+        label_to_nid_exact.insert(key, n.id.clone());
+    }
+    let mut seen_indirect_pairs: HashSet<(String, String)> = HashSet::new();
+
     // Ruby: per-method `var -> ClassName` table from `var = Const.new` bindings,
     // populated before walk_calls so member-call raw_calls carry a `receiver_type`
     // for type-based cross-file resolution (#1499). Empty for non-Ruby files.
@@ -172,7 +210,67 @@ pub(crate) fn extract_generic_with_source(
             HashMap::new()
         };
 
-    {
+    // Java: per-*body* `receiver -> type` table (fields / params / locals, with
+    // `this.field`), built before walk_calls so member-call raw_calls carry a
+    // `receiver_type` for type-based cross-file resolution (#1696). Keyed per body
+    // (aligned with `function_bodies`), not per method NID, so overloaded methods
+    // — one NID, distinct bodies — each resolve against their own scope. Empty for
+    // non-Java files.
+    let java_body_types: Vec<HashMap<String, String>> = if config.lang_id == LangId::Java {
+        function_bodies
+            .iter()
+            .map(|(_, body)| java::build_java_receiver_types_for_body(*body, source))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let empty_java: HashMap<String, String> = HashMap::new();
+    // C#: a file-wide `name -> Type` table (field / property / param / local),
+    // built from the whole tree so class-level members are in scope for every
+    // method. Constant across bodies (unlike Java's per-body table). Empty for
+    // non-C# files (#1609).
+    let csharp_var_types: HashMap<String, String> = if config.lang_id == LangId::CSharp {
+        csharp::build_csharp_type_table(root, source)
+    } else {
+        HashMap::new()
+    };
+    // C++: a per-*body* `var -> ClassName` table from local declarations in that
+    // function body, so member-call raw_calls carry a `receiver_type` for
+    // type-based cross-file resolution (#1547). Keyed per body (like Java) so a
+    // local in one function never types a same-named local in another. DIVERGENCE
+    // from graphify-py, which accumulates one file-scoped table across bodies:
+    // that mis-resolves a same-named local to the first function's type (wrong C++
+    // scoping — locals are function-scoped). Empty for non-C++.
+    let cpp_body_types: Vec<HashMap<String, String>> = if config.lang_id == LangId::Cpp {
+        function_bodies
+            .iter()
+            .map(|(_, body)| {
+                let mut table = HashMap::new();
+                cpp::collect_cpp_local_var_types(*body, source, &mut table);
+                table
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // TS/JS: a file-wide `name -> TypeName` table (constructor-injected
+    // `this.field` types, local `new` bindings, typed params), so member-call
+    // raw_calls carry a `receiver_type` for cross-file resolution (#1316/#1630).
+    // Empty for non-TS/JS files.
+    let ts_var_types: HashMap<String, String> = if matches!(
+        config.lang_id,
+        LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+    ) {
+        ts::build_ts_type_table(root, source)
+    } else {
+        HashMap::new()
+    };
+    // JS/TS: ids of the function bodies walked with their own caller, so the
+    // closure-descent in `walk_calls` doesn't double-walk a tracked arrow (#1630).
+    let tracked_body_ids: std::collections::HashSet<usize> =
+        function_bodies.iter().map(|(_, b)| b.id()).collect();
+
+    for (i, (caller_nid, body_node)) in function_bodies.iter().enumerate() {
         let mut call_ctx = super::generic::calls::CallWalkCtx {
             config,
             str_path: &str_path,
@@ -183,9 +281,45 @@ pub(crate) fn extract_generic_with_source(
             raw_calls: &mut raw_calls,
             seen_ref_pairs: &mut seen_ref_pairs,
             ruby_var_types: &ruby_var_types,
+            java_var_types: java_body_types.get(i).unwrap_or(&empty_java),
+            csharp_var_types: &csharp_var_types,
+            cpp_var_types: cpp_body_types.get(i).unwrap_or(&empty_java),
+            ts_var_types: &ts_var_types,
+            tracked_body_ids: &tracked_body_ids,
+            label_to_nid_exact: &label_to_nid_exact,
+            nid_to_sf: &nid_to_sf,
+            callable_def_nids: &callable_def_nids,
+            local_bound_names: &local_bound_names,
+            seen_indirect_pairs: &mut seen_indirect_pairs,
         };
-        for (caller_nid, body_node) in &function_bodies {
-            walk_calls(&mut call_ctx, *body_node, caller_nid, source);
+        walk_calls(&mut call_ctx, *body_node, caller_nid, source);
+    }
+
+    // ── Module-level indirect dispatch (#1566) ─────────────────────────────────
+    // A function listed in a TOP-LEVEL dispatch table / bound to a module alias /
+    // named by a reflective `getattr` is an indirect dependency of the file node.
+    // Function/class bodies are walked above, so this scan stops at their
+    // boundaries. Python + JS/TS only.
+    if matches!(
+        config.lang_id,
+        LangId::Python | LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+    ) {
+        let mut ind = indirect::IndirectState {
+            str_path: &str_path,
+            label_to_nid_exact: &label_to_nid_exact,
+            nid_to_sf: &nid_to_sf,
+            callable_def_nids: &callable_def_nids,
+            edges: &mut edges,
+            raw_calls: &mut raw_calls,
+            seen_call_pairs: &seen_call_pairs,
+            seen_indirect_pairs: &mut seen_indirect_pairs,
+        };
+        if config.lang_id == LangId::Python {
+            let module_bound = indirect::python_module_bound_names(root, source);
+            indirect::scan_module_dispatch(&mut ind, root, &file_nid, &module_bound, source);
+        } else {
+            let module_bound = indirect::js_module_bound_names(root, source);
+            indirect::scan_js_module_dispatch(&mut ind, root, &file_nid, &module_bound, source);
         }
     }
 
@@ -217,6 +351,8 @@ pub(crate) fn extract_generic_with_source(
                 weight: 1.0,
                 context: None,
                 confidence_score: Some(1.0),
+                deferred: false,
+                metadata: None,
             });
         }
     }
@@ -225,6 +361,20 @@ pub(crate) fn extract_generic_with_source(
     // before cleaning, so a type used before it is declared resolves to the
     // real node instead of an orphaned bare-name duplicate.
     crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
+
+    // Stamp the durable `_callable` marker on every function / method / class def
+    // node so the cross-file `indirect_call` resolver can gate a callback-by-name
+    // against same-named data symbols AFTER id-remap. Rides the AST cache via node
+    // metadata; stripped before graph.json (mirrors graphify-py's `_callable`).
+    if !callable_def_nids.is_empty() {
+        for n in &mut nodes {
+            if callable_def_nids.contains(&n.id) {
+                n.metadata
+                    .get_or_insert_with(indexmap::IndexMap::new)
+                    .insert("_callable".to_string(), serde_json::Value::Bool(true));
+            }
+        }
+    }
 
     // ── Clean edges ───────────────────────────────────────────────────────────
     // Cross-module edge relations (`imports`, `imports_from`, `re_exports`)

@@ -16,6 +16,7 @@ pub mod lock;
 mod notify;
 pub mod rebuild;
 mod resource;
+pub mod test_support;
 mod watch_fn;
 
 pub use constants::WATCHED_EXTENSIONS;

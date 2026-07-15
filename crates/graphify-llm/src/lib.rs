@@ -63,7 +63,7 @@ pub use backends::{
     default_model_for_backend, detect_backend, detect_backend_with, format_backend_env_keys,
     get_backend_api_key, router,
 };
-pub use call::{call_llm, call_llm_with_model};
+pub use call::{UsageSink, call_llm, call_llm_with_model, call_llm_with_model_usage};
 pub use constants::{
     DEEP_EXTRACTION_SUFFIX, EXTRACTION_SYSTEM, FILE_CHAR_CAP, LLM_JSON_MAX_BYTES,
     PER_FILE_OVERHEAD_CHARS, extraction_system,
@@ -75,7 +75,7 @@ pub use file_slice::{
     slice_boundaries, unit_path,
 };
 pub use labeling::{
-    LABEL_BATCH_SIZE, LABEL_MAX_COMMUNITIES, LabelOptions, generate_community_labels,
+    LABEL_BATCH_SIZE, LABEL_MAX_COMMUNITIES, LabelOptions, LabelUsage, generate_community_labels,
     generate_community_labels_with, label_communities, label_communities_with,
     placeholder_community_labels,
 };

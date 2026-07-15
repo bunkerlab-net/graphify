@@ -190,9 +190,32 @@ fn call_ollama_plain_via_mock() {
     let mut g = EnvGuard::new();
     g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
 
-    let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32)
+    let out = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32, None)
         .expect("mock ollama server should return a plain-text response");
     assert_eq!(out, "ollama answers");
+}
+
+#[test]
+#[serial_test::serial(env)]
+fn call_ollama_does_not_retry_non_rate_limit_errors() {
+    // #1686: a wedged/erroring local Ollama request must fail fast, not multiply
+    // --api-timeout by SDK retries. Rust's send_json_with_retry retries only HTTP
+    // 429 (never timeouts/5xx), so a non-429 failure is attempted exactly once —
+    // the ~21min stall the Python fix guards against cannot occur here.
+    let mut server = mockito::Server::new();
+    let m = server
+        .mock("POST", "/chat/completions")
+        .with_status(500)
+        .with_body("upstream wedged")
+        .expect(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+
+    let result = call_ollama_plain("ollama", &server.url(), "llama-test", "ping", 32, None);
+    assert!(result.is_err(), "a 500 from ollama surfaces as an error");
+    m.assert(); // exactly one attempt — no retry storm
 }
 
 #[test]

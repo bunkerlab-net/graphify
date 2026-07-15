@@ -346,6 +346,10 @@ pub(crate) enum Command {
         /// Print per-stage wall-clock timings to stderr (#1490).
         #[arg(long)]
         timing: bool,
+        /// Index code (local AST, no LLM key) and skip doc/paper/image files on a
+        /// mixed repo (#1734).
+        #[arg(long = "code-only")]
+        code_only: bool,
     },
 
     /// Export graph to various formats.

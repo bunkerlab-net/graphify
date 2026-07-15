@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use graphify_extract::postprocess::{
-    disambiguate_colliding_node_ids, rewire_unique_stub_nodes, source_key,
+    disambiguate_colliding_node_ids, merge_decl_def_classes, rewire_unique_stub_nodes, source_key,
 };
 use graphify_extract::types::{Edge, Node, RawCall};
 
@@ -18,6 +18,7 @@ fn n(id: &str, label: &str, source_file: &str) -> Node {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }
 }
 
@@ -33,6 +34,8 @@ fn e(src: &str, tgt: &str, source_file: &str, relation: &str) -> Edge {
         context: None,
         confidence_score: None,
         external: false,
+        deferred: false,
+        metadata: None,
     }
 }
 
@@ -46,6 +49,8 @@ fn raw(caller: &str, callee: &str, source_file: &str) -> RawCall {
         source_location: String::new(),
         receiver: None,
         receiver_type: None,
+        lang: None,
+        ..Default::default()
     }
 }
 
@@ -230,5 +235,57 @@ fn salted_ids_unique_across_colliding_groups() {
         unique.len(),
         ids.len(),
         "all node ids must be distinct: {ids:?}"
+    );
+}
+
+#[test]
+fn merge_decl_def_cleanup_is_scoped_to_merged_ids() {
+    // A `Foo.h`/`Foo.cpp` pair collapses to one `Foo` node. The self-loop and
+    // duplicate edges the collapse created (touching `Foo`) are cleaned, but
+    // unrelated self-loops / duplicate edges elsewhere must survive — the cleanup
+    // is scoped to merged ids, not a corpus-wide sweep (which would make an
+    // unrelated file's edges depend on whether some pair merged).
+    let mut nodes = vec![
+        n("Foo", "Foo", "Foo.h"),
+        n("Foo", "Foo", "Foo.cpp"),
+        n("X", "X", "x.cpp"),
+    ];
+    let mut edges = vec![
+        e("Foo", "Foo", "Foo.cpp", "calls"), // merge-created self-loop -> drop
+        e("Foo", "X", "Foo.h", "calls"),     // dup 1 (touches Foo)
+        e("Foo", "X", "Foo.cpp", "calls"),   // dup 2 (touches Foo) -> dedup to 1
+        e("bar", "bar", "b.py", "calls"),    // unrelated self-loop -> survive
+        e("a", "b", "x.py", "calls"),        // unrelated dup 1 -> survive
+        e("a", "b", "x.py", "calls"),        // unrelated dup 2 -> survive
+    ];
+    merge_decl_def_classes(&mut nodes, &mut edges);
+    assert_eq!(
+        nodes.iter().filter(|n| n.id == "Foo").count(),
+        1,
+        "the header/impl `Foo` pair must collapse to one node"
+    );
+    assert!(
+        !edges.iter().any(|e| e.source == "Foo" && e.target == "Foo"),
+        "the merge-created self-loop on `Foo` must be dropped"
+    );
+    assert_eq!(
+        edges
+            .iter()
+            .filter(|e| e.source == "Foo" && e.target == "X")
+            .count(),
+        1,
+        "duplicate `Foo`->`X` edges must dedup to one"
+    );
+    assert!(
+        edges.iter().any(|e| e.source == "bar" && e.target == "bar"),
+        "an unrelated self-loop must survive the scoped cleanup"
+    );
+    assert_eq!(
+        edges
+            .iter()
+            .filter(|e| e.source == "a" && e.target == "b")
+            .count(),
+        2,
+        "unrelated duplicate edges must survive the scoped cleanup"
     );
 }

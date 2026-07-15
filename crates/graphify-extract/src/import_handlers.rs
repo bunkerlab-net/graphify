@@ -13,6 +13,7 @@ use tree_sitter::Node;
 use crate::generic::resolve_js_import_target;
 use crate::ids::{file_stem, make_id, make_id1};
 use crate::types::Edge;
+use serde_json::Value;
 
 /// Return the source bytes covered by `node` as an owned `String` (lossy UTF-8).
 fn read_text_owned(node: Node<'_>, source: &[u8]) -> String {
@@ -39,6 +40,8 @@ pub(crate) fn make_edge(
         weight: 1.0,
         context: context.map(str::to_string),
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     }
 }
 
@@ -263,9 +266,21 @@ pub fn import_js(
     if cur.goto_first_child() {
         loop {
             let child = cur.node();
-            if child.kind() == "string" {
+            // The module string is a direct `string` child, or — for the TS
+            // import-equals form `import x = require("./m")` — sits inside an
+            // `import_require_clause`, which the direct-child scan never sees
+            // (9811def).
+            let string_node = if child.kind() == "string" {
+                Some(child)
+            } else if child.kind() == "import_require_clause" {
+                let mut cc = child.walk();
+                child.children(&mut cc).find(|s| s.kind() == "string")
+            } else {
+                None
+            };
+            if let Some(sn) = string_node {
                 found_string = true;
-                let raw = read_text_owned(child, source)
+                let raw = read_text_owned(sn, source)
                     .trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ' ')
                     .to_string();
                 if raw.is_empty() {
@@ -580,45 +595,79 @@ pub(crate) fn resolve_c_include_path(raw: &str, str_path: &str) -> Option<std::p
 
 // ── C# ────────────────────────────────────────────────────────────────────────
 
-/// Emit an `imports` edge for a C# `using_directive` node.
-pub fn import_csharp(
+/// Emit an `imports` edge for a C# `using_directive`, carrying `using_kind` /
+/// `target_fqn` / `alias` and lexical-scope (`scope_kind`/`scope_id`) metadata
+/// (#1562). Mirrors graphify-py `_import_csharp`. Driven from the structural walk
+/// (not the generic import-handler slot) because it needs the enclosing-namespace
+/// `scope_stack`.
+pub(crate) fn import_csharp(
     source: &[u8],
     node: Node<'_>,
     file_nid: &str,
-    _stem: &str,
     str_path: &str,
     edges: &mut Vec<Edge>,
+    scope_stack: &[String],
 ) {
-    let line = node.start_position().row as u32 + 1;
-    let mut cur = node.walk();
-    if !cur.goto_first_child() {
+    let raw = read_text_owned(node, source);
+    let mut text = raw.trim().trim_end_matches(';').trim();
+    if let Some(rest) = text.strip_prefix("global ") {
+        text = rest.trim();
+    }
+    let Some(body) = text.strip_prefix("using") else {
+        return;
+    };
+    let body = body.trim();
+    let (using_kind, alias, target_fqn): (&str, Option<String>, String) =
+        if let Some(rest) = body.strip_prefix("static ") {
+            ("static", None, rest.trim().to_string())
+        } else if let Some((lhs, rhs)) = body.split_once('=') {
+            (
+                "alias",
+                Some(lhs.trim().to_string()),
+                rhs.trim().to_string(),
+            )
+        } else {
+            ("namespace", None, body.to_string())
+        };
+    if target_fqn.is_empty() {
         return;
     }
-    loop {
-        let child = cur.node();
-        if matches!(
-            child.kind(),
-            "qualified_name" | "identifier" | "name_equals"
-        ) {
-            let raw = read_text_owned(child, source);
-            let module_name = raw.split('.').next_back().unwrap_or("").trim().to_string();
-            if !module_name.is_empty() {
-                let tgt_nid = make_id1(&module_name);
-                edges.push(make_edge(
-                    file_nid,
-                    &tgt_nid,
-                    "imports",
-                    Some("import"),
-                    str_path,
-                    line,
-                ));
-            }
-            break;
-        }
-        if !cur.goto_next_sibling() {
-            break;
-        }
+    // metadata order mirrors graphify-py: using_kind, [alias], target_fqn,
+    // scope_kind, [scope_id] (None values omitted).
+    let mut pairs: Vec<(&str, Value)> = vec![("using_kind", Value::String(using_kind.to_string()))];
+    if let Some(a) = &alias {
+        pairs.push(("alias", Value::String(a.clone())));
     }
+    pairs.push(("target_fqn", Value::String(target_fqn.clone())));
+    pairs.push((
+        "scope_kind",
+        Value::String(
+            if scope_stack.is_empty() {
+                "file"
+            } else {
+                "namespace"
+            }
+            .to_string(),
+        ),
+    ));
+    if let Some(sid) = scope_stack.last() {
+        pairs.push(("scope_id", Value::String(sid.clone())));
+    }
+    let line = node.start_position().row as u32 + 1;
+    edges.push(Edge {
+        external: false,
+        source: file_nid.to_string(),
+        target: make_id1(&target_fqn),
+        relation: "imports".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: str_path.to_string(),
+        source_location: Some(format!("L{line}")),
+        weight: 1.0,
+        context: Some("import".to_string()),
+        confidence_score: None,
+        deferred: false,
+        metadata: crate::generic::walk::sanitized_metadata(pairs),
+    });
 }
 
 // ── Kotlin ───────────────────────────────────────────────────────────────────
@@ -788,6 +837,8 @@ pub fn import_lua(
                 weight: 1.0,
                 context: Some("import".to_string()),
                 confidence_score: Some(1.0),
+                deferred: false,
+                metadata: None,
             });
         }
     }

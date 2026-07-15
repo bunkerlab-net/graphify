@@ -72,6 +72,7 @@ impl<'tree> DmCtx<'_, 'tree> {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
     }
@@ -91,6 +92,8 @@ impl<'tree> DmCtx<'_, 'tree> {
             context: context.map(str::to_string),
             confidence_score: None,
             external: false,
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -151,6 +154,8 @@ impl<'tree> DmCtx<'_, 'tree> {
                     context: Some("import".to_string()),
                     confidence_score: None,
                     external,
+                    deferred: false,
+                    metadata: None,
                 });
             }
             "type_definition" => {
@@ -264,6 +269,8 @@ impl CallCtx<'_> {
                 context: Some("call".to_string()),
                 confidence_score: None,
                 external: false,
+                deferred: false,
+                metadata: None,
             });
             return;
         }
@@ -275,6 +282,8 @@ impl CallCtx<'_> {
             source_location: format!("L{line}"),
             receiver: None,
             receiver_type: None,
+            lang: None,
+            ..Default::default()
         });
     }
 
@@ -333,6 +342,8 @@ impl CallCtx<'_> {
                                 context: Some("call".to_string()),
                                 confidence_score: None,
                                 external: false,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     }

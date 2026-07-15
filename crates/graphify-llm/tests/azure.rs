@@ -156,7 +156,7 @@ fn call_azure_plain_returns_content() {
         )
         .create();
 
-    let out = azure::call_azure_plain("tk", &server.url(), "gpt-4o", "hi", 64)
+    let out = azure::call_azure_plain("tk", &server.url(), "gpt-4o", "hi", 64, None)
         .expect("plain call succeeds");
     assert_eq!(out, "hello");
     mock.assert();

@@ -9,8 +9,15 @@ use std::path::{Path, PathBuf};
 
 /// The tree-sitter grammar for a JS/TS file, by extension (vue/others skipped).
 fn js_grammar_for(path: &Path) -> Option<tree_sitter::Language> {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("ts") => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+    // Case-insensitive extension (#1671): a capitalized TS extension (`.Ts`) is
+    // still TypeScript. DIVERGENCE from graphify-py's case-sensitive check.
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("ts" | "mts" | "cts") => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         Some("tsx") => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         Some("js" | "jsx" | "mjs" | "cjs") => Some(tree_sitter_javascript::LANGUAGE.into()),
         _ => None,
@@ -224,7 +231,7 @@ pub(super) fn resolve_js_default_imports(
                 line,
             ));
         }
-        aliases.insert((importer_nid, local.to_lowercase()), origin.clone());
+        aliases.insert((importer_nid, local.clone()), origin.clone());
     }
 
     JsDefaultResolution { edges, aliases }
@@ -567,10 +574,7 @@ impl ReexportResolver<'_> {
                         *line,
                     ));
                 }
-                aliases.insert(
-                    (consumer_nid.clone(), local.to_lowercase()),
-                    origin_sym.clone(),
-                );
+                aliases.insert((consumer_nid.clone(), local.clone()), origin_sym.clone());
             }
         }
         (edges, aliases)

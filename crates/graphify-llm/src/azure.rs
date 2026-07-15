@@ -223,6 +223,7 @@ pub fn call_azure_plain(
     model: &str,
     prompt: &str,
     max_tokens: u32,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     let url = chat_url(endpoint, model);
     graphify_security::validate_url(&url)?;
@@ -235,6 +236,13 @@ pub fn call_azure_plain(
         body["temperature"] = json!(t);
     }
     let value = send_azure_request(api_key, &url, &body)?;
+    if let Some(sink) = usage {
+        let u = &value["usage"];
+        sink.record(
+            u["prompt_tokens"].as_u64().unwrap_or(0),
+            u["completion_tokens"].as_u64().unwrap_or(0),
+        );
+    }
     Ok(value
         .get("choices")
         .and_then(Value::as_array)

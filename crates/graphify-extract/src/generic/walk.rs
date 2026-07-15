@@ -9,7 +9,7 @@
 // lines do not exist in practice, so usize→u32 truncation is safe.
 #![allow(clippy::cast_possible_truncation)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -19,18 +19,21 @@ use crate::ids::{make_id, make_id1};
 use crate::types::{Edge, Node as GNode};
 
 use super::config::{LangConfig, LangId};
+use super::indirect::{js_local_bound_names, python_local_bound_names};
 use super::inherit::{
     emit_cpp_inheritance, emit_csharp_inheritance, emit_java_inheritance, emit_kotlin_inheritance,
-    emit_php_inheritance, emit_scala_inheritance, emit_swift_inheritance, emit_ts_inheritance,
+    emit_php_inheritance, emit_ruby_inheritance, emit_scala_inheritance, emit_swift_inheritance,
+    emit_ts_inheritance,
 };
 use super::js_extra::{
-    JsAssignTarget, is_js_function_value, js_extra_walk, js_member_assignment_target,
+    JsAssignTarget, emit_ts_decorator_edges, is_js_function_value, js_extra_walk,
+    js_member_assignment_target,
 };
 use super::names::{get_cpp_func_name, read_csharp_type_name, read_text_owned};
 
 pub(crate) use super::graph::{
-    add_edge, add_node, any_child_kind, ensure_named_node, find_body, first_child_kind,
-    named_children,
+    add_edge, add_edge_meta, add_node, any_child_kind, ensure_named_node, find_body,
+    first_child_kind, named_children,
 };
 
 // ── Function-level reference edges ────────────────────────────────────────────
@@ -50,9 +53,10 @@ fn emit_function_reference_edges(
     source: &[u8],
     func_nid: &str,
     line: u32,
+    parent_class_nid: Option<&str>,
 ) {
     use super::references::{
-        PHP_TYPE_NODE_KINDS, RefRole, c_collect_type_refs, cpp_collect_type_refs,
+        CsharpTypeRef, PHP_TYPE_NODE_KINDS, RefRole, c_collect_type_refs, cpp_collect_type_refs,
         csharp_attribute_names, csharp_collect_type_refs, java_annotation_names,
         java_collect_type_refs, kotlin_collect_type_refs, kotlin_function_return_type_node,
         php_collect_type_refs, php_method_return_type_node, python_collect_param_refs,
@@ -117,6 +121,21 @@ fn emit_function_reference_edges(
             }
         }
         LangId::CSharp => {
+            // Materialise a (possibly sourceless) target stub for a C# type ref
+            // and emit a `references` edge carrying ref_token/qualified metadata.
+            let emit_cs = |ctx: &mut WalkCtx<'_, '_>, r: &CsharpTypeRef, context: &'static str| {
+                let target = super::inherit::emit_base_node(
+                    &r.name,
+                    line,
+                    stem,
+                    str_path,
+                    ctx.nodes,
+                    ctx.seen_ids,
+                );
+                if target != func_nid {
+                    push_csharp_ref_edge(ctx, func_nid, target, r, context, line);
+                }
+            };
             if let Some(params_node) = node.child_by_field_name("parameters") {
                 let mut cur = params_node.walk();
                 if cur.goto_first_child() {
@@ -124,10 +143,10 @@ fn emit_function_reference_edges(
                         if cur.node().kind() == "parameter"
                             && let Some(type_node) = cur.node().child_by_field_name("type")
                         {
-                            let mut refs: Vec<(String, RefRole)> = Vec::new();
+                            let mut refs: Vec<CsharpTypeRef> = Vec::new();
                             csharp_collect_type_refs(type_node, source, false, &mut refs);
-                            for (name, role) in refs {
-                                emit_ref(ctx, &name, role.into_context("parameter_type"));
+                            for r in &refs {
+                                emit_cs(ctx, r, r.role.into_context("parameter_type"));
                             }
                         }
                         if !cur.goto_next_sibling() {
@@ -137,14 +156,14 @@ fn emit_function_reference_edges(
                 }
             }
             if let Some(return_node) = node.child_by_field_name("returns") {
-                let mut refs: Vec<(String, RefRole)> = Vec::new();
+                let mut refs: Vec<CsharpTypeRef> = Vec::new();
                 csharp_collect_type_refs(return_node, source, false, &mut refs);
-                for (name, role) in refs {
-                    emit_ref(ctx, &name, role.into_context("return_type"));
+                for r in &refs {
+                    emit_cs(ctx, r, r.role.into_context("return_type"));
                 }
             }
-            for attr_name in csharp_attribute_names(node, source) {
-                emit_ref(ctx, &attr_name, "attribute");
+            for r in csharp_attribute_names(node, source) {
+                emit_cs(ctx, &r, "attribute");
             }
         }
         LangId::Java => {
@@ -197,6 +216,12 @@ fn emit_function_reference_edges(
                             let mut refs: Vec<(String, RefRole)> = Vec::new();
                             ts_collect_type_refs(type_node, source, false, &mut refs);
                             for (name, role) in refs {
+                                // A builtin global type (Date, Promise, Map, …)
+                                // must not casefold-bind a same-named user class
+                                // (#1726); skip it as the resolvers do.
+                                if crate::builtins::is_language_builtin_global(&name) {
+                                    continue;
+                                }
                                 emit_ref(ctx, &name, role.into_context("parameter_type"));
                             }
                         }
@@ -210,6 +235,9 @@ fn emit_function_reference_edges(
                 let mut refs: Vec<(String, RefRole)> = Vec::new();
                 ts_collect_type_refs(return_type_node, source, false, &mut refs);
                 for (name, role) in refs {
+                    if crate::builtins::is_language_builtin_global(&name) {
+                        continue;
+                    }
                     emit_ref(ctx, &name, role.into_context("return_type"));
                 }
             }
@@ -238,7 +266,11 @@ fn emit_function_reference_edges(
         LangId::Php => {
             if let Some(params) = first_child_kind(node, "formal_parameters") {
                 for p in named_children(params) {
-                    if p.kind() != "simple_parameter" {
+                    // PHP 8 constructor property promotion parses a promoted param
+                    // as `property_promotion_parameter` (type in the same shape); a
+                    // promoted param is additionally a real class field (51f805e).
+                    let is_promoted = p.kind() == "property_promotion_parameter";
+                    if !is_promoted && p.kind() != "simple_parameter" {
                         continue;
                     }
                     if let Some(type_node) = named_children(p)
@@ -249,6 +281,30 @@ fn emit_function_reference_edges(
                         php_collect_type_refs(type_node, source, false, &mut refs);
                         for (name, role) in refs {
                             emit_ref(ctx, &name, role.into_context("parameter_type"));
+                            // A promoted param also declares a class field; mirror
+                            // the property_declaration field edge so the type is
+                            // discoverable as a class field too (51f805e).
+                            if is_promoted && let Some(parent) = parent_class_nid {
+                                let target = super::inherit::emit_base_node(
+                                    &name,
+                                    line,
+                                    stem,
+                                    str_path,
+                                    ctx.nodes,
+                                    ctx.seen_ids,
+                                );
+                                if target != parent {
+                                    add_edge(
+                                        parent,
+                                        &target,
+                                        "references",
+                                        line,
+                                        str_path,
+                                        Some(role.into_context("field")),
+                                        ctx.edges,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -353,6 +409,41 @@ fn emit_function_reference_edges(
     }
 }
 
+/// Push a C# `references` edge from `src` to `target` carrying `ref_token` /
+/// `qualified` / `ref_qualifier` metadata (#1562). `qualified`/`ref_qualifier`
+/// are omitted when false/empty. `context` is the ref-role context.
+fn push_csharp_ref_edge(
+    ctx: &mut WalkCtx<'_, '_>,
+    src: &str,
+    target: String,
+    r: &super::references::CsharpTypeRef,
+    context: &'static str,
+    line: u32,
+) {
+    let mut pairs: Vec<(&str, Value)> = vec![("ref_token", Value::String(r.name.clone()))];
+    if r.qualified {
+        pairs.push(("qualified", Value::Bool(true)));
+    }
+    if !r.qualifier.is_empty() {
+        pairs.push(("ref_qualifier", Value::String(r.qualifier.clone())));
+    }
+    let str_path = ctx.str_path;
+    ctx.edges.push(Edge {
+        external: false,
+        source: src.to_string(),
+        target,
+        relation: "references".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: str_path.to_string(),
+        source_location: Some(format!("L{line}")),
+        weight: 1.0,
+        context: Some(context.to_string()),
+        confidence_score: None,
+        deferred: false,
+        metadata: sanitized_metadata(pairs),
+    });
+}
+
 /// Emit `references` edges (context `field` or `generic_arg`) from a class
 /// member's type node, using the supplied language type-ref `collect`or.
 /// Self-references (member type == enclosing class) are skipped.
@@ -377,6 +468,34 @@ fn emit_member_type_refs(
                 ctx.str_path,
                 Some(role.into_context("field")),
                 ctx.edges,
+            );
+        }
+    }
+}
+
+/// Emit C# member-type `references` edges (`field` / `generic_arg`) with
+/// `ref_token`/`qualified`/`ref_qualifier` metadata (#1562), skipping a
+/// self-reference to the enclosing class. The C# analogue of
+/// [`emit_member_type_refs`], which cannot carry the qualifier metadata.
+fn emit_csharp_member_type_refs(
+    ctx: &mut WalkCtx<'_, '_>,
+    type_node: Node<'_>,
+    parent_nid: &str,
+    line: u32,
+    source: &[u8],
+) {
+    let mut refs: Vec<super::references::CsharpTypeRef> = Vec::new();
+    super::references::csharp_collect_type_refs(type_node, source, false, &mut refs);
+    for r in &refs {
+        let target = ensure_named_node(&r.name, ctx.stem, ctx.str_path, ctx.nodes, ctx.seen_ids);
+        if target != parent_nid {
+            push_csharp_ref_edge(
+                ctx,
+                parent_nid,
+                target,
+                r,
+                r.role.into_context("field"),
+                line,
             );
         }
     }
@@ -471,6 +590,74 @@ pub(super) struct WalkCtx<'a, 'tree> {
     /// the structural walk and resolved to `listened_by` edges after every node
     /// exists. `(event_class, listener_class, line)`. Empty for non-PHP files.
     pub pending_listen_edges: &'a mut Vec<(String, String, u32)>,
+    /// C# enclosing-namespace stack (dotted parts) — folded into C# type node ids
+    /// and stamped as `namespace` metadata. Empty for every other language (#1562).
+    pub csharp_ns_stack: &'a mut Vec<String>,
+    /// C# lexical scope-id stack (one `s{start_byte}` per open namespace block),
+    /// stamped as `scope_chain` metadata so a `using` binds only in its block.
+    pub csharp_scope_stack: &'a mut Vec<String>,
+    /// Ids of function / method / class definitions in this file — the callable
+    /// defs an `indirect_call` reference may resolve to. Populated as each callable
+    /// node is created; read by the same-file indirect capture and stamped as a
+    /// durable `_callable` node marker for the cross-file resolver (#1565/#1566).
+    pub callable_def_nids: &'a mut HashSet<String>,
+    /// Python / JS-TS only: per-function set of names bound LOCALLY (params +
+    /// assignment / for / with-as / comprehension targets). The indirect-dispatch
+    /// shadow guard skips a call-argument identifier in the enclosing function's
+    /// set, so a param / local shadowing a module fn name yields no edge. Empty for
+    /// other languages.
+    pub local_bound_names: &'a mut HashMap<String, HashSet<String>>,
+}
+
+/// C# namespace name from a `namespace_declaration` /
+/// `file_scoped_namespace_declaration`: the `name` field, else the first
+/// `identifier`/`qualified_name` child. Mirrors graphify-py `_csharp_namespace_name`.
+fn csharp_namespace_name(node: Node<'_>, source: &[u8]) -> String {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        return read_text_owned(name_node, source).trim().to_string();
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if matches!(c.kind(), "identifier" | "qualified_name") {
+                return read_text_owned(c, source).trim().to_string();
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    String::new()
+}
+
+/// Canonical C# namespace node id: `csharp_namespace:` + first 16 hex of the
+/// SHA-1 of the dotted name. Mirrors graphify-py `_csharp_namespace_id`.
+#[must_use]
+fn csharp_namespace_id(dotted: &str) -> String {
+    use sha1::{Digest, Sha1};
+    format!(
+        "csharp_namespace:{}",
+        &hex::encode(Sha1::digest(dotted.as_bytes()))[..16]
+    )
+}
+
+/// Sanitised node/edge metadata map from key/value pairs (insertion order kept),
+/// or `None` when empty. Routes values through the shared metadata sanitiser so
+/// stamped source text can't inject markup (#1562).
+pub(crate) fn sanitized_metadata(pairs: Vec<(&str, Value)>) -> Option<IndexMap<String, Value>> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    for (k, v) in pairs {
+        map.insert(k.to_string(), v);
+    }
+    Some(
+        graphify_security::sanitize_metadata_map(&map)
+            .into_iter()
+            .collect(),
+    )
 }
 
 /// Recursive structural AST walk that emits nodes and edges for classes,
@@ -497,6 +684,20 @@ pub(super) fn walk<'tree>(
 
     // ── Imports ──────────────────────────────────────────────────────────────
     if config.import_types.contains(&t) {
+        // C#: `using` directives carry lexical-scope + kind metadata and need the
+        // namespace scope stack, so they are emitted here rather than via the
+        // generic import-handler slot (#1562).
+        if config.lang_id == LangId::CSharp && t == "using_directive" {
+            crate::import_handlers::import_csharp(
+                source,
+                node,
+                file_nid,
+                str_path,
+                ctx.edges,
+                ctx.csharp_scope_stack,
+            );
+            return;
+        }
         if let Some(handler) = config.import_handler {
             handler(source, node, file_nid, stem, str_path, ctx.edges);
         }
@@ -521,7 +722,65 @@ pub(super) fn walk<'tree>(
                 source_location: Some(format!("L{line}")),
                 metadata: Some(metadata),
                 origin_file: None,
+                node_type: None,
             });
+        }
+        // JS/TS `export * as ns from './x'`: synthesise the `ns` binding node, a
+        // file→binding `contains` edge (context `namespace_export`), and a
+        // file→target-file `re_exports` edge (context `export`) (#1552). Emitted
+        // here (before the id remap) so the node id and the consumer's per-file
+        // `import { ns }` edge target — both `make_id([stem, ns])` — canonicalise
+        // identically. `import_js` still emits the `imports_from` source edge.
+        if matches!(
+            config.lang_id,
+            LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+        ) && t == "export_statement"
+        {
+            let mut nsc = node.walk();
+            let children: Vec<tree_sitter::Node<'_>> = node.children(&mut nsc).collect();
+            let ns_name = children
+                .iter()
+                .find(|ch| ch.kind() == "namespace_export")
+                .and_then(|ne| {
+                    let mut ic = ne.walk();
+                    ne.children(&mut ic)
+                        .find(|x| x.kind() == "identifier")
+                        .map(|x| read_text_owned(x, source))
+                });
+            let src_raw = children.iter().find(|ch| ch.kind() == "string").map(|s| {
+                read_text_owned(*s, source)
+                    .trim_matches(|q| q == '\'' || q == '"' || q == '`' || q == ' ')
+                    .to_string()
+            });
+            if let (Some(ns_name), Some(src_raw)) = (ns_name, src_raw)
+                && !ns_name.is_empty()
+                && !src_raw.is_empty()
+            {
+                let line = node.start_position().row as u32 + 1;
+                let ns_id = make_id(&[stem, &ns_name]);
+                add_node(&ns_id, &ns_name, line, str_path, ctx.nodes, ctx.seen_ids);
+                add_edge(
+                    file_nid,
+                    &ns_id,
+                    "contains",
+                    line,
+                    str_path,
+                    Some("namespace_export"),
+                    ctx.edges,
+                );
+                let (tgt_nid, _) = super::resolve_js_import_target(&src_raw, str_path);
+                if !tgt_nid.is_empty() {
+                    add_edge(
+                        file_nid,
+                        &tgt_nid,
+                        "re_exports",
+                        line,
+                        str_path,
+                        Some("export"),
+                        ctx.edges,
+                    );
+                }
+            }
         }
         // `export_statement` may also wrap a declaration body
         // (`export function App() {}` / `export class Foo {}`) — keep
@@ -553,19 +812,63 @@ pub(super) fn walk<'tree>(
         });
         let Some(name_node) = name_node else { return };
         let class_name = read_text_owned(name_node, source);
-        let class_nid = make_id(&[stem, &class_name]);
         let line = node.start_position().row as u32 + 1;
-        add_node(
-            &class_nid,
-            &class_name,
-            line,
-            str_path,
-            ctx.nodes,
-            ctx.seen_ids,
-        );
+        // C#: fold the enclosing namespace into the id and stamp
+        // is_nested_type / namespace / scope_chain metadata (#1562). A no-op for
+        // other languages, whose namespace stack is always empty.
+        let class_nid = if config.lang_id == LangId::CSharp {
+            let ns = ctx.csharp_ns_stack.join(".");
+            let nid = make_id(&[stem, &ns, &class_name]);
+            if ctx.seen_ids.insert(nid.clone()) {
+                let mut pairs: Vec<(&str, Value)> = Vec::new();
+                if parent_class_nid.is_some() {
+                    pairs.push(("is_nested_type", Value::Bool(true)));
+                }
+                if !ns.is_empty() {
+                    pairs.push(("namespace", Value::String(ns)));
+                }
+                if !ctx.csharp_scope_stack.is_empty() {
+                    pairs.push((
+                        "scope_chain",
+                        Value::Array(
+                            ctx.csharp_scope_stack
+                                .iter()
+                                .map(|s| Value::String(s.clone()))
+                                .collect(),
+                        ),
+                    ));
+                }
+                ctx.nodes.push(GNode {
+                    id: nid.clone(),
+                    label: class_name.clone(),
+                    file_type: "code".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    node_type: None,
+                    metadata: sanitized_metadata(pairs),
+                    origin_file: None,
+                });
+            }
+            nid
+        } else {
+            let nid = make_id(&[stem, &class_name]);
+            add_node(&nid, &class_name, line, str_path, ctx.nodes, ctx.seen_ids);
+            nid
+        };
         add_edge(
             file_nid, &class_nid, "contains", line, str_path, None, ctx.edges,
         );
+        ctx.callable_def_nids.insert(class_nid.clone()); // a class is callable (constructor)
+        // TS/JS decorators on the class and its members (@Component, @Injectable,
+        // @Input, @Inject, @Entity, …) — a `references[decorator]` edge from the
+        // decorated entity to the decorator symbol. Decorators live only in class
+        // subtrees, so one pass over the class covers them (3540416).
+        if matches!(
+            config.lang_id,
+            LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX
+        ) {
+            emit_ts_decorator_edges(ctx, node, &class_nid, source);
+        }
 
         // Python inheritance
         if config.lang_id == LangId::Python
@@ -590,6 +893,7 @@ pub(super) fn walk<'tree>(
                                     source_location: None,
                                     metadata: None,
                                     origin_file: Some(str_path.to_string()),
+                                    node_type: None,
                                 });
                                 ctx.seen_ids.insert(bn.clone());
                             }
@@ -616,8 +920,9 @@ pub(super) fn walk<'tree>(
             emit_csharp_inheritance(ctx, node, source, &class_nid, line);
         }
 
-        // Java extends/implements
-        if config.lang_id == LangId::Java {
+        // Java / Groovy extends/implements — tree-sitter-groovy exposes the same
+        // `superclass`/`interfaces` fields, so the Java path handles both (64a6093).
+        if matches!(config.lang_id, LangId::Java | LangId::Groovy) {
             emit_java_inheritance(ctx, node, source, &class_nid, t, line);
             // Type-level annotations (`@Service`, `@Entity`) -> references (#1487).
             for anno_name in super::references::java_annotation_names(node, source) {
@@ -660,6 +965,11 @@ pub(super) fn walk<'tree>(
         // Scala extends_clause + constructor parameters
         if config.lang_id == LangId::Scala {
             emit_scala_inheritance(ctx, node, source, &class_nid, line);
+        }
+
+        // Ruby superclass (`class Dog < Animal`)
+        if config.lang_id == LangId::Ruby {
+            emit_ruby_inheritance(ctx, node, source, &class_nid, line);
         }
 
         // TS/JS class_heritage (extends_clause + implements_clause)
@@ -706,12 +1016,25 @@ pub(super) fn walk<'tree>(
             }
             None
         });
-        if let Some(type_name) = read_csharp_type_name(type_node, source)
-            && !type_name.is_empty()
+        if let Some(info) = read_csharp_type_name(type_node, source)
+            && !info.name.is_empty()
+            && !super::references::csharp_type_parameters_in_scope(
+                type_node.unwrap_or(node),
+                source,
+            )
+            .contains(&info.name)
         {
             let line = node.start_position().row as u32 + 1;
-            let tgt = ensure_named_node(&type_name, stem, str_path, ctx.nodes, ctx.seen_ids);
-            let e = Edge {
+            let tgt = ensure_named_node(&info.name, stem, str_path, ctx.nodes, ctx.seen_ids);
+            let mut pairs: Vec<(&str, Value)> =
+                vec![("ref_token", Value::String(info.name.clone()))];
+            if info.qualified {
+                pairs.push(("qualified", Value::Bool(true)));
+            }
+            if !info.qualifier.is_empty() {
+                pairs.push(("ref_qualifier", Value::String(info.qualifier.clone())));
+            }
+            ctx.edges.push(Edge {
                 external: false,
                 source: parent.to_string(),
                 target: tgt,
@@ -722,8 +1045,26 @@ pub(super) fn walk<'tree>(
                 weight: 1.0,
                 context: Some("field".to_string()),
                 confidence_score: None,
-            };
-            ctx.edges.push(e);
+                deferred: false,
+                metadata: sanitized_metadata(pairs),
+            });
+        }
+        return;
+    }
+
+    // ── C# property_declaration ───────────────────────────────────────────────
+    if config.lang_id == LangId::CSharp
+        && t == "property_declaration"
+        && let Some(parent) = parent_class_nid
+    {
+        // C# auto-properties (`public Widget Main { get; set; }`) are the
+        // idiomatic way to declare state, yet only field_declaration was handled.
+        // A property exposes its type directly (no variable_declaration wrapper),
+        // so read the `type` field and collect refs so `List<Widget>` yields both
+        // the List field ref and the Widget generic_arg ref (bb5e519).
+        if let Some(type_node) = node.child_by_field_name("type") {
+            let line = node.start_position().row as u32 + 1;
+            emit_csharp_member_type_refs(ctx, type_node, parent, line, source);
         }
         return;
     }
@@ -831,7 +1172,7 @@ pub(super) fn walk<'tree>(
     // Falls through (no early return) so call expressions in the initializer
     // are still walked.
     if config.lang_id == LangId::Scala
-        && t == "val_definition"
+        && matches!(t, "val_definition" | "var_definition")
         && let Some(parent) = parent_class_nid
         && let Some(type_node) = node.child_by_field_name("type")
     {
@@ -885,6 +1226,13 @@ pub(super) fn walk<'tree>(
                             | "init_declarator"
                             | "array_declarator"
                             | "identifier"
+                            // A method prototype (`void bar();`) is a field_declaration
+                            // whose declarator is a function_declarator. Python emits it
+                            // as a `defines field` member (labelled `bar`) so the impl's
+                            // out-of-class `Foo::bar` definition collides on id and merges
+                            // into ONE method node (#1547). Without it the header method is
+                            // dropped and the def dangles off the file alone.
+                            | "function_declarator"
                     ))
                     && let Some(name) = get_cpp_func_name(child, source)
                 {
@@ -902,6 +1250,8 @@ pub(super) fn walk<'tree>(
                         weight: 1.0,
                         context: Some("field".to_string()),
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     };
                     ctx.edges.push(e);
                 }
@@ -962,6 +1312,18 @@ pub(super) fn walk<'tree>(
         };
 
         add_node(&func_nid, &label, line, str_path, ctx.nodes, ctx.seen_ids);
+        ctx.callable_def_nids.insert(func_nid.clone()); // function / method def is callable
+        match config.lang_id {
+            LangId::Python => {
+                ctx.local_bound_names
+                    .insert(func_nid.clone(), python_local_bound_names(node, source));
+            }
+            LangId::JavaScript | LangId::TypeScript | LangId::TypeScriptX => {
+                ctx.local_bound_names
+                    .insert(func_nid.clone(), js_local_bound_names(node, source));
+            }
+            _ => {}
+        }
         let relation = if parent_class_nid.is_some() {
             "method"
         } else {
@@ -977,7 +1339,7 @@ pub(super) fn walk<'tree>(
             ctx.edges,
         );
 
-        emit_function_reference_edges(ctx, node, source, &func_nid, line);
+        emit_function_reference_edges(ctx, node, source, &func_nid, line, parent_class_nid);
 
         if let Some(body) = find_body(node, config) {
             // JS/TS: capture `this.X = () => {}` / `this.X = function(){}`
@@ -1016,6 +1378,9 @@ pub(super) fn walk<'tree>(
                             add_edge(
                                 this_owner, &m_nid, "method", m_line, str_path, None, ctx.edges,
                             );
+                            ctx.callable_def_nids.insert(m_nid.clone());
+                            ctx.local_bound_names
+                                .insert(m_nid.clone(), js_local_bound_names(val, source));
                             if let Some(m_body) = val.child_by_field_name("body") {
                                 ctx.function_bodies.push((m_nid, m_body));
                             }
@@ -1040,23 +1405,136 @@ pub(super) fn walk<'tree>(
         return;
     }
 
+    // ── Ruby extra walk (Struct.new/Class.new/Data.define constant classes) ────
+    if config.lang_id == LangId::Ruby && super::ruby::ruby_extra_walk(ctx, node, source) {
+        return;
+    }
+
     // ── C# namespace_declaration ──────────────────────────────────────────────
-    if config.lang_id == LangId::CSharp && t == "namespace_declaration" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            let ns_name = read_text_owned(name_node, source);
-            let ns_nid = make_id(&[stem, &ns_name]);
+    if config.lang_id == LangId::CSharp
+        && matches!(
+            t,
+            "namespace_declaration" | "file_scoped_namespace_declaration"
+        )
+    {
+        let ns_name = csharp_namespace_name(node, source);
+        let pushed = !ns_name.is_empty();
+        if pushed {
+            ctx.csharp_ns_stack.push(ns_name);
+            ctx.csharp_scope_stack
+                .push(format!("s{}", node.start_byte()));
+            let ns_label = ctx.csharp_ns_stack.join(".");
+            let ns_nid = csharp_namespace_id(&ns_label);
             let line = node.start_position().row as u32 + 1;
-            add_node(&ns_nid, &ns_name, line, str_path, ctx.nodes, ctx.seen_ids);
+            if ctx.seen_ids.insert(ns_nid.clone()) {
+                // Canonical namespace node: `type` = "namespace", metadata carries
+                // {kind, namespace}; no `scope_chain` on the namespace node itself.
+                let meta = sanitized_metadata(vec![
+                    ("kind", Value::String("csharp_namespace".to_string())),
+                    ("namespace", Value::String(ns_label.clone())),
+                ]);
+                ctx.nodes.push(GNode {
+                    id: ns_nid.clone(),
+                    label: ns_label,
+                    file_type: "code".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    node_type: Some("namespace".to_string()),
+                    metadata: meta,
+                    origin_file: None,
+                });
+            }
             add_edge(
                 file_nid, &ns_nid, "contains", line, str_path, None, ctx.edges,
             );
         }
-        if let Some(body) = node.child_by_field_name("body") {
+        // A block `namespace Foo { … }` recurses its body then pops. A file-scoped
+        // `namespace Foo;` has no body — it stays on the stack for the rest of the
+        // file's root siblings (never popped; the walk ends), matching C# scoping.
+        if t == "namespace_declaration" {
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cur = body.walk();
+                if cur.goto_first_child() {
+                    loop {
+                        walk(ctx, cur.node(), parent_class_nid, source);
+                        if !cur.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if pushed {
+                ctx.csharp_ns_stack.pop();
+                ctx.csharp_scope_stack.pop();
+            }
+        }
+        return;
+    }
+
+    // ── TS namespace / module container (internal_module, module) ─────────────
+    // `namespace Foo {}` parses as `internal_module` (name/body fields); `module
+    // Bar {}` and ambient `declare module "pkg" {}` parse as a named `module` with
+    // no fields, so name/body are found positionally. Emit the container node +
+    // file→container `contains` edge, then recurse its body (members stay
+    // file-contained, parity with the C# namespace handler). The `is_named` guard
+    // skips the anonymous `module` keyword token that shares the type string.
+    // Mirrors graphify-py `_ts_extra_walk` (869aaf7).
+    if matches!(config.lang_id, LangId::TypeScript | LangId::TypeScriptX)
+        && node.is_named()
+        && matches!(t, "internal_module" | "module")
+    {
+        let name_node = node.child_by_field_name("name").or_else(|| {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    let c = cur.node();
+                    if c.is_named()
+                        && matches!(c.kind(), "identifier" | "nested_identifier" | "string")
+                    {
+                        return Some(c);
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            None
+        });
+        let body = node.child_by_field_name("body").or_else(|| {
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    if cur.node().kind() == "statement_block" {
+                        return Some(cur.node());
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            None
+        });
+        if let Some(nn) = name_node {
+            let raw = read_text_owned(nn, source);
+            let ns_name = if nn.kind() == "string" {
+                raw.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+            } else {
+                &raw
+            };
+            if !ns_name.is_empty() {
+                let ns_nid = make_id(&[stem, ns_name]);
+                let line = node.start_position().row as u32 + 1;
+                add_node(&ns_nid, ns_name, line, str_path, ctx.nodes, ctx.seen_ids);
+                add_edge(
+                    file_nid, &ns_nid, "contains", line, str_path, None, ctx.edges,
+                );
+            }
+        }
+        if let Some(body) = body {
             let mut cur = body.walk();
             if cur.goto_first_child() {
                 loop {
-                    let child = cur.node();
-                    walk(ctx, child, parent_class_nid, source);
+                    walk(ctx, cur.node(), parent_class_nid, source);
                     if !cur.goto_next_sibling() {
                         break;
                     }
@@ -1093,6 +1571,156 @@ pub(super) fn walk<'tree>(
                 }
                 if !cur.goto_next_sibling() {
                     break;
+                }
+            }
+        }
+        // Associated-value types nest as `enum_type_parameters -> user_type ->
+        // type_identifier` (a sibling of the case-name); the loop above never
+        // descends into them, so `case failed(Config)` used to drop the
+        // NetworkError -> Config reference. Emit a `references` edge from the ENUM
+        // node to each associated type (context `type`, `generic_arg` for generic
+        // roles), guarding target != enum node (ad70152).
+        let line = node.start_position().row as u32 + 1;
+        let mut pcur = node.walk();
+        if pcur.goto_first_child() {
+            loop {
+                let child = pcur.node();
+                if child.kind() == "enum_type_parameters" {
+                    for grand in named_children(child) {
+                        let mut refs: Vec<(String, super::references::RefRole)> = Vec::new();
+                        super::references::swift_collect_type_refs(grand, source, false, &mut refs);
+                        for (name, role) in refs {
+                            let target =
+                                ensure_named_node(&name, stem, str_path, ctx.nodes, ctx.seen_ids);
+                            if target != parent {
+                                add_edge(
+                                    parent,
+                                    &target,
+                                    "references",
+                                    line,
+                                    str_path,
+                                    Some(role.into_context("type")),
+                                    ctx.edges,
+                                );
+                            }
+                        }
+                    }
+                }
+                if !pcur.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
+    // ── Java enum_constant ────────────────────────────────────────────────────
+    // Emit each Java enum constant as a node with a `case_of` edge to the enum,
+    // and descend into an anonymous constant body (`MONDAY { void greet(){} }`)
+    // so its methods attach to the constant rather than being dropped (cf36d10).
+    if config.lang_id == LangId::Java
+        && t == "enum_constant"
+        && let Some(parent) = parent_class_nid
+    {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let const_name = read_text_owned(name_node, source);
+            let line = node.start_position().row as u32 + 1;
+            let const_nid = make_id(&[parent, &const_name]);
+            add_node(
+                &const_nid,
+                &const_name,
+                line,
+                str_path,
+                ctx.nodes,
+                ctx.seen_ids,
+            );
+            add_edge(
+                parent, &const_nid, "case_of", line, str_path, None, ctx.edges,
+            );
+            // Anonymous-body constants: descend so the body's members attach to
+            // the constant node rather than being dropped.
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    let child = cur.node();
+                    if child.kind() == "class_body" {
+                        let mut bcur = child.walk();
+                        if bcur.goto_first_child() {
+                            loop {
+                                walk(ctx, bcur.node(), Some(const_nid.as_str()), source);
+                                if !bcur.goto_next_sibling() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // ── Kotlin enum_entry ─────────────────────────────────────────────────────
+    // Emit each Kotlin enum entry as a node with a `case_of` edge to the enum
+    // (the `enum_class_body` fallback lets the walker descend into the enum), and
+    // descend into an anonymous entry body so its members attach to the entry
+    // (#1700 Kotlin half, #1738).
+    if config.lang_id == LangId::Kotlin
+        && t == "enum_entry"
+        && let Some(parent) = parent_class_nid
+    {
+        let name = {
+            let mut cur = node.walk();
+            let mut found: Option<String> = None;
+            if cur.goto_first_child() {
+                loop {
+                    let child = cur.node();
+                    if matches!(child.kind(), "simple_identifier" | "identifier") {
+                        found = Some(read_text_owned(child, source));
+                        break;
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        if let Some(const_name) = name {
+            let line = node.start_position().row as u32 + 1;
+            let const_nid = make_id(&[parent, &const_name]);
+            add_node(
+                &const_nid,
+                &const_name,
+                line,
+                str_path,
+                ctx.nodes,
+                ctx.seen_ids,
+            );
+            add_edge(
+                parent, &const_nid, "case_of", line, str_path, None, ctx.edges,
+            );
+            let mut cur = node.walk();
+            if cur.goto_first_child() {
+                loop {
+                    let child = cur.node();
+                    if child.kind() == "class_body" {
+                        let mut bcur = child.walk();
+                        if bcur.goto_first_child() {
+                            loop {
+                                walk(ctx, bcur.node(), Some(const_nid.as_str()), source);
+                                if !bcur.goto_next_sibling() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if !cur.goto_next_sibling() {
+                        break;
+                    }
                 }
             }
         }

@@ -725,19 +725,27 @@ pub fn load_community_labels(
         .collect()
 }
 
-/// Check if `graph_path` has changed (`mtime_ns` + size), and if so reload.
+/// Check if `graph_path` has changed (`mtime_ns` + size), and if so reload,
+/// clearing `idf_cache` — its per-term IDF weights are derived from the graph
+/// (node count + document frequency), so they are stale once the graph is
+/// replaced.
 ///
-/// Mirrors Python `_maybe_reload`.
+/// Mirrors Python `_maybe_reload`, which stores the IDF cache on the graph so a
+/// swap invalidates it for free. Returns `true` when a reload actually happened.
+// implicit_hasher: the IDF cache is owned by `GraphCtx` with the default hasher;
+// a concrete `HashMap<String, f64>` matches that field and the other tool fns.
+#[allow(clippy::implicit_hasher)]
 pub fn maybe_reload(
     graph_path: &str,
     graph: &mut Graph,
     communities: &mut IndexMap<i64, Vec<String>>,
     reload_state: &mut ReloadState,
-) {
+    idf_cache: &mut HashMap<String, f64>,
+) -> bool {
     use crate::graph::{communities_from_graph, load_graph};
 
     let Ok(meta) = std::fs::metadata(graph_path) else {
-        return;
+        return false;
     };
     let mtime = meta
         .modified()
@@ -748,7 +756,7 @@ pub fn maybe_reload(
         });
     let size = meta.len();
     if (mtime, size) == (reload_state.mtime_ns, reload_state.size) {
-        return;
+        return false;
     }
     // Reload.
     if let Ok(new_g) = load_graph(graph_path) {
@@ -757,5 +765,8 @@ pub fn maybe_reload(
         *communities = new_comms;
         reload_state.mtime_ns = mtime;
         reload_state.size = size;
+        idf_cache.clear();
+        return true;
     }
+    false
 }

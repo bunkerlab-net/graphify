@@ -531,6 +531,73 @@ fn test_replace_or_append_idempotent() {
     assert_eq!(first.matches("## graphify").count(), 1);
 }
 
+#[test]
+fn test_replace_or_append_ignores_inline_marker_mention() {
+    // #1688: an inline `## graphify` mention (in a bullet/prose) must NOT be
+    // treated as the section heading. Substring-matching it anchored the replace
+    // there and deleted every line to the next heading, destroying content.
+    let content =
+        "# Notes\n\n- see the `## graphify` marker below\n\nImportant hand-written notes.\n";
+    let result = replace_or_append_section(content, "## graphify", "## graphify\n\nManaged.\n");
+    assert!(
+        result.contains("- see the `## graphify` marker below"),
+        "inline mention line preserved: {result}"
+    );
+    assert!(
+        result.contains("Important hand-written notes."),
+        "hand-written notes preserved: {result}"
+    );
+    assert!(
+        result.contains("Managed."),
+        "managed section appended: {result}"
+    );
+}
+
+#[test]
+fn test_replace_or_append_ignores_longer_heading() {
+    // #1688: `## graphify internals` is a different heading and must not match
+    // the managed `## graphify` section.
+    let content = "## graphify internals\n\nDocs about internals.\n";
+    let result = replace_or_append_section(content, "## graphify", "## graphify\n\nManaged.\n");
+    assert!(
+        result.contains("## graphify internals"),
+        "longer heading preserved: {result}"
+    );
+    assert!(
+        result.contains("Docs about internals."),
+        "its body preserved: {result}"
+    );
+    assert!(
+        result.contains("Managed."),
+        "managed section appended: {result}"
+    );
+}
+
+#[test]
+fn test_replace_or_append_uses_last_exact_heading() {
+    // #1688: with duplicate exact headings, the LAST is replaced (graphify's
+    // section is always appended), leaving earlier content intact.
+    let content = "## graphify\n\nfirst.\n\n## other\n\nmid.\n\n## graphify\n\nstale managed.\n";
+    let result =
+        replace_or_append_section(content, "## graphify", "## graphify\n\nfresh managed.\n");
+    assert!(
+        result.contains("fresh managed."),
+        "last section updated: {result}"
+    );
+    assert!(
+        !result.contains("stale managed."),
+        "stale last section replaced: {result}"
+    );
+    assert!(
+        result.contains("## other"),
+        "unrelated section preserved: {result}"
+    );
+    assert!(
+        result.contains("mid."),
+        "unrelated body preserved: {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // claude_install / claude_uninstall (test_claude_md.py)
 // ---------------------------------------------------------------------------
@@ -646,6 +713,12 @@ fn test_uninstall_no_op_when_no_file() {
     let home = tempfile::tempdir().expect("tempdir");
     let msg = claude_uninstall_to(dir.path(), home.path());
     assert!(msg.contains("No CLAUDE.md") || msg.contains("nothing to do"));
+    // The absent-hook path contributes no message, so the output must not carry a
+    // trailing blank line (the empty hook message is skipped, matching Python).
+    assert!(
+        !msg.ends_with('\n'),
+        "uninstall output must not end with a blank line: {msg:?}"
+    );
 }
 
 #[test]
@@ -2004,6 +2077,32 @@ fn test_uninstall_claude_hook_noop_when_absent() {
     assert!(msg.is_empty());
 }
 
+#[test]
+fn test_uninstall_claude_hook_cleans_settings_local() {
+    // #1731: a user may relocate the hook into settings.local.json (not committed
+    // to a shared repo). Uninstall must clean whichever file holds it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    install_claude_hook(dir.path()).expect("test invariant");
+    let claude = dir.path().join(".claude");
+    // Relocate the hook: settings.json -> settings.local.json.
+    let json = claude.join("settings.json");
+    let local = claude.join("settings.local.json");
+    fs::copy(&json, &local).expect("relocate to local");
+    fs::remove_file(&json).expect("remove settings.json");
+
+    let msg = uninstall_claude_hook(dir.path()).expect("test invariant");
+    assert!(msg.contains("settings.local.json"), "msg: {msg}");
+    let v: serde_json::Value =
+        serde_json::from_str(&local.read_to_string_unwrap()).expect("test invariant");
+    let empty = v["hooks"]["PreToolUse"]
+        .as_array()
+        .is_none_or(std::vec::Vec::is_empty);
+    assert!(
+        empty,
+        "graphify hook must be removed from settings.local.json: {v}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // install_gemini_hook / uninstall_gemini_hook standalone
 // ---------------------------------------------------------------------------
@@ -2811,6 +2910,21 @@ fn python_detect_has_pinned_and_file_probes() {
     assert!(PYTHON_DETECT.contains("graphify-out/.graphify_python"));
 }
 
+/// #1586: the interpreter-detection allowlists must accept `@` so Homebrew's
+/// versioned `python@3.13` path is not blanked, which would drop detection to a
+/// bare `python3` without graphify installed.
+#[test]
+fn python_detect_allows_at_sign_in_interpreter_path() {
+    assert!(
+        PYTHON_DETECT.contains("a-zA-Z0-9/_.@"),
+        "interpreter allowlist must include `@` for python@3.x paths"
+    );
+    assert!(
+        !PYTHON_DETECT.contains("[!a-zA-Z0-9/_.-]"),
+        "the pre-#1586 allowlist (missing `@`) must not be present"
+    );
+}
+
 /// End-to-end: the installed hooks substitute the `__PINNED_PYTHON__`
 /// placeholder and contain the cross-platform detach (#1161, #1127).
 #[test]
@@ -2835,5 +2949,22 @@ fn installed_hooks_substitute_placeholder_and_detach() {
             "{name} not detached"
         );
         assert!(!text.contains("nohup"), "{name} still references nohup");
+    }
+}
+
+/// #879c058: both hook scripts default rebuild workers to 1 on Git for
+/// Windows/MSYS (unless `GRAPHIFY_MAX_WORKERS` is explicitly set), since those
+/// shells inherit fragile pipe handles from GUI clients and agent shells.
+#[test]
+fn hook_scripts_cap_windows_rebuild_workers() {
+    for script in [HOOK_SCRIPT, CHECKOUT_SCRIPT] {
+        assert!(
+            script.contains(r#"export GRAPHIFY_MAX_WORKERS="${GRAPHIFY_MAX_WORKERS:-1}""#),
+            "hook script must default GRAPHIFY_MAX_WORKERS=1 on Windows/MSYS"
+        );
+        assert!(
+            script.contains(r#"[ -n "${WINDIR:-}" ] || [ -n "${MSYSTEM:-}" ]"#),
+            "the cap must be gated on WINDIR/MSYSTEM"
+        );
     }
 }

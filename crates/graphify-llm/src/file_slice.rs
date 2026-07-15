@@ -204,7 +204,16 @@ pub fn expand_oversized_files(files: &[PathBuf], max_chars: usize) -> Vec<Unit> 
 /// path in Python's `read_slice_text` that callers translate into a skip.
 #[must_use]
 pub fn read_slice_text(fs: &FileSlice) -> Option<String> {
-    let text = read_file_lossy(&fs.path)?;
+    read_slice_text_from(&fs.path, fs)
+}
+
+/// Like [`read_slice_text`] but reads the slice from an already-resolved `path`
+/// (a containment-checked `safe_path`), so the read does not re-follow the
+/// slice's stored path — keeping slice reads consistent with whole-file reads
+/// and closing the symlink re-resolution gap in the corpus-root guard.
+#[must_use]
+pub(crate) fn read_slice_text_from(path: &Path, fs: &FileSlice) -> Option<String> {
+    let text = read_file_lossy(path)?;
     Some(text.get(fs.start..fs.end).unwrap_or("").to_string())
 }
 

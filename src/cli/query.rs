@@ -165,6 +165,50 @@ pub(crate) fn cmd_path(from: &str, to: &str, graph: Option<&std::path::Path>) ->
     Ok(())
 }
 
+/// The `  Lesson: ...` line for a node's work-memory verdict, or `None` when the
+/// overlay (stashed on the graph by `load_graph`) has no entry for it (#1441).
+fn learning_lesson_line(g: &graphify_build::Graph, node_id: &str) -> Option<String> {
+    let entry = g
+        .graph_attrs
+        .get("_learning_overlay")
+        .and_then(serde_json::Value::as_object)?
+        .get(node_id)
+        .and_then(serde_json::Value::as_object)?;
+    let status = entry
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let uses = entry
+        .get("uses")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let score = entry
+        .get("score")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let mut lesson = match status {
+        "contested" => {
+            let neg = entry
+                .get("neg")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            format!("  Lesson: contested (useful {uses} / dead-end {neg})")
+        }
+        "preferred" => {
+            format!("  Lesson: preferred source (start here) — {uses} useful, score={score}")
+        }
+        s => format!(
+            "  Lesson: {} — {uses} useful, score={score}",
+            if s.is_empty() { "tentative" } else { s }
+        ),
+    };
+    if entry.get("stale").and_then(serde_json::Value::as_bool) == Some(true) {
+        // Exact string is asserted by graphify-py `test_explain_cli.py` — keep verbatim.
+        lesson.push_str(" [code changed since — re-verify]");
+    }
+    Some(lesson)
+}
+
 /// Print a node's metadata + sorted in/out connections from `graph.json`.
 ///
 /// Mirrors Python's `explain` command at `__main__.py:1662`: prints label,
@@ -221,6 +265,10 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
     println!("  Type:      {file_type}");
     println!("  Community: {community}");
     println!("  Degree:    {degree}");
+
+    if let Some(lesson) = learning_lesson_line(&g, node_id) {
+        println!("{lesson}");
+    }
 
     // (direction, neighbor_id, edge_data) — but record direction now and look
     // up edge data lazily because we need the *correct* direction's attrs.

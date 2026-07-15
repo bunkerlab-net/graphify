@@ -381,6 +381,11 @@ pub fn to_html(
         degree: &degree,
         max_deg,
         max_mc,
+        // Work-memory overlay (#1441): stashed on the graph by the CLI loader.
+        learning: graph
+            .graph_attrs
+            .get("_learning_overlay")
+            .and_then(Value::as_object),
     });
     let vis_edges = build_vis_edges(graph);
     let legend_data = build_legend_data(communities, community_labels, member_counts);
@@ -575,6 +580,9 @@ struct VisNodeArgs<'a> {
     degree: &'a IndexMap<String, usize>,
     max_deg: usize,
     max_mc: usize,
+    /// Work-memory overlay `{node_id -> entry}` for ring-colour / tooltip
+    /// annotation, or `None` when no sidecar was loaded (#1441).
+    learning: Option<&'a serde_json::Map<String, Value>>,
 }
 
 /// Build the vis.js node list (parallel for large graphs).
@@ -610,7 +618,7 @@ fn build_vis_nodes(args: &VisNodeArgs<'_>) -> Vec<Value> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        json!({
+        let mut node = json!({
             "id": node_id,
             "label": label,
             "color": {
@@ -626,13 +634,86 @@ fn build_vis_nodes(args: &VisNodeArgs<'_>) -> Vec<Value> {
             "source_file": source_file,
             "file_type": file_type,
             "degree": deg,
-        })
+        });
+        // Work-memory overlay (#1441): ring-colour + lesson tooltip for a node the
+        // reflect overlay marked preferred/tentative/contested.
+        if let Some(entry) = args
+            .learning
+            .and_then(|l| l.get(node_id))
+            .and_then(Value::as_object)
+        {
+            apply_learning_style(&mut node, entry, &label, color);
+        }
+        node
     };
     if node_refs.len() >= PARALLEL_VIS_THRESHOLD {
         node_refs.par_iter().map(builder).collect()
     } else {
         node_refs.iter().map(builder).collect()
     }
+}
+
+/// Overlay a node's work-memory verdict onto its vis.js JSON: a coloured border
+/// ring (green preferred / amber contested, grey dashed when stale), the
+/// `learning_status`/`learning_stale` fields, and a `Lesson:` tooltip. Mirrors
+/// graphify-py `to_html`'s per-node learning block (#1441).
+fn apply_learning_style(
+    node: &mut Value,
+    entry: &serde_json::Map<String, Value>,
+    label: &str,
+    base_color: &str,
+) {
+    let Some(obj) = node.as_object_mut() else {
+        return;
+    };
+    let status = sanitize_label(entry.get("status").and_then(Value::as_str).or(Some("")));
+    let stale = entry.get("stale").and_then(Value::as_bool) == Some(true);
+    obj.insert("learning_status".to_string(), json!(status));
+    obj.insert("learning_stale".to_string(), json!(stale));
+
+    let ring = match status.as_str() {
+        "preferred" => Some("#22c55e"),
+        "contested" => Some("#f59e0b"),
+        _ => None,
+    };
+    if let Some(mut ring) = ring {
+        if stale {
+            ring = "#9ca3af";
+            obj.insert(
+                "shapeProperties".to_string(),
+                json!({"borderDashes": [4, 4]}),
+            );
+        }
+        obj.insert("borderWidth".to_string(), json!(3));
+        obj.insert(
+            "color".to_string(),
+            json!({
+                "background": base_color,
+                "border": ring,
+                "highlight": {"background": "#ffffff", "border": ring},
+            }),
+        );
+    }
+
+    let uses = entry.get("uses").and_then(Value::as_u64).unwrap_or(0);
+    let score = entry.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+    let neg = entry.get("neg").and_then(Value::as_u64).unwrap_or(0);
+    let mut lesson = match status.as_str() {
+        "contested" => format!("Lesson: contested (useful {uses} / dead-end {neg})"),
+        "preferred" => format!("Lesson: preferred source ({uses} useful, score={score})"),
+        s => format!("Lesson: {s} ({uses} useful)"),
+    };
+    if stale {
+        lesson.push_str(" [code changed — re-verify]");
+    }
+    obj.insert(
+        "title".to_string(),
+        json!(format!(
+            "{}\n{}",
+            htmlescape::encode_minimal(label),
+            htmlescape::encode_minimal(&sanitize_label(Some(&lesson)))
+        )),
+    );
 }
 
 /// Compute the rendered vis.js node size + font size given degree/member-count scaling.

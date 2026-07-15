@@ -118,6 +118,16 @@ fn build_file_graph(graph: &Graph) -> IndexMap<String, IndexSet<String>> {
         if relation != "imports_from" && relation != "re_exports" {
             continue;
         }
+        // A deferred `import(...)` edge is a real dependency but does not form a
+        // hard file-level cycle, so it's excluded from cycle detection (#1241).
+        if edge
+            .attrs
+            .get("deferred")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let src_file = edge
             .attrs
             .get("source_file")

@@ -110,6 +110,99 @@ fn java_ambiguous_implements_disambiguated_by_import() {
 }
 
 #[test]
+fn java_ambiguous_reference_disambiguated_by_import() {
+    // #1744: two classes with the SAME simple name in different modules. Both
+    // survive as distinct path-scoped nodes, but a cross-module field/type
+    // `references` edge used to dangle on a sourceless phantom stub (implements/
+    // inherits were handled, references was not). The importing file's `import`
+    // must re-point the reference to the right class and leave no orphan phantom.
+    let tmp = tempfile::tempdir().unwrap();
+    let payment = write_file(
+        tmp.path(),
+        "payment/src/com/example/payment/FinancialEntryValidator.java",
+        "package com.example.payment;\n\
+         public class FinancialEntryValidator {\n\
+         public boolean validateCurrency(String c) { return c.length() == 3; }\n\
+         }\n",
+    );
+    let core = write_file(
+        tmp.path(),
+        "core/src/com/example/core/FinancialEntryValidator.java",
+        "package com.example.core;\n\
+         public class FinancialEntryValidator {\n\
+         public void auditEntry(String id) {}\n\
+         }\n",
+    );
+    let consumer = write_file(
+        tmp.path(),
+        "app/src/com/example/app/PaymentService.java",
+        "package com.example.app;\n\
+         import com.example.payment.FinancialEntryValidator;\n\
+         public class PaymentService {\n\
+         private FinancialEntryValidator validator = new FinancialEntryValidator();\n\
+         }\n",
+    );
+    let res = extract(&[payment, core, consumer], Some(tmp.path()));
+
+    // Both real classes survive (path-scoped ids); no sourceless phantom remains.
+    let reals = res
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.get("label").and_then(|v| v.as_str()) == Some("FinancialEntryValidator")
+                && !n
+                    .get("source_file")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .is_empty()
+        })
+        .count();
+    let phantoms = res
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.get("label").and_then(|v| v.as_str()) == Some("FinancialEntryValidator")
+                && n.get("source_file")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .is_empty()
+        })
+        .count();
+    assert_eq!(reals, 2, "expected both real classes to survive");
+    assert_eq!(phantoms, 0, "orphan phantom node(s) remain");
+
+    // Every reference to FinancialEntryValidator must resolve to the IMPORTED
+    // (payment) class, not core, and never dangle on a sourceless stub.
+    let ref_targets = edges_with_relation(&res, "references");
+    let fev_refs: Vec<&str> = ref_targets
+        .iter()
+        .copied()
+        .filter(|t| {
+            res.nodes.iter().any(|n| {
+                n.get("id").and_then(|v| v.as_str()) == Some(*t)
+                    && n.get("label").and_then(|v| v.as_str()) == Some("FinancialEntryValidator")
+            })
+        })
+        .collect();
+    assert!(
+        !fev_refs.is_empty(),
+        "expected a references edge to FinancialEntryValidator"
+    );
+    for t in &fev_refs {
+        let sf = node_source_file(&res, t).unwrap_or("");
+        assert!(!sf.is_empty(), "reference landed on phantom stub: {t}");
+        assert!(
+            sf.contains("payment"),
+            "reference must resolve to payment: {sf}"
+        );
+        assert!(
+            !sf.contains("core"),
+            "reference must not resolve to core: {sf}"
+        );
+    }
+}
+
+#[test]
 fn java_implements_edge_survives_build() {
     // #1318: the re-pointed edge must connect real nodes after graph assembly, so
     // the interface is not classified as an isolated community.

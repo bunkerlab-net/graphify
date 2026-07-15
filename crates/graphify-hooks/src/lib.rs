@@ -34,5 +34,9 @@ pub use constants::{
 pub use error::HooksError;
 pub use git::{hooks_dir, hooks_dir_with, user_hooks_dir};
 pub use install::install;
+pub use platform::{
+    check_skill_versions, refresh_all_version_stamps, skill_destinations, skill_version_warnings,
+    user_skill_destinations, version_tuple,
+};
 pub use status::status;
 pub use uninstall::uninstall;

@@ -12,6 +12,7 @@ version.workspace = true
 chrono = { workspace = true }
 graphify-analyze = { workspace = true }
 graphify-build = { workspace = true }
+graphify-reflect = { workspace = true }
 indexmap = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }

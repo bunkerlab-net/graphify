@@ -69,9 +69,9 @@ struct OaiMessage {
 }
 
 #[derive(Deserialize)]
-struct OaiUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
+pub(crate) struct OaiUsage {
+    pub(crate) prompt_tokens: Option<u64>,
+    pub(crate) completion_tokens: Option<u64>,
 }
 
 /// Call an `OpenAI`-compatible endpoint and return an [`LlmResponse`].
@@ -185,6 +185,19 @@ pub fn resolve_temperature(default: Option<f64>, model: &str) -> Option<f64> {
     default
 }
 
+/// Whether `GRAPHIFY_DISABLE_THINKING` opts thinking off for any
+/// OpenAI-compatible provider (#1621). Accepts `1`/`true`/`yes`/`on`
+/// (case-insensitive, whitespace-trimmed); anything else (or unset) is `false`.
+#[must_use]
+pub(crate) fn thinking_disabled_via_env() -> bool {
+    std::env::var("GRAPHIFY_DISABLE_THINKING").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
     let mut body = json!({
         "model": req.model,
@@ -214,6 +227,11 @@ fn build_chat_request_body(req: &OpenAiRequest<'_>) -> Value {
     let mut extra_body = serde_json::Map::new();
     if req.disable_thinking {
         // Kimi-k2.6 — disable thinking so content isn't empty.
+        extra_body.insert("thinking".to_string(), json!({"type": "disabled"}));
+    } else if thinking_disabled_via_env() {
+        // Opt-in GRAPHIFY_DISABLE_THINKING for any OpenAI-compatible provider
+        // (#1621). Loses to a provider's explicit extra_body (early-returned
+        // above) and to the forced kimi/moonshot disable.
         extra_body.insert("thinking".to_string(), json!({"type": "disabled"}));
     }
     if let Some(opts) = &req.ollama_options {

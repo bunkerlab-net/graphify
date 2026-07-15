@@ -47,6 +47,11 @@ fn safe_name(label: &str) -> String {
     }
 }
 
+/// Sentinel community id for the #1324 all-nodes fallback group. Chosen outside
+/// the natural cluster-id range (`>= 0`) so it can never match a real
+/// `community_labels` entry; `emit_community_nodes` renders it as `Community 0`.
+const SYNTHETIC_ALL_NODES_CID: i64 = i64::MIN;
+
 /// Export graph as an Obsidian Canvas file.
 ///
 /// Communities are laid out in a grid; nodes within each community are arranged
@@ -72,20 +77,41 @@ pub fn to_canvas(
         &owned_filenames
     };
 
-    // Fallback (#1324): with no community data (e.g. --no-cluster builds or a
-    // missing analysis sidecar) the grid below produces nothing and the canvas
-    // is written as an empty 32-byte shell on an otherwise populated graph.
-    // Emit every node into one synthetic community so the canvas always
-    // reflects the graph.
-    let owned_communities: IndexMap<i64, Vec<String>>;
-    let communities: &IndexMap<i64, Vec<String>> =
-        if communities.is_empty() && graph.node_count() > 0 {
-            let all_ids: Vec<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
-            owned_communities = std::iter::once((0_i64, all_ids)).collect();
-            &owned_communities
-        } else {
-            communities
-        };
+    // #1236: drop community MEMBERS absent from the graph or without a filename
+    // (stale community index / merge artifacts), and drop any community left with
+    // no kept members, so box sizing, card layout, and the edge set all match the
+    // cards actually emitted. DIVERGENCE from graphify-py to_canvas, which still
+    // emits an empty `group` box for a fully-dangling community — an empty labelled
+    // box is canvas noise, so it is dropped here.
+    let mut filtered: IndexMap<i64, Vec<String>> = communities
+        .iter()
+        .filter_map(|(&cid, members)| {
+            let kept: Vec<String> = members
+                .iter()
+                .filter(|m| {
+                    graph.node_data(m.as_str()).is_some() && node_filenames.contains_key(m.as_str())
+                })
+                .cloned()
+                .collect();
+            (!kept.is_empty()).then_some((cid, kept))
+        })
+        .collect();
+    // #1324: when NO community survives — no cluster data (`--no-cluster` / missing
+    // analysis sidecar), or every member dangled — synthesize one all-nodes
+    // community from the renderable nodes so the canvas still reflects a populated
+    // graph instead of an empty 32-byte shell. Applied to the FILTERED result (not
+    // the raw input) so an all-dangling input recovers real cards, not empty boxes.
+    if filtered.is_empty() && graph.node_count() > 0 {
+        let all_ids: Vec<String> = graph
+            .nodes()
+            .map(|(id, _)| id.clone())
+            .filter(|id| node_filenames.contains_key(id.as_str()))
+            .collect();
+        if !all_ids.is_empty() {
+            filtered.insert(SYNTHETIC_ALL_NODES_CID, all_ids);
+        }
+    }
+    let communities: &IndexMap<i64, Vec<String>> = &filtered;
 
     let sorted_cids: Vec<i64> = {
         let mut v: Vec<i64> = communities.keys().copied().collect();
@@ -214,13 +240,20 @@ fn emit_community_nodes(
         node_filenames,
     } = *ctx;
     let (gx, gy, gw, gh, inner_cols) = rect;
-    let community_name = community_labels
-        .and_then(|cl| cl.get(&cid))
-        .cloned()
-        .unwrap_or_else(|| format!("Community {cid}"));
+    // The #1324 all-nodes fallback renders as `Community 0` / `g0` and never
+    // inherits a real community's label; natural communities use their own.
+    let (community_name, group_id) = if cid == SYNTHETIC_ALL_NODES_CID {
+        ("Community 0".to_string(), "g0".to_string())
+    } else {
+        let name = community_labels
+            .and_then(|cl| cl.get(&cid))
+            .cloned()
+            .unwrap_or_else(|| format!("Community {cid}"));
+        (name, format!("g{cid}"))
+    };
     let canvas_color = CANVAS_COLORS[idx % CANVAS_COLORS.len()];
     canvas_nodes.push(json!({
-        "id": format!("g{cid}"),
+        "id": group_id,
         "type": "group",
         "label": community_name,
         "x": gx,

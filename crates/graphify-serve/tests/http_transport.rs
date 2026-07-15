@@ -239,3 +239,62 @@ async fn get_method_not_allowed() {
     let resp = app.oneshot(req).await.expect("oneshot");
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+/// Write a project graph at `<dir>/graphify-out/graph.json` with one labelled node.
+fn write_project_graph(dir: &std::path::Path, label: &str) {
+    let out = dir.join("graphify-out");
+    fs::create_dir_all(&out).expect("mkdir");
+    let graph = json!({
+        "nodes": [{"id": "n1", "label": label, "source_file": "a.py", "community": 0}],
+        "edges": []
+    });
+    fs::write(
+        out.join("graph.json"),
+        serde_json::to_string(&graph).expect("serialize"),
+    )
+    .expect("write project graph");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_requests_to_distinct_projects_are_isolated() {
+    // Per-project locking: two graphs queried concurrently each resolve to their
+    // own context — no deadlock, no cross-contamination, and (with per-project
+    // locks) no serialisation of unrelated projects.
+    let dir_def = tempfile::tempdir().expect("tempdir");
+    let gp = write_graph(dir_def.path());
+    let dir_a = tempfile::tempdir().expect("tempdir");
+    let dir_b = tempfile::tempdir().expect("tempdir");
+    write_project_graph(dir_a.path(), "alpha_only");
+    write_project_graph(dir_b.path(), "beta_only");
+    let app = build_app(&gp, &opts(true, None)).expect("build_app");
+
+    let call = |proj: &std::path::Path, label: &str, id: i64| {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"get_node","arguments":{{"label":"{label}","project_path":{}}}}}}}"#,
+            serde_json::to_string(&proj.to_string_lossy()).expect("json")
+        );
+        app.clone().oneshot(post("/mcp", &body))
+    };
+    let (ra, rb) = tokio::join!(
+        call(dir_a.path(), "alpha_only", 1),
+        call(dir_b.path(), "beta_only", 2),
+    );
+    let ra = ra.expect("resp a");
+    let rb = rb.expect("resp b");
+    assert_eq!(ra.status(), StatusCode::OK);
+    assert_eq!(rb.status(), StatusCode::OK);
+    let ta = body_string(ra).await;
+    let tb = body_string(rb).await;
+    assert!(
+        ta.contains("alpha_only"),
+        "project A routed to its own graph: {ta}"
+    );
+    assert!(
+        tb.contains("beta_only"),
+        "project B routed to its own graph: {tb}"
+    );
+    assert!(
+        !ta.contains("beta_only") && !tb.contains("alpha_only"),
+        "projects must not cross-contaminate: a={ta} b={tb}"
+    );
+}

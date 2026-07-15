@@ -28,6 +28,7 @@ pub mod terraform;
 pub mod verilog;
 pub mod zig;
 
+mod js_rationale;
 mod python_rationale;
 
 use std::path::Path;
@@ -37,7 +38,7 @@ use crate::lang_configs;
 use crate::types::FileResult;
 
 pub use groovy::extract_groovy;
-pub use multi::extract;
+pub use multi::{extract, has_extractor};
 
 /// Size cap for project XML files (`.csproj` / `.fsproj` / `.vbproj` / `.lpk`).
 /// Real files are well under 2 MiB; anything larger is malformed or hostile.
@@ -79,12 +80,24 @@ pub fn extract_python(path: &Path) -> FileResult {
 /// Extract classes, functions, arrow functions, and imports from `.js`/`.ts`/`.tsx` files.
 #[must_use]
 pub fn extract_js(path: &Path) -> FileResult {
-    let config = match path.extension().and_then(|e| e.to_str()) {
+    // Case-insensitive extension (#1671): a `.Ts`/`.MTS` file is TypeScript, so it
+    // must parse under the TS grammar, not silently fall through to JS. DIVERGENCE
+    // from graphify-py, whose extract_js checks `path.suffix` case-sensitively and
+    // so mis-parses a capitalized TS extension as JS (a bug, not a requirement).
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let config = match ext.as_deref() {
         Some("tsx") => &*lang_configs::TYPESCRIPT_TSX,
-        Some("ts") => &*lang_configs::TYPESCRIPT,
+        Some("ts" | "mts" | "cts") => &*lang_configs::TYPESCRIPT,
         _ => &*lang_configs::JAVASCRIPT,
     };
-    extract_generic(path, config)
+    let mut result = extract_generic(path, config);
+    if result.error.is_none() {
+        js_rationale::extract_js_rationale(path, &mut result);
+    }
+    result
 }
 
 // ── Java ──────────────────────────────────────────────────────────────────────

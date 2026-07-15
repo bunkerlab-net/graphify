@@ -35,8 +35,8 @@ mod extractors;
 
 pub use cargo_introspect::{CargoIntrospectError, CargoIntrospection, introspect_cargo};
 pub use error::ExtractError;
-pub use extractors::extract;
 pub use extractors::mcp::MCP_CONFIG_FILENAMES;
+pub use extractors::{extract, has_extractor};
 pub use extractors::{
     extract_apex, extract_astro, extract_bash, extract_blade, extract_c, extract_cpp,
     extract_csharp, extract_csproj, extract_dart, extract_delphi_form, extract_dm, extract_dmf,
@@ -54,4 +54,4 @@ pub use pg_introspect::{
     PgCatalog, PgForeignKey, PgIntrospectError, PgRoutine, PgTable, PgView, build_ddl,
     introspect_catalog, sanitize_connection_error,
 };
-pub use types::{Edge, ExtractOutput, FileResult, Node, RawCall};
+pub use types::{Edge, ExtractOutput, FileResult, Node, RawCall, RawCallLang};

@@ -69,6 +69,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     // Synthesise a `bash_entrypoint` node attached to the file via a
@@ -85,6 +86,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
     edges.push(Edge {
         external: false,
@@ -97,6 +99,8 @@ pub fn extract_bash(path: &Path) -> FileResult {
         weight: 1.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 
     let root = tree.root_node();
@@ -227,6 +231,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -240,6 +245,8 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 defined_functions.insert(func_name);
                 // find the compound_statement body
@@ -338,6 +345,8 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                         weight: 1.0,
                                         context: Some("import".to_string()),
                                         confidence_score: None,
+                                        deferred: false,
+                                        metadata: None,
                                     });
                                 }
                             } else {
@@ -354,6 +363,8 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                         weight: 1.0,
                                         context: Some("import".to_string()),
                                         confidence_score: None,
+                                        deferred: false,
+                                        metadata: None,
                                     });
                                 }
                             }
@@ -385,6 +396,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                         source_location: Some(format!("L{line}")),
                                         metadata: None,
                                         origin_file: None,
+                                        node_type: None,
                                     });
                                 }
                                 edges.push(Edge {
@@ -398,6 +410,8 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
                                     weight: 1.0,
                                     context: None,
                                     confidence_score: None,
+                                    deferred: false,
+                                    metadata: None,
                                 });
                             }
                         }
@@ -553,6 +567,8 @@ fn emit_call_edge_if_valid(
         weight: 1.0,
         context: Some("call".to_string()),
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 }
 

@@ -71,6 +71,7 @@ pub fn extract_zig(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -193,6 +194,7 @@ fn walk_zig(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -206,6 +208,8 @@ fn walk_zig(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 if let Some(body) = node.child_by_field_name("body") {
                     function_bodies.push((func_nid, body.start_byte(), body.end_byte()));
@@ -250,6 +254,7 @@ fn walk_zig(
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         edges.push(Edge {
@@ -263,6 +268,8 @@ fn walk_zig(
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                         let mut c2 = vn.walk();
                         if c2.goto_first_child() {
@@ -287,6 +294,7 @@ fn walk_zig(
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         edges.push(Edge {
@@ -300,6 +308,8 @@ fn walk_zig(
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                     "builtin_function" | "field_expression" => {
@@ -395,6 +405,8 @@ fn extract_zig_import(
                                     weight: 1.0,
                                     context: None,
                                     confidence_score: None,
+                                    deferred: false,
+                                    metadata: None,
                                 });
                             }
                             return;
@@ -475,6 +487,8 @@ fn walk_calls_zig(
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -487,6 +501,8 @@ fn walk_calls_zig(
                 source_location: format!("L{}", node.start_position().row + 1),
                 receiver: None,
                 receiver_type: None,
+                lang: None,
+                ..Default::default()
             });
         }
     }

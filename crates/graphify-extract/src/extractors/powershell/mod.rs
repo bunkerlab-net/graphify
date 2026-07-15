@@ -105,6 +105,7 @@ pub fn extract_powershell(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -261,6 +262,7 @@ impl PsRefCtx<'_> {
                 source_location: Some(String::new()),
                 metadata: None,
                 origin_file: Some(self.str_path.to_string()),
+                node_type: None,
             });
         }
         nid2
@@ -278,6 +280,8 @@ impl PsRefCtx<'_> {
             weight: 1.0,
             context: Some(context.to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 }
@@ -394,6 +398,7 @@ fn walk_ps(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -407,6 +412,8 @@ fn walk_ps(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 if let Some(body) = find_script_block_body(node) {
                     function_bodies.push((func_nid, body.start_byte(), body.end_byte()));
@@ -450,6 +457,7 @@ fn walk_ps(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -463,7 +471,62 @@ fn walk_ps(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
+                // Base type(s) after `:`. PowerShell has no syntactic base-vs-
+                // interface split, so (matching the C# convention) the first base
+                // is `inherits` and the rest `implements`; bases are the
+                // `simple_name` children following the `:` token (a129ff2). A generic
+                // base (`IComparer[Object]`, a different node kind) is skipped, matching
+                // graphify-py's simple_name-only base scan.
+                {
+                    let mut rc = PsRefCtx {
+                        stem,
+                        str_path,
+                        nodes: &mut *nodes,
+                        edges: &mut *edges,
+                        seen_ids: &mut *seen_ids,
+                    };
+                    let mut colon_seen = false;
+                    let mut base_index = 0usize;
+                    let mut bc = node.walk();
+                    if bc.goto_first_child() {
+                        loop {
+                            let child = bc.node();
+                            if child.kind() == ":" {
+                                colon_seen = true;
+                            } else if colon_seen && child.kind() == "simple_name" {
+                                let base_nid = rc.ensure_named_node(read_text(child, source));
+                                if base_nid != class_nid {
+                                    let rel = if base_index == 0 {
+                                        "inherits"
+                                    } else {
+                                        "implements"
+                                    };
+                                    rc.edges.push(Edge {
+                                        external: false,
+                                        source: class_nid.clone(),
+                                        target: base_nid,
+                                        relation: rel.to_string(),
+                                        confidence: "EXTRACTED".to_string(),
+                                        source_file: str_path.to_string(),
+                                        source_location: Some(format!("L{line}")),
+                                        weight: 1.0,
+                                        context: None,
+                                        confidence_score: None,
+                                        deferred: false,
+                                        metadata: None,
+                                    });
+                                }
+                                base_index += 1;
+                            }
+                            if !bc.goto_next_sibling() {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
                     loop {
@@ -540,6 +603,7 @@ fn walk_ps(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -553,6 +617,8 @@ fn walk_ps(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 // Return type (type_literal sibling of simple_name) and parameter
                 // types (class_method_parameter_list) → `references` edges.
@@ -617,6 +683,8 @@ fn walk_ps(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             } else if let Some(cmd_nn) = first_child_kind(node, "command_name") {
                 let cmd_text = read_text(cmd_nn, source).to_lowercase();
@@ -667,6 +735,8 @@ fn walk_ps(
                                 weight: 1.0,
                                 context: None,
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     }
@@ -684,6 +754,8 @@ fn walk_ps(
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                     }
                 }
@@ -775,6 +847,8 @@ fn walk_calls_ps(
                                 weight: 1.0,
                                 context: None,
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                     }
@@ -787,6 +861,8 @@ fn walk_calls_ps(
                         source_location: format!("L{}", node.start_position().row + 1),
                         receiver: None,
                         receiver_type: None,
+                        lang: None,
+                        ..Default::default()
                     });
                 }
             }

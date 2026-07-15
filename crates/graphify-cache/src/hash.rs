@@ -84,7 +84,7 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
         return Err(CacheError::NotAFile(p));
     }
 
-    ensure_stat_index(&root);
+    let key = ensure_stat_index(&root, None);
     let abs_key = p.canonicalize().unwrap_or_else(|_| p.clone());
     let abs_key_str = abs_key.to_string_lossy().to_string();
 
@@ -98,12 +98,15 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
         .unwrap_or_default();
 
     {
-        let state = lock_index();
-        if let Some(entry) = state.entries.get(&abs_key_str)
+        let index = lock_index();
+        // Word-count-only entries carry no hash — require one for the fastpath.
+        if let Some(state) = index.roots.get(&key)
+            && let Some(entry) = state.entries.get(&abs_key_str)
             && entry.size == size
             && entry.mtime_ns == mtime_ns
+            && let Some(hash) = &entry.hash
         {
-            return Ok(entry.hash.clone());
+            return Ok(hash.clone());
         }
     }
 
@@ -130,17 +133,102 @@ pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheEr
     let digest = hex::encode(hasher.finalize());
 
     {
-        let mut state = lock_index();
-        state.entries.insert(
-            abs_key_str,
-            StatEntry {
-                size,
-                mtime_ns,
-                hash: digest.clone(),
-            },
-        );
+        let mut index = lock_index();
+        let state = index.roots.entry(key).or_default();
+        // Preserve a co-located word_count when the (size, mtime_ns) signature is
+        // still current; otherwise replace the stale entry outright.
+        match state.entries.get_mut(&abs_key_str) {
+            Some(entry) if entry.size == size && entry.mtime_ns == mtime_ns => {
+                entry.hash = Some(digest.clone());
+            }
+            _ => {
+                state.entries.insert(
+                    abs_key_str,
+                    StatEntry {
+                        size,
+                        mtime_ns,
+                        hash: Some(digest.clone()),
+                        word_count: None,
+                    },
+                );
+            }
+        }
         state.dirty = true;
     }
 
     Ok(digest)
+}
+
+/// Word count with the same `(size, mtime_ns)` stat-fastpath cache as
+/// [`file_hash`], persisted in the shared stat index.
+///
+/// `detect()` counts words in every PDF/docx/text file to size the corpus,
+/// re-parsing every binary on each run — minutes on a large docs corpus even
+/// when only a handful of files changed (#1656). This caches the count against
+/// the file's stat signature so an unchanged file is counted once and read from
+/// the index thereafter. `compute` produces the count on a miss. A file that
+/// can't be stat'd simply recomputes and isn't cached — correct, just not
+/// accelerated.
+pub fn cached_word_count<P: AsRef<Path>>(
+    path: P,
+    root: &Path,
+    compute: impl FnOnce(&Path) -> u64,
+    cache_root: Option<&Path>,
+) -> u64 {
+    let p = normalize_path(path.as_ref());
+    let root = normalize_path(root);
+    let key = ensure_stat_index(&root, cache_root);
+    let abs_key = p.canonicalize().unwrap_or_else(|_| p.clone());
+    let abs_key_str = abs_key.to_string_lossy().to_string();
+
+    let Ok(meta) = p.metadata() else {
+        return compute(&p); // can't stat (e.g. an unreachable long path) — recompute, don't cache
+    };
+    let size = meta.len();
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+
+    {
+        let index = lock_index();
+        if let Some(state) = index.roots.get(&key)
+            && let Some(entry) = state.entries.get(&abs_key_str)
+            && entry.size == size
+            && entry.mtime_ns == mtime_ns
+            && let Some(wc) = entry.word_count
+        {
+            return wc;
+        }
+    }
+
+    let wc = compute(&p);
+
+    {
+        let mut index = lock_index();
+        let state = index.roots.entry(key).or_default();
+        // Augment an existing hash entry in place when its signature is current;
+        // otherwise create a word-count-only entry (no hash).
+        match state.entries.get_mut(&abs_key_str) {
+            Some(entry) if entry.size == size && entry.mtime_ns == mtime_ns => {
+                entry.word_count = Some(wc);
+            }
+            _ => {
+                state.entries.insert(
+                    abs_key_str,
+                    StatEntry {
+                        size,
+                        mtime_ns,
+                        hash: None,
+                        word_count: Some(wc),
+                    },
+                );
+            }
+        }
+        state.dirty = true;
+    }
+
+    wc
 }

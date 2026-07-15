@@ -65,6 +65,7 @@ impl SlnxCtx<'_> {
                                     source_location: None,
                                     metadata: None,
                                     origin_file: None,
+                                    node_type: None,
                                 });
                                 self.edges.push(Edge {
                                     external: false,
@@ -77,6 +78,8 @@ impl SlnxCtx<'_> {
                                     weight: 1.0,
                                     context: None,
                                     confidence_score: None,
+                                    deferred: false,
+                                    metadata: None,
                                 });
                             }
                             self.project_nids.insert(nid.clone());
@@ -139,6 +142,7 @@ pub fn extract_slnx(path: &Path) -> FileResult {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -202,6 +206,8 @@ pub fn extract_slnx(path: &Path) -> FileResult {
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
     }

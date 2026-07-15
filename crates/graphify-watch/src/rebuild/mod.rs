@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod pending;
 pub mod pipeline;
 mod pipeline_helpers;
+pub mod reconcile;
 pub mod relativize;
 pub mod shrink;
 
@@ -21,7 +22,7 @@ pub use pending::{
     rebuild_with_pending,
 };
 pub use relativize::relativize_source_files;
-pub use shrink::check_shrink;
+pub use shrink::{ShrinkChecker, check_shrink};
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +54,9 @@ pub struct RebuildOptions {
     pub no_cluster: bool,
     /// Lock-acquisition policy.
     pub lock: LockPolicy,
+    /// Follow symlinked directories during detection (mirrors graphify-py
+    /// `_rebuild_code(follow_symlinks=...)`).
+    pub follow_symlinks: bool,
 }
 
 /// Re-run AST extraction + build + optional cluster + report for code files.
@@ -71,12 +75,33 @@ pub fn rebuild_code(
     changed_paths: Option<&[PathBuf]>,
     opts: RebuildOptions,
 ) -> Result<bool, WatchError> {
-    let out = watch_path.join(graphify_security::graphify_out());
+    rebuild_code_impl(watch_path, changed_paths, opts, check_shrink)
+}
+
+/// [`rebuild_code`] with an injectable shrink-guard. The public entry always
+/// supplies the real [`check_shrink`]; `test_support` supplies a rejecting
+/// checker scoped to a single call, so no global state or environment variable
+/// can alter production behaviour.
+pub(crate) fn rebuild_code_impl(
+    watch_path: &Path,
+    changed_paths: Option<&[PathBuf]>,
+    opts: RebuildOptions,
+    check_shrink_fn: ShrinkChecker,
+) -> Result<bool, WatchError> {
+    let Some(effective) = effective_watch_path(watch_path) else {
+        return Ok(false);
+    };
+    let out = effective.join(graphify_security::graphify_out());
 
     match opts.lock {
-        LockPolicy::None => {
-            rebuild_code_inner(watch_path, changed_paths, opts.force, opts.no_cluster)
-        }
+        LockPolicy::None => rebuild_code_inner(
+            &effective,
+            changed_paths,
+            opts.force,
+            opts.no_cluster,
+            opts.follow_symlinks,
+            check_shrink_fn,
+        ),
         LockPolicy::TryAcquire | LockPolicy::BlockOn => {
             let block = matches!(opts.lock, LockPolicy::BlockOn);
             // #1059: an incremental hook must not drop its change set when
@@ -103,10 +128,53 @@ pub fn rebuild_code(
             // (including the paths we just queued ourselves) and merge with our
             // own change set, then loop to absorb any late arrivals.
             let result = pending::rebuild_with_pending(&out, changed_paths, |paths| {
-                rebuild_code_inner(watch_path, paths, opts.force, opts.no_cluster)
+                rebuild_code_inner(
+                    &effective,
+                    paths,
+                    opts.force,
+                    opts.no_cluster,
+                    opts.follow_symlinks,
+                    check_shrink_fn,
+                )
             });
             drop(guard);
             result
         }
     }
+}
+
+/// Resolve the watch path to use for a rebuild WITHOUT mutating the process
+/// working directory.
+///
+/// Detached git hooks can inherit a transient working directory that is deleted
+/// before the background rebuild starts; in that state `current_dir()` and the
+/// relative `graphify-out` mkdirs fail. Rather than `chdir`-ing (which mutates
+/// process-global state shared by any concurrent caller), this resolves the
+/// path: a valid CWD keeps the caller-supplied (often relative) path as-is so
+/// the committed `.graphify_root` marker stays portable (#777); only when the
+/// CWD is gone does it fall back to rooting the path under `GRAPHIFY_REPO_ROOT`.
+/// Returns `None` (skip the rebuild) when neither is available.
+///
+/// Divergence from graphify-py `_stabilize_rebuild_cwd`: the reference `chdir`s
+/// to `GRAPHIFY_REPO_ROOT` unconditionally; here it is a CWD-gone fallback so a
+/// valid working directory is preferred (git hooks run from the repo root, so
+/// the two agree) and the process CWD is never disturbed.
+fn effective_watch_path(watch_path: &Path) -> Option<PathBuf> {
+    if watch_path.is_absolute() {
+        return Some(watch_path.to_path_buf());
+    }
+    if std::env::current_dir().is_ok() {
+        return Some(watch_path.to_path_buf());
+    }
+    if let Ok(root) = std::env::var("GRAPHIFY_REPO_ROOT") {
+        let root = root.trim();
+        if !root.is_empty() && Path::new(root).is_dir() {
+            return Some(Path::new(root).join(watch_path));
+        }
+    }
+    eprintln!(
+        "[graphify watch] Rebuild failed: current working directory no longer \
+         exists and GRAPHIFY_REPO_ROOT is not set."
+    );
+    None
 }

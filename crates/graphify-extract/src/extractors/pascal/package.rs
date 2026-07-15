@@ -47,6 +47,7 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             source_location: Some("L1".to_string()),
             metadata: None,
             origin_file: None,
+            node_type: None,
         }
     };
 
@@ -96,6 +97,8 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
         weight: 1.0,
         context: None,
         confidence_score: None,
+        deferred: false,
+        metadata: None,
     });
 
     // Required packages → imports edges
@@ -119,6 +122,8 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             weight: 1.0,
             context: Some("import".to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -143,6 +148,8 @@ pub fn extract_lazarus_package(path: &Path) -> FileResult {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 

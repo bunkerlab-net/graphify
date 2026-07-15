@@ -307,7 +307,9 @@ fn extract_with_custom_out_dir() {
         .arg(&out)
         .assert()
         .success();
-    assert!(out.join("graph.json").exists());
+    // #1747: artifacts land under <out>/graphify-out/, matching graphify-py's
+    // "<out>/graphify-out/" contract (not directly in <out>).
+    assert!(out.join("graphify-out").join("graph.json").exists());
 }
 
 #[test]

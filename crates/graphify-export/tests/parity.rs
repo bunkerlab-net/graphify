@@ -275,6 +275,114 @@ fn test_to_html_contains_search() {
     assert!(content.contains("search"), "HTML missing 'search' element");
 }
 
+/// Extract and parse the `const RAW_NODES = [...]` vis.js node list from the
+/// interactive HTML export.
+fn raw_nodes_from_html(html: &str) -> Vec<Value> {
+    let after = html
+        .split("const RAW_NODES = ")
+        .nth(1)
+        .expect("RAW_NODES marker");
+    let arr = after.split(";\n").next().expect("RAW_NODES array");
+    serde_json::from_str(arr).expect("RAW_NODES is valid JSON")
+}
+
+fn html_with_overlay(overlay: Value) -> Vec<Value> {
+    let mut g = build_from_json(
+        json!({
+            "nodes": [
+                {"id": "n_transformer", "label": "Transformer", "source_file": "t.py"},
+                {"id": "other", "label": "Other", "source_file": "o.py"},
+            ],
+            "edges": [],
+        }),
+        false,
+        None,
+    )
+    .expect("build graph");
+    g.graph_attrs
+        .insert("_learning_overlay".to_string(), overlay);
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.html");
+    to_html(&g, &IndexMap::new(), &out, None, None, None).expect("to_html");
+    raw_nodes_from_html(&std::fs::read_to_string(&out).expect("read html"))
+}
+
+#[test]
+fn test_to_html_annotated_node_gets_learning_status_and_ring() {
+    // #1441: a preferred node gets learning_status/stale fields, a green ring
+    // border, borderWidth 3, and a Lesson tooltip; an un-annotated node is untouched.
+    let nodes = html_with_overlay(json!({
+        "n_transformer": {"status": "preferred", "uses": 3, "score": 2.4, "stale": false}
+    }));
+    let ann = nodes
+        .iter()
+        .find(|n| n["id"] == "n_transformer")
+        .expect("annotated node");
+    assert_eq!(ann["learning_status"], "preferred");
+    assert_eq!(ann["learning_stale"], false);
+    assert_eq!(ann["color"]["border"], "#22c55e");
+    assert_eq!(ann["borderWidth"], 3);
+    assert!(
+        ann["title"]
+            .as_str()
+            .expect("title")
+            .contains("Lesson: preferred source")
+    );
+    let other = nodes
+        .iter()
+        .find(|n| n["id"] == "other")
+        .expect("other node");
+    assert!(other.get("learning_status").is_none());
+    assert!(other.get("learning_stale").is_none());
+}
+
+#[test]
+fn test_to_html_contested_stale_node_gets_dashed_desaturated_ring() {
+    let nodes = html_with_overlay(json!({
+        "n_transformer": {"status": "contested", "uses": 2, "neg": 3, "score": -0.5, "stale": true}
+    }));
+    let ann = nodes
+        .iter()
+        .find(|n| n["id"] == "n_transformer")
+        .expect("annotated node");
+    assert_eq!(ann["learning_status"], "contested");
+    assert_eq!(ann["learning_stale"], true);
+    assert_eq!(ann["color"]["border"], "#9ca3af");
+    assert_eq!(ann["shapeProperties"]["borderDashes"], json!([4, 4]));
+    assert!(
+        ann["title"]
+            .as_str()
+            .expect("title")
+            .contains("code changed")
+    );
+}
+
+#[test]
+fn test_to_html_unannotated_identical_to_pre_feature() {
+    // #1441: with no overlay, HTML is byte-identical whether `_learning_overlay`
+    // is omitted or an empty object — no learning fields leak into the render.
+    let g = make_graph();
+    let communities = make_communities();
+    let mut g_empty = make_graph();
+    g_empty
+        .graph_attrs
+        .insert("_learning_overlay".to_string(), json!({}));
+    let tmp = tempdir().expect("tempdir");
+    let a = tmp.path().join("a.html");
+    let b = tmp.path().join("b.html");
+    to_html(&g, &communities, &a, None, None, None).expect("to_html a");
+    to_html(&g_empty, &communities, &b, None, None, None).expect("to_html b");
+    // The output path appears in the title, so compare with the name normalized.
+    let ca = std::fs::read_to_string(&a)
+        .expect("read a")
+        .replace("a.html", "X.html");
+    let cb = std::fs::read_to_string(&b)
+        .expect("read b")
+        .replace("b.html", "X.html");
+    assert_eq!(ca, cb);
+    assert!(!ca.contains("learning_status"));
+}
+
 #[test]
 fn test_to_html_contains_legend_with_labels() {
     let g = make_graph();
@@ -372,6 +480,59 @@ fn test_to_canvas_no_communities_still_populates() {
     assert!(
         size > 32,
         "canvas must not be the empty 32-byte shell (got {size})"
+    );
+}
+
+#[test]
+fn test_to_canvas_all_dangling_communities_synthesize_real_cards() {
+    // A non-empty community whose members ALL dangle (stale index / merge artifact)
+    // must not leave an empty group box; the graph's real nodes are synthesized
+    // into a single all-nodes community instead (#1324 applied to the filtered map).
+    let g = make_graph();
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(7, vec!["ghost_a".to_string(), "ghost_b".to_string()]);
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.canvas");
+    to_canvas(&g, &communities, &out, None, None).expect("test invariant");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    let nodes = data["nodes"].as_array().expect("array field");
+    let file_cards = nodes.iter().filter(|n| n["type"] == "file").count();
+    assert_eq!(
+        file_cards,
+        g.node_count(),
+        "each real node appears once as a card (no duplication): {file_cards} vs {}",
+        g.node_count()
+    );
+    let group_count = nodes.iter().filter(|n| n["type"] == "group").count();
+    assert_eq!(
+        group_count, 1,
+        "only the synthesized all-nodes group should remain, not the dangling one"
+    );
+}
+
+#[test]
+fn test_to_canvas_fallback_group_ignores_stale_community_0_label() {
+    // #1324: the synthesized all-nodes fallback keys on a sentinel id, so a stale
+    // `community_labels` entry for community 0 never leaks into its group label.
+    let g = make_graph();
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new(); // triggers the fallback
+    let mut labels: IndexMap<i64, String> = IndexMap::new();
+    labels.insert(0, "AuthModule".to_string());
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.canvas");
+    to_canvas(&g, &communities, &out, Some(&labels), None).expect("test invariant");
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    let nodes = data["nodes"].as_array().expect("array field");
+    let group = nodes
+        .iter()
+        .find(|n| n["type"] == "group")
+        .expect("a synthesized group");
+    assert_eq!(
+        group["label"].as_str(),
+        Some("Community 0"),
+        "the fallback group must not inherit the stale community-0 label"
     );
 }
 
@@ -586,6 +747,32 @@ fn test_attach_hyperedges_deduplicates() {
 }
 
 #[test]
+fn test_attach_hyperedges_deduplicates_within_one_batch() {
+    // graphify-py records each accepted id into `seen_ids` as it appends, so a
+    // duplicate id in the SAME batch is dropped too — not only across calls.
+    let val: Value = serde_json::from_str(EXTRACTION_JSON).expect("valid JSON");
+    let mut g = build_from_json(val, false, None).expect("build_from_json");
+    let batch = vec![
+        json!({"id": "dup", "label": "first"}),
+        json!({"id": "dup", "label": "second"}),
+        json!({"id": "unique", "label": "third"}),
+    ];
+    attach_hyperedges(&mut g, &batch);
+    let stored = g.graph_attrs["hyperedges"].as_array().expect("array field");
+    assert_eq!(
+        stored.len(),
+        2,
+        "the duplicate `dup` within one batch must collapse to a single entry"
+    );
+    // The first occurrence wins (append-then-record order).
+    let dup = stored
+        .iter()
+        .find(|h| h.get("id").and_then(Value::as_str) == Some("dup"))
+        .expect("dup present");
+    assert_eq!(dup.get("label").and_then(Value::as_str), Some("first"));
+}
+
+#[test]
 fn test_to_html_aggregated_remaps_hyperedges_to_communities() {
     // graphify-py #1006: when the graph exceeds the viz limit and is aggregated
     // into a community meta-graph, hyperedges must be remapped from semantic
@@ -724,4 +911,89 @@ fn to_canvas_never_emits_punctuation_only_filenames() {
             "punctuation-only canvas filename: {file}"
         );
     }
+}
+// ── to_json anti-shrink guard (#479 / d2d1f68 fail-safe) ────────────────────
+
+/// Build an undirected graph with `n` nodes labelled `n0..n{n-1}` (mirrors the
+/// Python `_mkG` helper).
+fn make_graph_n(n: usize) -> graphify_build::Graph {
+    let mut g = graphify_build::Graph::new(graphify_build::GraphKind::Graph);
+    for i in 0..n {
+        let mut attrs = IndexMap::new();
+        attrs.insert("label".to_string(), json!(format!("n{i}")));
+        g.add_node(&format!("n{i}"), attrs);
+    }
+    g
+}
+
+#[test]
+fn test_to_json_refuses_shrink() {
+    // #479: refuse to silently overwrite an existing graph with fewer nodes.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::write(
+        &out,
+        r#"{"nodes":[{"id":"n0"},{"id":"n1"},{"id":"n2"},{"id":"n3"},{"id":"n4"}],"links":[]}"#,
+    )
+    .expect("write existing");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        !to_json(&make_graph_n(2), &communities, &out, false, None, None).expect("to_json"),
+        "a smaller graph must be refused when force=false"
+    );
+    assert!(
+        to_json(&make_graph_n(2), &communities, &out, true, None, None).expect("to_json"),
+        "force=true overrides the shrink guard"
+    );
+}
+
+#[test]
+fn test_to_json_refuses_unreadable_existing() {
+    // An existing path that cannot be read as a file (here a directory) must fail
+    // SAFE — refuse the overwrite rather than treat it as empty. Fail-open would be
+    // the silent data-loss path #479 guards against.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::create_dir(&out).expect("mkdir");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        !to_json(&make_graph_n(5), &communities, &out, false, None, None).expect("to_json"),
+        "an unreadable existing path must be refused when force=false"
+    );
+}
+
+#[test]
+fn test_to_json_fails_safe_on_corrupt_existing() {
+    // A non-empty but unparseable existing graph.json (corrupt or mid-write) must
+    // NOT be silently overwritten — we can't verify the new graph isn't a partial
+    // shrink, so fail safe (refuse) unless force is given.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::write(&out, "{ this has content but is not valid json").expect("write existing");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        !to_json(&make_graph_n(10), &communities, &out, false, None, None).expect("to_json"),
+        "an unparseable existing graph must be refused when force=false"
+    );
+    assert!(
+        to_json(&make_graph_n(10), &communities, &out, true, None, None).expect("to_json"),
+        "force=true overrides"
+    );
+}
+
+#[test]
+fn test_to_json_proceeds_on_empty_existing() {
+    // An empty/whitespace existing file has no nodes to lose, so it is not a
+    // shrink risk — the write proceeds.
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.json");
+    std::fs::write(&out, "").expect("write existing");
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    assert!(
+        to_json(&make_graph_n(3), &communities, &out, false, None, None).expect("to_json"),
+        "an empty existing file is not a shrink — proceed"
+    );
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
+    assert_eq!(data["nodes"].as_array().expect("array").len(), 3);
 }

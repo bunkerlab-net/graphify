@@ -12,6 +12,17 @@ use crate::types::{Edge, FileResult, Node};
 
 static FORTRAN_CPP_EXTS: &[&str] = &[".F", ".F90", ".F95", ".F03", ".F08"];
 
+/// Fortran scope-container node kinds. Calls lexically inside one are attributed
+/// to that scope; a nested occurrence is skipped so an inner procedure's calls
+/// aren't also counted against the enclosing module/program.
+const FORTRAN_SCOPE_KINDS: &[&str] = &[
+    "subroutine",
+    "function",
+    "module",
+    "program",
+    "internal_procedures",
+];
+
 const STMT_HEADERS: &[&str] = &[
     "subroutine_statement",
     "function_statement",
@@ -130,6 +141,7 @@ pub fn extract_fortran(path: &Path) -> FileResult {
         source_location: Some("L1".to_string()),
         metadata: None,
         origin_file: None,
+        node_type: None,
     });
 
     let root = tree.root_node();
@@ -153,17 +165,9 @@ pub fn extract_fortran(path: &Path) -> FileResult {
             stem: &stem,
             stmt_headers: STMT_HEADERS,
             edges: &mut edges,
+            seen_ids: &seen_ids,
         };
-        for (scope_nid, body_start, body_end) in &scope_bodies {
-            walk_calls_fortran(
-                &mut call_ctx,
-                tree.root_node(),
-                &source,
-                scope_nid,
-                *body_start,
-                *body_end,
-            );
-        }
+        emit_fortran_calls(&mut call_ctx, tree.root_node(), &source, &scope_bodies);
     }
 
     crate::forward_refs::reconcile_forward_refs(&mut nodes, &mut edges);
@@ -234,6 +238,7 @@ impl FortranRefCtx<'_> {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         nid2
@@ -251,6 +256,8 @@ impl FortranRefCtx<'_> {
             weight: 1.0,
             context: Some(context.to_string()),
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 }
@@ -374,6 +381,7 @@ fn walk_fortran(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -387,6 +395,8 @@ fn walk_fortran(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
                 let mut cur = node.walk();
@@ -431,6 +441,7 @@ fn walk_fortran(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -444,6 +455,8 @@ fn walk_fortran(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
@@ -487,6 +500,7 @@ fn walk_fortran(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -500,6 +514,8 @@ fn walk_fortran(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
                 let mut rc = FortranRefCtx {
@@ -553,6 +569,7 @@ fn walk_fortran(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -566,6 +583,8 @@ fn walk_fortran(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 scope_bodies.push((nid.clone(), node.start_byte(), node.end_byte()));
                 let mut rc = FortranRefCtx {
@@ -604,6 +623,7 @@ fn walk_fortran(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 edges.push(Edge {
@@ -617,6 +637,8 @@ fn walk_fortran(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }
@@ -652,6 +674,7 @@ fn walk_fortran(
                     source_location: Some(format!("L{line}")),
                     metadata: None,
                     origin_file: None,
+                    node_type: None,
                 });
                 edges.push(Edge {
                     external: false,
@@ -664,6 +687,8 @@ fn walk_fortran(
                     weight: 1.0,
                     context: Some("use".to_string()),
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }
@@ -692,6 +717,24 @@ struct FortranCallCtx<'a, 'h> {
     stem: &'a str,
     stmt_headers: &'a [&'h str],
     edges: &'a mut Vec<Edge>,
+    seen_ids: &'a HashSet<String>,
+}
+
+/// First direct `identifier` child of `node`, if any — the callee name in a
+/// Fortran `subroutine_call` / `call_expression`.
+fn first_identifier_child(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if cur.node().kind() == "identifier" {
+                return Some(cur.node());
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
 }
 
 fn walk_calls_fortran(
@@ -699,41 +742,20 @@ fn walk_calls_fortran(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     scope_nid: &str,
-    body_start: usize,
-    body_end: usize,
 ) {
     let str_path = ctx.str_path;
     let stem = ctx.stem;
     let stmt_headers = ctx.stmt_headers;
     let edges = &mut *ctx.edges;
-    if node.start_byte() >= body_end || node.end_byte() <= body_start {
-        return;
-    }
-    if matches!(
-        node.kind(),
-        "subroutine" | "function" | "module" | "program" | "internal_procedures"
-    ) {
+    let seen_ids = ctx.seen_ids;
+    // Skip nested scopes: their calls belong to their own scope entry. We already
+    // start from the current scope's children, so any scope-kind node reached here
+    // is strictly nested.
+    if FORTRAN_SCOPE_KINDS.contains(&node.kind()) {
         return;
     }
     if node.kind() == "subroutine_call" {
-        let name_node = {
-            let mut cur = node.walk();
-            if cur.goto_first_child() {
-                let mut f = None;
-                loop {
-                    if cur.node().kind() == "identifier" {
-                        f = Some(cur.node());
-                        break;
-                    }
-                    if !cur.goto_next_sibling() {
-                        break;
-                    }
-                }
-                f
-            } else {
-                None
-            }
-        };
+        let name_node = first_identifier_child(node);
         if let Some(nn) = name_node {
             let callee = read_text(nn, source).to_lowercase();
             let target_nid = make_id(&[stem, &callee]);
@@ -749,9 +771,40 @@ fn walk_calls_fortran(
                 weight: 1.0,
                 context: Some("call".to_string()),
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
         return;
+    }
+    if node.kind() == "call_expression" {
+        // `y = f(x)` — Fortran reuses `name(...)` for array indexing, so only
+        // emit when the callee resolves to a procedure defined in this file (an
+        // array variable has no matching node); array accesses like `arr(i)`
+        // therefore can't fabricate spurious `calls` edges (b8f41c7). No early
+        // return: fall through to recurse so nested calls (`f(g(x))`) still fire.
+        let name_node = first_identifier_child(node);
+        if let Some(nn) = name_node {
+            let callee = read_text(nn, source).to_lowercase();
+            let target_nid = make_id(&[stem, &callee]);
+            if seen_ids.contains(&target_nid) && target_nid != scope_nid {
+                let line = node.start_position().row + 1;
+                edges.push(Edge {
+                    external: false,
+                    source: scope_nid.to_string(),
+                    target: target_nid,
+                    relation: "calls".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: Some("call".to_string()),
+                    confidence_score: None,
+                    deferred: false,
+                    metadata: None,
+                });
+            }
+        }
     }
     if stmt_headers.contains(&node.kind()) {
         return;
@@ -759,9 +812,69 @@ fn walk_calls_fortran(
     let mut cur = node.walk();
     if cur.goto_first_child() {
         loop {
-            walk_calls_fortran(ctx, cur.node(), source, scope_nid, body_start, body_end);
+            walk_calls_fortran(ctx, cur.node(), source, scope_nid);
             if !cur.goto_next_sibling() {
                 break;
+            }
+        }
+    }
+}
+
+/// Descend from `node` to the Fortran scope-container node whose byte span is
+/// exactly `[start, end)`, so the call pass can re-locate a recorded scope
+/// without holding a `tree_sitter::Node` across passes.
+fn find_fortran_scope_node(
+    node: tree_sitter::Node<'_>,
+    start: usize,
+    end: usize,
+) -> Option<tree_sitter::Node<'_>> {
+    // Prune subtrees that cannot contain the target span.
+    if start < node.start_byte() || end > node.end_byte() {
+        return None;
+    }
+    if node.start_byte() == start
+        && node.end_byte() == end
+        && FORTRAN_SCOPE_KINDS.contains(&node.kind())
+    {
+        return Some(node);
+    }
+    let mut cur = node.walk();
+    if cur.goto_first_child() {
+        loop {
+            if let Some(found) = find_fortran_scope_node(cur.node(), start, end) {
+                return Some(found);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Emit `calls` edges for every recorded scope by walking each scope node's
+/// direct children (skipping its statement header), so calls are attributed to
+/// the scope they lexically belong to.
+fn emit_fortran_calls(
+    ctx: &mut FortranCallCtx<'_, '_>,
+    root: tree_sitter::Node<'_>,
+    source: &[u8],
+    scope_bodies: &[(String, usize, usize)],
+) {
+    for (scope_nid, body_start, body_end) in scope_bodies {
+        let Some(scope_node) = find_fortran_scope_node(root, *body_start, *body_end) else {
+            continue;
+        };
+        let mut cur = scope_node.walk();
+        if cur.goto_first_child() {
+            loop {
+                let child = cur.node();
+                if !STMT_HEADERS.contains(&child.kind()) {
+                    walk_calls_fortran(ctx, child, source, scope_nid);
+                }
+                if !cur.goto_next_sibling() {
+                    break;
+                }
             }
         }
     }

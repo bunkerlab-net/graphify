@@ -95,8 +95,52 @@ fn openai_plain_via_mock() {
     let mut g = allow_private();
     g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
 
-    let out = call_openai_plain("key", "gpt-test", "ping", 32).expect("test invariant");
+    let out = call_openai_plain("key", "gpt-test", "ping", 32, None).expect("test invariant");
     assert_eq!(out, "plain answer");
+}
+
+#[serial_test::serial(env)]
+#[test]
+fn generate_community_labels_totals_token_usage() {
+    // #1694: labeling accumulates each response's token usage and returns it so
+    // cluster-only mode reports real cost instead of a hardcoded 0/0.
+    let mut server = mockito::Server::new();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(json_body("{\"0\":\"Orders\"}"))
+        .create();
+
+    let mut g = allow_private();
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+    g.set("OPENAI_API_KEY", "key");
+
+    let mut communities = indexmap::IndexMap::new();
+    communities.insert(0i64, vec!["order_place".to_string()]);
+    let mut node_labels = indexmap::IndexMap::new();
+    node_labels.insert("order_place".to_string(), "place_order".to_string());
+    let gods = indexmap::IndexSet::new();
+
+    let (labels, source, usage) = graphify_llm::generate_community_labels(
+        &communities,
+        &node_labels,
+        &gods,
+        Some("openai"),
+        None,
+        true,
+        1,
+        100,
+    );
+    assert_eq!(source, "llm");
+    assert_eq!(labels[&0], "Orders");
+    assert_eq!(
+        usage.input, 5,
+        "prompt tokens accumulated from the response usage"
+    );
+    assert_eq!(
+        usage.output, 8,
+        "completion tokens accumulated from the response usage"
+    );
 }
 
 #[test]
@@ -200,7 +244,7 @@ fn gemini_plain_via_mock() {
     let mut g = allow_private();
     g.set("GRAPHIFY_GEMINI_BASE_URL", &server.url());
 
-    let out = call_gemini_plain("key", "gemini-test", "ping", 32).expect("test invariant");
+    let out = call_gemini_plain("key", "gemini-test", "ping", 32, None).expect("test invariant");
     assert_eq!(out, "gemini answer");
 }
 
@@ -264,7 +308,7 @@ fn deepseek_plain_via_mock() {
     let mut g = allow_private();
     g.set("GRAPHIFY_DEEPSEEK_BASE_URL", &server.url());
 
-    let out = call_deepseek_plain("key", "ds-test", "ping", 32).expect("test invariant");
+    let out = call_deepseek_plain("key", "ds-test", "ping", 32, None).expect("test invariant");
     assert_eq!(out, "deepseek answer");
 }
 

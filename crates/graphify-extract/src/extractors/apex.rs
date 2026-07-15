@@ -128,6 +128,7 @@ impl ApexCtx<'_> {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
     }
@@ -144,6 +145,8 @@ impl ApexCtx<'_> {
             weight: 1.0,
             context: None,
             confidence_score: None,
+            deferred: false,
+            metadata: None,
         });
     }
 
@@ -277,6 +280,18 @@ pub fn extract_apex(path: &Path) -> FileResult {
                 .clone()
                 .unwrap_or_else(|| file_nid.clone());
             ctx.add_edge(&parent, &iface_nid, "contains", lineno, "EXTRACTED");
+            // `interface X extends A, B` — one `extends` edge per parent (group 2),
+            // mirroring the class branch; the handler previously read only the name
+            // (group 1), so interface inheritance was dropped (53c769d).
+            if let Some(parents) = im.get(2) {
+                for parent in parents.as_str().split(',') {
+                    let parent = parent.trim();
+                    if !parent.is_empty() {
+                        let parent_nid = ctx.resolve_type(&stem, parent, lineno);
+                        ctx.add_edge(&iface_nid, &parent_nid, "extends", lineno, "INFERRED");
+                    }
+                }
+            }
             pending_annotations.clear();
             continue;
         }

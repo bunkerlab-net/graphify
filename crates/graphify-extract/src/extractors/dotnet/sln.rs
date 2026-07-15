@@ -51,6 +51,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
         source_location: None,
         metadata: None,
         origin_file: None,
+        node_type: None,
     }];
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -83,6 +84,7 @@ pub fn extract_sln(path: &Path) -> FileResult {
                 source_location: None,
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
             edges.push(Edge {
                 external: false,
@@ -95,6 +97,8 @@ pub fn extract_sln(path: &Path) -> FileResult {
                 weight: 1.0,
                 context: None,
                 confidence_score: None,
+                deferred: false,
+                metadata: None,
             });
         }
         if !proj_guid.is_empty() {
@@ -145,6 +149,8 @@ pub fn extract_sln(path: &Path) -> FileResult {
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }

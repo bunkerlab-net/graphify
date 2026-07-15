@@ -361,6 +361,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         cargo,
         postgres,
         timing,
+        code_only,
     } = cmd
     else {
         unreachable!("dispatch_extract invoked with wrong variant")
@@ -395,6 +396,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
             postgres: postgres.as_deref(),
         },
         timing,
+        code_only,
     })
 }
 

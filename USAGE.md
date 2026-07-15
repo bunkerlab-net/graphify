@@ -91,6 +91,7 @@ clusters it, runs analysis, writes the report, and exports HTML.
 graphify extract .                       # current directory
 graphify extract ../some-repo            # any directory
 graphify extract . --no-cluster          # raw extraction only
+graphify extract . --code-only           # index code as a local AST graph, no LLM key needed
 graphify extract . --out /tmp/g          # write to /tmp/g/graphify-out
 graphify extract . --google-workspace    # also export .gdoc/.gsheet/.gslides sidecars via gws (requires the optional `gws` Google Workspace export CLI)
 graphify extract . --global              # merge result into ~/.graphify/global-graph.json
@@ -130,6 +131,11 @@ deep-extraction instruction to the LLM system prompt so the model emits richer `
 edges (shared data contracts, lifecycle coupling, multi-step flows). An unknown `--mode` value exits with
 status 2.
 
+`--code-only` builds a code graph from the local AST alone: it skips the semantic (LLM) pass entirely and
+drops documents, papers, and images from the corpus (printing a one-line skip notice), so a mixed repo indexes
+without an API key. With `--out <dir>`, all outputs **and** the detect/AST/semantic caches live under
+`<dir>/graphify-out/` — a scan of another directory never leaves a stray `graphify-out/` in the corpus (#1747).
+
 ### `update <path>`
 
 Re-extracts code files only (no LLM round-trip). Use after edits to refresh the graph quickly.
@@ -139,6 +145,13 @@ graphify update .
 graphify update . --force         # rebuild even if the new graph has fewer nodes
 graphify update . --no-cluster    # skip clustering pass
 ```
+
+On an incremental rebuild, a hyperedge carried forward from an unchanged file is
+dropped when any of its member nodes belonged to a file that was deleted or
+re-extracted: `graphify-py` keeps such dangling hyperedges verbatim, but graphify
+drops them to preserve referential integrity. A hyperedge whose member list is
+malformed (a non-array `members` / `node_ids` alias) is reported on stderr rather
+than being silently emptied.
 
 ### `watch <path>`
 
@@ -183,6 +196,10 @@ graphify cluster-only . --batch-size 50            # communities per LLM call (d
 graphify cluster-only . --missing-only             # only (re)name unnamed / "Community N" placeholders, keep curated labels (#1481)
 graphify cluster-only . --timing                   # print per-stage wall-clock timings to stderr (#1490)
 ```
+
+Outputs (`GRAPH_REPORT.md`, re-clustered `graph.json`, labels, analysis, HTML) land beside `--graph` when it points
+inside a `graphify-out/` directory (another project's or tenant's output), instead of a stray `graphify-out/` in the
+CWD; an arbitrary `--graph` (e.g. an archived `backup/graph.json`) falls back to `<path>/graphify-out/` (#1747).
 
 ### `label <path>`
 
@@ -315,6 +332,10 @@ graphify explain "AuthMiddleware"
 Pass a node label, ID, or a source-file path. A full path (e.g. `app/api/route.ts`) resolves to that
 file's node — the file-level node, not a symbol inside it — and a trailing slash is tolerated (#1503).
 
+When a work-memory overlay sidecar (`.graphify_learning.json`, written by `reflect` — see below) sits beside the
+graph, `explain` appends a `Lesson:` line for a marked node (e.g. `Lesson: preferred source (3 useful, score=2.4)`),
+so a prior session's verdict surfaces inline (#1441).
+
 ### `save-result`
 
 Save a Q&A result back into `graphify-out/memory/` so it gets re-extracted into the graph on the next `update`
@@ -352,6 +373,13 @@ graphify reflect --half-life-days 14      # signals decay twice as fast
 graphify reflect --min-corroboration 3    # require 3 useful sessions to promote a node to "preferred"
 graphify reflect --out custom/LESSONS.md  # write the lessons doc elsewhere
 ```
+
+When a `graph.json` is passed to `reflect`, it also writes a **work-memory overlay** sidecar
+(`.graphify_learning.json`) beside the graph — a derived, node-keyed projection of the aggregated verdicts with a
+content fingerprint for staleness detection. Read surfaces consume it automatically: the report gains a
+`## Work-memory lessons` section (preferred sources + known dead ends), `serve`'s node text and `explain` append a
+`learning=<status>` / `Lesson:` line, and the interactive HTML rings preferred nodes green, contested amber, and
+stale verdicts grey-dashed (#1441).
 
 The post-commit / post-checkout hooks refresh `LESSONS.md` automatically after each rebuild when saved outcomes
 exist, so the lessons doc stays current without a manual run.
@@ -554,6 +582,15 @@ stream), `--stateless` (skip per-session ids), and `--session-timeout`
 (accepted for compatibility; a no-op since graphify keeps no per-session state).
 Binding `0.0.0.0` without an `--api-key` prints a warning.
 
+Multi-project routing: a tool call may include an optional absolute `project_path`
+to target that project's `graph.json` (an absent or empty value uses the default
+graph; a non-string value is a tool error). Loaded project graphs are cached by
+canonical path and bounded — the oldest-loaded is evicted past the cap — so a
+remote client cannot pin unbounded graphs in memory. A tool call that cannot load
+its graph returns a result with `isError: true`, and a failing `resources/read`
+returns a JSON-RPC error; `graphify-py` reports both as plain text, so this is an
+intentional, MCP-spec-aligned divergence.
+
 ### Per-platform installers
 
 Each writes a section to the platform's instructions file + (where applicable) a tool-use hook that nudges the assistant
@@ -630,6 +667,11 @@ The aggregate `install` is a convenience dispatcher to the per-platform installe
 every supported platform and removes the integration wherever it finds one. The `agents` platform (aliased as
 `skills`) targets the cross-framework Agent-Skills location — `~/.agents/skills/graphify/SKILL.md` globally, or
 `./.agents/skills/graphify/SKILL.md` plus an `AGENTS.md` section under `--project`.
+
+Each install stamps a `.graphify_version` file beside the skill. On startup, non-silent commands compare that stamp
+against the running package and warn on a mismatch: an OLDER on-disk skill advises `graphify install`, while a NEWER
+one advises upgrading the package (running `install` would downgrade the skill). The check is skipped for
+`install` / `uninstall` / `hook-check` (#1568).
 
 ### `hook-check`
 

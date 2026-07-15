@@ -126,3 +126,213 @@ fn alias_import_edge_resolves_with_relative_input_paths() -> TestResult {
     );
     Ok(())
 }
+
+/// File→file `imports_from` edge, mirroring Python `_has_edge`.
+fn has_file_edge(out: &ExtractOutput, source_rel: &str, target_rel: &str) -> bool {
+    let s = file_node_id(Path::new(source_rel));
+    let t = file_node_id(Path::new(target_rel));
+    out.edges.iter().any(|e| {
+        e.get("source").and_then(Value::as_str) == Some(s.as_str())
+            && e.get("target").and_then(Value::as_str) == Some(t.as_str())
+            && e.get("relation").and_then(Value::as_str) == Some("imports_from")
+    })
+}
+
+/// 5746964 (#927): `@*` → `features/*/src/` substitutes the captured segment.
+#[test]
+fn tsconfig_wildcard_alias_substitutes_captured_path() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@*": ["features/*/src/"]}}}"#,
+    )?;
+    write(
+        &root.join("features/communicate/documentv2/src/index.ts"),
+        "export const FileChipComponent = {}\n",
+    )?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { FileChipComponent } from '@communicate/documentv2'\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("features/communicate/documentv2/src/index.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(&root),
+    );
+    assert!(has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "features/communicate/documentv2/src/index.ts"
+    ));
+    Ok(())
+}
+
+/// The star substitutes before a fixed suffix (`@*/interfaces`).
+#[test]
+fn tsconfig_wildcard_alias_substitutes_before_suffix() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@*/interfaces": ["features/*/src/interfaces.ts"]}}}"#,
+    )?;
+    write(
+        &root.join("features/communicate/src/interfaces.ts"),
+        "export interface Message { id: string }\n",
+    )?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import type { Message } from '@communicate/interfaces'\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("features/communicate/src/interfaces.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(&root),
+    );
+    assert!(has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "features/communicate/src/interfaces.ts"
+    ));
+    Ok(())
+}
+
+/// Substitution happens before normalising the target (`generated/*/../shared`).
+#[test]
+fn tsconfig_wildcard_alias_substitutes_before_normalizing_target() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["generated/*/../shared"]}}}"#,
+    )?;
+    write(
+        &root.join("generated/feature/shared/index.ts"),
+        "export const shared = 1\n",
+    )?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { shared } from '@/feature/nested'\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("generated/feature/shared/index.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(&root),
+    );
+    assert!(has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "generated/feature/shared/index.ts"
+    ));
+    Ok(())
+}
+
+/// A wildcard prefix matches with an empty capture: `app*` resolves `'app'`.
+#[test]
+fn tsconfig_wildcard_alias_allows_empty_capture() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"app*": ["src/config/index.ts"]}}}"#,
+    )?;
+    write(
+        &root.join("src/config/index.ts"),
+        "export const config = {}\n",
+    )?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { config } from 'app'\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("src/config/index.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(&root),
+    );
+    assert!(has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "src/config/index.ts"
+    ));
+    Ok(())
+}
+
+/// The longest matching prefix wins (`@/common/integration/*` over `@/*`).
+#[test]
+fn tsconfig_wildcard_alias_prefers_longest_matching_prefix() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["fallback/*"], "@/common/integration/*": ["preferred/*"]}}}"#,
+    )?;
+    write(
+        &root.join("fallback/common/integration/foo.ts"),
+        "export const Foo = 1\n",
+    )?;
+    write(&root.join("preferred/foo.ts"), "export const Foo = 2\n")?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { Foo } from '@/common/integration/foo'\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("fallback/common/integration/foo.ts"),
+            root.join("preferred/foo.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(&root),
+    );
+    assert!(has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "preferred/foo.ts"
+    ));
+    assert!(!has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "fallback/common/integration/foo.ts"
+    ));
+    Ok(())
+}
+
+/// An exact (non-wildcard) alias still resolves (`app-config`).
+#[test]
+fn tsconfig_exact_alias_still_resolves() -> TestResult {
+    let tmp = tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    write(
+        &root.join("tsconfig.json"),
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"app-config": ["src/config/index.ts"]}}}"#,
+    )?;
+    write(
+        &root.join("src/config/index.ts"),
+        "export const config = {}\n",
+    )?;
+    write(
+        &root.join("src/routes/page.ts"),
+        "import { config } from 'app-config'\n",
+    )?;
+    let out = extract(
+        &[
+            root.join("src/config/index.ts"),
+            root.join("src/routes/page.ts"),
+        ],
+        Some(&root),
+    );
+    assert!(has_file_edge(
+        &out,
+        "src/routes/page.ts",
+        "src/config/index.ts"
+    ));
+    Ok(())
+}

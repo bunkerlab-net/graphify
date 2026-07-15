@@ -78,6 +78,7 @@ impl JuliaWalkCtx<'_> {
                 source_location: Some(format!("L{line}")),
                 metadata: None,
                 origin_file: None,
+                node_type: None,
             });
         }
         nid2
@@ -135,6 +136,8 @@ fn emit_julia_struct_fields(
                     weight: 1.0,
                     context: Some("field".to_string()),
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
             }
         }
@@ -186,6 +189,7 @@ pub(super) fn walk_julia(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -199,6 +203,8 @@ pub(super) fn walk_julia(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 let mut cur = node.walk();
                 if cur.goto_first_child() {
@@ -273,6 +279,7 @@ pub(super) fn walk_julia(
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         ctx.edges.push(Edge {
@@ -286,6 +293,8 @@ pub(super) fn walk_julia(
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                         if identifiers.len() >= 2 {
                             let super_name = read_text(identifiers[identifiers.len() - 1], source);
@@ -301,6 +310,8 @@ pub(super) fn walk_julia(
                                 weight: 1.0,
                                 context: None,
                                 confidence_score: None,
+                                deferred: false,
+                                metadata: None,
                             });
                         }
                         emit_julia_struct_fields(ctx, node, &struct_nid, source);
@@ -336,6 +347,7 @@ pub(super) fn walk_julia(
                                 source_location: Some(format!("L{line}")),
                                 metadata: None,
                                 origin_file: None,
+                                node_type: None,
                             });
                         }
                         ctx.edges.push(Edge {
@@ -349,6 +361,8 @@ pub(super) fn walk_julia(
                             weight: 1.0,
                             context: None,
                             confidence_score: None,
+                            deferred: false,
+                            metadata: None,
                         });
                         emit_julia_struct_fields(ctx, node, &struct_nid, source);
                     }
@@ -406,6 +420,7 @@ pub(super) fn walk_julia(
                             source_location: Some(format!("L{line}")),
                             metadata: None,
                             origin_file: None,
+                            node_type: None,
                         });
                     }
                     ctx.edges.push(Edge {
@@ -419,6 +434,8 @@ pub(super) fn walk_julia(
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                 }
             }
@@ -456,6 +473,7 @@ pub(super) fn walk_julia(
                         source_location: Some(format!("L{line}")),
                         metadata: None,
                         origin_file: None,
+                        node_type: None,
                     });
                 }
                 ctx.edges.push(Edge {
@@ -469,6 +487,8 @@ pub(super) fn walk_julia(
                     weight: 1.0,
                     context: None,
                     confidence_score: None,
+                    deferred: false,
+                    metadata: None,
                 });
                 ctx.function_bodies
                     .push((func_nid, node.start_byte(), node.end_byte(), true));
@@ -511,6 +531,7 @@ pub(super) fn walk_julia(
                             source_location: Some(format!("L{line}")),
                             metadata: None,
                             origin_file: None,
+                            node_type: None,
                         });
                     }
                     ctx.edges.push(Edge {
@@ -524,6 +545,8 @@ pub(super) fn walk_julia(
                         weight: 1.0,
                         context: None,
                         confidence_score: None,
+                        deferred: false,
+                        metadata: None,
                     });
                     // Walk RHS only (last child). tree-sitter 0.26 changed
                     // `child()` to accept `u32`; cast the index explicitly.
@@ -543,82 +566,80 @@ pub(super) fn walk_julia(
         }
         "using_statement" | "import_statement" => {
             let line = node.start_position().row + 1;
+            // Collect each imported module name. A direct identifier /
+            // scoped_identifier / import_path child names a module; a
+            // `selected_import` (`import Base.Threads: nthreads`) names its package
+            // via its first such child (#984a6a8: qualified `Base.Threads`,
+            // relative `..Sibling`, and scoped selected-import packages were
+            // previously dropped — only bare identifiers were handled).
+            let mut names: Vec<String> = Vec::new();
             let mut cur = node.walk();
             if cur.goto_first_child() {
                 loop {
                     let child = cur.node();
-                    if child.kind() == "identifier" {
-                        let mod_name = read_text(child, source);
-                        let imp_nid = make_id1(mod_name);
-                        ctx.seen_ids.insert(imp_nid.clone());
-                        ctx.nodes.push(Node {
-                            id: imp_nid.clone(),
-                            label: mod_name.to_string(),
-                            file_type: "code".to_string(),
-                            source_file: ctx.str_path.to_string(),
-                            source_location: Some(format!("L{line}")),
-                            metadata: None,
-                            origin_file: None,
-                        });
-                        ctx.edges.push(Edge {
-                            external: false,
-                            source: scope_nid.to_string(),
-                            target: imp_nid,
-                            relation: "imports".to_string(),
-                            confidence: "EXTRACTED".to_string(),
-                            source_file: ctx.str_path.to_string(),
-                            source_location: Some(format!("L{line}")),
-                            weight: 1.0,
-                            context: Some("import".to_string()),
-                            confidence_score: None,
-                        });
-                    } else if child.kind() == "selected_import" {
-                        let idents: Vec<tree_sitter::Node<'_>> = {
-                            let mut ids = vec![];
+                    match child.kind() {
+                        "identifier" | "scoped_identifier" | "import_path" => {
+                            if let Some(n) = julia_mod_name(child, source) {
+                                names.push(n);
+                            }
+                        }
+                        "selected_import" => {
                             let mut sc = child.walk();
                             if sc.goto_first_child() {
                                 loop {
-                                    if sc.node().kind() == "identifier" {
-                                        ids.push(sc.node());
+                                    let c = sc.node();
+                                    if matches!(
+                                        c.kind(),
+                                        "identifier" | "scoped_identifier" | "import_path"
+                                    ) {
+                                        if let Some(n) = julia_mod_name(c, source) {
+                                            names.push(n);
+                                        }
+                                        break;
                                     }
                                     if !sc.goto_next_sibling() {
                                         break;
                                     }
                                 }
                             }
-                            ids
-                        };
-                        if let Some(first) = idents.first() {
-                            let pkg_name = read_text(*first, source);
-                            let pkg_nid = make_id1(pkg_name);
-                            ctx.seen_ids.insert(pkg_nid.clone());
-                            ctx.nodes.push(Node {
-                                id: pkg_nid.clone(),
-                                label: pkg_name.to_string(),
-                                file_type: "code".to_string(),
-                                source_file: ctx.str_path.to_string(),
-                                source_location: Some(format!("L{line}")),
-                                metadata: None,
-                                origin_file: None,
-                            });
-                            ctx.edges.push(Edge {
-                                external: false,
-                                source: scope_nid.to_string(),
-                                target: pkg_nid,
-                                relation: "imports".to_string(),
-                                confidence: "EXTRACTED".to_string(),
-                                source_file: ctx.str_path.to_string(),
-                                source_location: Some(format!("L{line}")),
-                                weight: 1.0,
-                                context: Some("import".to_string()),
-                                confidence_score: None,
-                            });
                         }
+                        _ => {}
                     }
                     if !cur.goto_next_sibling() {
                         break;
                     }
                 }
+            }
+            for name in names {
+                let imp_nid = make_id1(&name);
+                // Dedup the imported-symbol node: repeated `using`/`import` of the
+                // same name (or scoped re-imports) must not emit duplicate nodes.
+                if ctx.seen_ids.insert(imp_nid.clone()) {
+                    ctx.nodes.push(Node {
+                        id: imp_nid.clone(),
+                        label: name.clone(),
+                        file_type: "code".to_string(),
+                        source_file: ctx.str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        metadata: None,
+                        origin_file: None,
+                        node_type: None,
+                    });
+                }
+                ctx.edges.push(Edge {
+                    external: false,
+                    source: scope_nid.to_string(),
+                    target: imp_nid,
+                    relation: "imports".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    source_file: ctx.str_path.to_string(),
+                    source_location: Some(format!("L{line}")),
+                    weight: 1.0,
+                    context: Some("import".to_string()),
+                    confidence_score: None,
+                    deferred: false,
+                    metadata: None,
+                });
             }
         }
         _ => {
@@ -632,5 +653,31 @@ pub(super) fn walk_julia(
                 }
             }
         }
+    }
+}
+
+/// Resolve a Julia import module name from an `identifier` (`Foo`),
+/// `scoped_identifier` (`Base.Threads`), or `import_path` (relative `..Sibling`,
+/// whose last identifier is the module). Mirrors graphify-py `_julia_mod_name`
+/// (#984a6a8). Returns `None` for any other node kind.
+fn julia_mod_name(n: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    match n.kind() {
+        "import_path" => {
+            let mut last: Option<tree_sitter::Node<'_>> = None;
+            let mut c = n.walk();
+            if c.goto_first_child() {
+                loop {
+                    if c.node().kind() == "identifier" {
+                        last = Some(c.node());
+                    }
+                    if !c.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            last.map(|id| read_text(id, source).to_string())
+        }
+        "identifier" | "scoped_identifier" => Some(read_text(n, source).to_string()),
+        _ => None,
     }
 }

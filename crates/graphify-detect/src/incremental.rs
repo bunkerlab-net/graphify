@@ -83,15 +83,40 @@ pub fn detect_incremental(
     root: &Path,
     prev: &Manifest,
 ) -> Result<IncrementalDetectResult, DetectError> {
+    detect_incremental_with_cache_root(root, prev, None)
+}
+
+/// [`detect_incremental`] with an explicit cache root for the word-count /
+/// stat-index cache.
+///
+/// **Divergence from graphify-py (deliberate):** graphify-py's
+/// `detect_incremental` calls `detect(target)` with no `cache_root`, so an
+/// `extract <corpus> --out <elsewhere>` run still writes the stat-index cache
+/// into the scanned corpus on the incremental (second) run — leaking a stray
+/// `graphify-out/` the #1747 clean-corpus contract forbids. Rust threads
+/// `cache_root` (the `--out` root) through the initial corpus walk so the
+/// guarantee holds on every run, not just the first. Per AGENTS.md, a Python
+/// bug is not a requirement.
+///
+/// # Errors
+///
+/// Returns [`DetectError`] on I/O or parse failure.
+pub fn detect_incremental_with_cache_root(
+    root: &Path,
+    prev: &Manifest,
+    cache_root: Option<&Path>,
+) -> Result<IncrementalDetectResult, DetectError> {
     let manifest_path = root.join(MANIFEST_PATH);
     let had_manifest = manifest_path.exists() || !prev.is_empty();
 
     // Walk once and reuse the result both for the first-run "everything
-    // changed" branch and the per-type bucketing below.
-    let full = walk::detect(root, None, None);
+    // changed" branch and the per-type bucketing below. `cache_root` is threaded
+    // through the corpus walk's word-count cache so this run's stat index is
+    // keyed to the `--out` root, not the scanned corpus (#1747).
+    let full = walk::detect_with_cache_root(root, None, None, cache_root);
 
     let (changed_paths, deleted_files, manifest) = if manifest_path.exists() {
-        detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None)?
+        detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None, cache_root)?
     } else if prev.is_empty() {
         // No previous run at all — everything is new. Seed the returned
         // manifest with the current files so callers can persist it
@@ -120,7 +145,7 @@ pub fn detect_incremental(
             .map_err(DetectError::Io)?;
         let json = serde_json::to_string_pretty(prev).map_err(DetectError::Json)?;
         std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(DetectError::Io)?;
-        detect_incremental_with_manifest(root, tmp.path(), None, "semantic", None)?
+        detect_incremental_with_manifest(root, tmp.path(), None, "semantic", None, cache_root)?
     };
 
     let changed_set: HashSet<PathBuf> = changed_paths.iter().cloned().collect();

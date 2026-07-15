@@ -432,9 +432,22 @@ fn cli_inner_with_dirs(
     model: Option<&str>,
     add_dirs: &[PathBuf],
 ) -> Result<LlmResponse, LlmError> {
+    // #32ff6d6: newer Claude Code CLIs (>=2.1) ignore `--system-prompt` for the
+    // raw-JSON intent and reply conversationally to a bare file dump (0 nodes →
+    // infinite bisection). Fold the extraction system prompt into the user turn
+    // and pass NO system prompt; the `<untrusted_source>` guardrails ride along
+    // in the schema text.
+    let combined = system_prompt.map(|system| {
+        format!(
+            "{system}\n\n---\nNow extract the knowledge graph from the following source file(s) \
+             and output ONLY the JSON object described above. No prose, no preamble, no markdown \
+             fences.\n\n{user_message}"
+        )
+    });
+    let message = combined.as_deref().unwrap_or(user_message);
     let (stdout, stderr, code) = runner.run(
-        user_message,
-        system_prompt,
+        message,
+        None,
         model,
         add_dirs,
         crate::openai_compat::api_timeout(),
@@ -526,7 +539,7 @@ fn cli_inner_with_dirs(
 /// Returns [`LlmError::ClaudeCliMissing`] when the binary isn't on `$PATH`, or
 /// [`LlmError::ClaudeCliError`] on non-zero exit or unparseable output.
 pub fn call_claude_cli_plain(user_message: &str, max_tokens: u32) -> Result<String, LlmError> {
-    call_claude_cli_plain_with_model(user_message, max_tokens, None)
+    call_claude_cli_plain_with_model(user_message, max_tokens, None, None)
 }
 
 /// [`call_claude_cli_plain`] with an optional `--model` override (#b304331).
@@ -538,6 +551,7 @@ pub fn call_claude_cli_plain_with_model(
     user_message: &str,
     _max_tokens: u32,
     model: Option<&str>,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     if resolve_claude_command().is_none() {
         return Err(LlmError::ClaudeCliMissing);
@@ -557,6 +571,13 @@ pub fn call_claude_cli_plain_with_model(
         )));
     }
     let envelope = claude_cli_envelope(&stdout)?;
+    if let Some(sink) = usage {
+        let u = &envelope["usage"];
+        let input = u["input_tokens"].as_u64().unwrap_or(0)
+            + u["cache_read_input_tokens"].as_u64().unwrap_or(0)
+            + u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+        sink.record(input, u["output_tokens"].as_u64().unwrap_or(0));
+    }
     Ok(envelope
         .get("result")
         .and_then(|v| v.as_str())

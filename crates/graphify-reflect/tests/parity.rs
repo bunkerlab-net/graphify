@@ -707,3 +707,300 @@ fn filetime_set(path: &std::path::Path, mtime: std::time::SystemTime) {
     let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
     f.set_modified(mtime).unwrap();
 }
+
+// --- work-memory overlay sidecar (.graphify_learning.json) --------------------
+// Ports the overlay tests from `test_reflect.py` (#1441): reflect with a graph
+// writes a DERIVED experiential sidecar next to graph.json projecting
+// preferred/tentative/contested nodes, keyed by canonical id, with a code
+// fingerprint for staleness and a capped provenance trail.
+
+/// Write a memory doc with a controlled date + source nodes (mirrors Python
+/// `_write_raw_doc`).
+fn write_overlay_doc(
+    mem: &std::path::Path,
+    filename: &str,
+    date: &str,
+    outcome: &str,
+    question: &str,
+    nodes: &[&str],
+) {
+    std::fs::create_dir_all(mem).unwrap();
+    let src_nodes = nodes
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = format!(
+        "---\ntype: \"query\"\ndate: \"{date}\"\nquestion: \"{question}\"\ncontributor: \"graphify\"\noutcome: \"{outcome}\"\nsource_nodes: [{src_nodes}]\n---\n\n# Q: {question}\n"
+    );
+    std::fs::write(mem.join(filename), body).unwrap();
+}
+
+/// Write a minimal `graph.json` under `out` from `(id, label, source_file)` tuples.
+fn write_overlay_graph(out: &std::path::Path, nodes: &[(&str, &str, &str)]) {
+    std::fs::create_dir_all(out).unwrap();
+    let node_vals: Vec<serde_json::Value> = nodes
+        .iter()
+        .map(|(id, label, sf)| serde_json::json!({"id": id, "label": label, "source_file": sf, "community": 0}))
+        .collect();
+    let graph = serde_json::json!({
+        "directed": true, "multigraph": false, "graph": {}, "nodes": node_vals, "links": [],
+    });
+    std::fs::write(out.join("graph.json"), graph.to_string()).unwrap();
+}
+
+fn run_reflect_with_graph(mem: &std::path::Path, out: &std::path::Path) {
+    let graph = out.join("graph.json");
+    reflect(
+        mem,
+        &out.join("reflections").join("LESSONS.md"),
+        GraphPaths {
+            graph: Some(&graph),
+            ..Default::default()
+        },
+        now(),
+        30.0,
+        2,
+    )
+    .unwrap();
+}
+
+#[test]
+fn sidecar_write_classifies_and_keys_by_canonical_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    let src = tmp.path().join("auth.py");
+    std::fs::write(&src, "def login(): pass\n").unwrap();
+    write_overlay_graph(
+        &out,
+        &[
+            ("auth_login", "login()", src.to_str().unwrap()),
+            ("redis_client", "RedisClient", ""),
+            ("contested_node", "Contested", ""),
+            ("deadend_node", "DeadEnd", ""),
+        ],
+    );
+    let mem = out.join("memory");
+    write_overlay_doc(
+        &mem,
+        "p1.md",
+        "2026-05-01",
+        "useful",
+        "how do I auth?",
+        &["login()"],
+    );
+    write_overlay_doc(
+        &mem,
+        "p2.md",
+        "2026-05-10",
+        "useful",
+        "auth again",
+        &["login()"],
+    );
+    write_overlay_doc(
+        &mem,
+        "t1.md",
+        "2026-05-02",
+        "useful",
+        "cache?",
+        &["RedisClient"],
+    );
+    write_overlay_doc(
+        &mem,
+        "c1.md",
+        "2026-05-03",
+        "useful",
+        "contested useful",
+        &["Contested"],
+    );
+    write_overlay_doc(
+        &mem,
+        "c2.md",
+        "2026-05-04",
+        "dead_end",
+        "contested dead",
+        &["Contested"],
+    );
+    write_overlay_doc(
+        &mem,
+        "d1.md",
+        "2026-05-05",
+        "dead_end",
+        "led nowhere",
+        &["DeadEnd"],
+    );
+    run_reflect_with_graph(&mem, &out);
+
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join(".graphify_learning.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sidecar["version"], 1);
+    assert_eq!(sidecar["generated_at"], now().to_rfc3339());
+    let nodes = &sidecar["nodes"];
+    assert_eq!(nodes["auth_login"]["status"], "preferred");
+    assert_eq!(nodes["auth_login"]["uses"], 2);
+    assert_eq!(nodes["auth_login"]["label"], "login()");
+    assert!(nodes["auth_login"]["score"].is_number());
+    assert!(
+        nodes["auth_login"]["provenance"]
+            .as_array()
+            .is_some_and(|p| !p.is_empty())
+    );
+    assert_eq!(nodes["redis_client"]["status"], "tentative");
+    assert_eq!(nodes["contested_node"]["status"], "contested");
+    let verdict = nodes["contested_node"]["verdict"].as_str().unwrap();
+    assert!(["useful", "dead end", "even"].contains(&verdict));
+    // Dead-end-only node stays query-scoped — never in the overlay.
+    assert!(nodes.get("deadend_node").is_none());
+    // graph.json (durable truth) is never stamped with learning_* fields.
+    let graph: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("graph.json")).unwrap()).unwrap();
+    for n in graph["nodes"].as_array().unwrap() {
+        assert!(
+            n.as_object()
+                .unwrap()
+                .keys()
+                .all(|k| !k.starts_with("learning"))
+        );
+    }
+}
+
+#[test]
+fn sidecar_is_byte_identical_across_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    let src = tmp.path().join("auth.py");
+    std::fs::write(&src, "def login(): pass\n").unwrap();
+    write_overlay_graph(&out, &[("auth_login", "login()", src.to_str().unwrap())]);
+    let mem = out.join("memory");
+    write_overlay_doc(&mem, "a.md", "2026-05-01", "useful", "q", &["login()"]);
+    write_overlay_doc(&mem, "b.md", "2026-05-10", "useful", "q", &["login()"]);
+    run_reflect_with_graph(&mem, &out);
+    let first = std::fs::read(out.join(".graphify_learning.json")).unwrap();
+    run_reflect_with_graph(&mem, &out);
+    let second = std::fs::read(out.join(".graphify_learning.json")).unwrap();
+    assert_eq!(first, second);
+}
+
+#[test]
+fn loader_marks_entry_stale_when_source_file_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    let src = tmp.path().join("auth.py");
+    std::fs::write(&src, "def login(): pass\n").unwrap();
+    write_overlay_graph(&out, &[("auth_login", "login()", src.to_str().unwrap())]);
+    let mem = out.join("memory");
+    write_overlay_doc(&mem, "a.md", "2026-05-01", "useful", "q", &["login()"]);
+    write_overlay_doc(&mem, "b.md", "2026-05-10", "useful", "q", &["login()"]);
+    run_reflect_with_graph(&mem, &out);
+
+    let fresh = graphify_reflect::load_learning_overlay(&out.join("graph.json"));
+    assert_eq!(fresh["auth_login"]["stale"], serde_json::Value::Bool(false));
+    std::fs::write(&src, "def login(): return 1  # changed\n").unwrap();
+    let after = graphify_reflect::load_learning_overlay(&out.join("graph.json"));
+    assert_eq!(after["auth_login"]["stale"], serde_json::Value::Bool(true));
+}
+
+#[test]
+fn provenance_capped_to_five_most_recent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    let src = tmp.path().join("auth.py");
+    std::fs::write(&src, "x\n").unwrap();
+    write_overlay_graph(&out, &[("auth_login", "login()", src.to_str().unwrap())]);
+    let mem = out.join("memory");
+    for i in 0..7 {
+        write_overlay_doc(
+            &mem,
+            &format!("u{i}.md"),
+            &format!("2026-05-{:02}", 10 + i),
+            "useful",
+            &format!("q{i}"),
+            &["login()"],
+        );
+    }
+    run_reflect_with_graph(&mem, &out);
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join(".graphify_learning.json")).unwrap(),
+    )
+    .unwrap();
+    let prov = sidecar["nodes"]["auth_login"]["provenance"]
+        .as_array()
+        .unwrap();
+    assert_eq!(prov.len(), 5);
+    assert_eq!(prov[0]["date"], "2026-05-16");
+    assert_eq!(prov[4]["date"], "2026-05-12");
+}
+
+#[test]
+fn provenance_excludes_dead_end_events() {
+    // graphify-py `_record_node` records provenance only for useful/corrected
+    // events; a `dead_end` updates the score (making this node contested) but
+    // leaves no provenance entry.
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    let src = tmp.path().join("auth.py");
+    std::fs::write(&src, "x\n").unwrap();
+    write_overlay_graph(&out, &[("auth_login", "login()", src.to_str().unwrap())]);
+    let mem = out.join("memory");
+    write_overlay_doc(&mem, "u.md", "2026-05-01", "useful", "worked", &["login()"]);
+    write_overlay_doc(
+        &mem,
+        "d1.md",
+        "2026-05-02",
+        "dead_end",
+        "nope1",
+        &["login()"],
+    );
+    write_overlay_doc(
+        &mem,
+        "d2.md",
+        "2026-05-03",
+        "dead_end",
+        "nope2",
+        &["login()"],
+    );
+    run_reflect_with_graph(&mem, &out);
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join(".graphify_learning.json")).unwrap(),
+    )
+    .unwrap();
+    let prov = sidecar["nodes"]["auth_login"]["provenance"]
+        .as_array()
+        .unwrap();
+    assert!(
+        prov.iter().all(|p| p["outcome"] != "dead_end"),
+        "dead_end events must not appear in provenance: {prov:?}"
+    );
+    assert_eq!(prov.len(), 1, "only the useful event is recorded: {prov:?}");
+    assert_eq!(prov[0]["outcome"], "useful");
+}
+
+#[test]
+fn ambiguous_or_unresolved_citation_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("graphify-out");
+    write_overlay_graph(
+        &out,
+        &[
+            ("dup_a", "Dup", ""),
+            ("dup_b", "Dup", ""),
+            ("solo", "Solo", ""),
+        ],
+    );
+    let mem = out.join("memory");
+    write_overlay_doc(&mem, "a.md", "2026-05-01", "useful", "q", &["Dup"]);
+    write_overlay_doc(&mem, "b.md", "2026-05-02", "useful", "q", &["Dup"]);
+    write_overlay_doc(&mem, "c.md", "2026-05-03", "useful", "q", &["Solo"]);
+    write_overlay_doc(&mem, "d.md", "2026-05-04", "useful", "q", &["Solo"]);
+    run_reflect_with_graph(&mem, &out);
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join(".graphify_learning.json")).unwrap(),
+    )
+    .unwrap();
+    let nodes = &sidecar["nodes"];
+    // Ambiguous "Dup" skipped; only the unambiguous "Solo" survives.
+    assert!(nodes.get("dup_a").is_none() && nodes.get("dup_b").is_none());
+    assert!(nodes.get("solo").is_some());
+}

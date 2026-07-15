@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use graphify_build::Graph;
 use indexmap::IndexMap;
@@ -29,7 +30,7 @@ use crate::{ReloadState, ServeError};
 
 /// Returns the static list of MCP tool descriptors broadcast on the `tools/list` request.
 fn tools_list() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         tool_query_graph_schema(),
         tool_get_node_schema(),
         tool_get_neighbors_schema(),
@@ -40,7 +41,26 @@ fn tools_list() -> Vec<Value> {
         tool_list_prs_schema(),
         tool_get_pr_impact_schema(),
         tool_triage_prs_schema(),
-    ]
+    ];
+    // Every tool accepts an optional `project_path` for multi-project serving:
+    // routing a call to a different project's graph. Injected once here rather
+    // than in each schema, mirroring graphify-py serve._build_server (#1594).
+    for tool in &mut tools {
+        if let Some(props) = tool
+            .get_mut("inputSchema")
+            .and_then(|s| s.get_mut("properties"))
+            .and_then(Value::as_object_mut)
+        {
+            props.insert(
+                "project_path".to_string(),
+                json!({
+                    "type": "string",
+                    "description": "Absolute path to a project root; routes the call to that project's graphify-out/graph.json instead of the default graph."
+                }),
+            );
+        }
+    }
+    tools
 }
 
 fn tool_query_graph_schema() -> Value {
@@ -220,104 +240,6 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 
 // ── Message dispatcher ────────────────────────────────────────────────────────
 
-/// Route a single MCP JSON-RPC message to the appropriate handler.
-///
-/// Returns `Some(response)` for request messages and `None` for notifications
-/// (which must not receive a reply per the JSON-RPC spec).
-fn dispatch(
-    msg: &Value,
-    graph: &mut Graph,
-    communities: &mut IndexMap<i64, Vec<String>>,
-    reload_state: &mut ReloadState,
-    idf_cache: &mut HashMap<String, f64>,
-    graph_path: &str,
-) -> Option<Value> {
-    let id = msg.get("id").cloned().unwrap_or(Value::Null);
-    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
-    let empty_obj = serde_json::Map::new();
-    let params = msg
-        .get("params")
-        .and_then(Value::as_object)
-        .unwrap_or(&empty_obj);
-
-    // Notifications (no id) don't get a response.
-    let is_notification = msg.get("id").is_none();
-
-    match method {
-        "initialize" => {
-            if is_notification {
-                return None;
-            }
-            Some(ok_response(
-                &id,
-                json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {},
-                        "resources": {}
-                    },
-                    "serverInfo": {
-                        "name": "graphify",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                }),
-            ))
-        }
-        "notifications/initialized" => None,
-        "tools/list" => {
-            if is_notification {
-                return None;
-            }
-            Some(ok_response(&id, json!({"tools": tools_list()})))
-        }
-        "tools/call" => {
-            if is_notification {
-                return None;
-            }
-            maybe_reload(graph_path, graph, communities, reload_state);
-            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-            let empty_args = serde_json::Map::new();
-            let arguments = params
-                .get("arguments")
-                .and_then(Value::as_object)
-                .unwrap_or(&empty_args);
-            let text = dispatch_tool(name, graph, communities, arguments, idf_cache, graph_path);
-            Some(ok_response(
-                &id,
-                json!({"content": [{"type": "text", "text": text}]}),
-            ))
-        }
-        "resources/list" => {
-            if is_notification {
-                return None;
-            }
-            Some(ok_response(&id, json!({"resources": resources_list()})))
-        }
-        "resources/read" => {
-            if is_notification {
-                return None;
-            }
-            maybe_reload(graph_path, graph, communities, reload_state);
-            let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
-            let text = dispatch_resource(uri, graph, communities, graph_path);
-            Some(ok_response(
-                &id,
-                json!({"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]}),
-            ))
-        }
-        _ => {
-            if is_notification {
-                return None;
-            }
-            Some(error_response(
-                &id,
-                -32_601,
-                &format!("Method not found: {method}"),
-            ))
-        }
-    }
-}
-
 /// Dispatch a `tools/call` MCP request to the matching tool handler.
 ///
 /// Returns the tool's text output, which is wrapped in a `content` array
@@ -456,7 +378,7 @@ where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let mut state = McpServerState::load(graph_path)?;
+    let state = McpServerState::load(graph_path);
 
     let buf_reader = BufReader::new(reader);
     let mut lines = buf_reader.lines();
@@ -482,68 +404,340 @@ where
     Ok(())
 }
 
-/// In-memory MCP server state shared across messages: the loaded graph, its
-/// derived communities, the hot-reload bookkeeping, and the IDF cache.
-///
-/// Both the stdio transport ([`run_server`]) and the Streamable HTTP transport
-/// drive it through [`McpServerState::handle`], so the two transports share one
-/// dispatch path and one reload contract.
-pub(crate) struct McpServerState {
+/// A single loaded graph plus its derived state, cached per resolved graph path.
+struct GraphCtx {
     graph: Graph,
     communities: IndexMap<i64, Vec<String>>,
     reload_state: ReloadState,
     idf_cache: HashMap<String, f64>,
 }
 
-impl McpServerState {
-    /// Load the graph at `graph_path` and derive the initial server state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ServeError`] if the graph file cannot be loaded.
-    pub(crate) fn load(graph_path: &str) -> Result<Self, ServeError> {
+impl GraphCtx {
+    /// Load the graph at `graph_path` and derive its state.
+    fn load(graph_path: &str) -> Result<Self, ServeError> {
         use crate::graph::{communities_from_graph, load_graph};
-
         let graph = load_graph(graph_path)?;
         let communities = communities_from_graph(&graph);
-
-        let meta = std::fs::metadata(graph_path);
-        let (init_mtime, init_size) = meta.map_or((0, 0), |m| {
-            let mtime = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| {
-                    // Use checked arithmetic so a post-2554 mtime (~`u64::MAX`
-                    // ns since the epoch) saturates instead of wrapping.
-                    d.as_secs()
-                        .checked_mul(1_000_000_000)
-                        .and_then(|s| s.checked_add(u64::from(d.subsec_nanos())))
-                        .unwrap_or(u64::MAX)
-                });
-            (mtime, m.len())
-        });
+        let (mtime_ns, size) = stat_mtime_size(graph_path);
         Ok(Self {
             graph,
             communities,
-            reload_state: ReloadState {
-                mtime_ns: init_mtime,
-                size: init_size,
-            },
+            reload_state: ReloadState { mtime_ns, size },
             idf_cache: HashMap::new(),
         })
     }
 
-    /// Route one JSON-RPC message. Returns `Some(response)` for requests and
-    /// `None` for notifications (which receive no reply).
-    pub(crate) fn handle(&mut self, msg: &Value, graph_path: &str) -> Option<Value> {
-        dispatch(
-            msg,
+    /// Reload from disk when the file's `(mtime, size)` changed, dropping the
+    /// now-stale `idf_cache` (keyed by term but derived from the graph) so a hot
+    /// reload cannot rank queries with the previous graph's IDF weights.
+    /// graphify-py stores `_idf_cache` ON the graph so a swap invalidates it for
+    /// free; the Rust holds it separately, so `maybe_reload` clears it on reload.
+    fn reload(&mut self, graph_path: &str) {
+        maybe_reload(
+            graph_path,
             &mut self.graph,
             &mut self.communities,
             &mut self.reload_state,
             &mut self.idf_cache,
-            graph_path,
-        )
+        );
+    }
+}
+
+/// A shared, independently-lockable graph context. Each resolved graph path maps
+/// to one of these; a request locks only its own project's handle, so unrelated
+/// projects dispatch concurrently and one slow load never blocks the others.
+type CtxHandle = Arc<Mutex<GraphCtx>>;
+
+/// Read a graph file's `(mtime_ns, size)` for hot-reload bookkeeping; a missing
+/// or unreadable file reports `(0, 0)`.
+fn stat_mtime_size(graph_path: &str) -> (u64, u64) {
+    std::fs::metadata(graph_path).map_or((0, 0), |m| {
+        let mtime = m
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| {
+                // Checked arithmetic so a post-2554 mtime saturates, not wraps.
+                d.as_secs()
+                    .checked_mul(1_000_000_000)
+                    .and_then(|s| s.checked_add(u64::from(d.subsec_nanos())))
+                    .unwrap_or(u64::MAX)
+            });
+        (mtime, m.len())
+    })
+}
+
+/// Upper bound on cached per-project graph contexts. `project_path` is supplied
+/// remotely on each tool call, so the cache is capped (with FIFO eviction) to
+/// stop a client pinning unbounded large graphs in memory.
+const MAX_PROJECT_CTXS: usize = 64;
+
+/// In-memory MCP server state shared across messages.
+///
+/// Holds the default graph (the one the server was started with, or `None` when
+/// it is absent — pure multi-project mode) plus a per-project-path cache of
+/// graphs routed to via a tool call's optional `project_path`. Each context
+/// hot-reloads independently. Both the stdio transport ([`run_server`]) and the
+/// Streamable HTTP transport drive it through [`McpServerState::handle`], so the
+/// two share one dispatch path and one reload contract.
+pub(crate) struct McpServerState {
+    default_path: String,
+    /// The startup graph, lazily (re)loadable and pinned. `None` until a load
+    /// succeeds; a pure multi-project server keeps it `None`.
+    default_ctx: Mutex<Option<CtxHandle>>,
+    /// Per-project graph cache keyed by the **canonicalised** resolved
+    /// `graph.json` path, so path aliases (symlinks, `.`/`..`) to one project
+    /// share a single loaded graph. Bounded at [`MAX_PROJECT_CTXS`] with FIFO
+    /// eviction (hence `IndexMap`): `project_path` is remotely selectable, so an
+    /// unbounded cache would let a client pin arbitrarily many graphs in memory.
+    /// The `Mutex` guards only lookups/inserts, never a load or a dispatch.
+    project_ctxs: Mutex<IndexMap<String, CtxHandle>>,
+}
+
+impl McpServerState {
+    /// Load the default graph at `graph_path`, tolerating its absence.
+    ///
+    /// A missing or unloadable default graph yields a pure multi-project server
+    /// (`default_ctx == None`) rather than a startup failure, so `project_path`
+    /// calls still resolve (#1594).
+    pub(crate) fn load(graph_path: &str) -> Self {
+        let default_ctx = GraphCtx::load(graph_path)
+            .ok()
+            .map(|c| Arc::new(Mutex::new(c)));
+        Self {
+            default_path: graph_path.to_string(),
+            default_ctx: Mutex::new(default_ctx),
+            project_ctxs: Mutex::new(IndexMap::new()),
+        }
+    }
+
+    /// Resolve a tool call's optional `project_path` to a graph.json path.
+    /// `None` → the default graph; else `<project_path>/<GRAPHIFY_OUT>/graph.json`.
+    fn resolve_graph_path(&self, project_path: Option<&str>) -> String {
+        match project_path {
+            None => self.default_path.clone(),
+            Some(p) => Path::new(p)
+                .join(graphify_security::graphify_out())
+                .join("graph.json")
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+
+    /// Resolve the shared [`GraphCtx`] handle for `resolved`, loading it on first
+    /// use. Returns an `Arc<Mutex<GraphCtx>>` the caller locks for reload +
+    /// dispatch, so only calls to the SAME graph serialise — unrelated projects
+    /// run concurrently. The map/default locks are held only to look up or insert
+    /// a handle, never across a graph load or a tool dispatch, so one slow load
+    /// cannot block other projects (nor pile up on the blocking pool).
+    fn select_ctx(&self, resolved: &str) -> Result<CtxHandle, String> {
+        if resolved == self.default_path {
+            let mut slot = self
+                .default_ctx
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.is_none() {
+                // Lazily (re)load a default absent at startup; a failure is NOT
+                // cached, so a later-appearing graph still resolves.
+                let ctx = GraphCtx::load(resolved).map_err(|e| e.to_string())?;
+                *slot = Some(Arc::new(Mutex::new(ctx)));
+            }
+            slot.as_ref()
+                .map(Arc::clone)
+                .ok_or_else(|| "default graph unavailable".to_string())
+        } else {
+            // Canonicalise so aliases to one project share a handle; fall back to
+            // the raw path when absent (GraphCtx::load then reports it).
+            let key = std::fs::canonicalize(resolved).map_or_else(
+                |_| resolved.to_string(),
+                |p| p.to_string_lossy().into_owned(),
+            );
+            // Fast path: an already-cached handle, under a brief map lock.
+            if let Some(handle) = self
+                .project_ctxs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&key)
+            {
+                return Ok(Arc::clone(handle));
+            }
+            // Miss: load OUTSIDE the map lock so a slow load blocks no one else.
+            let handle: CtxHandle = Arc::new(Mutex::new(
+                GraphCtx::load(resolved).map_err(|err| err.to_string())?,
+            ));
+            let mut map = self
+                .project_ctxs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Another thread may have inserted this path while we loaded — reuse it.
+            if let Some(existing) = map.get(&key) {
+                return Ok(Arc::clone(existing));
+            }
+            // Bound the cache: evict the oldest (FIFO) before inserting a new one.
+            if map.len() >= MAX_PROJECT_CTXS {
+                map.shift_remove_index(0);
+            }
+            map.insert(key, Arc::clone(&handle));
+            Ok(handle)
+        }
+    }
+
+    /// Handle a `tools/call`: pop `project_path`, select the target graph, and
+    /// dispatch. `Ok` carries the tool's text output (including benign "not
+    /// found" results); `Err` carries an infrastructure failure — a malformed
+    /// `project_path` or an unloadable graph — that the caller reports as an
+    /// `isError: true` tool result so MCP clients can detect it.
+    fn call_tool(&self, params: &serde_json::Map<String, Value>) -> Result<String, String> {
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mut arguments = params
+            .get("arguments")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        // Match graphify-py: absent / null / empty → the default graph; a
+        // non-empty string routes to that project; any other JSON type is a
+        // caller error (Python's `Path(project_path)` raises on a non-str, which
+        // surfaces as a tool error) rather than silently falling back to default.
+        let project_path = match arguments.remove("project_path") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if s.is_empty() => None,
+            Some(Value::String(s)) => Some(s),
+            Some(other) => {
+                return Err(format!("project_path must be a string, got: {other}"));
+            }
+        };
+        let resolved = self.resolve_graph_path(project_path.as_deref());
+        let handle = self.select_ctx(&resolved).map_err(|e| {
+            format!(
+                "could not load graph for project_path '{}': {e}",
+                project_path.as_deref().unwrap_or("")
+            )
+        })?;
+        let mut ctx = handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ctx.reload(&resolved);
+        let ctx = &mut *ctx; // deref the guard once so disjoint field borrows hold
+        Ok(dispatch_tool(
+            &name,
+            &mut ctx.graph,
+            &ctx.communities,
+            &arguments,
+            &mut ctx.idf_cache,
+            &resolved,
+        ))
+    }
+
+    /// Handle a `resources/read` against the default graph. `Ok` carries the
+    /// resource text; `Err` carries a load failure the caller maps to a JSON-RPC
+    /// error response.
+    fn read_resource(&self, uri: &str) -> Result<String, String> {
+        let resolved = self.resolve_graph_path(None);
+        let handle = self.select_ctx(&resolved)?;
+        let mut ctx = handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ctx.reload(&resolved);
+        Ok(dispatch_resource(
+            uri,
+            &ctx.graph,
+            &ctx.communities,
+            &resolved,
+        ))
+    }
+
+    /// Route one JSON-RPC message. Returns `Some(response)` for requests and
+    /// `None` for notifications. `_graph_path` is retained for transport
+    /// signature stability; the default path is owned by the state.
+    pub(crate) fn handle(&self, msg: &Value, _graph_path: &str) -> Option<Value> {
+        let id = msg.get("id").cloned().unwrap_or(Value::Null);
+        let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+        let empty_obj = serde_json::Map::new();
+        let params = msg
+            .get("params")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty_obj);
+        let is_notification = msg.get("id").is_none();
+
+        match method {
+            "initialize" => {
+                if is_notification {
+                    return None;
+                }
+                Some(ok_response(
+                    &id,
+                    json!({
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}, "resources": {}},
+                        "serverInfo": {"name": "graphify", "version": env!("CARGO_PKG_VERSION")}
+                    }),
+                ))
+            }
+            "notifications/initialized" => None,
+            "tools/list" => {
+                if is_notification {
+                    return None;
+                }
+                Some(ok_response(&id, json!({"tools": tools_list()})))
+            }
+            "tools/call" => {
+                if is_notification {
+                    return None;
+                }
+                // MCP: a tool-level failure is a result with `isError: true`, not
+                // a JSON-RPC error. Benign tool output (incl. "not found") is ok.
+                let (text, is_error) = match self.call_tool(params) {
+                    Ok(t) => (t, false),
+                    Err(e) => (format!("Error: {e}"), true),
+                };
+                Some(ok_response(
+                    &id,
+                    json!({"content": [{"type": "text", "text": text}], "isError": is_error}),
+                ))
+            }
+            "resources/list" => {
+                if is_notification {
+                    return None;
+                }
+                Some(ok_response(&id, json!({"resources": resources_list()})))
+            }
+            "resources/read" => {
+                if is_notification {
+                    return None;
+                }
+                let uri = params
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                // A resource load failure is a JSON-RPC error (internal error),
+                // distinct from a tool call's `isError` result.
+                match self.read_resource(&uri) {
+                    Ok(text) => Some(ok_response(
+                        &id,
+                        json!({"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]}),
+                    )),
+                    Err(e) => Some(error_response(
+                        &id,
+                        -32_603,
+                        &format!("Error reading resource: {e}"),
+                    )),
+                }
+            }
+            _ => {
+                if is_notification {
+                    return None;
+                }
+                Some(error_response(
+                    &id,
+                    -32_601,
+                    &format!("Method not found: {method}"),
+                ))
+            }
+        }
     }
 }

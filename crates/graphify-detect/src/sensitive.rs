@@ -12,6 +12,8 @@
 
 use std::path::Path;
 
+use crate::extensions::{FileType, classify_file};
+
 use regex::Regex;
 
 /// Directory names that always contain personal/secret material.
@@ -26,6 +28,32 @@ static SENSITIVE_DIRS: std::sync::LazyLock<std::collections::HashSet<&'static st
             "secrets",
             ".secrets",
             "credentials",
+        ]
+        .into_iter()
+        .collect()
+    });
+
+/// Data/serialization extensions that commonly ARE secret stores when their name
+/// hits a generic keyword (`credentials.json`, `secrets.yaml`, `token.toml`).
+/// These stay subject to the Stage-3 keyword drop even though some route through
+/// the CODE path for manifest parsing — only real programming-language source is
+/// exempt (#1666). Extensions carry the leading dot to match `Path::extension`
+/// after re-prefixing.
+static SECRET_PRONE_DATA_EXTS: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".ini",
+            ".cfg",
+            ".conf",
+            ".config",
+            ".xml",
+            ".properties",
+            ".env",
+            ".txt",
         ]
         .into_iter()
         .collect()
@@ -181,8 +209,25 @@ pub fn is_sensitive(path: &Path) -> bool {
     if SIMPLE_PATTERNS.iter().any(|p| p.is_match(name)) {
         return true;
     }
-    // Stage 3: generic keywords, only when load-bearing in the name
-    generic_keyword_hit(name)
+    // Stage 3: generic keywords, only when load-bearing in the name. Do NOT let a
+    // bare-name keyword silently drop a genuine programming-language source file:
+    // a .rb/.py named `device_token` or `passwords_controller` is a module, not a
+    // secret store (#1666). Data/config formats (.json, .yaml, .toml, ...) are
+    // deliberately NOT exempt even though .json routes through the CODE path for
+    // manifest parsing, because `credentials.json` / `secrets.yaml` are exactly
+    // the secret stores this stage must catch. The Stage 2 patterns still apply
+    // to everything regardless of extension.
+    if generic_keyword_hit(name) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e.to_ascii_lowercase()))
+            .unwrap_or_default();
+        let is_source_code = classify_file(path) == Some(FileType::Code)
+            && !SECRET_PRONE_DATA_EXTS.contains(ext.as_str());
+        return !is_source_code;
+    }
+    false
 }
 
 /// Directory names to always skip.
@@ -213,8 +258,7 @@ pub static SKIP_DIRS: std::sync::LazyLock<std::collections::HashSet<&'static str
             "lcov-report",
             "visual-tests",
             "visual-test",
-            "__snapshots__",
-            "snapshots",
+            "__snapshots__", // "snapshots" (bare) is gated in is_noise_dir (#1666)
             "storybook-static",
             "dist-protected",
             ".next",
@@ -252,18 +296,47 @@ pub static SKIP_FILES: std::sync::LazyLock<std::collections::HashSet<&'static st
         .collect()
     });
 
-/// Return `true` if this directory name looks like a venv, cache, or dep dir.
+/// Return `true` if this directory name looks like a venv, cache, dep, or
+/// snapshot artifact dir.
 ///
-/// `parent_name` is the immediate parent directory's name; when `Some`, an
-/// extra rule fires: a directory literally named `worktrees` nested directly
-/// inside a dotted directory (e.g. `.claude/worktrees/`, `.git/worktrees/`)
-/// is treated as noise. Ports graphify-py #1023.
+/// `dir_path` is the directory's own path (when available), used for two rules:
+/// a directory named `worktrees` nested directly inside a dotted directory
+/// (`.claude/worktrees/`, `.git/worktrees/`) is noise (#1023); and a bare
+/// `snapshots` dir is a Jest/Vitest artifact only when it holds `*.snap` files or
+/// lives directly under a JS test root — elsewhere it is often real source
+/// (`app/services/snapshots/`), so pruning by name silently dropped legitimate
+/// code (#1666). `__snapshots__` stays unconditionally pruned via `SKIP_DIRS`.
 #[must_use]
-pub fn is_noise_dir(name: &str, parent_name: Option<&str>) -> bool {
+pub fn is_noise_dir(name: &str, dir_path: Option<&Path>) -> bool {
     // `SKIP_DIRS` already includes the literal "graphify-out"; also skip a
     // custom output dir so `GRAPHIFY_OUT` is never re-ingested as source (#1423).
     if SKIP_DIRS.contains(name) || name == graphify_security::graphify_out_name() {
         return true;
+    }
+    let parent_name = dir_path
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|n| n.to_str());
+    if name == "snapshots" {
+        // Prune only when it looks like an actual JS/Vitest snapshot dir.
+        let Some(dir) = dir_path else {
+            return false; // cannot verify; keep a possibly-real code dir
+        };
+        if matches!(parent_name, Some("__tests__" | "__test__")) {
+            return true;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry
+                    .path()
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("snap"))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
     if name.ends_with("_venv") || name.ends_with("_env") {
         return true;
@@ -276,7 +349,3 @@ pub fn is_noise_dir(name: &str, parent_name: Option<&str>) -> bool {
     }
     false
 }
-
-#[cfg(test)]
-#[path = "sensitive_tests.rs"]
-mod sensitive_tests;

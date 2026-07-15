@@ -54,7 +54,7 @@ pub fn attach_hyperedges(graph: &mut Graph, hyperedges: &[Value]) {
         .cloned()
         .unwrap_or_else(|| json!([]));
 
-    let seen_ids: IndexSet<String> = existing_val
+    let mut seen_ids: IndexSet<String> = existing_val
         .as_array()
         .map(|arr| {
             arr.iter()
@@ -67,7 +67,9 @@ pub fn attach_hyperedges(graph: &mut Graph, hyperedges: &[Value]) {
 
     for h in hyperedges {
         let hid = h.get("id").and_then(Value::as_str).unwrap_or("");
-        if !hid.is_empty() && !seen_ids.contains(hid) {
+        // `insert` records the id as we accept it, so a duplicate id WITHIN this
+        // batch is also deduped — matching graphify-py's per-append `seen_ids.add`.
+        if !hid.is_empty() && seen_ids.insert(hid.to_string()) {
             merged.push(h.clone());
         }
     }
@@ -169,16 +171,49 @@ fn would_shrink_graph(graph: &Graph, output_path: &Path) -> bool {
         );
         return true;
     }
-    let Ok(text) = std::fs::read_to_string(output_path) else {
-        return false;
+    // A genuinely missing file has no nodes to lose, so any new graph is a growth
+    // — proceed. But a read FAILURE on an existing file (permission / transient IO)
+    // must NOT be treated as empty: that is the fail-OPEN data-loss path #479
+    // guards against (a transiently unreadable graph.json letting a partial rebuild
+    // clobber a good one). Fail SAFE, matching the parse-error branch below.
+    // DIVERGENCE from graphify-py, whose read-error branch sets `raw = ""`
+    // (fail-open) while its parse-error branch fails closed — an inconsistency.
+    let raw = match std::fs::read_to_string(output_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            eprintln!(
+                "[graphify] WARNING: existing graph.json at {} could not be read to \
+                 verify the new graph is not smaller ({e}). Refusing to overwrite. \
+                 Pass force=True to override.",
+                output_path.display()
+            );
+            return true;
+        }
     };
-    let Ok(existing_data) = serde_json::from_str::<Value>(&text) else {
+    if raw.trim().is_empty() {
         return false;
+    }
+    let existing_n = match serde_json::from_str::<Value>(&raw) {
+        Ok(data) => data
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
+        Err(exc) => {
+            // Non-empty but unparseable (corrupt or a mid-write): we cannot verify
+            // the new graph is not a silent shrink. Fail SAFE — refuse rather than
+            // overwrite (#479). A fail-OPEN here is the silent data-loss path the
+            // guard exists to prevent: a transiently unreadable graph.json would
+            // let a partial rebuild clobber a good one.
+            eprintln!(
+                "[graphify] WARNING: existing graph.json at {} could not be read to \
+                 verify the new graph is not smaller ({exc}). Refusing to overwrite. \
+                 Pass force=True to override.",
+                output_path.display()
+            );
+            return true;
+        }
     };
-    let existing_n = existing_data
-        .get("nodes")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
     let new_n = graph.node_count();
     if new_n < existing_n {
         eprintln!(

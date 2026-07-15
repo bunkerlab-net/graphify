@@ -1,6 +1,14 @@
 //! Ollama backend — local `OpenAI`-compatible server.
 //!
 //! Ports the ollama section in `graphify-py/graphify/llm.py`.
+//!
+//! Divergence (#1686): graphify-py forces the `OpenAI` SDK's `max_retries` to 0
+//! for ollama so a wedged local request cannot multiply `--api-timeout` by the
+//! SDK's 6 transient-error retries. Rust needs no such carve-out: our
+//! [`crate::openai_compat::send_json_with_retry`] retries **only** HTTP 429
+//! (never timeouts / connection errors / 5xx), and ollama does not rate-limit,
+//! so a hung request is attempted exactly once and `api_timeout` is already the
+//! hard wall-clock bound. There is no per-backend SDK retry knob to set here.
 
 use crate::kimi::call_plain_openai_compat;
 use crate::openai_compat::{
@@ -171,6 +179,7 @@ pub fn call_ollama_plain(
     model: &str,
     prompt: &str,
     max_tokens: u32,
+    usage: Option<&crate::call::UsageSink>,
 ) -> Result<String, LlmError> {
     call_plain_openai_compat(&crate::kimi::PlainOpenAiRequest {
         base_url,
@@ -182,6 +191,7 @@ pub fn call_ollama_plain(
         disable_thinking: false,
         extra_body: None,
         max_tokens,
+        usage,
     })
 }
 

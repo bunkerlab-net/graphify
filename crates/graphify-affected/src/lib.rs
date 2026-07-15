@@ -20,6 +20,7 @@ use graphify_build::{Graph, build_from_json};
 /// `DEFAULT_AFFECTED_RELATIONS` in the Python source.
 pub const DEFAULT_AFFECTED_RELATIONS: &[&str] = &[
     "calls",
+    "indirect_call",
     "references",
     "imports",
     "imports_from",
@@ -235,6 +236,30 @@ pub fn affected_nodes(
     let mut queue: VecDeque<(String, usize)> = VecDeque::new();
     queue.push_back((seed.to_string(), 0));
     let mut hits: Vec<AffectedHit> = Vec::new();
+
+    // #1669: seed the reverse walk with the seed's own member nodes (one outward
+    // `method`/`contains` hop). A caller can bind to a class's method node rather
+    // than the class node itself (`Service.call` resolves to the `def self.call`
+    // node, #1634), so those callers are unreachable from the class otherwise. The
+    // member nodes are seeds only (not reported as hits), and `method`/`contains`
+    // stay out of the general relation-filtered walk, so this adds no forward noise.
+    for edge in graph.edges() {
+        if edge.source != seed {
+            continue;
+        }
+        let relation = edge
+            .attrs
+            .get("relation")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if relation != "method" && relation != "contains" {
+            continue;
+        }
+        if !seen.contains(&edge.target) {
+            seen.insert(edge.target.clone());
+            queue.push_back((edge.target.clone(), 0));
+        }
+    }
 
     while let Some((current, current_depth)) = queue.pop_front() {
         if current_depth >= depth {
