@@ -36,10 +36,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Capture rustc fingerprint
-        id: rustc
-        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
       - name: Setup Mise
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         env:
@@ -49,15 +45,6 @@ jobs:
           cache: true
           experimental: true
           install: true
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-test-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-test-${{ steps.rustc.outputs.fingerprint }}-
 
       - name: Install Binstall
         env:
@@ -142,19 +129,6 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
-
-      - name: Capture rustc fingerprint
-        id: rustc
-        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-integration-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-integration-${{ steps.rustc.outputs.fingerprint }}-
 
       - name: Install Binstall
         env:
