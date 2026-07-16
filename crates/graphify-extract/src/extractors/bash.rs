@@ -665,22 +665,19 @@ fn emit_call_edge_if_valid(
     let Some(cnn) = cmd_name_node else {
         return;
     };
-    let name = read_text(cnn, source).trim().to_string();
-    if name.is_empty() {
+    // Clean the command name the way graphify-py does (`cmd = literal(...)`):
+    // strip surrounding matching quotes and reject shell-expansion/metachar
+    // tokens, so a quoted `"./child.sh"` invocation is recognised the same as a
+    // bare one (bash.py:164 via the `literal` helper at :92-93). `None` (empty or
+    // a `$`/backtick/redirection token) is not a real call target.
+    let Some(name) = literal_token(cnn, source) else {
         return;
-    }
+    };
     // A command that is NOT a defined function may still run another script:
     // a bare `./x.sh` or a runner (`bash x.sh`) resolving to a real .sh file on
     // disk gets a cross-file `script_invocation` calls edge (#1756).
     if !ctx.defined_functions.contains(&name) {
         try_emit_script_invocation(ctx, cmd_node, source, caller_nid, &name);
-        return;
-    }
-    // `defined_functions` already constrains us to user-defined function
-    // names, so an extra `BASH_SKIP` filter would only create false
-    // negatives when a script shadows a builtin like `source` — see
-    // graphify-py `walk_calls`, which only checks `defined_functions`.
-    if !is_literal_command_name(&name) {
         return;
     }
     let tgt = make_id(&[ctx.stem, &name]);

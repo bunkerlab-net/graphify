@@ -21,6 +21,9 @@ use serde_json::Value;
 
 use crate::{ExportError, node_community_map};
 
+/// Per-process sequence for unique `GraphML` temp-file names (atomic write).
+static GRAPHML_TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Export graph as a `GraphML` file.
 ///
 /// Community IDs are written as a node attribute so tools like Gephi can colour
@@ -48,12 +51,15 @@ pub fn to_graphml(
     out.push_str("</graphml>\n");
 
     // Write atomically (#1831): a mid-write failure otherwise leaves a partial
-    // (0-byte) .graphml that downstream tooling mistakes for a completed export,
-    // or truncates an existing good file. Write a sibling temp, then rename over
-    // the destination on success; clean up the temp either way (Python's
-    // `finally`). Mirrors `to_graphml`'s `os.replace(tmp, out)` in graphify-py.
+    // (0-byte) `.graphml` that downstream tooling mistakes for a completed
+    // export, or truncates an existing good file. Stage a sibling temp, then
+    // rename over the destination on success; clean up the temp either way.
+    // The temp name carries a process id + per-call sequence so two exports to
+    // the same path never clobber each other's temp (graphify-py's fixed
+    // `<out>.tmp` is not collision-safe; a public writer should be).
+    let seq = GRAPHML_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tmp_os = output_path.as_os_str().to_os_string();
-    tmp_os.push(".tmp");
+    tmp_os.push(format!(".{}.{seq}.tmp", std::process::id()));
     let tmp = PathBuf::from(tmp_os);
     let result =
         std::fs::write(&tmp, out.as_bytes()).and_then(|()| std::fs::rename(&tmp, output_path));

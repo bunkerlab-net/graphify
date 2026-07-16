@@ -622,6 +622,33 @@ fn extract_bash_emits_script_invocation_calls() {
     }
 }
 
+/// A quoted script path (`"./helpers.sh"`, `bash "./helpers.sh"`) is recognized
+/// the same as a bare one: graphify-py cleans the command token through
+/// `literal()`, which strips surrounding quotes before the `.sh` check.
+#[test]
+fn extract_bash_emits_script_invocation_for_quoted_path() {
+    for command in ["\"./helpers.sh\"", "bash \"./helpers.sh\""] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let helpers = tmp.path().join("helpers.sh");
+        std::fs::write(&helpers, "#!/bin/bash\necho helper\n").expect("write fixture");
+        let script = tmp.path().join("deploy.sh");
+        std::fs::write(&script, format!("#!/bin/bash\n{command}\n")).expect("write fixture");
+
+        let result = extract_bash(&script);
+        let invocation: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.relation == "calls" && e.context.as_deref() == Some("script_invocation"))
+            .collect();
+        assert_eq!(
+            invocation.len(),
+            1,
+            "command {command:?}: {:?}",
+            result.edges
+        );
+    }
+}
+
 /// A runner shadowed by a defined function, and a `./missing.sh` with no file
 /// on disk, both emit no invocation edge (#1756).
 #[test]

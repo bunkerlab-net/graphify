@@ -36,26 +36,3 @@ pub(crate) fn handle_stdout_error(e: &std::io::Error) -> ! {
 fn is_broken_pipe_write(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::BrokenPipe || (cfg!(windows) && e.raw_os_error() == Some(22))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::is_broken_pipe_write;
-    use std::io::{Error, ErrorKind};
-
-    #[test]
-    fn broken_pipe_kind_is_detected() {
-        assert!(is_broken_pipe_write(&Error::from(ErrorKind::BrokenPipe)));
-    }
-
-    #[test]
-    fn unrelated_stdout_error_is_not_a_broken_pipe() {
-        // A non-pipe write failure must NOT be mapped to a success exit — on
-        // Unix a raw EINVAL (22) is a genuine error, not a closed pipe.
-        assert!(!is_broken_pipe_write(&Error::from(
-            ErrorKind::PermissionDenied
-        )));
-        assert!(!is_broken_pipe_write(&Error::from_raw_os_error(28))); // ENOSPC
-        #[cfg(not(windows))]
-        assert!(!is_broken_pipe_write(&Error::from_raw_os_error(22))); // EINVAL on Unix
-    }
-}

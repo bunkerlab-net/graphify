@@ -25,8 +25,21 @@ pub fn write_build_config(out_dir: &Path, excludes: Option<&[String]>) {
         return;
     }
     let payload = serde_json::json!({ "excludes": excludes });
-    if let Ok(text) = serde_json::to_string(&payload) {
-        let _ = std::fs::write(out_dir.join(BUILD_CONFIG_FILENAME), text);
+    let Ok(text) = serde_json::to_string(&payload) else {
+        return;
+    };
+    // Write atomically: a torn write would leave a corrupt sidecar that
+    // `read_build_excludes` silently discards, dropping the persisted excludes.
+    // Stage a sibling temp then rename over the destination; clean up on failure.
+    let dest = out_dir.join(BUILD_CONFIG_FILENAME);
+    let mut tmp = dest.clone().into_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    if std::fs::write(&tmp, text.as_bytes())
+        .and_then(|()| std::fs::rename(&tmp, &dest))
+        .is_err()
+    {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
