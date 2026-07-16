@@ -136,7 +136,12 @@ impl KeyRegistry {
             }
         }
         for (k, v) in &graph.graph_attrs {
-            reg.register("graph", k, value_graphml_type(v));
+            // Drop internal `_`-prefixed markers from graph scope too, consistent
+            // with node/edge keys — they are runtime/persistence details, not
+            // graph data. `hyperedges` (the only real graph attr) is unaffected.
+            if !k.starts_with('_') {
+                reg.register("graph", k, value_graphml_type(v));
+            }
         }
         reg
     }

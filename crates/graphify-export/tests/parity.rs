@@ -1094,6 +1094,10 @@ fn test_to_graphml_tolerates_dict_and_list_attribute_values()
         "hyperedges".to_string(),
         json!([{"nodes": [nid], "label": "h"}]),
     );
+    // An internal `_`-prefixed graph attr must be dropped from the export,
+    // consistent with node/edge scope (not leaked as a GraphML key).
+    g.graph_attrs
+        .insert("_internal".to_string(), json!("secret"));
 
     let tmp = tempdir()?;
     let out = tmp.path().join("graph.graphml");
@@ -1115,6 +1119,10 @@ fn test_to_graphml_tolerates_dict_and_list_attribute_values()
     assert!(
         content.contains("&quot;k&quot;:&quot;v&quot;"),
         "edge dict attr not serialized"
+    );
+    assert!(
+        !content.contains("attr.name=\"_internal\""),
+        "internal `_`-prefixed graph attr leaked into GraphML"
     );
     // Graph-level hyperedges list is emitted as a graph-scoped <data> (#1831).
     // The key id is opaque (networkx-style d0/d1/…), so assert on the key

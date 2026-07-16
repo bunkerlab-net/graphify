@@ -336,6 +336,10 @@ pub fn pick_scored_endpoint(graph: &Graph, scored: &[(f64, String)], query: &str
         return head();
     }
     for (_score, nid) in scored {
+        // Tokenize the RAW `label` (falling back to the id), matching graphify-py
+        // `_pick_scored_endpoint` (`G.nodes[nid].get("label") or nid`).
+        // `search_tokens` already lowercases + strips diacritics, so this yields
+        // the same token set as `norm_label` would — no need to prefer it here.
         let label = graph
             .node_map
             .get(nid)
