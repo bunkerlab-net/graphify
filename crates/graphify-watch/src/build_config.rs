@@ -12,6 +12,9 @@ use serde_json::Value;
 /// Sidecar filename storing build options under the output directory.
 pub const BUILD_CONFIG_FILENAME: &str = ".graphify_build.json";
 
+/// Per-process sequence for unique build-config temp-file names (atomic write).
+static BUILD_CONFIG_TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Persist build options (currently `--exclude` patterns) under `out_dir`.
 ///
 /// Best-effort and non-clobbering: with `None`/empty excludes it leaves any
@@ -30,10 +33,14 @@ pub fn write_build_config(out_dir: &Path, excludes: Option<&[String]>) {
     };
     // Write atomically: a torn write would leave a corrupt sidecar that
     // `read_build_excludes` silently discards, dropping the persisted excludes.
-    // Stage a sibling temp then rename over the destination; clean up on failure.
+    // Stage a per-process/per-call unique sibling temp then rename over the
+    // destination (replace-capable on every platform, incl. Windows via
+    // `MoveFileExW`); clean up on failure. The unique suffix means two writers
+    // to the same dir never clobber each other's staging file.
     let dest = out_dir.join(BUILD_CONFIG_FILENAME);
+    let seq = BUILD_CONFIG_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tmp = dest.clone().into_os_string();
-    tmp.push(".tmp");
+    tmp.push(format!(".{}.{seq}.tmp", std::process::id()));
     let tmp = std::path::PathBuf::from(tmp);
     if std::fs::write(&tmp, text.as_bytes())
         .and_then(|()| std::fs::rename(&tmp, &dest))
