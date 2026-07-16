@@ -35,7 +35,7 @@ pub fn check_semantic_cache(files: &[String], root: &Path) -> SemanticCacheSplit
         if !p.is_absolute() {
             p = root.join(&p);
         }
-        if let Some(Value::Object(map)) = load_cached(&p, root, "semantic") {
+        if let Some(Value::Object(map)) = load_cached(&p, root, "semantic", None) {
             if let Some(Value::Array(ns)) = map.get("nodes") {
                 split.cached_nodes.extend(ns.iter().cloned());
             }
@@ -64,6 +64,12 @@ pub fn check_semantic_cache(files: &[String], root: &Path) -> SemanticCacheSplit
 /// per chunk) without dropping a prior slice of a large file split across
 /// chunks (#1715). `false` overwrites, the default authoritative behaviour.
 ///
+/// When `allowed_source_files` is `Some`, only those files may be used as
+/// cache-write keys. Semantic nodes can legitimately mention another corpus
+/// file, but a model must not replace that file's complete cache entry unless
+/// the file was part of the current extraction batch (#1757). Out-of-scope
+/// files are skipped (with a warning) and not counted.
+///
 /// # Errors
 ///
 /// Returns [`CacheError::Io`] on filesystem failure or [`CacheError::Json`]
@@ -74,6 +80,7 @@ pub fn save_semantic_cache(
     hyperedges: &[Value],
     root: &Path,
     merge_existing: bool,
+    allowed_source_files: Option<&[PathBuf]>,
 ) -> Result<usize, CacheError> {
     type SemanticBuckets = (Vec<Value>, Vec<Value>, Vec<Value>);
     let mut by_file: IndexMap<String, SemanticBuckets> = IndexMap::new();
@@ -111,44 +118,77 @@ pub fn save_semantic_cache(
         }
     }
 
+    let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let allowed_paths: Option<HashSet<PathBuf>> = allowed_source_files.map(|allowed| {
+        allowed
+            .iter()
+            .map(|p| resolved_source_path(p, &root_path))
+            .collect()
+    });
+
     let mut saved = 0;
     for (fpath, (n, e, h)) in &by_file {
-        let mut p = PathBuf::from(fpath);
-        if !p.is_absolute() {
-            p = root.join(&p);
+        let p = resolved_source_path(Path::new(fpath), &root_path);
+        if !p.is_file() {
+            continue;
         }
-        if p.is_file() {
-            let payload = if merge_existing {
-                // Accumulate a prior slice (a large file split across chunks)
-                // instead of overwriting it: prev + new, in order (#1715).
-                let prev = load_cached(&p, root, "semantic");
-                let prev_obj = prev.as_ref().and_then(Value::as_object);
-                let merged = |key: &str, new: &[Value]| -> Vec<Value> {
-                    let mut out: Vec<Value> = prev_obj
-                        .and_then(|m| m.get(key))
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    out.extend(new.iter().cloned());
-                    out
-                };
-                serde_json::json!({
-                    "nodes": merged("nodes", n),
-                    "edges": merged("edges", e),
-                    "hyperedges": merged("hyperedges", h),
-                })
-            } else {
-                serde_json::json!({
-                    "nodes": n,
-                    "edges": e,
-                    "hyperedges": h,
-                })
+        // A model may mint semantic nodes that mention another corpus file, but
+        // it must not replace that file's cache entry unless the file was part
+        // of the current extraction batch (#1757).
+        if let Some(allowed) = &allowed_paths
+            && !allowed.contains(&p)
+        {
+            eprintln!(
+                "[graphify] warning: semantic cache skipped out-of-scope \
+                 source_file '{fpath}'; the file was not dispatched for extraction"
+            );
+            continue;
+        }
+        let payload = if merge_existing {
+            // Accumulate a prior slice (a large file split across chunks)
+            // instead of overwriting it: prev + new, in order (#1715).
+            let prev = load_cached(&p, root, "semantic", None);
+            let prev_obj = prev.as_ref().and_then(Value::as_object);
+            let merged = |key: &str, new: &[Value]| -> Vec<Value> {
+                let mut out: Vec<Value> = prev_obj
+                    .and_then(|m| m.get(key))
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                out.extend(new.iter().cloned());
+                out
             };
-            save_cached(&p, &payload, root, "semantic")?;
-            saved += 1;
-        }
+            serde_json::json!({
+                "nodes": merged("nodes", n),
+                "edges": merged("edges", e),
+                "hyperedges": merged("hyperedges", h),
+            })
+        } else {
+            serde_json::json!({
+                "nodes": n,
+                "edges": e,
+                "hyperedges": h,
+            })
+        };
+        save_cached(&p, &payload, root, "semantic", None)?;
+        saved += 1;
     }
     Ok(saved)
+}
+
+/// Resolve a `source_file` value to an absolute, canonical path for scope
+/// comparison: absolute values pass through, relative ones anchor at
+/// `root_path`; canonicalisation falls back to a lexical absolute path for
+/// inaccessible paths or a symlink loop from an untrusted result (#1757).
+fn resolved_source_path(value: &Path, root_path: &Path) -> PathBuf {
+    let path = if value.is_absolute() {
+        value.to_path_buf()
+    } else {
+        root_path.join(value)
+    };
+    path.canonicalize()
+        .or_else(|_| std::path::absolute(&path))
+        .unwrap_or(path)
 }
 
 /// Remove orphaned semantic cache entries, returning the count pruned.

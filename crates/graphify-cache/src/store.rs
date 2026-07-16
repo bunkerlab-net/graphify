@@ -23,17 +23,33 @@ use crate::paths::{EXTRACTOR_VERSION, cache_dir_versioned, out_base};
 /// Relative `source_file` fields are re-anchored against `root` so callers see
 /// the same absolute-path shape a fresh in-process extraction would produce
 /// (#777). Returns `None` if no matching entry exists or it fails to parse.
+/// `root` anchors the content-hash key and `source_file` relativization;
+/// `cache_root` (when `Some`) decouples *where* the cache directory lives from
+/// that anchor, so the cache never lands inside a read-only/analysed source
+/// tree (#1774). `None` falls back to `root`.
 #[must_use]
-pub fn load_cached(path: &Path, root: &Path, kind: &str) -> Option<Value> {
-    load_cached_versioned(path, root, kind, EXTRACTOR_VERSION)
+pub fn load_cached(
+    path: &Path,
+    root: &Path,
+    kind: &str,
+    cache_root: Option<&Path>,
+) -> Option<Value> {
+    load_cached_versioned(path, root, kind, EXTRACTOR_VERSION, cache_root)
 }
 
 /// Like [`load_cached`] but with the AST namespace version supplied
 /// explicitly (used by tests to simulate an upgrade).
 #[must_use]
-pub fn load_cached_versioned(path: &Path, root: &Path, kind: &str, version: &str) -> Option<Value> {
-    let hash = file_hash(path, root).ok()?;
-    let dir = cache_dir_versioned(root, kind, version).ok()?;
+pub fn load_cached_versioned(
+    path: &Path,
+    root: &Path,
+    kind: &str,
+    version: &str,
+    cache_root: Option<&Path>,
+) -> Option<Value> {
+    let hash = file_hash(path, root, cache_root).ok()?;
+    let location = cache_root.unwrap_or(root);
+    let dir = cache_dir_versioned(location, kind, version).ok()?;
     let entry = dir.join(format!("{hash}.json"));
     let text = fs::read_to_string(&entry).ok()?;
     let mut value: Value = serde_json::from_str(&text).ok()?;
@@ -57,8 +73,17 @@ pub fn load_cached_versioned(path: &Path, root: &Path, kind: &str, version: &str
 ///
 /// Returns [`CacheError::Io`] on filesystem failure, [`CacheError::Json`]
 /// on serialisation failure, or any error from [`file_hash`].
-pub fn save_cached(path: &Path, result: &Value, root: &Path, kind: &str) -> Result<(), CacheError> {
-    save_cached_versioned(path, result, root, kind, EXTRACTOR_VERSION)
+/// `root` anchors the content-hash key and `source_file` relativization;
+/// `cache_root` (when `Some`) is where the cache directory is written, decoupled
+/// from `root` so the cache never lands inside the analysed source tree (#1774).
+pub fn save_cached(
+    path: &Path,
+    result: &Value,
+    root: &Path,
+    kind: &str,
+    cache_root: Option<&Path>,
+) -> Result<(), CacheError> {
+    save_cached_versioned(path, result, root, kind, EXTRACTOR_VERSION, cache_root)
 }
 
 /// Like [`save_cached`] but with the AST namespace version supplied
@@ -73,6 +98,7 @@ pub fn save_cached_versioned(
     root: &Path,
     kind: &str,
     version: &str,
+    cache_root: Option<&Path>,
 ) -> Result<(), CacheError> {
     if !path.is_file() {
         return Ok(());
@@ -86,8 +112,9 @@ pub fn save_cached_versioned(
         Cow::Borrowed(result)
     };
 
-    let hash = file_hash(path, root)?;
-    let dir = cache_dir_versioned(root, kind, version)?;
+    let hash = file_hash(path, root, cache_root)?;
+    let location = cache_root.unwrap_or(root);
+    let dir = cache_dir_versioned(location, kind, version)?;
     let entry = dir.join(format!("{hash}.json"));
     let mut tmp = tempfile::Builder::new()
         .prefix(&format!("{hash}."))

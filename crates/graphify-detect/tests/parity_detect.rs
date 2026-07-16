@@ -753,3 +753,171 @@ fn detect_surfaces_unreadable_dir_instead_of_silent_skip() {
         "the unreadable directory must be recorded in walk_errors"
     );
 }
+
+#[test]
+fn nested_gitignore_star_does_not_ignore_outside_its_dir() {
+    // #1873: a nested `.gitignore` with a bare `*` (e.g. hypothesis writes one
+    // into `.hypothesis/`) must ignore ONLY that directory's contents, not the
+    // whole corpus.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("README.md"), "# hello").expect("test invariant");
+    std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
+    let hyp = tmp.path().join(".hypothesis");
+    std::fs::create_dir_all(&hyp).expect("create_dir_all");
+    std::fs::write(hyp.join(".gitignore"), "*\n").expect("test invariant");
+    std::fs::write(hyp.join("cached.py"), "y = 2").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    assert_eq!(result.total_files, 2, "README.md + main.py survive");
+}
+
+#[test]
+fn nested_gitignore_patterns_still_apply_inside_their_dir() {
+    // Counterpart guard: anchor-scoping must not stop a nested ignore file from
+    // working WITHIN its own subtree.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir_all(&sub).expect("create_dir_all");
+    std::fs::write(sub.join(".gitignore"), "*.log\n").expect("test invariant");
+    std::fs::write(sub.join("keep.py"), "y = 2").expect("test invariant");
+    std::fs::write(sub.join("noise.log"), "z").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    assert_eq!(
+        result.total_files, 2,
+        "main.py + sub/keep.py; sub/noise.log ignored"
+    );
+}
+
+#[test]
+fn gitignore_nested_below_root_excludes_file() {
+    // #1206: a `.gitignore` in a subdirectory below the scan root is honored.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".gitignore"), "*.log\n").expect("test invariant");
+    let sub = tmp.path().join("vendor").join("sub");
+    std::fs::create_dir_all(&sub).expect("create_dir_all");
+    std::fs::write(sub.join(".gitignore"), "secret.txt\n").expect("test invariant");
+    std::fs::write(tmp.path().join("root.py"), "x = 1").expect("test invariant");
+    std::fs::write(tmp.path().join("root.log"), "noise").expect("test invariant");
+    std::fs::write(sub.join("keep.py"), "y = 2").expect("test invariant");
+    std::fs::write(sub.join("secret.txt"), "shh").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let code = &result.files["code"];
+    assert!(code.iter().any(|f| f.contains("root.py")));
+    assert!(code.iter().any(|f| f.contains("keep.py")));
+    assert!(!code.iter().any(|f| f.contains("root.log")));
+    assert!(!code.iter().any(|f| f.contains("secret.txt")));
+    assert_eq!(result.graphifyignore_patterns, 2);
+}
+
+#[test]
+fn gitignore_nested_below_root_prunes_whole_directory() {
+    // A nested `.gitignore` excluding a directory prevents descending into it.
+    let tmp = tempdir().expect("tempdir");
+    let sub = tmp.path().join("vendor").join("sub");
+    std::fs::create_dir_all(&sub).expect("create_dir_all");
+    std::fs::write(sub.join(".gitignore"), "generated/\n").expect("test invariant");
+    let gen_dir = sub.join("generated");
+    std::fs::create_dir_all(&gen_dir).expect("create_dir_all");
+    std::fs::write(gen_dir.join("out.py"), "x = 1").expect("test invariant");
+    std::fs::write(sub.join("keep.py"), "y = 2").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let code = &result.files["code"];
+    assert!(code.iter().any(|f| f.contains("keep.py")));
+    assert!(!code.iter().any(|f| f.contains("out.py")));
+}
+
+#[test]
+fn gitignore_nested_negation_overrides_broader_root_rule() {
+    // #1847/#1873: a closer (nested) `.gitignore` `!` re-include wins over a
+    // root exclude, matching git's closer-file-wins precedence. Uses `.py` so
+    // classification lands in the deterministic `code` bucket.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".gitignore"), "*.py\n").expect("test invariant");
+    let sub = tmp.path().join("vendor").join("sub");
+    std::fs::create_dir_all(&sub).expect("create_dir_all");
+    std::fs::write(sub.join(".gitignore"), "!important.py\n").expect("test invariant");
+    std::fs::write(tmp.path().join("root.py"), "a = 1").expect("test invariant");
+    std::fs::write(sub.join("important.py"), "b = 1").expect("test invariant");
+    std::fs::write(sub.join("other.py"), "c = 1").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let code = &result.files["code"];
+    assert!(code.iter().any(|f| f.contains("important.py")));
+    assert!(!code.iter().any(|f| f.ends_with("root.py")));
+    assert!(!code.iter().any(|f| f.ends_with("other.py")));
+}
+
+#[test]
+fn nested_ignore_overrides_git_info_exclude_and_root() {
+    // Precedence across all three sources: a nested `.gitignore` `!` re-include
+    // outranks both a root `.gitignore` and `.git/info/exclude` (lowest, #1810),
+    // while an info/exclude-only file with no re-include stays out.
+    let tmp = tempdir().expect("tempdir");
+    let info = tmp.path().join(".git").join("info");
+    std::fs::create_dir_all(&info).expect("create_dir_all");
+    std::fs::write(info.join("exclude"), "*.py\n").expect("test invariant");
+    std::fs::write(tmp.path().join(".gitignore"), "keep.py\n").expect("test invariant");
+    let sub = tmp.path().join("a").join("b");
+    std::fs::create_dir_all(&sub).expect("create_dir_all");
+    std::fs::write(sub.join(".gitignore"), "!keep.py\n").expect("test invariant");
+    std::fs::write(sub.join("keep.py"), "x = 1").expect("test invariant");
+    std::fs::write(tmp.path().join("drop.py"), "y = 1").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let code = &result.files["code"];
+    assert!(
+        code.iter().any(|f| f.contains("keep.py")),
+        "nested ! must beat root + info/exclude: {code:?}"
+    );
+    assert!(!code.iter().any(|f| f.ends_with("drop.py")));
+}
+
+#[test]
+fn detect_skips_nox_virtualenv() {
+    // #1804: `.nox/` (nox virtualenvs, tox's successor) must be excluded like `.tox`.
+    let tmp = tempdir().expect("tempdir");
+    let nox = tmp
+        .path()
+        .join(".nox")
+        .join("tests")
+        .join("lib")
+        .join("site-packages")
+        .join("pydeck");
+    std::fs::create_dir_all(&nox).expect("create_dir_all");
+    std::fs::write(nox.join("widget.py"), "class Deck: pass").expect("test invariant");
+    std::fs::write(tmp.path().join("app.py"), "def go(): pass").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let all: Vec<&String> = result.files.values().flatten().collect();
+    assert!(!all.iter().any(|f| f.contains(".nox")));
+    assert!(all.iter().any(|f| f.contains("app.py")));
+}
+
+#[test]
+fn detect_honors_git_info_exclude() {
+    // #1810: `.git/info/exclude` (where `git worktree add` records nested
+    // worktree paths, and where local-only excludes live) must be honored.
+    let tmp = tempdir().expect("tempdir");
+    let info = tmp.path().join(".git").join("info");
+    std::fs::create_dir_all(&info).expect("create_dir_all");
+    std::fs::write(info.join("exclude"), "worktrees/\n").expect("test invariant");
+    let wt = tmp.path().join("worktrees").join("foo");
+    std::fs::create_dir_all(&wt).expect("create_dir_all");
+    std::fs::write(wt.join("dupe.py"), "def dupe(): pass").expect("test invariant");
+    std::fs::write(tmp.path().join("real.py"), "def real(): pass").expect("test invariant");
+
+    let result = detect(tmp.path(), None, None);
+    let all: Vec<&String> = result.files.values().flatten().collect();
+    assert!(
+        !all.iter().any(|f| f.contains("dupe.py")),
+        "worktree dir was not excluded: {all:?}"
+    );
+    assert!(
+        all.iter().any(|f| f.contains("real.py")),
+        "real source was dropped"
+    );
+}

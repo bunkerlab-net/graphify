@@ -210,6 +210,7 @@ pub fn call_azure(
         finish_reason,
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
+        uncovered_files: vec![],
     })
 }
 

@@ -352,6 +352,7 @@ pub(crate) fn reconcile_existing_graph(
         node: node_evicted,
         edge: edge_evicted,
         hyperedge: hyperedge_evicted,
+        rebuilt,
     } = compute_eviction_sets(
         &existing,
         &source_paths,
@@ -383,7 +384,8 @@ pub(crate) fn reconcile_existing_graph(
             .filter_map(|n| n.get("id").and_then(Value::as_str).map(str::to_string)),
     );
 
-    let preserved_edges = filter_preserved_edges(&existing, &source_paths, &all_ids, &edge_evicted);
+    let preserved_edges =
+        filter_preserved_edges(&existing, &source_paths, &all_ids, &edge_evicted, &rebuilt);
 
     let new_hyper_ids: HashSet<String> = result
         .get("hyperedges")
@@ -450,6 +452,7 @@ fn filter_preserved_edges(
     source_paths: &StoredSourcePaths,
     all_ids: &HashSet<String>,
     edge_evicted: &HashSet<String>,
+    rebuilt: &HashSet<String>,
 ) -> Vec<Value> {
     existing
         .get("links")
@@ -460,9 +463,25 @@ fn filter_preserved_edges(
                 .filter(|edge| {
                     let src = edge.get("source").and_then(Value::as_str).unwrap_or("");
                     let tgt = edge.get("target").and_then(Value::as_str).unwrap_or("");
-                    all_ids.contains(src)
-                        && all_ids.contains(tgt)
-                        && !source_paths.is_evicted(edge, edge_evicted)
+                    if !all_ids.contains(src) || !all_ids.contains(tgt) {
+                        return false;
+                    }
+                    // Deletion eviction is tier-blind.
+                    if source_paths.is_evicted(edge, edge_evicted) {
+                        return false;
+                    }
+                    // Re-extraction owns only the AST tier: drop an edge whose
+                    // source was re-extracted only when it is AST-origin. Its
+                    // semantic/LLM edges (which the AST pass cannot regenerate)
+                    // survive until a semantic re-extraction supersedes them
+                    // (#1865). Edges from pre-marker graphs (no `_origin`) are
+                    // treated as non-AST and kept — the #1116 migration trade-off.
+                    if edge.get("_origin").and_then(Value::as_str) == Some("ast")
+                        && source_paths.is_evicted(edge, rebuilt)
+                    {
+                        return false;
+                    }
+                    true
                 })
                 .cloned()
                 .collect()
@@ -513,11 +532,13 @@ fn filter_preserved_hyperedges(
         .unwrap_or_default()
 }
 
-/// The three eviction identity sets for the reconciliation.
+/// The eviction identity sets for the reconciliation, plus the `rebuilt` set
+/// (re-extracted sources) used for the tier-scoped edge check (#1865).
 struct EvictionSets {
     node: HashSet<String>,
     edge: HashSet<String>,
     hyperedge: HashSet<String>,
+    rebuilt: HashSet<String>,
 }
 
 /// Build the node/edge/hyperedge eviction sets and discover stale (removed or
@@ -546,16 +567,29 @@ fn compute_eviction_sets(
     // whose source was re-extracted (#1755). The stale-source loop below adds to
     // all three sets.
     let mut hyperedge: HashSet<String> = deleted_source_identities.clone();
+    // Edge eviction is tier-scoped (#1865): re-extraction replaces a source's
+    // AST-tier edges (enforced per-edge in `filter_preserved_edges` via the
+    // `rebuilt` set), while its semantic/LLM edges survive until a semantic
+    // re-extraction supersedes them. So the edge set is seeded from DELETIONS
+    // only — deletion eviction stays provenance-blind.
+    let mut edge: HashSet<String> = deleted_source_identities.clone();
     if !full_rebuild {
         node.extend(rebuilt.iter().cloned());
     }
-    let mut edge: HashSet<String> = node.clone();
-    edge.extend(rebuilt.iter().cloned());
 
     // Reconcile every rebuild against the current watched corpus. A hook change
     // list can carry only a rename destination, so explicit paths alone cannot
     // identify the stale source. Scope the comparison to the watched root so a
     // subfolder update preserves records outside that subtree.
+    // Fail-closed eviction (#1795): a source identity missing from the corpus is
+    // only DELETION evidence when the file is actually gone from disk. A file
+    // that still exists but stopped being collected was EXCLUDED (ignore rules or
+    // filters changed) — treating that as deletion silently mass-evicts good
+    // nodes. Preserve instead and say so; a full re-extraction still purges a
+    // deliberately excluded source via the AST-ownership rule.
+    let mut excluded_alive_files: HashSet<String> = HashSet::new();
+    let mut excluded_alive_nodes: usize = 0;
+    let mut alive_cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     if let Some(nodes) = existing.get("nodes").and_then(Value::as_array) {
         for node_val in nodes {
             let source_file = node_val.get("source_file").and_then(Value::as_str);
@@ -570,6 +604,16 @@ fn compute_eviction_sets(
                 continue;
             };
             if !current_sources.contains(&identity) {
+                if !identity.is_empty() {
+                    let alive = *alive_cache
+                        .entry(identity.clone())
+                        .or_insert_with(|| Path::new(&identity).exists());
+                    if alive {
+                        excluded_alive_files.insert(identity.clone());
+                        excluded_alive_nodes += 1;
+                        continue;
+                    }
+                }
                 if let Some(normalized) = source_paths.normalize(source_file)
                     && !deleted_paths.contains(&normalized)
                 {
@@ -581,11 +625,22 @@ fn compute_eviction_sets(
             }
         }
     }
+    if !excluded_alive_files.is_empty() {
+        // stdout (matches graphify-py's `print`, which the message assertion targets).
+        println!(
+            "[graphify watch] fail-closed: kept {excluded_alive_nodes} node(s) from {} \
+             file(s) that left the scan corpus but still exist on disk (ignore rules or \
+             filters changed?). Run a full re-extraction to purge them if the exclusion \
+             is intentional.",
+            excluded_alive_files.len()
+        );
+    }
 
     EvictionSets {
         node,
         edge,
         hyperedge,
+        rebuilt,
     }
 }
 

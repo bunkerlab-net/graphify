@@ -169,10 +169,24 @@ pub fn introspect_cargo(root: &Path) -> Result<CargoIntrospection, CargoIntrospe
         let mut dep_names: Vec<&String> = dependencies.keys().collect();
         dep_names.sort();
         for dep_name in dep_names {
-            if known.contains(dep_name.as_str()) {
+            // Cargo lets a dep table entry rename the crate via `package = "..."`:
+            //   db = { path = "../storage", package = "internal-storage" }
+            // The key `db` is the name used in `use db::…;`; the crate published
+            // under `[package].name = "internal-storage"` is what `known`/`crates`
+            // are keyed by. Without honoring `package`, every renamed
+            // workspace-internal dep silently drops its edge (#1858). A rename
+            // pointing outside the workspace stays dropped (not in `known`).
+            let real_name = dependencies
+                .get(dep_name)
+                .and_then(toml::Value::as_table)
+                .and_then(|t| t.get("package"))
+                .and_then(toml::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(dep_name.as_str());
+            if known.contains(real_name) {
                 edges.push(json!({
                     "source": source_id,
-                    "target": format!("crate:{dep_name}"),
+                    "target": format!("crate:{real_name}"),
                     "relation": "crate_depends_on",
                     "context": "cargo_dependency",
                     "weight": 1.0,

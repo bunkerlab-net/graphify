@@ -79,7 +79,7 @@ pub(crate) fn lang_family(source_file: &str) -> Option<&'static str> {
         "py" => "python",
         "go" => "go",
         "rs" => "rust",
-        "rb" => "ruby",
+        "rb" | "rake" => "ruby",
         "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => "php",
         "cs" | "razor" | "cshtml" | "xaml" => "dotnet",
         "lua" | "luau" => "lua",

@@ -131,6 +131,7 @@ pub fn detect_incremental_with_cache_root(
                     mtime,
                     semantic_hash: String::new(),
                     ast_hash: String::new(),
+                    legacy_mtime_only: false,
                 },
             );
         }

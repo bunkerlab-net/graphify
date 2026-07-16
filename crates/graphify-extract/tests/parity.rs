@@ -590,6 +590,151 @@ fn extract_bash_emits_source_imports_from() {
     assert_eq!(import_edges[0].context.as_deref(), Some("import"));
 }
 
+/// #1756: `./x.sh` and `bash x.sh` emit a cross-file `script_invocation` calls
+/// edge from the caller's entry to the invoked script's entry node.
+#[test]
+fn extract_bash_emits_script_invocation_calls() {
+    for command in ["./helpers.sh", "bash ./helpers.sh"] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let helpers = tmp.path().join("helpers.sh");
+        std::fs::write(&helpers, "#!/bin/bash\necho helper\n").expect("write fixture");
+        let script = tmp.path().join("deploy.sh");
+        std::fs::write(&script, format!("#!/bin/bash\n{command}\n")).expect("write fixture");
+
+        let result = extract_bash(&script);
+        let invocation: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.relation == "calls" && e.context.as_deref() == Some("script_invocation"))
+            .collect();
+        assert_eq!(
+            invocation.len(),
+            1,
+            "command {command:?}: {:?}",
+            result.edges
+        );
+        let src_entry = format!("{}__entry", make_id1(&script.to_string_lossy()));
+        let canon_helpers = std::fs::canonicalize(&helpers).expect("canonicalize");
+        let tgt_entry = format!("{}__entry", make_id1(&canon_helpers.to_string_lossy()));
+        assert_eq!(invocation[0].source, src_entry);
+        assert_eq!(invocation[0].target, tgt_entry);
+        assert_eq!(invocation[0].source_location.as_deref(), Some("L2"));
+    }
+}
+
+/// A runner shadowed by a defined function, and a `./missing.sh` with no file
+/// on disk, both emit no invocation edge (#1756).
+#[test]
+fn extract_bash_skips_missing_and_shadowed_script_invocations() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("helpers.sh"), "#!/bin/bash\necho helper\n")
+        .expect("write fixture");
+    let script = tmp.path().join("deploy.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\nbash() { echo custom; }\nbash ./helpers.sh\n./missing.sh\n",
+    )
+    .expect("write fixture");
+    let result = extract_bash(&script);
+    assert!(
+        !result
+            .edges
+            .iter()
+            .any(|e| e.context.as_deref() == Some("script_invocation")),
+        "{:?}",
+        result.edges
+    );
+}
+
+/// A dynamic (`$VAR`) script target never resolves to a real file, so no
+/// invocation edge (#1756).
+#[test]
+fn extract_bash_skips_dynamic_script_invocation() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("helpers.sh"), "#!/bin/bash\necho helper\n")
+        .expect("write fixture");
+    let script = tmp.path().join("deploy.sh");
+    std::fs::write(&script, "#!/bin/bash\nbash \"./$SCRIPT.sh\"\n").expect("write fixture");
+    let result = extract_bash(&script);
+    assert!(
+        !result
+            .edges
+            .iter()
+            .any(|e| e.context.as_deref() == Some("script_invocation"))
+    );
+}
+
+/// With a relative caller path, the invocation target keys off the CWD-relative
+/// path so it matches the entry node a corpus `extract()` mints (#1756).
+#[test]
+#[serial_test::serial]
+fn extract_bash_relative_script_invocation_targets_existing_entrypoint() {
+    use graphify_extract::extract;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let helpers = tmp.path().join("helpers.sh");
+    std::fs::write(&helpers, "#!/bin/bash\necho helper\n").expect("write fixture");
+    let script = tmp.path().join("deploy.sh");
+    std::fs::write(&script, "#!/bin/bash\n./helpers.sh\n").expect("write fixture");
+
+    // Mirror Python's `monkeypatch.chdir(tmp)`: with a RELATIVE caller path the
+    // invocation target keys off the CWD-relative path, matching the entry node
+    // id the corpus extract mints. `#[serial]` keeps the chdir from racing other
+    // tests under a threaded runner; the original CWD is always restored.
+    let prev_cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(tmp.path()).expect("chdir tmp");
+    let result = extract(
+        &[
+            std::path::PathBuf::from("deploy.sh"),
+            std::path::PathBuf::from("helpers.sh"),
+        ],
+        Some(&std::path::PathBuf::from(".")),
+    );
+    std::env::set_current_dir(&prev_cwd).expect("restore cwd");
+
+    let node_ids: std::collections::HashSet<&str> = result
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    let invocation = result
+        .edges
+        .iter()
+        .find(|e| e.get("context").and_then(serde_json::Value::as_str) == Some("script_invocation"))
+        .expect("script_invocation edge");
+    let target = invocation
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .expect("target");
+    assert!(
+        node_ids.contains(target),
+        "invocation target {target} not a real node: {node_ids:?}"
+    );
+}
+
+/// An invocation inside a function is attributed to that function node, not the
+/// file entry (#1756).
+#[test]
+fn extract_bash_attributes_script_invocation_to_function() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("helpers.sh"), "#!/bin/bash\necho helper\n")
+        .expect("write fixture");
+    let script = tmp.path().join("deploy.sh");
+    std::fs::write(&script, "#!/bin/bash\ndeploy() { bash ./helpers.sh; }\n")
+        .expect("write fixture");
+    let result = extract_bash(&script);
+    let deploy = result
+        .nodes
+        .iter()
+        .find(|n| n.label == "deploy()")
+        .expect("deploy node");
+    let invocation = result
+        .edges
+        .iter()
+        .find(|e| e.context.as_deref() == Some("script_invocation"))
+        .expect("script_invocation edge");
+    assert_eq!(invocation.source, deploy.id);
+}
+
 #[test]
 fn extract_bash_creates_entrypoint_node() {
     // Every script gets a `<file>__entry` entrypoint node attached to the
@@ -947,7 +1092,11 @@ fn extract_swift_merges_extension_across_files() {
     let extension = tmp.path().join("Foo+Ext.swift");
     std::fs::write(&canonical, "class Foo {\n    func bar() {}\n}\n").expect("test invariant");
     std::fs::write(&extension, "extension Foo {\n    func baz() {}\n}\n").expect("test invariant");
-    let result = extract(&[canonical.clone(), extension.clone()], None);
+    // Isolate the AST cache under the tempdir: with `None`, #1774 writes it to
+    // CWD (shared across test processes), and a stale cross-run hit keyed by
+    // content + relative path would serve a prior run's absolute node ids and
+    // defeat the merge. An explicit cache_root keeps this test hermetic.
+    let result = extract(&[canonical.clone(), extension.clone()], Some(tmp.path()));
     let foo_nodes: Vec<_> = result
         .nodes
         .iter()
@@ -1490,5 +1639,43 @@ fn extract_js_dynamic_import_is_deferred() {
     assert!(
         deferred.iter().all(|e| e.relation == "imports_from"),
         "deferred import() edges must keep relation `imports_from`"
+    );
+}
+
+/// #1899 (variant B): a symbol whose name normalizes to nothing (a minified `$`
+/// function) must not be minted — `make_id(stem, "")` collapses to the bare,
+/// absolute-path-derived file stem, leaking the scan path and colliding with the
+/// file node. The real function must still be extracted.
+#[test]
+fn degenerate_symbol_name_does_not_leak_absolute_id() {
+    use graphify_extract::extract;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let js = tmp.path().join("vendor.js");
+    std::fs::write(&js, "function $(){return 1}\nfunction real(){return 2}\n")
+        .expect("write fixture");
+    let result = extract(&[js], Some(tmp.path()));
+    let marker = tmp.path().to_string_lossy().to_lowercase();
+    for n in &result.nodes {
+        let id = n
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            !id.to_lowercase().contains(marker.as_str()),
+            "absolute path leaked into id: {id}"
+        );
+    }
+    let labels: std::collections::HashSet<&str> = result
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("label").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        labels.contains("real()"),
+        "the real function must still be extracted"
+    );
+    assert!(
+        !labels.contains("$()"),
+        "the degenerate `$` symbol must be dropped (#1899)"
     );
 }

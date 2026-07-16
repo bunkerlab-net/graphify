@@ -529,6 +529,88 @@ pub(super) fn resolve_python_reexport_imports(
     JsDefaultResolution { edges, aliases }
 }
 
+/// Class label key -> owning class node ids (the class arm's god-node index).
+type PyClassDefs = HashMap<String, Vec<String>>;
+/// `(class node id, method key)` -> method node id.
+type PyMethodIndex = HashMap<(String, String), String>;
+/// File node id -> (child label key -> child node ids) from `contains` edges.
+type PyContainsChildren = HashMap<String, HashMap<String, Vec<String>>>;
+/// Import-target node ids per caller file node.
+type PyImportsByFile = HashMap<String, HashSet<String>>;
+
+/// Case-folding key: keep ASCII alphanumerics, lowercased. Mirrors Python `_key`.
+fn py_key(s: &str) -> String {
+    s.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Index `method` edges into `(class label key -> owning class node ids)` and
+/// `((class node id, method key) -> method node id)`.
+fn build_python_class_index(
+    all_edges: &[Edge],
+    node_by_id: &HashMap<&str, &Node>,
+) -> (PyClassDefs, PyMethodIndex) {
+    let mut class_def_nids: HashMap<String, Vec<String>> = HashMap::new();
+    let mut method_index: HashMap<(String, String), String> = HashMap::new();
+    for e in all_edges {
+        if e.relation != "method" {
+            continue;
+        }
+        if let Some(cnode) = node_by_id.get(e.source.as_str()) {
+            class_def_nids
+                .entry(py_key(cnode.label.as_str()))
+                .or_default()
+                .push(e.source.clone());
+        }
+        if let Some(tnode) = node_by_id.get(e.target.as_str()) {
+            method_index.insert(
+                (e.source.clone(), py_key(tnode.label.as_str())),
+                e.target.clone(),
+            );
+        }
+    }
+    // A class with N methods produced N entries; collapse to a unique set.
+    for nids in class_def_nids.values_mut() {
+        nids.sort();
+        nids.dedup();
+    }
+    (class_def_nids, method_index)
+}
+
+/// Index for the module-alias arm (#1883): `contains` children per file node,
+/// each child's owning file node, and the imports per file node. Keyed on
+/// stable node ids (not `source_file` strings, which the CLI id-remap
+/// relativizes while `raw_calls` keep their original path).
+fn build_python_module_index(
+    all_edges: &[Edge],
+    node_by_id: &HashMap<&str, &Node>,
+) -> (PyContainsChildren, HashMap<String, String>, PyImportsByFile) {
+    let mut contains_children: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+    let mut file_of_node: HashMap<String, String> = HashMap::new();
+    let mut imported_by_filenode: HashMap<String, HashSet<String>> = HashMap::new();
+    for e in all_edges {
+        if e.relation == "contains" {
+            if let Some(tnode) = node_by_id.get(e.target.as_str()) {
+                contains_children
+                    .entry(e.source.clone())
+                    .or_default()
+                    .entry(py_key(tnode.label.as_str()))
+                    .or_default()
+                    .push(e.target.clone());
+                file_of_node.insert(e.target.clone(), e.source.clone());
+            }
+        } else if e.relation == "imports" || e.relation == "imports_from" {
+            imported_by_filenode
+                .entry(e.source.clone())
+                .or_default()
+                .insert(e.target.clone());
+        }
+    }
+    (contains_children, file_of_node, imported_by_filenode)
+}
+
 /// Resolve cross-file Python qualified class-method calls (`ClassName.method()`)
 /// to the class-qualified method node (#1446).
 ///
@@ -546,45 +628,32 @@ pub(super) fn resolve_python_member_calls(
     all_edges: &mut Vec<Edge>,
     all_raw_calls: &[RawCall],
 ) {
-    let key = |s: &str| -> String {
-        s.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect::<String>()
-            .to_lowercase()
-    };
-
     let node_by_id: HashMap<&str, &Node> = all_nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // Class arm (#1446): class label -> owning class node ids (len != 1 is the
+    // god-node guard) and (class node id, method key) -> method node id.
+    let (class_def_nids, method_index) = build_python_class_index(all_edges, &node_by_id);
+    // Module arm (#1883): `contains` children, each child's file, imports per file.
+    let (contains_children, file_of_node, imported_by_filenode) =
+        build_python_module_index(all_edges, &node_by_id);
 
-    // A class owns methods: it is the source of one or more `method` edges. Index
-    // class label -> owning class node ids (len != 1 is the god-node guard), and
-    // (class_node_id, method_key) -> method_node_id.
-    let mut class_def_nids: HashMap<String, Vec<String>> = HashMap::new();
-    let mut method_index: HashMap<(String, String), String> = HashMap::new();
-    for e in all_edges.iter() {
-        if e.relation != "method" {
-            continue;
+    let module_stem_key = |nid: &str| -> String {
+        let Some(n) = node_by_id.get(nid) else {
+            return String::new();
+        };
+        let stem = if n.source_file.is_empty() {
+            String::new()
+        } else {
+            PathBuf::from(&n.source_file)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        if stem.is_empty() {
+            py_key(n.label.as_str())
+        } else {
+            py_key(&stem)
         }
-        if let Some(cnode) = node_by_id.get(e.source.as_str()) {
-            class_def_nids
-                .entry(key(cnode.label.as_str()))
-                .or_default()
-                .push(e.source.clone());
-        }
-        if let Some(tnode) = node_by_id.get(e.target.as_str()) {
-            method_index.insert(
-                (e.source.clone(), key(tnode.label.as_str())),
-                e.target.clone(),
-            );
-        }
-    }
-    if class_def_nids.is_empty() {
-        return;
-    }
-    // A class with N methods produced N entries; collapse to a unique set.
-    for nids in class_def_nids.values_mut() {
-        nids.sort();
-        nids.dedup();
-    }
+    };
 
     let mut existing_pairs: HashSet<(String, String)> = all_edges
         .iter()
@@ -596,36 +665,64 @@ pub(super) fn resolve_python_member_calls(
         if !rc.is_member_call || rc.callee.is_empty() || rc.caller_nid.is_empty() {
             continue;
         }
-        // Only a capitalized receiver is treated as a class reference, so an
-        // instance/module (`self`, `obj`, `config`) never collides with a
-        // same-spelled class via the case-folding key.
-        let Some(receiver) = rc
-            .receiver
-            .as_deref()
-            .filter(|r| r.chars().next().is_some_and(char::is_uppercase))
-        else {
+        let Some(receiver) = rc.receiver.as_deref().filter(|r| !r.is_empty()) else {
             continue;
         };
-        let class_nids = match class_def_nids.get(&key(receiver)) {
-            Some(nids) if nids.len() == 1 => nids,
-            _ => continue, // absent or ambiguous -> god-node guard
+        let target_nid: Option<String> = if receiver.chars().next().is_some_and(char::is_uppercase)
+        {
+            // Class arm (#1446): a capitalized receiver is a class reference; an
+            // instance (`self`, `obj`) never collides with a same-spelled class.
+            match class_def_nids.get(&py_key(receiver)) {
+                Some(nids) if nids.len() == 1 => method_index
+                    .get(&(nids[0].clone(), py_key(&rc.callee)))
+                    .cloned(),
+                _ => None, // absent or ambiguous -> god-node guard
+            }
+        } else {
+            // Module arm (#1883): a lowercase receiver may be an imported module.
+            // Resolve it against the modules imported into the caller's own file
+            // (so `self`/`obj`/local instances never match), then to the single
+            // callable that module contains.
+            let rkey = py_key(receiver);
+            let mods: Vec<&String> = file_of_node
+                .get(rc.caller_nid.as_str())
+                .and_then(|cf| imported_by_filenode.get(cf))
+                .map(|set| {
+                    set.iter()
+                        .filter(|t| {
+                            contains_children.contains_key(t.as_str()) && module_stem_key(t) == rkey
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if mods.len() == 1 {
+                match contains_children
+                    .get(mods[0].as_str())
+                    .and_then(|m| m.get(&py_key(&rc.callee)))
+                {
+                    Some(children) if children.len() == 1 => Some(children[0].clone()),
+                    _ => None, // absent or ambiguous callable -> bail
+                }
+            } else {
+                None // not an imported module, or ambiguous -> bail
+            }
         };
-        let Some(method_nid) = method_index.get(&(class_nids[0].clone(), key(&rc.callee))) else {
+        let Some(target_nid) = target_nid else {
             continue;
         };
-        if *method_nid == rc.caller_nid
-            || existing_pairs.contains(&(rc.caller_nid.clone(), method_nid.clone()))
+        if target_nid == rc.caller_nid
+            || existing_pairs.contains(&(rc.caller_nid.clone(), target_nid.clone()))
         {
             continue;
         }
-        existing_pairs.insert((rc.caller_nid.clone(), method_nid.clone()));
-        // EXTRACTED: a qualified `ClassName.method()` is an explicit, unambiguous
-        // static reference, and the class resolved to exactly one definition that
-        // owns the method.
+        existing_pairs.insert((rc.caller_nid.clone(), target_nid.clone()));
+        // EXTRACTED: a qualified call (`ClassName.method()` or `module.func()`) is
+        // an explicit, unambiguous static reference resolved to exactly one
+        // definition (each arm applies a single-definition god-node guard).
         new_edges.push(Edge {
             external: false,
             source: rc.caller_nid.clone(),
-            target: method_nid.clone(),
+            target: target_nid,
             relation: "calls".to_string(),
             confidence: "EXTRACTED".to_string(),
             source_file: rc.source_file.clone(),

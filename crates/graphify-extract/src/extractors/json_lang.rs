@@ -345,6 +345,17 @@ fn walk_json_object(
             }
             continue;
         };
+        // A key that normalizes to nothing (a JSONC `"//"` comment key, say)
+        // would collapse `make_id(stem, key)` down to the bare file-stem id, which
+        // is absolute-path-derived and leaks the scan path (#1899). Such keys
+        // carry no graph signal, so drop them. (The `key_nid.is_empty()` check
+        // below does not catch this collapse-onto-stem case.)
+        if graphify_build::normalize_id(key).is_empty() {
+            if !cur.goto_next_sibling() {
+                break;
+            }
+            continue;
+        }
         let key_nid = if let Some(pk) = parent_key {
             make_id(&[ctx.stem, pk, key])
         } else {

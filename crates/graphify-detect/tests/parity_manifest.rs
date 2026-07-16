@@ -695,3 +695,81 @@ fn incremental_cache_root_is_per_invocation() {
         "root B must not hold alpha.txt"
     );
 }
+
+/// Read a file's mtime the same way `manifest::file_mtime` does, so a stored
+/// value compares bit-equal to the one change detection reads back.
+#[allow(clippy::cast_precision_loss)]
+fn file_mtime_secs(p: &Path) -> f64 {
+    let meta = std::fs::metadata(p).expect("metadata");
+    let d = meta
+        .modified()
+        .expect("modified")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("epoch");
+    d.as_secs() as f64 + f64::from(d.subsec_nanos()) / 1_000_000_000.0
+}
+
+/// Write a legacy bare-float manifest (`{path: mtime}`) at the standard
+/// `graphify-out/manifest.json` location so `detect_incremental` loads it.
+fn write_legacy_float_manifest(root: &Path, src: &Path, mtime: f64) {
+    let canon = std::fs::canonicalize(src).expect("canonicalize");
+    let mut map = serde_json::Map::new();
+    map.insert(
+        canon.to_string_lossy().into_owned(),
+        serde_json::json!(mtime),
+    );
+    let out = root.join("graphify-out");
+    std::fs::create_dir_all(&out).expect("create_dir_all");
+    std::fs::write(
+        out.join("manifest.json"),
+        serde_json::to_string(&serde_json::Value::Object(map)).expect("serialize"),
+    )
+    .expect("write manifest");
+}
+
+#[test]
+#[serial]
+fn detect_incremental_legacy_float_reextracts_on_backwards_mtime() {
+    // #1859: a legacy float manifest must re-extract when mtime moves BACKWARDS
+    // (git checkout of an older commit, tar/rsync restore). Pre-fix used `>`,
+    // which silently kept the stale cache.
+    _reset_stat_index_for_tests();
+    let tmp = tempdir().expect("tempdir");
+    let src = tmp.path().join("mod.py");
+    std::fs::write(&src, "def old_content():\n    return 1\n").expect("write fixture");
+    // Store a mtime FROM THE FUTURE, simulating a checkout of an older revision
+    // that restored the file to an earlier timestamp.
+    let future = file_mtime_secs(&src) + 3600.0;
+    write_legacy_float_manifest(tmp.path(), &src, future);
+
+    let result = detect_incremental(tmp.path(), &Manifest::new()).expect("incremental");
+    let changed: Vec<String> = result.changed_files.values().flatten().cloned().collect();
+    let unchanged: Vec<String> = result.unchanged_files.values().flatten().cloned().collect();
+    assert!(
+        changed.iter().any(|f| f.contains("mod.py")),
+        "backwards-moving mtime on a legacy entry must re-extract: {changed:?}"
+    );
+    assert!(!unchanged.iter().any(|f| f.contains("mod.py")));
+}
+
+#[test]
+#[serial]
+fn detect_incremental_legacy_float_skips_when_mtime_matches() {
+    // Non-regression: legacy float branch still skips when the stored mtime
+    // equals the current mtime.
+    _reset_stat_index_for_tests();
+    let tmp = tempdir().expect("tempdir");
+    let src = tmp.path().join("mod.py");
+    std::fs::write(&src, "def stable():\n    return 1\n").expect("write fixture");
+    let current = file_mtime_secs(&src);
+    write_legacy_float_manifest(tmp.path(), &src, current);
+
+    let result = detect_incremental(tmp.path(), &Manifest::new()).expect("incremental");
+    let changed: Vec<String> = result.changed_files.values().flatten().cloned().collect();
+    let unchanged: Vec<String> = result.unchanged_files.values().flatten().cloned().collect();
+    assert!(
+        !changed.iter().any(|f| f.contains("mod.py")),
+        "exact match must skip: {changed:?}"
+    );
+    assert!(unchanged.iter().any(|f| f.contains("mod.py")));
+}

@@ -27,16 +27,16 @@ impl TriageBackend for LlmTriageBackend {
                  `claude` once for claude-cli auth."
                 .to_string()
         })?;
-        println!();
-        println!("  Triage ({backend})");
-        println!();
+        outln!();
+        outln!("  Triage ({backend})");
+        outln!();
         let response = graphify_llm::call_llm(prompt, &backend, 1024)
             .map_err(|e| format!("LLM call failed: {e}"))?;
         // Indent each line by two spaces to match Python's `print("  ", ...)` prefix.
         for line in response.lines() {
-            println!("  {line}");
+            outln!("  {line}");
         }
-        println!();
+        outln!();
         Ok(())
     }
 }

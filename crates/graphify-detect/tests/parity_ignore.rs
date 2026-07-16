@@ -9,15 +9,15 @@ use tempfile::tempdir;
 #[test]
 fn negation_cannot_rescue_file_under_excluded_dir() {
     let tmp = tempdir().expect("tempdir");
-    let android = tmp.path().join("android").join("app").join("src");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let android = root.join("android").join("app").join("src");
     std::fs::create_dir_all(&android).expect("create_dir_all");
     let victim = android.join("Main.kt");
     std::fs::write(&victim, "fun main() {}").expect("test invariant");
-    std::fs::write(tmp.path().join(".graphifyignore"), "android/\n!src/\n")
-        .expect("test invariant");
-    let patterns = load_graphifyignore(tmp.path());
+    std::fs::write(root.join(".graphifyignore"), "android/\n!src/\n").expect("test invariant");
+    let patterns = load_graphifyignore(&root);
     assert!(
-        is_ignored(&victim, tmp.path(), &patterns),
+        is_ignored(&victim, &root, &patterns),
         "android/app/src/Main.kt must remain ignored even with !src/ because \
          the parent android/ is excluded"
     );
@@ -75,9 +75,10 @@ fn graphifyignore_hermetic_without_vcs() {
 fn graphifyignore_discovered_from_parent_in_vcs() {
     // Inside a VCS repo, parent .graphifyignore applies to subdir scans.
     let tmp = tempdir().expect("tempdir");
-    std::fs::create_dir_all(tmp.path().join(".git")).expect("test invariant");
-    std::fs::write(tmp.path().join(".graphifyignore"), "vendor/\n").expect("test invariant");
-    let sub = tmp.path().join("packages").join("mylib");
+    let base = tmp.path().canonicalize().expect("canonicalize");
+    std::fs::create_dir_all(base.join(".git")).expect("test invariant");
+    std::fs::write(base.join(".graphifyignore"), "vendor/\n").expect("test invariant");
+    let sub = base.join("packages").join("mylib");
     std::fs::create_dir_all(&sub).expect("create_dir_all");
     let vendor_dir = sub.join("vendor");
     std::fs::create_dir_all(&vendor_dir).expect("create_dir_all");
@@ -117,7 +118,11 @@ fn graphifyignore_stops_at_git_boundary() {
 fn graphifyignore_at_git_root_is_included() {
     // A .graphifyignore at the git repo root is included when scanning a subdir.
     let tmp = tempdir().expect("tempdir");
-    let repo = tmp.path().join("repo");
+    let repo = tmp
+        .path()
+        .canonicalize()
+        .expect("canonicalize")
+        .join("repo");
     std::fs::create_dir_all(repo.join(".git")).expect("test invariant");
     std::fs::write(repo.join(".graphifyignore"), "vendor/\n").expect("test invariant");
     let sub = repo.join("packages").join("mylib");
@@ -253,7 +258,8 @@ fn is_ignored_cache_matches_uncached_results() {
     use graphify_detect::{IgnoreEvalCache, is_ignored_with_cache};
 
     let tmp = tempdir().expect("tempdir");
-    let root = tmp.path();
+    let root_buf = tmp.path().canonicalize().expect("canonicalize");
+    let root = root_buf.as_path();
     std::fs::create_dir_all(root.join("build").join("sub")).expect("mkdir build");
     std::fs::create_dir_all(root.join("logs")).expect("mkdir logs");
     std::fs::create_dir_all(root.join("src")).expect("mkdir src");
@@ -403,4 +409,22 @@ fn double_star_matches_across_segments() {
         is_ignored(&nested, root, &patterns),
         "/**/*.py must match a/b/c.py across segments"
     );
+}
+
+#[test]
+fn git_info_exclude_ranks_below_gitignore_negation() {
+    // #1810: info/exclude is loaded at lowest priority, so a later `.gitignore`
+    // `!` negation of the same (non-directory) pattern still wins under
+    // last-match-wins.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let info = root.join(".git").join("info");
+    std::fs::create_dir_all(&info).expect("create_dir_all");
+    std::fs::write(info.join("exclude"), "secret*.txt\n").expect("test invariant");
+    std::fs::write(root.join(".gitignore"), "!secret-ok.txt\n").expect("test invariant");
+    std::fs::write(root.join("secret-bad.txt"), "x").expect("test invariant");
+    std::fs::write(root.join("secret-ok.txt"), "x").expect("test invariant");
+    let patterns = load_graphifyignore(&root);
+    assert!(is_ignored(&root.join("secret-bad.txt"), &root, &patterns));
+    assert!(!is_ignored(&root.join("secret-ok.txt"), &root, &patterns));
 }

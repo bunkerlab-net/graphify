@@ -385,8 +385,9 @@ fn rewrite_edge_endpoints(
 ///
 /// Mirrors `_rewire_unique_stub_nodes` in the Python source.
 pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
-    let mut real_by_label: HashMap<String, Vec<usize>> = HashMap::new(); // exact-case (all langs)
+    let mut real_by_label: HashMap<String, Vec<usize>> = HashMap::new(); // exact-case type-like (all langs)
     let mut real_by_label_ci: HashMap<String, Vec<usize>> = HashMap::new(); // case-INSENSITIVE-lang reals only
+    let mut func_by_label: HashMap<String, Vec<usize>> = HashMap::new(); // top-level function defs (#1781)
     let mut stub_indices: Vec<usize> = Vec::new();
 
     for (idx, node) in nodes.iter().enumerate() {
@@ -406,11 +407,19 @@ pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
                         .or_default()
                         .push(idx);
                 }
+            } else if is_top_level_function_definition(node) {
+                // #1781: a free function is a valid rewire target for a
+                // cross-module by-name reference (e.g. FastAPI `Depends(get_db)`).
+                func_by_label.entry(key).or_default().push(idx);
             }
             continue;
         }
         stub_indices.push(idx);
     }
+
+    // Language families referencing each stub, plus stubs used as a supertype
+    // (never a function), for the function-merge guard (#1781).
+    let (stub_families, supertype_stub_ids) = build_stub_ref_index(nodes, &stub_indices, edges);
 
     let mut remap: HashMap<String, String> = HashMap::new();
     let mut drop_ids: HashSet<String> = HashSet::new();
@@ -424,16 +433,37 @@ pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
             .cloned()
             .unwrap_or_default();
         if candidates.len() != 1 {
-            // No unique exact match — fall back to a case-insensitive match, but only
-            // against case-insensitive-language definitions (so a case-sensitive `PATH`
-            // can never absorb a `Path` reference).
+            // No unique exact type match — fall back to a case-insensitive match,
+            // but only against case-insensitive-language definitions (so a
+            // case-sensitive `PATH` can never absorb a `Path` reference).
             candidates = real_by_label_ci
                 .get(&node_label_key(&stub.label, true))
                 .cloned()
                 .unwrap_or_default();
-            if candidates.len() != 1 {
-                continue;
+        }
+        if candidates.len() != 1 {
+            // #1781: no unique type — try a unique top-level FUNCTION definition,
+            // gated by (a) the stub not being used as a supertype and (b) a
+            // language-family match with the stub's referrers.
+            let fcands = func_by_label
+                .get(&node_label_key(&stub.label, false))
+                .cloned()
+                .unwrap_or_default();
+            if fcands.len() == 1 && !supertype_stub_ids.contains(&stub.id) {
+                let fams = stub_families.get(&stub.id);
+                let cand_fam = crate::lang_configs::lang_family(&nodes[fcands[0]].source_file);
+                // Mirror Python `not fams or cand_fam is None or cand_fam in fams`.
+                let fams_empty = fams.is_none_or(std::collections::HashSet::is_empty);
+                let fam_ok = fams_empty
+                    || cand_fam.is_none()
+                    || cand_fam.is_some_and(|cf| fams.is_some_and(|f| f.contains(cf)));
+                if fam_ok {
+                    candidates = fcands;
+                }
             }
+        }
+        if candidates.len() != 1 {
+            continue;
         }
         let target_id = nodes[candidates[0]].id.clone();
         if !target_id.is_empty() && target_id != stub.id {
@@ -456,6 +486,59 @@ pub fn rewire_unique_stub_nodes(nodes: &mut Vec<Node>, edges: &mut [Edge]) {
     }
 
     nodes.retain(|n| !drop_ids.contains(&n.id));
+}
+
+/// A free/top-level function definition (label `name()`), not a method or type.
+///
+/// Methods carry a leading dot (`.foo()`) or a qualifier (`Class.foo()`);
+/// excluding those keeps a bare-name reference from binding to a receiver-scoped
+/// method, which the receiver-typed resolvers own (#1781).
+fn is_top_level_function_definition(node: &Node) -> bool {
+    let label = node.label.trim();
+    node.file_type == "code"
+        && label.ends_with(')')
+        && !label.starts_with('.')
+        && !label.contains('.')
+}
+
+/// Language families that reference each stub id (for the #1781 family guard).
+type StubFamilies = HashMap<String, HashSet<String>>;
+
+/// For every stub id, collect the language families of the edges that touch it
+/// and the set of stubs used as a supertype target (`inherits`/`implements`/
+/// `extends`) — the latter must never resolve to a same-named function (#1781).
+fn build_stub_ref_index(
+    nodes: &[Node],
+    stub_indices: &[usize],
+    edges: &[Edge],
+) -> (StubFamilies, HashSet<String>) {
+    const SUPERTYPE_RELATIONS: [&str; 3] = ["inherits", "implements", "extends"];
+    let stub_ids: HashSet<String> = stub_indices
+        .iter()
+        .filter_map(|&i| {
+            let id = &nodes[i].id;
+            (!id.is_empty()).then(|| id.clone())
+        })
+        .collect();
+    let mut stub_families: StubFamilies = HashMap::new();
+    let mut supertype_stub_ids: HashSet<String> = HashSet::new();
+    for edge in edges {
+        for (is_target, nid) in [(false, &edge.source), (true, &edge.target)] {
+            if !stub_ids.contains(nid) {
+                continue;
+            }
+            if let Some(fam) = crate::lang_configs::lang_family(&edge.source_file) {
+                stub_families
+                    .entry(nid.clone())
+                    .or_default()
+                    .insert(fam.to_string());
+            }
+            if is_target && SUPERTYPE_RELATIONS.contains(&edge.relation.as_str()) {
+                supertype_stub_ids.insert(nid.clone());
+            }
+        }
+    }
+    (stub_families, supertype_stub_ids)
 }
 
 fn node_label_key(label: &str, fold: bool) -> String {

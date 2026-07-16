@@ -1577,3 +1577,222 @@ fn malformed_hyperedge_alias_warns_on_stderr() {
         "the malformed-alias warning must name the id, alias, and reason: {stderr}"
     );
 }
+
+// ── #1799: markdown doc-twin merge ───────────────────────────────────────────
+
+fn has_node(g: &Graph, id: &str) -> bool {
+    g.nodes().any(|(nid, _)| nid == id)
+}
+
+fn edge_connects(g: &Graph, a: &str, b: &str) -> bool {
+    g.edges()
+        .any(|e| (e.source == a && e.target == b) || (e.source == b && e.target == a))
+}
+
+#[test]
+fn markdown_doc_twin_merges_into_semantic_doc_node() {
+    // #1799: the markdown quick-scan's bare `<slug>` doc node and the semantic
+    // `<slug>_doc` node for the same file collapse to one, edges consolidated.
+    let ext = json!({
+        "nodes": [
+            {"id": "docs_readme_doc", "label": "README", "file_type": "document",
+             "source_file": "docs/readme.md", "source_location": "L1"},
+            {"id": "docs_readme", "label": "readme.md", "file_type": "document",
+             "source_file": "docs/readme.md", "source_location": "L1"},
+            {"id": "code_auth", "label": "auth", "file_type": "code",
+             "source_file": "auth.py", "source_location": "L1"},
+            {"id": "docs_guide", "label": "guide.md", "file_type": "document",
+             "source_file": "docs/guide.md", "source_location": "L1"},
+        ],
+        "edges": [
+            {"source": "docs_readme_doc", "target": "code_auth", "relation": "references",
+             "source_file": "docs/readme.md", "confidence": "INFERRED", "weight": 1.0},
+            {"source": "docs_guide", "target": "docs_readme", "relation": "references",
+             "source_file": "docs/guide.md", "confidence": "EXTRACTED", "weight": 1.0},
+        ],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    assert!(
+        !has_node(&g, "docs_readme"),
+        "bare twin should be merged away"
+    );
+    assert!(
+        has_node(&g, "docs_readme_doc"),
+        "semantic node is canonical"
+    );
+    assert!(
+        edge_connects(&g, "docs_guide", "docs_readme_doc"),
+        "quick-scan edge repointed"
+    );
+    assert!(
+        edge_connects(&g, "docs_readme_doc", "code_auth"),
+        "semantic edge kept"
+    );
+}
+
+#[test]
+fn doc_twin_merge_does_not_touch_code_symbols() {
+    // #1799 guard: a code symbol `foo` and an unrelated `foo_doc` (not
+    // file_type=document) must NOT merge, even sharing a source_file.
+    let ext = json!({
+        "nodes": [
+            {"id": "m_foo", "label": "foo", "file_type": "code",
+             "source_file": "m.py", "source_location": "L1"},
+            {"id": "m_foo_doc", "label": "foo rationale", "file_type": "rationale",
+             "source_file": "m.py", "source_location": "L2"},
+        ],
+        "edges": [],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    assert!(
+        has_node(&g, "m_foo") && has_node(&g, "m_foo_doc"),
+        "code symbols must not merge"
+    );
+}
+
+#[test]
+fn doc_twin_merge_remaps_aliased_hyperedge_members() {
+    // #1799: a hyperedge referencing the bare doc id via the `members` alias must
+    // be canonicalised to `nodes` AND remapped onto the `_doc` twin — an aliased
+    // member list must not keep the removed bare id.
+    let ext = json!({
+        "nodes": [
+            {"id": "docs_readme_doc", "label": "README", "file_type": "document",
+             "source_file": "docs/readme.md", "source_location": "L1"},
+            {"id": "docs_readme", "label": "readme.md", "file_type": "document",
+             "source_file": "docs/readme.md", "source_location": "L1"},
+        ],
+        "edges": [],
+        "hyperedges": [
+            {"id": "grp", "label": "Group", "members": ["docs_readme"],
+             "relation": "participate_in", "confidence": "INFERRED", "source_file": "docs/readme.md"},
+        ],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    let he = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .expect("hyperedge present");
+    let members: Vec<&str> = he
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        members,
+        ["docs_readme_doc"],
+        "aliased member must remap to the _doc twin"
+    );
+}
+
+// ── #1796: never prune a re-extracted source ─────────────────────────────────
+
+fn write_graph(path: &std::path::Path, nodes: &Value) {
+    let graph_json = json!({"nodes": nodes, "links": [], "hyperedges": []});
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("mkdir");
+    }
+    std::fs::write(path, serde_json::to_string(&graph_json).expect("ser")).expect("write graph");
+}
+
+#[test]
+fn reextracted_file_in_prune_sources_is_not_deleted() {
+    // #1796: a file present in BOTH new_chunks (re-extracted) and prune_sources
+    // must be REPLACED, not deleted — "replace" wins over "delete".
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graphify-out").join("graph.json");
+    write_graph(
+        &graph_path,
+        &json!([
+            {"id": "foo_widget_cache", "label": "Widget Cache Design", "file_type": "concept",
+             "source_file": "docs/foo.md", "source_location": "L1"},
+            {"id": "bar_other", "label": "Other", "file_type": "concept",
+             "source_file": "docs/bar.md", "source_location": "L1"},
+        ]),
+    );
+    let new_chunk = json!({
+        "nodes": [{"id": "foo_widget_cache", "label": "Widget Cache Design", "file_type": "concept",
+                   "source_file": "docs/foo.md", "source_location": "L2"}],
+        "edges": [],
+    });
+    let g = build_merge(
+        &[new_chunk],
+        &graph_path,
+        Some(&["docs/foo.md".to_string()]),
+        false,
+        false,
+        Some(tmp.path()),
+    )
+    .expect("build_merge");
+    assert!(
+        node_labels(&g).contains("Widget Cache Design"),
+        "re-extracted node was wrongly pruned"
+    );
+}
+
+#[test]
+fn genuine_deletion_still_prunes() {
+    // #1796 guard: a file in prune_sources but NOT in new_chunks is still removed.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graphify-out").join("graph.json");
+    write_graph(
+        &graph_path,
+        &json!([
+            {"id": "foo_widget_cache", "label": "Widget Cache Design", "file_type": "concept",
+             "source_file": "docs/foo.md", "source_location": "L1"},
+            {"id": "bar_other", "label": "Other", "file_type": "concept",
+             "source_file": "docs/bar.md", "source_location": "L1"},
+        ]),
+    );
+    let new_chunk = json!({
+        "nodes": [{"id": "foo_widget_cache", "label": "Widget Cache Design", "file_type": "concept",
+                   "source_file": "docs/foo.md", "source_location": "L2"}],
+        "edges": [],
+    });
+    let g = build_merge(
+        &[new_chunk],
+        &graph_path,
+        Some(&["docs/bar.md".to_string()]),
+        false,
+        false,
+        Some(tmp.path()),
+    )
+    .expect("build_merge");
+    let labels = node_labels(&g);
+    assert!(
+        !labels.contains("Other"),
+        "genuinely deleted file's node should be pruned"
+    );
+    assert!(labels.contains("Widget Cache Design"));
+}
+
+#[test]
+fn reextracted_source_survives_prune_on_first_build() {
+    // #1796 regression: with NO existing graph.json, a source present in BOTH
+    // new_chunks and prune_sources must keep its freshly-built nodes. This
+    // exercises the unconditional `new_sources` collection (a graph_existed-gated
+    // collection would silently delete the node here).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let graph_path = tmp.path().join("graphify-out").join("graph.json");
+    std::fs::create_dir_all(graph_path.parent().expect("parent")).expect("mkdir");
+    let new_chunk = json!({
+        "nodes": [{"id": "foo_widget_cache", "label": "Widget Cache Design", "file_type": "concept",
+                   "source_file": "docs/foo.md", "source_location": "L1"}],
+        "edges": [],
+    });
+    let g = build_merge(
+        &[new_chunk],
+        &graph_path,
+        Some(&["docs/foo.md".to_string()]),
+        false,
+        false,
+        Some(tmp.path()),
+    )
+    .expect("build_merge");
+    assert!(
+        node_labels(&g).contains("Widget Cache Design"),
+        "re-extracted node was wrongly pruned on a first build"
+    );
+}

@@ -14,7 +14,8 @@ pub mod graph;
 /// Streamable HTTP transport (MCP spec 2025-03-26); requires the `http` feature.
 #[cfg(feature = "http")]
 pub mod http;
-/// Append-only JSONL query logging (`~/.cache/graphify-queries.log`).
+/// Opt-in append-only query logging (off by default; enable via
+/// `GRAPHIFY_QUERY_LOG`/`GRAPHIFY_QUERY_LOG_ENABLE`, #1797).
 pub mod querylog;
 mod serve_fn;
 /// MCP stdio JSON-RPC server transport and message dispatcher.

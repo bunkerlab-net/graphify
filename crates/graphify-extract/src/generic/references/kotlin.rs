@@ -1,9 +1,102 @@
 //! Kotlin type-reference helpers.
 
+use std::collections::HashSet;
+use std::sync::LazyLock;
+
 use tree_sitter::Node;
 
+use super::java::is_java_builtin;
 use super::{RefRole, recurse_named_refs, role_of};
 use crate::generic::names::read_text_owned;
+
+/// Kotlin builtin / stdlib types filtered from the references graph (#5c0a04c).
+///
+/// These are `kotlin.*` scalars, collections, throwables, and text types that
+/// appear constantly in signatures but carry no useful graph meaning (mirrors
+/// [`is_java_builtin`] / Python `_KOTLIN_BUILTIN_TYPES`). Kotlin compiles to the
+/// JVM and freely references `java.*` types too, so callers combine this with
+/// [`is_java_builtin`] rather than duplicating that list. Deliberately EXCLUDES
+/// `Result` (a common user-defined type name).
+static KOTLIN_BUILTIN_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        // kotlin — scalars & core
+        "Any",
+        "Unit",
+        "Nothing",
+        "Boolean",
+        "Byte",
+        "Short",
+        "Int",
+        "Long",
+        "Float",
+        "Double",
+        "Char",
+        "String",
+        "CharSequence",
+        "Number",
+        "Comparable",
+        "Enum",
+        "Annotation",
+        "Pair",
+        "Triple",
+        "Lazy",
+        "Function",
+        // kotlin — throwables
+        "Throwable",
+        "Exception",
+        "RuntimeException",
+        "Error",
+        "IllegalArgumentException",
+        "IllegalStateException",
+        "NullPointerException",
+        "IndexOutOfBoundsException",
+        "ClassCastException",
+        "NumberFormatException",
+        "ArithmeticException",
+        "UnsupportedOperationException",
+        "NoSuchElementException",
+        "ConcurrentModificationException",
+        "StackOverflowError",
+        "OutOfMemoryError",
+        "AssertionError",
+        "InterruptedException",
+        // kotlin.collections
+        "Array",
+        "List",
+        "MutableList",
+        "ArrayList",
+        "Set",
+        "MutableSet",
+        "HashSet",
+        "LinkedHashSet",
+        "Map",
+        "MutableMap",
+        "HashMap",
+        "LinkedHashMap",
+        "Collection",
+        "MutableCollection",
+        "Iterable",
+        "MutableIterable",
+        "Iterator",
+        "MutableIterator",
+        "ListIterator",
+        "MutableListIterator",
+        "Sequence",
+        "Comparator",
+        // kotlin.text
+        "Regex",
+        "MatchResult",
+        "StringBuilder",
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// True when `name` is a Kotlin builtin/stdlib type or a Java builtin (Kotlin
+/// targets the JVM), so it should be suppressed from the references graph.
+fn is_kotlin_ref_noise(name: &str) -> bool {
+    is_java_builtin(name) || KOTLIN_BUILTIN_TYPES.contains(name)
+}
 
 /// Return the head identifier text from a Kotlin `user_type` node.
 #[must_use]
@@ -127,7 +220,7 @@ pub(crate) fn kotlin_collect_type_refs(
         "user_type" => {
             if let Some(head) = kotlin_user_type_head(node) {
                 let text = read_text_owned(head, source);
-                if !text.is_empty() {
+                if !text.is_empty() && !is_kotlin_ref_noise(&text) {
                     out.push((text, role_of(generic)));
                 }
             }
@@ -135,7 +228,7 @@ pub(crate) fn kotlin_collect_type_refs(
         }
         "identifier" | "type_identifier" => {
             let text = read_text_owned(node, source);
-            if !text.is_empty() {
+            if !text.is_empty() && !is_kotlin_ref_noise(&text) {
                 out.push((text, role_of(generic)));
             }
         }

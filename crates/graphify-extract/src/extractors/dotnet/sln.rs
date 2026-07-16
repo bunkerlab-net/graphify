@@ -69,11 +69,21 @@ pub fn extract_sln(path: &Path) -> FileResult {
             .trim_matches(|c| c == '{' || c == '}')
             .to_string();
 
-        let abs_proj = path
-            .parent()
-            .map(|p| p.join(&proj_path))
-            .and_then(|p| p.canonicalize().ok())
-            .map_or_else(|| proj_path.clone(), |p| p.to_string_lossy().into_owned());
+        // A solution folder is a VIRTUAL grouping, not a file: Visual Studio
+        // writes its name as both the display name and the "path"
+        // (proj_name == proj_path, no real file). Resolving it to an absolute
+        // path and keying the node id off that leaked the absolute scan path
+        // (incl. the OS username) into graph.json, because the CLI's
+        // id-relativization only remaps ids of real files in the scan set — a
+        // virtual folder never matches, so its absolute id survived (#1789).
+        let abs_proj = if proj_path == proj_name {
+            proj_name.clone()
+        } else {
+            path.parent()
+                .map(|p| p.join(&proj_path))
+                .and_then(|p| p.canonicalize().ok())
+                .map_or_else(|| proj_path.clone(), |p| p.to_string_lossy().into_owned())
+        };
         let proj_nid = make_id1(&abs_proj);
         if !proj_nid.is_empty() && seen_ids.insert(proj_nid.clone()) {
             nodes.push(Node {

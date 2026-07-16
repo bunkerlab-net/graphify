@@ -289,3 +289,67 @@ fn merge_decl_def_cleanup_is_scoped_to_merged_ids() {
         "unrelated duplicate edges must survive the scoped cleanup"
     );
 }
+
+// ── #1781: cross-module function-reference rewire ────────────────────────────
+
+#[test]
+fn rewire_binds_cross_module_function_reference_to_definition() {
+    // A cross-module reference to a function lands on the real definition, not a
+    // sourceless name-only stub (functions were previously excluded as targets).
+    let mut nodes = vec![
+        n("pkg_dep_get_db", "get_db()", "pkg/dep.py"),
+        n("get_db", "get_db()", ""),
+    ];
+    let mut edges = vec![e("pkg_ep_route", "get_db", "pkg/ep.py", "references")];
+    rewire_unique_stub_nodes(&mut nodes, &mut edges);
+    assert_eq!(edges[0].target, "pkg_dep_get_db");
+    assert!(
+        nodes.iter().all(|n| n.id != "get_db"),
+        "stub must be dropped"
+    );
+}
+
+#[test]
+fn rewire_does_not_bind_function_reference_across_language() {
+    // A Python reference stub must not bind to a unique Go function of the same
+    // name (mirrors the #1749 interop guard).
+    let mut nodes = vec![
+        n("svc_get_db", "get_db()", "svc/main.go"),
+        n("get_db", "get_db()", ""),
+    ];
+    let mut edges = vec![e("app_route", "get_db", "app/route.py", "references")];
+    rewire_unique_stub_nodes(&mut nodes, &mut edges);
+    assert_eq!(
+        edges[0].target, "get_db",
+        "cross-language must stay unresolved"
+    );
+}
+
+#[test]
+fn rewire_does_not_bind_ambiguous_function_reference() {
+    // Two same-named functions leave the reference on the stub.
+    let mut nodes = vec![
+        n("a_get_db", "get_db()", "a.py"),
+        n("b_get_db", "get_db()", "b.py"),
+        n("get_db", "get_db()", ""),
+    ];
+    let mut edges = vec![e("c_route", "get_db", "c.py", "references")];
+    rewire_unique_stub_nodes(&mut nodes, &mut edges);
+    assert_eq!(edges[0].target, "get_db", "ambiguous must not merge");
+}
+
+#[test]
+fn rewire_does_not_bind_supertype_stub_to_function() {
+    // A stub used as a base type must never resolve to a same-named,
+    // same-language function (you don't inherit from a function).
+    let mut nodes = vec![
+        n("factory_book_store", "BookStore()", "factory.py"),
+        n("BookStore", "BookStore", ""),
+    ];
+    let mut edges = vec![e("store_sqlite", "BookStore", "store.py", "inherits")];
+    rewire_unique_stub_nodes(&mut nodes, &mut edges);
+    assert_eq!(
+        edges[0].target, "BookStore",
+        "supertype stub must not bind to a function"
+    );
+}

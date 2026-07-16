@@ -145,3 +145,37 @@ fn suggest_questions_respects_top_n() {
     let qs = suggest_questions(&g, &communities, &labels, 1);
     assert_eq!(qs.len(), 1);
 }
+
+#[test]
+fn suggest_questions_excludes_rationale_nodes_from_isolated_count() {
+    // #1768: rationale nodes are excluded from the weakly-connected count so it
+    // agrees with the report's Knowledge Gaps section (both count the same set).
+    let g = build_graph(json!({
+        "nodes": [
+            {"id": "service", "label": "Service", "file_type": "code", "source_file": "service.py"},
+            {"id": "reason", "label": "Explains service", "file_type": "rationale", "source_file": "service.py"}
+        ],
+        "edges": []
+    }));
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    let labels: IndexMap<i64, String> = IndexMap::new();
+    let qs = suggest_questions(&g, &communities, &labels, 10);
+    let isolated = qs
+        .iter()
+        .find(|q| q.get("type").and_then(serde_json::Value::as_str) == Some("isolated_nodes"))
+        .expect("isolated_nodes question present");
+    let why = isolated
+        .get("why")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let question = isolated
+        .get("question")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(why.starts_with("1 weakly-connected node"), "why: {why:?}");
+    assert!(question.contains("`Service`"), "question: {question:?}");
+    assert!(
+        !question.contains("Explains service"),
+        "rationale node leaked: {question:?}"
+    );
+}

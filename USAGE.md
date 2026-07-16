@@ -110,6 +110,10 @@ scan (unlike graphify-py, the Rust `extract` keeps `<PATH>` required — point i
 introspect a database alone). Raster images in the corpus reach the LLM as vision input; see
 [LLM backends](#llm-backends).
 
+After building, duplicate nodes are collapsed (exact-id and fuzzy-label matches, definer-wins on a collision)
+and a `Deduplicated N node(s) (X exact, Y fuzzy).` summary is printed to **stderr** (graphify-py prints it to
+stdout; this workspace keeps stdout for structured output, so the summary goes to stderr).
+
 Beyond tree-sitter source files, the AST pass also ingests **package manifests**
 (`apm.yml`, `apm.yaml`, `pyproject.toml`, `go.mod`, `pom.xml`) into one canonical
 `type=package` node per package plus `depends_on` edges, so a package referenced
@@ -131,10 +135,21 @@ deep-extraction instruction to the LLM system prompt so the model emits richer `
 edges (shared data contracts, lifecycle coupling, multi-step flows). An unknown `--mode` value exits with
 status 2.
 
+If a semantic chunk returns a valid response that silently omits some of the documents it was handed, those
+files produce no node; graphify diffs the dispatched files against the ones that returned and prints a loud
+`WARNING: N/M dispatched file(s) produced no nodes …` naming the omitted files, so an omission is retried next
+run instead of vanishing (#1890). AST-extracted edges carry an `"_origin": "ast"` marker; semantic/LLM edges
+deliberately do not, so an incremental rebuild replaces a source's AST-tier edges while preserving its
+semantic edges (#1865).
+
 `--code-only` builds a code graph from the local AST alone: it skips the semantic (LLM) pass entirely and
 drops documents, papers, and images from the corpus (printing a one-line skip notice), so a mixed repo indexes
 without an API key. With `--out <dir>`, all outputs **and** the detect/AST/semantic caches live under
 `<dir>/graphify-out/` — a scan of another directory never leaves a stray `graphify-out/` in the corpus (#1747).
+
+Without `--out`, the AST cache is written under the current working directory's `graphify-out/`, not inside the
+scanned source tree — so scanning a read-only or third-party corpus never drops a `graphify-out/cache/` into it
+(#1774). An explicit output directory (`--out`) still wins.
 
 ### `update <path>`
 
@@ -152,6 +167,10 @@ re-extracted: `graphify-py` keeps such dangling hyperedges verbatim, but graphif
 drops them to preserve referential integrity. A hyperedge whose member list is
 malformed (a non-array `members` / `node_ids` alias) is reported on stderr rather
 than being silently emptied.
+
+An incremental rebuild preserves each surviving node's `community_name` and re-applies persisted `--exclude`
+paths (from `graphify-out/.graphify_build.json`), so a plain `update` after an `extract --exclude` does not
+silently re-index the excluded tree (#1808, #1886).
 
 ### `watch <path>`
 
@@ -174,6 +193,11 @@ acquire the rebuild lock appends its changed paths to
 `graphify-out/.pending_changes` instead of dropping them. The process holding
 the lock drains that queue and folds the paths into its own rebuild, so no
 commit's changes are lost under contention.
+
+Eviction is **fail-closed** (#1795): a source that merely left the scan corpus (a new ignore rule, a filter
+change) but still exists on disk keeps its nodes, with a loud line reporting how many were kept and why; only a
+genuine on-disk deletion evicts. Git hooks are also no-ops inside a linked worktree, so a commit in one worktree
+of a shared checkout no longer fires a rebuild against the wrong tree (#1809).
 
 ### `cluster-only <path>`
 
@@ -222,7 +246,10 @@ If no backend is configured (no API key), `label` degrades to `Community N` plac
 
 ## Querying the graph
 
-All query commands default to `graphify-out/graph.json`; pass `--graph <path>` to point elsewhere.
+All query commands default to `graphify-out/graph.json`; pass `--graph <path>` to point elsewhere. Piping a
+command into a reader that closes the pipe early (`graphify query … | head`, `| sed q`) is treated as success:
+graphify exits `0` instead of crashing with a broken-pipe error and a nonzero status, so CI wrappers and agent
+harnesses read a satisfied reader as success (#1807).
 
 ### Edge vocabulary
 
@@ -716,7 +743,10 @@ top of any `.gitignore`:
 
 - **`.graphifyignore`** — gitignore-syntax exclude list. Same last-match-wins and parent-exclusion rules as
   `.gitignore` (a `!` re-include cannot rescue a file whose ancestor directory is excluded). Loaded from the scan
-  root up to the VCS root.
+  root up to the VCS root, **and** from every directory the walk descends into — a nested
+  `.gitignore`/`.graphifyignore` below the scan root is honoured and scoped to its own subtree, so a nested bare
+  `*` ignores only that directory's contents, not the whole repo (#1206, #1873). `.git/info/exclude` is honoured
+  too, at the lowest precedence (a nearer `!` re-include still wins) (#1810).
 - **`.graphifyinclude`** — gitignore-syntax **allowlist** that re-includes files an ignore rule would otherwise
   drop. A file is kept when it (or an ancestor directory) matches an include pattern, even if `.graphifyignore` /
   `.gitignore` excludes it. Anchored directory stems cover their whole subtree — both `/src` and the globbed
@@ -726,6 +756,14 @@ top of any `.gitignore`:
 Files under `graphify-out/memory/` are always detected regardless of either file. (`graphify-py` ships the
 `.graphifyinclude` matcher but never wires it into `detect`, so the allowlist is inert there; the Rust port
 completes the feature.)
+
+Common noise directories are always pruned regardless of ignore files: virtualenvs and framework caches
+including `node_modules`, `.venv`, `.tox`, and `.nox` (issue #1804 — nox venvs, tox's successor, same `.nox/`
+tree shape), build/coverage output, and graphify's own `graphify-out`.
+
+`extract --exclude <path>` (repeatable) drops matching paths and **persists** the exclude list to
+`graphify-out/.graphify_build.json` (`{"excludes": [...]}`), so a later `update`/`watch`/git-hook rebuild
+re-applies it instead of silently re-indexing the excluded paths (#1886).
 
 ### Environment variables
 
@@ -752,6 +790,10 @@ completes the feature.)
 | `GRAPHIFY_API_TIMEOUT`           | LLM HTTP request timeout in seconds (default 600); bounds a runaway connection during semantic extraction.                                          |
 | `GRAPHIFY_MAX_RETRIES`           | Times a rate-limited (HTTP 429) LLM request is retried before its chunk is dropped (default 6); `0` disables retries (#1523).                       |
 | `GRAPHIFY_RETRY_BASE_MS`         | Base backoff delay in milliseconds for the 429 retry path; the wait grows exponentially per attempt (default 500). `0` disables the sleep (#1523).  |
+| `GRAPHIFY_QUERY_LOG_ENABLE`      | Set to `1` to log each `query`/`path`/`explain` question + corpus path at `~/.cache/graphify-queries.log`. Off by default; opt in only (#1797).     |
+| `GRAPHIFY_QUERY_LOG`             | Enable the query log and write it to this path instead of the default. Off unless this or `_ENABLE` is set.                                         |
+| `GRAPHIFY_QUERY_LOG_DISABLE`     | Set to `1` to force the query log off (wins over the enable vars).                                                                                  |
+| `GRAPHIFY_QUERY_LOG_RESPONSES`   | When the log is enabled, also record full subgraph responses (off by default).                                                                      |
 
 ### LLM backends
 

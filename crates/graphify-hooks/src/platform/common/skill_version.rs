@@ -192,9 +192,9 @@ pub fn skill_version_warnings(skill_dst: &Path, current: &str) -> Vec<String> {
 /// Warn on `stderr` for every user-scope skill whose stamp mismatches `current`.
 ///
 /// Callers skip this for silent commands (`install`, `uninstall`, `hook-check`,
-/// `hook-guard`). Divergence from graphify-py: the "SKILL.md is missing"
-/// warning goes to `stderr` here (Python sends that one line to stdout), keeping
-/// stdout reserved for structured output.
+/// `hook-guard`). All warnings — including the "SKILL.md is missing" line — go
+/// to `stderr`, matching graphify-py (which moved that line from stdout to
+/// stderr in 4f6106a) and keeping stdout reserved for structured output.
 pub fn check_skill_versions(current: &str) {
     for dst in user_skill_destinations() {
         for warning in skill_version_warnings(&dst, current) {

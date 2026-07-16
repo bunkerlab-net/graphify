@@ -47,8 +47,8 @@ pub(crate) fn cmd_tree(
     #[allow(clippy::cast_precision_loss)]
     let size_kb = out.metadata().map_or(0.0, |m| m.len() as f64 / 1024.0);
     let abs = out.canonicalize().unwrap_or_else(|_| out.to_path_buf());
-    println!("wrote {} ({size_kb:.1} KB)", out.display());
-    println!(
+    outln!("wrote {} ({size_kb:.1} KB)", out.display());
+    outln!(
         "open with: xdg-open {}  (or file://{})",
         out.display(),
         abs.display()

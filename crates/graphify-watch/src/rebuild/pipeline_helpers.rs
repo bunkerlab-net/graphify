@@ -34,12 +34,14 @@ pub(crate) fn resolve_project_root(watch_path: &Path, watch_root: &Path) -> Path
 }
 
 /// Run detection and log the elapsed time when `GRAPHIFY_PERF_LOG` is set.
+/// `extra_excludes` re-applies persisted `--exclude` patterns (#1886).
 pub(crate) fn detect_phase(
     watch_path: &Path,
     follow_symlinks: bool,
+    extra_excludes: Option<&[String]>,
 ) -> (DetectResult, Vec<PathBuf>) {
     let t_detect = std::time::Instant::now();
-    let (detected, code_files) = detect_code_files(watch_path, follow_symlinks);
+    let (detected, code_files) = detect_code_files(watch_path, follow_symlinks, extra_excludes);
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!(
             "[perf] detect: {:.2}s ({} files)",
@@ -488,10 +490,20 @@ pub(crate) fn write_graph_tmp(
     communities: &IndexMap<i64, Vec<String>>,
     graph_tmp: &Path,
     commit: Option<&str>,
+    community_labels: Option<&IndexMap<i64, String>>,
 ) -> Result<Option<Value>, WatchError> {
     let t_to_json = std::time::Instant::now();
-    let json_written = to_json(graph_with_hyper, communities, graph_tmp, true, commit, None)
-        .map_err(|e| WatchError::Pipeline(e.to_string()))?;
+    // Forward community labels so `update`/hook rebuilds write readable
+    // `community_name` fields, matching the `cluster-only` path (#1808).
+    let json_written = to_json(
+        graph_with_hyper,
+        communities,
+        graph_tmp,
+        true,
+        commit,
+        community_labels,
+    )
+    .map_err(|e| WatchError::Pipeline(e.to_string()))?;
     if std::env::var("GRAPHIFY_PERF_LOG").is_ok() {
         eprintln!("[perf] to_json: {:.2}s", t_to_json.elapsed().as_secs_f64());
     }

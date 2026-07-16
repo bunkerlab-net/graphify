@@ -231,6 +231,7 @@ pub fn call_claude_with_system(
         finish_reason,
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
+        uncovered_files: vec![],
     })
 }
 

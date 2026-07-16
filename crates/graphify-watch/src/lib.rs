@@ -9,6 +9,7 @@
 //! configurable debounce window. The full rebuild pipeline lives in
 //! [`rebuild`].
 
+pub mod build_config;
 pub mod canonical;
 mod constants;
 pub mod error;
@@ -19,6 +20,7 @@ mod resource;
 pub mod test_support;
 mod watch_fn;
 
+pub use build_config::{BUILD_CONFIG_FILENAME, read_build_excludes, write_build_config};
 pub use constants::WATCHED_EXTENSIONS;
 pub use error::WatchError;
 pub use lock::RebuildLock;

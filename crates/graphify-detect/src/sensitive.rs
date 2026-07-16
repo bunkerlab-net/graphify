@@ -251,6 +251,7 @@ pub static SKIP_DIRS: std::sync::LazyLock<std::collections::HashSet<&'static str
             ".mypy_cache",
             ".ruff_cache",
             ".tox",
+            ".nox",
             ".eggs",
             "*.egg-info",
             "graphify-out",

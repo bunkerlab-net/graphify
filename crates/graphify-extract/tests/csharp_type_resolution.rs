@@ -1305,3 +1305,34 @@ fn csharp_alias_using_scoped_to_its_block() -> TestResult {
 fn opt_field<'a>(t: Option<&'a Obj>, key: &str) -> Option<&'a str> {
     t.and_then(|n| n.get(key).and_then(Value::as_str))
 }
+
+#[test]
+fn csharp_method_chained_off_new_expression_resolves() -> TestResult {
+    // #1770: a method invoked directly on a `new X(...)` object-creation
+    // expression (no intermediate variable) must still emit a calls edge to the
+    // constructed type's method — the fluent `new X(...).M()` pattern.
+    let tmp = tempfile::tempdir()?;
+    let f = write_file(
+        tmp.path(),
+        "S.cs",
+        "public class Merger {\n\
+         \x20   public Merger(int x) {}\n\
+         \x20   public int Combine(int a, bool b) { return a; }\n\
+         }\n\
+         public class Svc {\n\
+         \x20   public int Run(int ctx) {\n\
+         \x20       return new Merger(ctx).Combine(ctx, true);\n\
+         \x20   }\n\
+         }\n",
+    )?;
+    let res = extract(&[f], Some(tmp.path()));
+    let chained = res.edges.iter().any(|e| {
+        e.get("relation").and_then(Value::as_str) == Some("calls")
+            && node_by_id(&res, str_field(e, "source"))
+                .is_some_and(|s| str_field(s, "label").to_lowercase().contains("run"))
+            && node_by_id(&res, str_field(e, "target"))
+                .is_some_and(|t| str_field(t, "label") == ".Combine()")
+    });
+    assert!(chained, "chained call off new Merger(...) not captured");
+    Ok(())
+}

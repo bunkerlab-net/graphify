@@ -19,6 +19,7 @@ pub mod score;
 pub use api::deduplicate_entities;
 pub use backend::{DedupLlmBackend, JudgeResult, NoOpBackend};
 pub use error::DedupError;
+pub use merge::defines_id;
 pub use score::{
     entropy, is_variant_pair, norm, numeric_tokens_differ, shingles, short_label_blocked,
 };

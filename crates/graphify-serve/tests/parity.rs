@@ -1091,6 +1091,128 @@ fn test_pick_seeds_diversity_recovers_starved_term() {
     );
 }
 
+#[test]
+fn test_pick_seeds_dedups_homonymous_generic_labels() {
+    // #1766: many nodes sharing one generic label (framework `GET` handlers)
+    // contribute at most ONE seed, not consume every slot. A distinct, relevant
+    // label still gets its own seed.
+    let mut g = Graph::new(GraphKind::DiGraph);
+    let mk = |label: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("source_file".to_string(), json!(src));
+        a
+    };
+    let mut scored: Vec<(f64, String)> = Vec::new();
+    for i in 0..5 {
+        g.add_node(&format!("get{i}"), mk("GET", &format!("routes/r{i}.py")));
+        scored.push((1000.0, format!("get{i}")));
+    }
+    g.add_node("um", mk("users_model", "models/users.py"));
+    scored.push((900.0, "um".to_string()));
+
+    let mut cache = HashMap::new();
+    let seeds = pick_seeds_diverse(&scored, 3, 0.2, &g, &[], &mut cache);
+    let get_seeds: Vec<&String> = seeds.iter().filter(|s| s.starts_with("get")).collect();
+    assert_eq!(
+        get_seeds.len(),
+        1,
+        "expected one GET representative, got {get_seeds:?}"
+    );
+    assert!(
+        seeds.contains(&"um".to_string()),
+        "distinct label starved out: {seeds:?}"
+    );
+}
+
+#[test]
+fn test_pick_seeds_dedup_key_is_case_and_diacritic_normalized() {
+    // #1766: `GET`/`Get`/`get` are the same generic label and dedup together.
+    let mut g = Graph::new(GraphKind::DiGraph);
+    let mk = |label: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("source_file".to_string(), json!(src));
+        a
+    };
+    g.add_node("a", mk("GET", "a.py"));
+    g.add_node("b", mk("Get", "b.py"));
+    g.add_node("c", mk("get", "c.py"));
+    let scored = vec![
+        (1000.0_f64, "a".to_string()),
+        (990.0, "b".to_string()),
+        (980.0, "c".to_string()),
+    ];
+    let mut cache = HashMap::new();
+    let seeds = pick_seeds_diverse(&scored, 3, 0.2, &g, &[], &mut cache);
+    assert_eq!(
+        seeds.len(),
+        1,
+        "case-variant duplicates not collapsed: {seeds:?}"
+    );
+}
+
+#[test]
+fn test_pick_seeds_per_term_guarantee_does_not_reintroduce_generic_dupe() {
+    // #1766: the per-term guarantee loop honors the same per-label cap, so it
+    // can't add a second `GET` after dedup already seeded one.
+    let mut g = Graph::new(GraphKind::DiGraph);
+    let mk = |label: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("source_file".to_string(), json!(src));
+        a
+    };
+    for i in 0..3 {
+        g.add_node(&format!("get{i}"), mk("GET", &format!("r{i}.py")));
+    }
+    g.add_node("um", mk("users_model", "users.py"));
+    g.add_edge("um", "get0", indexmap::IndexMap::new());
+
+    let mut cache = HashMap::new();
+    let terms = ["get", "users"];
+    let scored = score_nodes(&g, &terms, &mut cache);
+    let seeds = pick_seeds_diverse(&scored, 3, 0.2, &g, &terms, &mut cache);
+    let get_seeds: Vec<&String> = seeds.iter().filter(|s| s.starts_with("get")).collect();
+    assert_eq!(
+        get_seeds.len(),
+        1,
+        "per-term guarantee reintroduced a GET dupe: {seeds:?}"
+    );
+}
+
+#[test]
+fn test_score_nodes_scores_identical_labels_equally() {
+    // #1766 followup: the per-label multiplicity penalty must NOT leak into
+    // score_nodes (shared by path/explain endpoint resolution). Two nodes with
+    // the SAME label receive the SAME score — the fix lives in seed selection.
+    let mut g = Graph::new(GraphKind::DiGraph);
+    let mk = |label: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("source_file".to_string(), json!(src));
+        a
+    };
+    g.add_node("g1", mk("GET", "a.py"));
+    g.add_node("g2", mk("GET", "b.py"));
+    g.add_node("g3", mk("GET", "c.py"));
+    let mut cache = HashMap::new();
+    let by_id: std::collections::HashMap<String, f64> = score_nodes(&g, &["get"], &mut cache)
+        .into_iter()
+        .map(|(s, nid)| (nid, s))
+        .collect();
+    assert_eq!(
+        by_id["g1"].total_cmp(&by_id["g2"]),
+        std::cmp::Ordering::Equal,
+        "identical labels scored differently: {by_id:?}"
+    );
+    assert_eq!(
+        by_id["g2"].total_cmp(&by_id["g3"]),
+        std::cmp::Ordering::Equal,
+        "identical labels scored differently: {by_id:?}"
+    );
+}
+
 // ── Truncation hint (issue #897) ──────────────────────────────────────────────
 
 #[test]

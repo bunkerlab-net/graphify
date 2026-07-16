@@ -13,8 +13,8 @@ use rayon::prelude::*;
 
 use crate::extensions::{FileType, GOOGLE_WORKSPACE_EXTENSIONS, classify_file};
 use crate::ignore::{
-    IgnorePatterns, could_contain_included_path, is_ignored, is_included, load_graphifyignore,
-    load_graphifyinclude,
+    IgnorePatterns, could_contain_included_path, is_ignored, is_included, load_dir_own_ignore,
+    load_graphifyignore, load_graphifyinclude,
 };
 use crate::office::{convert_office_file, xlsx_to_markdown};
 use crate::sensitive::{SKIP_FILES, is_noise_dir, is_sensitive};
@@ -552,6 +552,11 @@ pub fn detect_with_cache_root(
             }
         }
     }
+    // Nested .gitignore/.graphifyignore files BELOW the scan root are honored
+    // too (#1206). The parallel walker is handed a frozen pattern list, so we
+    // pre-collect descendant ignore files here (Python loads them live during
+    // its os.walk); anchor-scoping makes the two equivalent.
+    collect_nested_ignore(&root, follow_symlinks, &mut ignore_patterns);
     let include_patterns = load_graphifyinclude(&root);
     let graphifyignore_patterns = ignore_patterns.len();
 
@@ -602,6 +607,65 @@ pub fn detect_with_cache_root(
         walk_errors,
         graphifyignore_patterns,
         scan_root: root.to_string_lossy().into_owned(),
+    }
+}
+
+/// Pre-collect nested `.gitignore`/`.graphifyignore` patterns from directories
+/// BELOW the scan root, appending them to `patterns` (#1206).
+///
+/// The parallel walker is handed a frozen pattern list, so — unlike Python's
+/// os.walk, which loads each descendant's ignore file live before pruning that
+/// directory's children — we traverse descendants top-down here first. Outer
+/// dirs are processed before inner ones, so a parent's patterns precede a
+/// child's; the anchor-scoping in `eval_path` (#1873) then makes each pattern
+/// govern only its own subtree, exactly as live loading would.
+///
+/// Only noise directories and (unless `follow_symlinks`) symlinked directories
+/// are skipped — the same coarse pruning the walk applies before any ignore
+/// evaluation. We deliberately do NOT prune by the ignore set being built here:
+/// the real walker retains some ignored directories via
+/// `could_contain_included_path` (and `.graphifyinclude` is not even loaded
+/// yet), so pruning here could drop a nested ignore file the walk still needs.
+/// Anchor-scoping makes collecting patterns from otherwise-excluded subtrees
+/// harmless — they can only ever govern their own (already-excluded) subtree.
+fn collect_nested_ignore(root: &Path, follow_symlinks: bool, patterns: &mut IgnorePatterns) {
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    // Seed with the canonical root so a descendant symlink pointing back at the
+    // root is treated as already-visited and never re-queues the whole corpus.
+    visited.insert(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
+    let mut queue: std::collections::VecDeque<PathBuf> = std::collections::VecDeque::new();
+    queue.push_back(root.to_path_buf());
+    while let Some(dir) = queue.pop_front() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        // Deterministic order so the appended-pattern sequence is stable.
+        let mut child_dirs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        child_dirs.sort();
+        for child in child_dirs {
+            let name = child.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if is_noise_dir(name, Some(&child)) {
+                continue;
+            }
+            // os.walk (followlinks=False) never descends symlinked dirs; when
+            // following, an out-of-root target is skipped for containment.
+            if child.is_symlink() && (!follow_symlinks || !resolves_under_root(&child, root)) {
+                continue;
+            }
+            // Guard against symlink loops when following is enabled.
+            let key = child.canonicalize().unwrap_or_else(|_| child.clone());
+            if !visited.insert(key) {
+                continue;
+            }
+            // Every surviving descendant (child != root) contributes its own
+            // ignore file, anchored at itself.
+            patterns.extend(load_dir_own_ignore(&child));
+            queue.push_back(child);
+        }
     }
 }
 

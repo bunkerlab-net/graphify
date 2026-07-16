@@ -56,7 +56,7 @@ pub(crate) fn cmd_reflect(args: ReflectArgs) -> Result<()> {
     };
 
     if args.if_stale && graphify_reflect::lessons_fresh(&out_path, &memory_dir, graphs) {
-        println!(
+        outln!(
             "Lessons already up to date -> {} (skipped; omit --if-stale to force)",
             out_path.display()
         );
@@ -71,7 +71,7 @@ pub(crate) fn cmd_reflect(args: ReflectArgs) -> Result<()> {
         args.half_life_days,
         args.min_corroboration,
     )?;
-    println!(
+    outln!(
         "Reflected {} memories ({} useful, {} dead ends, {} corrected) -> {}",
         agg.total,
         agg.counts.useful,

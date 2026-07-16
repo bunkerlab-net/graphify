@@ -37,7 +37,7 @@ use crate::extractors::{
     extract_swift, extract_terraform, extract_verilog, extract_vue, extract_xaml, extract_zig,
     is_mcp_config_path, with_xaml_extract_root,
 };
-use crate::ids::make_id1;
+use crate::ids::{make_id, make_id1};
 use crate::types::{Edge, ExtractOutput, FileResult, Node, RawCall};
 use cache::extract_single_file;
 use csharp::{resolve_cross_file_csharp_imports, resolve_csharp_type_references};
@@ -239,7 +239,7 @@ fn dispatch_ext(ext: &str) -> Option<ExtractFn> {
         "groovy" | "gradle" => Some(extract_groovy),
         "c" | "h" => Some(extract_c),
         "cpp" | "cc" | "cxx" | "hpp" | "cu" | "cuh" | "metal" => Some(extract_cpp),
-        "rb" => Some(extract_ruby),
+        "rb" | "rake" => Some(extract_ruby),
         "cs" => Some(extract_csharp),
         "kt" | "kts" => Some(extract_kotlin),
         "scala" => Some(extract_scala),
@@ -312,6 +312,55 @@ fn relativise_under_root(path: &Path, root: &Path) -> Option<PathBuf> {
         .and_then(|c| c.strip_prefix(root).map(Path::to_path_buf).ok())
 }
 
+/// A portable `source_file` for a target OUTSIDE the scan root (#1899).
+///
+/// Produces a walk-up relative path (`../..`-style), degrading to the bare
+/// basename when the target lives well outside the corpus (more than three
+/// walk-ups, or a different Windows drive) — otherwise its ancestor dirs would
+/// embed foreign, possibly user-named segments into a committed graph.json.
+/// Mirrors Python `_portable_out_of_root_sf`.
+fn portable_out_of_root_sf(p: &Path, root: &Path) -> String {
+    let basename = || {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let Some(rel) = lexical_relpath(p, root) else {
+        return basename(); // different Windows drive: no relative path exists
+    };
+    let updepth = rel.split('/').take_while(|seg| *seg == "..").count();
+    if updepth > 3 { basename() } else { rel }
+}
+
+/// Lexical relative path from `base` to `target` (both absolute), using `..`
+/// walk-ups. Returns `None` when they share no common root (e.g. different
+/// Windows drive prefixes), mirroring Python `os.path.relpath` raising.
+fn lexical_relpath(target: &Path, base: &Path) -> Option<String> {
+    use std::path::Component;
+    let keep = |c: &Component<'_>| !matches!(c, Component::CurDir);
+    let t: Vec<Component> = target.components().filter(keep).collect();
+    let b: Vec<Component> = base.components().filter(keep).collect();
+    // No shared root/prefix → no relative path exists.
+    if t.first() != b.first() {
+        return None;
+    }
+    let mut i = 0;
+    while i < t.len() && i < b.len() && t[i] == b[i] {
+        i += 1;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for _ in i..b.len() {
+        parts.push("..".to_string());
+    }
+    for c in &t[i..] {
+        parts.push(c.as_os_str().to_string_lossy().into_owned());
+    }
+    if parts.is_empty() {
+        return Some(".".to_string());
+    }
+    Some(parts.join("/"))
+}
+
 /// `true` when `id` begins with `prefix` followed by a `_` segment boundary —
 /// i.e. `id == "{prefix}_{suffix}"`. IDs are `make_id` output (lowercase word
 /// chars + `_`), so the byte index is always on a char boundary.
@@ -380,7 +429,19 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         base.canonicalize().unwrap_or(base)
     };
 
-    let effective_root: &Path = cache_root.unwrap_or(&root);
+    // #1774: the cache is an OUTPUT, so with no explicit `cache_root` it lands
+    // under the current working directory — never `root` (the inferred common
+    // parent of the inputs), which would drop `graphify-out/` inside a
+    // read-only/foreign corpus. `root` still anchors content-hash keys, node
+    // ids, symbol resolution, and the XAML boundary; only the cache directory's
+    // location diverges from it.
+    let cache_location: PathBuf = {
+        let base = cache_root.map_or_else(
+            || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            Path::to_path_buf,
+        );
+        base.canonicalize().unwrap_or(base)
+    };
 
     // Phase 1: extract per file (cached or fresh)
     let uncached_work: Vec<(usize, &PathBuf)> = paths
@@ -395,7 +456,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         // Parallel via rayon
         let results: Vec<(usize, FileResult)> = uncached_work
             .par_iter()
-            .map(|(idx, path)| (*idx, extract_single_file(path, effective_root)))
+            .map(|(idx, path)| (*idx, extract_single_file(path, &root, &cache_location)))
             .collect();
         for (idx, result) in results {
             per_file[idx] = result;
@@ -403,7 +464,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     } else {
         // Sequential
         for (idx, path) in &uncached_work {
-            per_file[*idx] = extract_single_file(path, effective_root);
+            per_file[*idx] = extract_single_file(path, &root, &cache_location);
         }
     }
 
@@ -1079,12 +1140,25 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     // output" contract that relativises source_file (#1516, #932). The per-file
     // AST cache keeps its own copy, which the colliding-id pass reads on a cache
     // hit.
+    // A source_file OUTSIDE the scan root (an out-of-root ProjectReference/.sln
+    // project, or bash `source`) can't be made relative to root; leaving it
+    // absolute leaked the scan path — including the OS username — into a
+    // committed graph.json (#1899). Fall back to a portable walk-up (or bare
+    // basename when the target is far outside), and when a node's id was itself
+    // minted from the absolute path, remap it to a portable `ext_`-namespaced id.
+    let mut ext_id_remap: HashMap<String, String> = HashMap::new();
     for n in &mut all_nodes {
         let sf_path = PathBuf::from(&n.source_file);
-        if sf_path.is_absolute()
-            && let Some(rel) = relativise_under_root(&sf_path, &root)
-        {
-            n.source_file = rel.to_string_lossy().into_owned();
+        if sf_path.is_absolute() {
+            if let Some(rel) = relativise_under_root(&sf_path, &root) {
+                n.source_file = rel.to_string_lossy().into_owned();
+            } else {
+                let portable = portable_out_of_root_sf(&sf_path, &root);
+                if n.id == make_id1(&sf_path.to_string_lossy()) {
+                    ext_id_remap.insert(n.id.clone(), make_id(&["ext", &portable]));
+                }
+                n.source_file = portable;
+            }
         }
         n.origin_file = None;
         // Drop the internal `_callable` marker — it rides the AST cache + id-remap
@@ -1100,10 +1174,28 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
     }
     for e in &mut all_edges {
         let sf_path = PathBuf::from(&e.source_file);
-        if sf_path.is_absolute()
-            && let Some(rel) = relativise_under_root(&sf_path, &root)
-        {
-            e.source_file = rel.to_string_lossy().into_owned();
+        if sf_path.is_absolute() {
+            if let Some(rel) = relativise_under_root(&sf_path, &root) {
+                e.source_file = rel.to_string_lossy().into_owned();
+            } else {
+                e.source_file = portable_out_of_root_sf(&sf_path, &root);
+            }
+        }
+    }
+    // Apply the id remap so edge endpoints follow the portable node ids (#1899).
+    if !ext_id_remap.is_empty() {
+        for n in &mut all_nodes {
+            if let Some(new_id) = ext_id_remap.get(&n.id) {
+                n.id = new_id.clone();
+            }
+        }
+        for e in &mut all_edges {
+            if let Some(new_id) = ext_id_remap.get(&e.source) {
+                e.source = new_id.clone();
+            }
+            if let Some(new_id) = ext_id_remap.get(&e.target) {
+                e.target = new_id.clone();
+            }
         }
     }
 
@@ -1130,24 +1222,30 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
                 .collect()
         };
     // Tag AST provenance so the incremental watch rebuild can distinguish
-    // AST-extracted nodes from semantic/LLM nodes. On a full re-extraction the
-    // watcher drops any AST-marked node missing from the fresh output even when
-    // its source file still exists (#1116/#1118).
+    // AST-extracted nodes/edges from semantic/LLM ones. On a full re-extraction
+    // the watcher drops any AST-marked node missing from the fresh output even
+    // when its source file still exists (#1116/#1118); edges carry the same
+    // marker so edge eviction is tier-scoped — re-extracting a source replaces
+    // its AST edges without evicting the semantic edges the AST pass cannot
+    // regenerate (#1865).
     for n in &mut nodes_out {
         n.insert("_origin".to_string(), Value::String("ast".to_string()));
     }
-    let edges_out: Vec<indexmap::IndexMap<String, Value>> = if all_edges.len() >= PARALLEL_THRESHOLD
-    {
-        all_edges
-            .into_par_iter()
-            .filter_map(|e| serde_json::to_value(e).ok().and_then(to_indexmap))
-            .collect()
-    } else {
-        all_edges
-            .into_iter()
-            .filter_map(|e| serde_json::to_value(e).ok().and_then(to_indexmap))
-            .collect()
-    };
+    let mut edges_out: Vec<indexmap::IndexMap<String, Value>> =
+        if all_edges.len() >= PARALLEL_THRESHOLD {
+            all_edges
+                .into_par_iter()
+                .filter_map(|e| serde_json::to_value(e).ok().and_then(to_indexmap))
+                .collect()
+        } else {
+            all_edges
+                .into_iter()
+                .filter_map(|e| serde_json::to_value(e).ok().and_then(to_indexmap))
+                .collect()
+        };
+    for e in &mut edges_out {
+        e.insert("_origin".to_string(), Value::String("ast".to_string()));
+    }
 
     ExtractOutput {
         nodes: nodes_out,

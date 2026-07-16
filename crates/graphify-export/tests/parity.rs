@@ -997,3 +997,281 @@ fn test_to_json_proceeds_on_empty_existing() {
         serde_json::from_str(&std::fs::read_to_string(&out).expect("read")).expect("valid JSON");
     assert_eq!(data["nodes"].as_array().expect("array").len(), 3);
 }
+
+// ── U8: html XSS guard + graphml non-scalar tolerance (#1838, #1831, #1775) ────
+
+#[test]
+fn test_to_html_neighbor_links_have_no_inline_onclick_xss() {
+    // #1838: neighbor links must not drop an unescaped JSON.stringify(nid) into a
+    // quoted inline onclick (broke every link + stored XSS from a hostile id).
+    // The id is carried in an escaped data attribute and dispatched via one
+    // delegated listener.
+    let g = make_graph();
+    let communities = make_communities();
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.html");
+    to_html(&g, &communities, &out, None, None, None).expect("to_html");
+    let html = std::fs::read_to_string(&out).expect("read html");
+    assert!(
+        !html.contains("onclick=\"focusNode("),
+        "vulnerable inline onclick still present"
+    );
+    assert!(
+        !html.contains("JSON.stringify(nid)"),
+        "unescaped stringify still present"
+    );
+    assert!(
+        html.contains("data-nid=\"${esc(nid)}\""),
+        "escaped data-nid attribute missing"
+    );
+    assert!(
+        html.contains("closest('.neighbor-link')"),
+        "delegated listener missing"
+    );
+}
+
+#[test]
+fn test_to_html_handles_null_source_file_and_label() {
+    // #1775: a node with source_file=None or label=None must not crash to_html
+    // (synthetic/aggregate nodes legitimately carry null source_file).
+    let mut g = graphify_build::Graph::new(graphify_build::GraphKind::Graph);
+    let mut n1 = IndexMap::new();
+    n1.insert("label".to_string(), json!("Foo"));
+    n1.insert("source_file".to_string(), Value::Null);
+    n1.insert("community".to_string(), json!(0));
+    g.add_node("n1", n1);
+    let mut n2 = IndexMap::new();
+    n2.insert("label".to_string(), Value::Null);
+    n2.insert("source_file".to_string(), json!("a.py"));
+    n2.insert("community".to_string(), json!(0));
+    g.add_node("n2", n2);
+    let mut n3 = IndexMap::new();
+    n3.insert("label".to_string(), Value::Null);
+    n3.insert("source_file".to_string(), Value::Null);
+    n3.insert("community".to_string(), json!(0));
+    g.add_node("n3", n3);
+
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(
+        0,
+        vec!["n1".to_string(), "n2".to_string(), "n3".to_string()],
+    );
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.html");
+    to_html(&g, &communities, &out, None, None, None)
+        .expect("to_html must not panic on null attrs");
+    let meta = std::fs::metadata(&out).expect("stat html");
+    assert!(
+        out.exists() && meta.len() > 0,
+        "html output must be non-empty"
+    );
+}
+
+#[test]
+fn test_to_graphml_tolerates_dict_and_list_attribute_values()
+-> Result<(), Box<dyn std::error::Error>> {
+    // #1831: a dict/list attribute (per-node metadata, tags, the graph-level
+    // hyperedges list) must not crash the export — each is JSON-serialized into
+    // a string-typed <data> across graph/node/edge scopes.
+    let mut g = make_graph();
+    let communities = make_communities();
+    let (nid, mut nattrs) = {
+        let (id, attrs) = g.nodes().next().ok_or("graph has at least one node")?;
+        (id.clone(), attrs.clone())
+    };
+    nattrs.insert("metadata".to_string(), json!({"kind": "file", "size": 12}));
+    nattrs.insert("tags".to_string(), json!(["x", "y"]));
+    g.add_node(&nid, nattrs);
+    let edge_info = g
+        .edges()
+        .next()
+        .map(|e| (e.source.clone(), e.target.clone(), e.attrs.clone()));
+    if let Some((src, tgt, mut eattrs)) = edge_info {
+        eattrs.insert("ctx".to_string(), json!({"k": "v"}));
+        g.add_edge(&src, &tgt, eattrs);
+    }
+    g.graph_attrs.insert(
+        "hyperedges".to_string(),
+        json!([{"nodes": [nid], "label": "h"}]),
+    );
+
+    let tmp = tempdir()?;
+    let out = tmp.path().join("graph.graphml");
+    to_graphml(&g, &communities, &out)?; // must not raise
+    let content = std::fs::read_to_string(&out)?;
+    // The dict/list are JSON-serialized then XML-escaped (`"` -> `&quot;`).
+    assert!(
+        content.contains("&quot;kind&quot;:&quot;file&quot;"),
+        "node dict attr not serialized"
+    );
+    assert!(
+        content.contains("&quot;size&quot;:12"),
+        "node dict numeric member missing"
+    );
+    assert!(
+        content.contains("[&quot;x&quot;,&quot;y&quot;]"),
+        "node list attr not serialized"
+    );
+    assert!(
+        content.contains("&quot;k&quot;:&quot;v&quot;"),
+        "edge dict attr not serialized"
+    );
+    // Graph-level hyperedges list is emitted as a graph-scoped <data> (#1831).
+    // The key id is opaque (networkx-style d0/d1/…), so assert on the key
+    // declaration's scope/name/type and on the serialized member content.
+    assert!(
+        content.contains("for=\"graph\" attr.name=\"hyperedges\" attr.type=\"string\""),
+        "graph-level hyperedges key declaration missing"
+    );
+    assert!(
+        content.contains("&quot;label&quot;:&quot;h&quot;"),
+        "graph-level hyperedges data missing"
+    );
+    // Atomic write leaves no stale sibling temp (#1831).
+    assert!(
+        !out.with_extension("graphml.tmp").exists(),
+        "stale .tmp left behind"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_to_graphml_preserves_native_scalar_types() -> Result<(), Box<dyn std::error::Error>> {
+    // #1831: GraphML-native scalars (int/float/bool/str) keep their type so a
+    // consumer reads them back native — the key is typed by the value category,
+    // only non-scalars are stringified.
+    let mut g = graphify_build::Graph::new(graphify_build::GraphKind::Graph);
+    let mut a = IndexMap::new();
+    a.insert("count".to_string(), json!(3));
+    a.insert("ratio".to_string(), json!(0.5));
+    a.insert("flag".to_string(), json!(true));
+    a.insert("name".to_string(), json!("x"));
+    g.add_node("a", a);
+    g.add_node("b", IndexMap::new());
+    g.add_edge("a", "b", IndexMap::new());
+
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(0, vec!["a".to_string(), "b".to_string()]);
+    let tmp = tempdir()?;
+    let out = tmp.path().join("g.graphml");
+    to_graphml(&g, &communities, &out)?;
+    let content = std::fs::read_to_string(&out)?;
+    // Key declarations carry the inferred native type.
+    assert!(
+        content.contains("attr.name=\"count\" attr.type=\"long\""),
+        "int key not typed long"
+    );
+    assert!(
+        content.contains("attr.name=\"ratio\" attr.type=\"double\""),
+        "float key not typed double"
+    );
+    assert!(
+        content.contains("attr.name=\"flag\" attr.type=\"boolean\""),
+        "bool key not typed boolean"
+    );
+    assert!(
+        content.contains("attr.name=\"name\" attr.type=\"string\""),
+        "str key not typed string"
+    );
+    // And the values round-trip unchanged.
+    assert!(content.contains(">3</data>"), "int value missing");
+    assert!(content.contains(">0.5</data>"), "float value missing");
+    assert!(content.contains(">true</data>"), "bool value missing");
+    assert!(content.contains(">x</data>"), "str value missing");
+    Ok(())
+}
+
+#[test]
+fn test_to_graphml_splits_mixed_type_attr_into_typed_keys() -> Result<(), Box<dyn std::error::Error>>
+{
+    // #1831: when the same attribute name carries different scalar types across
+    // nodes, each (name, type) gets its own <key> and each node's <data> must
+    // reference the key whose declared type matches its value (networkx-style
+    // split). Distinct-name tests would still pass if the split were broken.
+    let mut g = graphify_build::Graph::new(graphify_build::GraphKind::Graph);
+    let mut ni = IndexMap::new();
+    ni.insert("val".to_string(), json!(3));
+    g.add_node("ni", ni);
+    let mut ns = IndexMap::new();
+    ns.insert("val".to_string(), json!("hi"));
+    g.add_node("ns", ns);
+    let mut nb = IndexMap::new();
+    nb.insert("val".to_string(), json!(true));
+    g.add_node("nb", nb);
+
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(
+        0,
+        vec!["ni".to_string(), "ns".to_string(), "nb".to_string()],
+    );
+    let tmp = tempdir()?;
+    let out = tmp.path().join("g.graphml");
+    to_graphml(&g, &communities, &out)?;
+    let content = std::fs::read_to_string(&out)?;
+
+    // Extract the XML attribute `attr="..."` value from a `<key>` line.
+    let attr = |line: &str, name: &str| -> String {
+        line.split(&format!("{name}=\""))
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("attribute present")
+            .to_string()
+    };
+    // Map declared type -> key id for the `val` attribute's declarations.
+    let mut id_for_type: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for line in content.lines() {
+        if line.contains("<key ") && line.contains("attr.name=\"val\"") {
+            id_for_type.insert(attr(line, "attr.type"), attr(line, "id"));
+        }
+    }
+    assert_eq!(
+        id_for_type.len(),
+        3,
+        "expected 3 typed keys for `val`, got {id_for_type:?}"
+    );
+    // Each node's <data> references the key whose type matches its value.
+    assert!(content.contains(&format!("<data key=\"{}\">3</data>", id_for_type["long"])));
+    assert!(content.contains(&format!(
+        "<data key=\"{}\">hi</data>",
+        id_for_type["string"]
+    )));
+    assert!(content.contains(&format!(
+        "<data key=\"{}\">true</data>",
+        id_for_type["boolean"]
+    )));
+    Ok(())
+}
+
+#[test]
+fn test_to_html_escapes_hostile_node_id_and_label() {
+    // #1838: a node id/label from a document or a scraped `graphify add` URL can
+    // carry a double-quote or a `</script>` sequence. It must be embedded
+    // JSON-safely so it cannot break out of the data island and inject a live
+    // event handler into the locally-opened report (stored XSS).
+    let mut g = graphify_build::Graph::new(graphify_build::GraphKind::Graph);
+    let mut a = IndexMap::new();
+    a.insert("label".to_string(), json!(r#"evil" onmouseover="alert(1)"#));
+    a.insert("community".to_string(), json!(0));
+    let hostile_id = r#"n"</script><img src=x onerror=alert(1)>"#;
+    g.add_node(hostile_id, a);
+    let mut communities: IndexMap<i64, Vec<String>> = IndexMap::new();
+    communities.insert(0, vec![hostile_id.to_string()]);
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("graph.html");
+    to_html(&g, &communities, &out, None, None, None).expect("to_html");
+    let html = std::fs::read_to_string(&out).expect("read html");
+    // The `</script>` in the id is neutralized (`<\/`) in the embedded data.
+    assert!(
+        !html.contains("</script><img"),
+        "raw </script> breakout in embedded data"
+    );
+    // The label's double-quote is JSON-escaped, not a raw attribute breakout.
+    assert!(
+        html.contains(r#"onmouseover=\"alert(1)"#),
+        "hostile label not JSON-escaped"
+    );
+    // The fix carries the id in an escaped data attribute, never an inline onclick.
+    assert!(html.contains("data-nid=\"${esc(nid)}\""));
+    assert!(!html.contains("onclick=\"focusNode("));
+}

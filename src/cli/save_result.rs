@@ -25,6 +25,6 @@ pub(crate) fn cmd_save_result(
         outcome,
         correction,
     )?;
-    println!("Saved to {}", path.display());
+    outln!("Saved to {}", path.display());
     Ok(())
 }

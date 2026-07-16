@@ -144,7 +144,7 @@ fn export_html(
         if out.exists() {
             std::fs::remove_file(&out)?;
         }
-        println!("--no-viz: skipped graph.html");
+        outln!("--no-viz: skipped graph.html");
         return Ok(());
     }
     eprintln!("rendering HTML viz ({} nodes) ...", g.node_count());
@@ -157,7 +157,7 @@ fn export_html(
         Some(node_limit),
     )?;
     if g.node_count() <= node_limit {
-        println!("graph.html written - open in any browser, no server needed");
+        outln!("graph.html written - open in any browser, no server needed");
     }
     Ok(())
 }
@@ -190,12 +190,12 @@ fn export_obsidian(
         labels_opt,
         cohesion_opt,
     )?;
-    println!("Obsidian vault: {count} notes in {}/", out_dir.display());
+    outln!("Obsidian vault: {count} notes in {}/", out_dir.display());
     // Mirror Python: also write graph.canvas next to the vault.
     let canvas_path = out_dir.join("graph.canvas");
     graphify_export::to_canvas(&g, &analysis.communities, &canvas_path, labels_opt, None)?;
-    println!("Canvas: {}", canvas_path.display());
-    println!("Open {}/ as a vault in Obsidian.", out_dir.display());
+    outln!("Canvas: {}", canvas_path.display());
+    outln!("Open {}/ as a vault in Obsidian.", out_dir.display());
     Ok(())
 }
 
@@ -246,8 +246,8 @@ fn export_wiki(
         cohesion_opt,
         gods_opt,
     )?;
-    println!("Wiki: {n} articles written to {}", wiki_dir.display());
-    println!("  {}/index.md  ->  agent entry point", wiki_dir.display());
+    outln!("Wiki: {n} articles written to {}", wiki_dir.display());
+    outln!("  {}/index.md  ->  agent entry point", wiki_dir.display());
     Ok(())
 }
 
@@ -318,7 +318,7 @@ fn export_callflow_html(opts: CallflowDispatchOptions) -> Result<()> {
     let written = graphify_html::callflow::write_callflow_html(&callflow_opts)?;
     // Match Python's stdout message at __main__.py:2229 so callers grepping stdout
     // for "callflow HTML written" find it.
-    println!(
+    outln!(
         "callflow HTML written - open in any browser: {}",
         written.display()
     );
@@ -339,7 +339,7 @@ fn export_neo4j(
     let Some(uri) = push else {
         let out = out_dir.join("cypher.txt");
         graphify_export::to_cypher(&g, &out)?;
-        println!(
+        outln!(
             "cypher.txt written - import with: cypher-shell < {}",
             out.display()
         );
@@ -366,7 +366,7 @@ fn export_neo4j(
         &analysis.communities,
         false,
     )?;
-    println!("pushed {n_nodes} nodes, {n_rels} relationships to {uri}");
+    outln!("pushed {n_nodes} nodes, {n_rels} relationships to {uri}");
     Ok(())
 }
 
@@ -390,9 +390,9 @@ fn export_falkordb(
     let Some(uri) = push else {
         let out = out_dir.join("cypher.txt");
         graphify_export::to_cypher(&g, &out)?;
-        println!(
+        outln!(
             "cypher.txt written - FalkorDB is OpenCypher-compatible; import with: \
-             redis-cli -x GRAPH.QUERY graphify < {}",
+         redis-cli -x GRAPH.QUERY graphify < {}",
             out.display()
         );
         return Ok(());
@@ -416,7 +416,7 @@ fn export_falkordb(
             &analysis.communities,
             "graphify",
         )?;
-        println!("Pushed to FalkorDB: {n_nodes} nodes, {n_edges} edges");
+        outln!("Pushed to FalkorDB: {n_nodes} nodes, {n_edges} edges");
         Ok(())
     }
     #[cfg(not(feature = "falkordb"))]

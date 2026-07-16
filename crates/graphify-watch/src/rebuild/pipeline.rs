@@ -48,7 +48,11 @@ pub(crate) fn rebuild_code_inner(
     let report_root = report_root_label(watch_path);
     let out = watch_path.join(graphify_security::graphify_out());
 
-    let (detected, code_files) = detect_phase(watch_path, follow_symlinks);
+    // Re-apply the excludes the initial extract persisted, so an update/watch/
+    // hook rebuild never silently re-includes deliberately excluded paths (#1886).
+    let persisted_excludes = crate::build_config::read_build_excludes(&out);
+    let extra_excludes = (!persisted_excludes.is_empty()).then_some(persisted_excludes.as_slice());
+    let (detected, code_files) = detect_phase(watch_path, follow_symlinks, extra_excludes);
     let existing_graph_path = out.join("graph.json");
     // Proceed with no code files only when a prior graph exists — the rebuild
     // then reconciles deletions/renames against it (#8d8d2b8). With neither,
@@ -138,6 +142,7 @@ pub(crate) fn rebuild_code_inner(
         &communities,
         &graph_tmp,
         commit.as_deref(),
+        Some(&labels),
     )?
     else {
         return Ok(false);
