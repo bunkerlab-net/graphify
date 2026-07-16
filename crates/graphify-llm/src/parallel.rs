@@ -121,38 +121,39 @@ pub fn extract_corpus_parallel_with_total(
 /// loud warning naming the omitted files. Not persisted to `graph.json`.
 fn reconcile_uncovered(merged: &mut LlmResponse, chunks: &[Vec<Unit>], root: &Path) {
     use std::collections::{BTreeSet, HashSet};
-    // Canonicalize with a fallback to the original path so a missing path never
-    // aborts the diff (mirrors Python's `resolve()`-based comparison).
-    fn canon(p: &Path) -> PathBuf {
-        p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-    }
-    // Files we dispatched (deduped, sorted). `unit_path` collapses a slice onto
-    // its parent file, so a split document counts once.
-    let dispatched: BTreeSet<PathBuf> = chunks
-        .iter()
-        .flatten()
-        .map(|u| unit_path(u).to_path_buf())
-        .collect();
-    // Files that returned: each node's `source_file` resolved against `root`
-    // (absolute as-is, else joined), then canonicalized for comparison.
+    // Resolve a path the same way for both sides of the diff: an absolute path
+    // as-is, else joined onto `root`, then canonicalized (with a fallback to the
+    // resolved path so a missing file never aborts the diff). Without the shared
+    // `root` anchor, a relative dispatched path would canonicalize against the
+    // CWD and never match a `source_file` resolved against `root`, reporting
+    // every dispatched file as uncovered.
+    let resolve_key = |p: &Path| -> PathBuf {
+        let resolved = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            root.join(p)
+        };
+        resolved.canonicalize().unwrap_or(resolved)
+    };
+    // Files that returned: each node's `source_file`, resolved for comparison.
     let covered: HashSet<PathBuf> = merged
         .nodes
         .iter()
         .filter_map(|n| n.get("source_file").and_then(serde_json::Value::as_str))
         .filter(|sf| !sf.is_empty())
-        .map(|sf| {
-            let p = Path::new(sf);
-            let resolved = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                root.join(p)
-            };
-            canon(&resolved)
-        })
+        .map(|sf| resolve_key(Path::new(sf)))
+        .collect();
+    // Files we dispatched (deduped, sorted). `unit_path` collapses a slice onto
+    // its parent file, so a split document counts once. The report keeps the raw
+    // dispatched path; only the comparison key is root-resolved.
+    let dispatched: BTreeSet<PathBuf> = chunks
+        .iter()
+        .flatten()
+        .map(|u| unit_path(u).to_path_buf())
         .collect();
     let uncovered: Vec<String> = dispatched
         .iter()
-        .filter(|p| !covered.contains(&canon(p)))
+        .filter(|p| !covered.contains(&resolve_key(p)))
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     if !uncovered.is_empty() {
