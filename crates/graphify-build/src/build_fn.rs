@@ -297,8 +297,12 @@ fn apply_doc_twin_remap(extraction: &mut Value) {
                 }
                 let final_s = new_s.or(s0);
                 let final_t = new_t.or(t0);
-                // Drop only self-loops the remap itself collapsed; leave any
-                // pre-existing self-loop alone.
+                // Drop a self-loop only when the remap produced it — i.e. an
+                // endpoint was remapped and the edge now points to itself (a
+                // bare->`_doc` link becoming `doc->doc`). Mirrors graphify-py
+                // `build.py:482` exactly (`source == target and (s0 or t0 in
+                // remap)`): a self-loop whose own node was remapped is also
+                // dropped there, so preserving it would diverge from parity.
                 if remapped && final_s.is_some() && final_s == final_t {
                     continue;
                 }

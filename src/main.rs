@@ -26,13 +26,16 @@ fn main() {
     }
 }
 
-/// `true` when any error in the chain is a closed-pipe write (#1807): an
-/// `io::Error` of kind `BrokenPipe`, or a raw EPIPE (32) / EINVAL (22).
+/// `true` when any error in the chain is a closed-pipe write (#1807). `std` maps
+/// EPIPE (POSIX) and `ERROR_NO_DATA` (Windows) to `ErrorKind::BrokenPipe`, so
+/// that kind is the portable signal; Windows additionally reports a closed pipe
+/// as raw EINVAL (22), matched only there so a genuine Unix EINVAL is never
+/// mistaken for success.
 fn is_broken_pipe(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
             io.kind() == std::io::ErrorKind::BrokenPipe
-                || matches!(io.raw_os_error(), Some(32 | 22))
+                || (cfg!(windows) && io.raw_os_error() == Some(22))
         })
     })
 }

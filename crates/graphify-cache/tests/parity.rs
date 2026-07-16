@@ -913,6 +913,28 @@ fn test_save_semantic_cache_rejects_out_of_scope_source_file() {
         .filter_map(|n| n["id"].as_str())
         .collect();
     assert_eq!(ids, HashSet::from(["expected"]));
+    // The stray edge/hyperedge carry `source_file: protected.md` (out of the
+    // allowlist), so they must not leak into intended.md's cache either.
+    let edge_ids: HashSet<&str> = intended_cache["edges"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .filter_map(|e| e["source"].as_str())
+        .collect();
+    assert!(
+        !edge_ids.contains("stray"),
+        "stray edge leaked into intended cache"
+    );
+    let hyper_ids: HashSet<&str> = intended_cache["hyperedges"]
+        .as_array()
+        .expect("hyperedges")
+        .iter()
+        .filter_map(|h| h["id"].as_str())
+        .collect();
+    assert!(
+        !hyper_ids.contains("stray_hyperedge"),
+        "stray hyperedge leaked into intended cache"
+    );
 
     // The protected file keeps its original entry, untouched by the stray node.
     let protected_cache =
