@@ -43,7 +43,7 @@ pub(crate) fn cmd_agents_platform(cmd: &PlatformCmd) -> Result<()> {
         PlatformCmd::Install { .. } => agents_platform_install(&cwd)?,
         PlatformCmd::Uninstall { .. } => agents_platform_uninstall(&cwd)?,
     };
-    println!("{msg}");
+    outln!("{msg}");
     Ok(())
 }
 /// Print the amber-brain banner shown at the top of `graphify install`.
@@ -62,20 +62,20 @@ fn print_banner() {
         return;
     }
     let version = env!("CARGO_PKG_VERSION");
-    println!(
+    outln!(
         "{AMBER}
-  ╭──◉──╮     ╭──◉──╮
- ╱  ◉   ◉ ╲ ╱ ◉   ◉  ╲
-│   ◉─◉─◉  ◉  ◉─◉─◉   │
-│    ◉   ◉ │ ◉   ◉    │
-│   ◉─◉─◉  ◉  ◉─◉─◉   │
- ╲  ◉   ◉ ╱ ╲ ◉   ◉  ╱
-  ╰──◉──╯     ╰──◉──╯
-           ◉
+      ╭──◉──╮     ╭──◉──╮
+     ╱  ◉   ◉ ╲ ╱ ◉   ◉  ╲
+    │   ◉─◉─◉  ◉  ◉─◉─◉   │
+    │    ◉   ◉ │ ◉   ◉    │
+    │   ◉─◉─◉  ◉  ◉─◉─◉   │
+     ╲  ◉   ◉ ╱ ╲ ◉   ◉  ╱
+      ╰──◉──╯     ╰──◉──╯
+       ◉
 
-  █▀▀ █▀█ ▄▀█ █▀█ █ █ █ █▀▀ █▄█
-  █▄█ █▀▄ █▀█ █▀▀ █▀█ █ █▀   █{DARK}  {version}{RESET}
-"
+      █▀▀ █▀█ ▄▀█ █▀█ █ █ █ █▀▀ █▄█
+      █▄█ █▀▄ █▀█ █▀▀ █▀█ █ █▀   █{DARK}  {version}{RESET}
+    "
     );
 }
 
@@ -95,7 +95,7 @@ pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
     if project && platform == "antigravity" {
         let cwd = std::env::current_dir()?;
         let msg = antigravity_install(&cwd, true)?;
-        println!("{msg}");
+        outln!("{msg}");
         return Ok(());
     }
     // Kilo's skill + `/graphify` command are global artefacts (the generic
@@ -106,7 +106,7 @@ pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
         let msg = install_kilo_skill_and_command()?;
         // #1568: keep other platforms' version stamps current after a global install.
         refresh_all_version_stamps(env!("CARGO_PKG_VERSION"));
-        println!("{msg}");
+        outln!("{msg}");
         return Ok(());
     }
     let msg = if project {
@@ -120,7 +120,7 @@ pub(crate) fn cmd_install(platform: &str, project: bool) -> Result<()> {
         refresh_all_version_stamps(env!("CARGO_PKG_VERSION"));
         m
     };
-    println!("{msg}");
+    outln!("{msg}");
     Ok(())
 }
 
@@ -141,7 +141,7 @@ pub(crate) fn cmd_kilo(cmd: &PlatformCmd) -> Result<()> {
         PlatformCmd::Install { .. } => kilo_install(&cwd)?,
         PlatformCmd::Uninstall { .. } => kilo_uninstall(&cwd)?,
     };
-    println!("{msg}");
+    outln!("{msg}");
     Ok(())
 }
 
@@ -151,7 +151,7 @@ pub(crate) fn cmd_kilo(cmd: &PlatformCmd) -> Result<()> {
 pub(crate) fn cmd_uninstall(purge: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let msg = uninstall_all(&cwd, purge)?;
-    println!("{msg}");
+    outln!("{msg}");
     Ok(())
 }
 
@@ -217,6 +217,6 @@ pub(crate) fn cmd_platform(platform: &str, cmd: &PlatformCmd) -> Result<()> {
         (p, PlatformCmd::Install { .. }) => agents_install(&cwd, p)?,
         (p, PlatformCmd::Uninstall { .. }) => agents_uninstall(&cwd, p)?,
     };
-    println!("{msg}");
+    outln!("{msg}");
     Ok(())
 }

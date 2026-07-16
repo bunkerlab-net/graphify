@@ -24,6 +24,12 @@ pub struct LlmResponse {
     pub elapsed_seconds: f64,
     /// Chunk indices (0-based) that failed during parallel extraction.
     pub failed_chunk_indices: Vec<usize>,
+    /// Dispatched files that returned no node and are absent from the graph
+    /// (#1890). A semantic chunk can return a clean, non-empty response that
+    /// omits some documents it was given; those are surfaced here (and warned)
+    /// rather than silently dropped. Not persisted to `graph.json` (Python
+    /// does not persist it either — see [`LlmResponse::to_value`]).
+    pub uncovered_files: Vec<String>,
 }
 
 impl LlmResponse {

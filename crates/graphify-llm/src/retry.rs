@@ -66,6 +66,7 @@ pub(crate) fn empty_llm_response(model: Option<&str>) -> LlmResponse {
         finish_reason: "stop".to_string(),
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
+        uncovered_files: vec![],
     }
 }
 
@@ -87,6 +88,8 @@ pub(crate) fn merge_responses(
     hyperedges.extend_from_slice(&right.hyperedges);
     let mut failed_chunk_indices = left.failed_chunk_indices.clone();
     failed_chunk_indices.extend_from_slice(&right.failed_chunk_indices);
+    let mut uncovered_files = left.uncovered_files.clone();
+    uncovered_files.extend_from_slice(&right.uncovered_files);
     LlmResponse {
         nodes,
         edges,
@@ -98,6 +101,7 @@ pub(crate) fn merge_responses(
         // Merge: sum elapsed, concatenate failed indices from both halves.
         elapsed_seconds: left.elapsed_seconds + right.elapsed_seconds,
         failed_chunk_indices,
+        uncovered_files,
     }
 }
 

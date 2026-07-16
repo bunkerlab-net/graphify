@@ -105,7 +105,7 @@ pub(super) fn resolve_ruby_member_calls(
         .map(|e| e.target.as_str())
         .collect();
     for n in all_nodes {
-        if crate::lang_configs::ends_with_suffix_ci(&n.source_file, &[".rb"])
+        if crate::lang_configs::ends_with_suffix_ci(&n.source_file, &[".rb", ".rake"])
             && contained.contains(n.id.as_str())
             && is_type_like_definition(n)
             && n.label.chars().next().is_some_and(char::is_uppercase)
@@ -124,7 +124,7 @@ pub(super) fn resolve_ruby_member_calls(
             continue;
         }
         if let Some(cnode) = node_by_id.get(e.source.as_str())
-            && crate::lang_configs::ends_with_suffix_ci(&cnode.source_file, &[".rb"])
+            && crate::lang_configs::ends_with_suffix_ci(&cnode.source_file, &[".rb", ".rake"])
         {
             class_def_nids
                 .entry(key(&cnode.label))
@@ -149,7 +149,7 @@ pub(super) fn resolve_ruby_member_calls(
     for rc in all_raw_calls {
         // Scope to Ruby raw_calls (mirrors Python `_ruby_raw_calls`); only member
         // calls are resolved here (the shared pass already handled the rest).
-        if !crate::lang_configs::ends_with_suffix_ci(&rc.source_file, &[".rb"])
+        if !crate::lang_configs::ends_with_suffix_ci(&rc.source_file, &[".rb", ".rake"])
             || !rc.is_member_call
         {
             continue;

@@ -140,6 +140,10 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     // `<out_root>/graphify-out/` — the user-facing "<out>/graphify-out/" contract
     // (an absolute configured output name replaces the base via `join`).
     let out_dir = out_root.join(graphify_out_dir());
+    // The cache is anchored to `out_root` (passed as `cache_root` below), so with
+    // no `--out` it lands under the corpus's `graphify-out/cache/` — matching
+    // graphify-py's CLI (`cache_root=out_root`). #1774's default-to-CWD is the
+    // separate library `extract(cache_root=None)` path.
 
     let detect = run_detect_phase(path, &out_dir, extra_excludes, Some(&out_root));
     stages.mark("detect");
@@ -168,6 +172,10 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
     run_introspect_phase(&mut extraction_json, path, &introspect)?;
 
     std::fs::create_dir_all(&out_dir)?;
+    // Persist --exclude so later update/watch/hook rebuilds re-apply it instead
+    // of silently re-including the excluded paths (#1886). Non-clobbering: a run
+    // without --exclude leaves any prior sidecar intact.
+    graphify_watch::write_build_config(&out_dir, extra_excludes);
     write_scan_breadcrumb(path, &out_dir);
     persist_raw_extraction(&out_dir, &extraction_json)?;
 
@@ -647,7 +655,12 @@ fn run_semantic_phase(
         );
     }
 
-    save_semantic_cache_safe(&sem_result, cache_root);
+    // Scope cache writes to the dispatched (uncached) files: the model may mint
+    // semantic nodes mentioning other corpus files, but must not overwrite a
+    // file's cache entry unless that file was sent for extraction (#1757).
+    // Rust has no per-chunk checkpoint (this single post-hoc save covers the
+    // same contract as Python's `_checkpoint_chunk` scoping, cfc7cf2 included).
+    save_semantic_cache_safe(&sem_result, cache_root, &uncached_files);
     // Prune orphaned semantic cache entries against the FULL live document set
     // (sem_paths), NOT the incremental cache-miss subset, which would delete every
     // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
@@ -668,8 +681,20 @@ fn run_semantic_phase(
 }
 
 /// Best-effort persistence of fresh semantic results into the cache. Warns on
-/// I/O failure instead of bubbling the error up.
-fn save_semantic_cache_safe(sem_result: &graphify_llm::LlmResponse, path: &std::path::Path) {
+/// I/O failure instead of bubbling the error up. `allowed` scopes cache writes
+/// to the dispatched files so an out-of-scope `source_file` can't replace
+/// another file's entry (#1757).
+// Divergence from graphify-py's per-chunk checkpoint (#1890 followup): Python
+// scopes cache writes per chunk file as each chunk lands. Rust performs a single
+// post-hoc `save_semantic_cache` gated by the U4 allowlist (`allowed`), which
+// yields the same observable contract — only files that actually returned nodes
+// are cached, so an omitted document is not stamped and is retried next run.
+// The `uncovered_files` reconciliation (in graphify-llm) surfaces those omissions.
+fn save_semantic_cache_safe(
+    sem_result: &graphify_llm::LlmResponse,
+    path: &std::path::Path,
+    allowed: &[std::path::PathBuf],
+) {
     if (!sem_result.nodes.is_empty() || !sem_result.edges.is_empty())
         && let Err(e) = graphify_cache::save_semantic_cache(
             &sem_result.nodes,
@@ -677,6 +702,7 @@ fn save_semantic_cache_safe(sem_result: &graphify_llm::LlmResponse, path: &std::
             &sem_result.hyperedges,
             path,
             false,
+            Some(allowed),
         )
     {
         eprintln!("      warning: failed to save semantic cache: {e}");
@@ -700,7 +726,7 @@ fn prune_semantic_cache_safe(root: &std::path::Path, sem_paths: &[String]) {
                 fp = root.join(&fp);
             }
             fp.is_file()
-                .then(|| graphify_cache::file_hash(&fp, root).ok())
+                .then(|| graphify_cache::file_hash(&fp, root, None).ok())
                 .flatten()
         })
         .collect();
@@ -1030,7 +1056,7 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
     };
     let ok = graphify_watch::rebuild_code(&watch_path, None, opts)?;
     if ok {
-        println!(
+        outln!(
             "Code graph updated. For doc/paper/image changes run /graphify --update in your AI assistant."
         );
         if std::env::var("GEMINI_API_KEY").is_err()
@@ -1039,7 +1065,7 @@ pub(crate) fn cmd_update(path: &std::path::Path, force: bool, no_cluster: bool) 
             && std::env::var("DEEPSEEK_API_KEY").is_err()
             && std::env::var("GRAPHIFY_NO_TIPS").is_err()
         {
-            println!(
+            outln!(
                 "Tip: set GEMINI_API_KEY or GOOGLE_API_KEY to use Gemini for semantic extraction."
             );
         }

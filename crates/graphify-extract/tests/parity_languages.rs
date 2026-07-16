@@ -1706,6 +1706,46 @@ fn kotlin_extractor_produces_nodes() {
     assert_no_dangling_edges(&result);
 }
 
+/// #5c0a04c: kotlin.* scalar/collection/core types (String, Int, …) used as
+/// parameter/return/field types carry no graph meaning and must not be emitted
+/// as `references` targets (mirrors the Java builtin / Python annotation-noise
+/// handling).
+#[test]
+fn kotlin_builtin_types_not_emitted_as_references() {
+    let result = extract_kotlin(&fixtures().join("sample.kt"));
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let ref_targets: std::collections::HashSet<String> =
+        edge_label_pairs(&result, "references", None)
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect();
+    for builtin in ["String", "Int"] {
+        assert!(
+            !ref_targets.contains(builtin),
+            "builtin type {builtin:?} should not be a references target: {ref_targets:?}"
+        );
+    }
+}
+
+/// Guard against over-filtering: a user-defined class sharing a common
+/// domain name (`Result`) must still resolve to real reference edges — the
+/// builtin list stays narrow enough not to swallow it (#5c0a04c).
+#[test]
+fn kotlin_user_types_still_emit_references() {
+    let result = extract_kotlin(&fixtures().join("sample.kt"));
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let fields = edge_label_pairs(&result, "references", Some("field"));
+    let params = edge_label_pairs(&result, "references", Some("parameter_type"));
+    assert!(
+        fields.contains(&("DataProcessor".to_string(), "Result".to_string())),
+        "user-defined Result field ref missing: {fields:?}"
+    );
+    assert!(
+        params.contains(&("run".to_string(), "DataProcessor".to_string())),
+        "DataProcessor parameter ref missing: {params:?}"
+    );
+}
+
 /// Ports `test_languages.py::test_kotlin_enum_entries_have_case_of_edge`
 /// (#1700 Kotlin half, #1738): Kotlin enum entries become nodes with a
 /// `case_of` edge to the enum (needs the `enum_class_body` body fallback).
@@ -2433,6 +2473,85 @@ fn csproj_project_references() {
     assert!(r.error.is_none(), "{:?}", r.error);
     let imports: Vec<_> = r.edges.iter().filter(|e| e.relation == "imports").collect();
     assert_eq!(imports.len(), 6); // 4 packages + 2 project refs
+}
+
+/// #1899: a `ProjectReference` to a project OUTSIDE the scan root must not leak
+/// the absolute scan path (incl. the OS username) into any node id,
+/// `source_file`, or edge endpoint. The out-of-root target gets a portable
+/// `ext_`-namespaced id and a walk-up relative `source_file`.
+#[test]
+fn csproj_out_of_root_reference_id_is_portable() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let web = tmp.path().join("WebApi");
+    let core = tmp.path().join("Core");
+    std::fs::create_dir_all(&web).expect("mkdir web");
+    std::fs::create_dir_all(&core).expect("mkdir core");
+    std::fs::write(
+        core.join("Core.csproj"),
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>\
+         <TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
+    )
+    .expect("write core");
+    std::fs::write(
+        web.join("WebApi.csproj"),
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>\
+         <ProjectReference Include=\"..\\Core\\Core.csproj\" /></ItemGroup></Project>",
+    )
+    .expect("write web");
+    let result = graphify_extract::extract(&[web.join("WebApi.csproj")], Some(&web));
+    let marker = tmp.path().to_string_lossy().to_lowercase();
+    let has_marker = |s: &str| s.to_lowercase().contains(marker.as_str());
+    for n in &result.nodes {
+        let id = n
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let sf = n
+            .get("source_file")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(!has_marker(id), "absolute path leaked into id: {id}");
+        assert!(
+            !has_marker(sf),
+            "absolute path leaked into source_file: {sf}"
+        );
+    }
+    for e in &result.edges {
+        for key in ["source", "target", "source_file"] {
+            let v = e
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            assert!(!has_marker(v), "absolute path leaked into edge {key}: {v}");
+        }
+    }
+    let core_ref: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| id.to_lowercase().contains("core"))
+        })
+        .collect();
+    assert!(
+        !core_ref.is_empty(),
+        "out-of-root Core reference node missing"
+    );
+    let id = core_ref[0]
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        id.starts_with("ext_"),
+        "out-of-root id must be ext_-namespaced: {id}"
+    );
+    assert_eq!(
+        core_ref[0]
+            .get("source_file")
+            .and_then(serde_json::Value::as_str),
+        Some("../Core/Core.csproj")
+    );
 }
 
 #[test]

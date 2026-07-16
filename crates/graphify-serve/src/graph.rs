@@ -316,6 +316,45 @@ pub fn score_nodes<S: BuildHasher>(
     scored.into_iter().map(|(s, _, nid)| (s, nid)).collect()
 }
 
+/// Pick a path endpoint from a [`score_nodes`] result, preferring full-token
+/// matches.
+///
+/// The full-query tier in `score_nodes` only fires when the query equals or
+/// prefixes a label, so a query that is a token *subset* of the intended label
+/// (query "Reject-everything judge" vs. label "Degenerate Reject-Everything
+/// Judge") gets no bonus, and a node prefix-matching one rare token (label
+/// "Rejection Summary") can out-score it on IDF alone — anchoring the path on an
+/// unrelated, often disconnected node and yielding a false "No path found".
+/// Scan the score-ordered list and take the first candidate whose label contains
+/// EVERY query token; when the head already full-matches (or none does) this is
+/// exactly `scored[0]`. Mirrors Python `_pick_scored_endpoint`.
+#[must_use]
+pub fn pick_scored_endpoint(graph: &Graph, scored: &[(f64, String)], query: &str) -> String {
+    let head = || scored.first().map_or_else(String::new, |(_, n)| n.clone());
+    let qtokens: std::collections::HashSet<String> = search_tokens(query).into_iter().collect();
+    if qtokens.is_empty() {
+        return head();
+    }
+    for (_score, nid) in scored {
+        // Tokenize the RAW `label` (falling back to the id), matching graphify-py
+        // `_pick_scored_endpoint` (`G.nodes[nid].get("label") or nid`).
+        // `search_tokens` already lowercases + strips diacritics, so this yields
+        // the same token set as `norm_label` would — no need to prefer it here.
+        let label = graph
+            .node_map
+            .get(nid)
+            .and_then(|a| a.get("label"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(nid);
+        let ltokens: std::collections::HashSet<String> = search_tokens(label).into_iter().collect();
+        if qtokens.is_subset(&ltokens) {
+            return nid.clone();
+        }
+    }
+    head()
+}
+
 // ── Seed selection ────────────────────────────────────────────────────────────
 
 /// Select BFS seed nodes, stopping when score drops too far below the top.
@@ -354,7 +393,39 @@ pub fn pick_seeds_diverse<S: BuildHasher>(
     terms: &[&str],
     idf_cache: &mut HashMap<String, f64, S>,
 ) -> Vec<String> {
-    let mut seeds = pick_seeds(scored, max_k, gap_ratio);
+    if scored.is_empty() {
+        return Vec::new();
+    }
+    // Dedup seeds by normalized label so a generic, homonymous symbol — dozens of
+    // route handlers all labelled `GET`/`POST`, a `handler` repeated across a
+    // framework — contributes at most one seed instead of consuming every slot
+    // and flooding the BFS with near-identical neighborhoods (#1766). The key
+    // mirrors `get_norm_label` (score_nodes' normalization) so `GET`/`Get`/`get`
+    // collapse; a node absent from the graph falls back to its (unique) id.
+    let seed_label_key = |nid: &str| -> String {
+        graph.node_map.get(nid).map_or_else(
+            || nid.to_string(),
+            |attrs| {
+                let k = get_norm_label(attrs);
+                if k.is_empty() { nid.to_string() } else { k }
+            },
+        )
+    };
+    let top_score = scored[0].0;
+    let mut seeds: Vec<String> = Vec::new();
+    let mut seen_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (score, nid) in scored {
+        if seeds.len() >= max_k {
+            break;
+        }
+        if !seeds.is_empty() && *score < top_score * gap_ratio {
+            break;
+        }
+        if !seen_labels.insert(seed_label_key(nid)) {
+            continue;
+        }
+        seeds.push(nid.clone());
+    }
     // Distinct, sorted query tokens (BTreeSet mirrors Python `sorted({...})`).
     let norm_terms: std::collections::BTreeSet<String> =
         terms.iter().flat_map(|t| search_tokens(t)).collect();
@@ -393,7 +464,9 @@ pub fn pick_seeds_diverse<S: BuildHasher>(
         } else {
             first_nid.clone()
         };
-        if !seeds.contains(&best_nid) {
+        // Honor the same per-label cap so the per-term guarantee can't
+        // reintroduce a second copy of an already-seeded generic label (#1766).
+        if !seeds.contains(&best_nid) && seen_labels.insert(seed_label_key(&best_nid)) {
             seeds.push(best_nid);
         }
     }

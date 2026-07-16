@@ -13,14 +13,14 @@ pub(crate) fn cmd_hook(cmd: &HookCmd) -> Result<()> {
     match cmd {
         HookCmd::Install => {
             let msg = graphify_hooks::install(&cwd)?;
-            println!("{msg}");
+            outln!("{msg}");
         }
         HookCmd::Uninstall => {
             let msg = graphify_hooks::uninstall(&cwd)?;
-            println!("{msg}");
+            outln!("{msg}");
         }
         HookCmd::Status => {
-            println!("{}", graphify_hooks::status(&cwd));
+            outln!("{}", graphify_hooks::status(&cwd));
         }
     }
     Ok(())

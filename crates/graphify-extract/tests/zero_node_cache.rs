@@ -22,7 +22,7 @@ fn normal_file_still_cached() {
 
     // The non-empty result must have been written to the AST cache.
     assert!(
-        graphify_cache::load_cached(&f, &out, "ast").is_some(),
+        graphify_cache::load_cached(&f, &out, "ast", None).is_some(),
         "a non-empty result should be cached"
     );
 }

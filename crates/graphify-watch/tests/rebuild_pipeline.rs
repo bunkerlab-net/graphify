@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use graphify_watch::{LockPolicy, RebuildOptions, rebuild_code};
+use graphify_watch::{LockPolicy, RebuildOptions, rebuild_code, write_build_config};
 
 // GRAPHIFY_OUT isolation: these tests drive `rebuild_code` against per-test
 // tempdirs and read the default `graphify-out/` output dir. They deliberately
@@ -1431,4 +1431,285 @@ fn rebuild_code_does_not_mutate_cwd() {
         before, after,
         "rebuild_code must not change the process CWD"
     );
+}
+
+// ── U7: persisted excludes, community names, edge tiers, fail-closed ──────────
+
+fn default_opts() -> RebuildOptions {
+    RebuildOptions {
+        force: false,
+        no_cluster: false,
+        lock: LockPolicy::None,
+        follow_symlinks: false,
+    }
+}
+
+fn no_cluster_opts() -> RebuildOptions {
+    RebuildOptions {
+        no_cluster: true,
+        ..default_opts()
+    }
+}
+
+fn source_file_set(path: &Path) -> std::collections::HashSet<String> {
+    node_field_set(path, "source_file")
+}
+
+#[test]
+fn rebuild_honors_persisted_excludes() {
+    // #1886: `--exclude` recorded at extract time must survive into rebuilds.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::create_dir_all(corpus.join("src")).expect("mkdir src");
+    fs::create_dir_all(corpus.join("vendor")).expect("mkdir vendor");
+    fs::write(corpus.join("src/app.py"), "def keep(): return 1\n").expect("write");
+    fs::write(corpus.join("main.py"), "def top(): return 2\n").expect("write");
+    fs::write(corpus.join("vendor/lib.py"), "def vendored(): pass\n").expect("write");
+    write_build_config(&corpus.join("graphify-out"), Some(&["vendor".to_string()]));
+
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("rebuild"));
+
+    let sources = source_file_set(&corpus.join("graphify-out").join("graph.json"));
+    assert!(sources.iter().any(|s| s.contains("src/app.py")));
+    assert!(sources.iter().any(|s| s.contains("main.py")));
+    assert!(
+        !sources.iter().any(|s| s.contains("vendor/lib.py")),
+        "rebuild silently re-included an excluded path (#1886): {sources:?}"
+    );
+}
+
+#[test]
+fn rebuild_code_writes_community_name() {
+    // #1808: an update rebuild must forward community_labels so clustered nodes
+    // carry a human-readable community_name, not just a numeric id.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::write(
+        corpus.join("a.py"),
+        "def alpha():\n    return beta()\n\ndef beta():\n    return 1\n",
+    )
+    .expect("write a.py");
+    fs::write(
+        corpus.join("b.py"),
+        "import a\n\ndef gamma():\n    return a.alpha()\n",
+    )
+    .expect("write b.py");
+    assert!(rebuild_code(corpus, None, default_opts()).expect("rebuild"));
+
+    let graph = read_graph(&corpus.join("graphify-out").join("graph.json"));
+    let clustered: Vec<&serde_json::Value> = graph["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter(|n| !n.get("community").is_none_or(serde_json::Value::is_null))
+        .collect();
+    assert!(!clustered.is_empty(), "expected clustered nodes");
+    assert!(
+        clustered.iter().all(|n| n
+            .get("community_name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.is_empty())),
+        "clustered nodes missing community_name (#1808)"
+    );
+}
+
+#[test]
+fn update_rebuilds_with_nested_star_gitignore() {
+    // #1880: a nested `.gitignore` with a bare `*` must not zero the re-scan.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::create_dir_all(corpus.join("src")).expect("mkdir src");
+    fs::write(
+        corpus.join("src/a.py"),
+        "from src.b import Base\nclass App(Base):\n    def run(self): return 1\n",
+    )
+    .expect("write");
+    fs::write(corpus.join("src/b.py"), "class Base: pass\n").expect("write");
+    fs::write(corpus.join("main.py"), "def top(): return 2\n").expect("write");
+    fs::create_dir_all(corpus.join("scratch")).expect("mkdir scratch");
+    fs::write(corpus.join("scratch/.gitignore"), "*\n").expect("write");
+    fs::write(corpus.join("scratch/junk.py"), "x = 1\n").expect("write");
+
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("rebuild"));
+
+    let graph = read_graph(&corpus.join("graphify-out").join("graph.json"));
+    let sources = source_file_set(&corpus.join("graphify-out").join("graph.json"));
+    assert!(
+        !graph["nodes"].as_array().expect("nodes").is_empty(),
+        "update produced 0 nodes (#1880)"
+    );
+    assert!(sources.iter().any(|s| s.contains("src/a.py")));
+    assert!(sources.iter().any(|s| s.contains("main.py")));
+    assert!(!sources.iter().any(|s| s.contains("scratch/junk.py")));
+}
+
+#[test]
+fn update_discovers_newly_added_files_and_dirs() {
+    // #1837: a plain update (full re-scan) discovers brand-new files AND dirs.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::create_dir_all(corpus.join("src")).expect("mkdir src");
+    fs::write(corpus.join("src/a.py"), "def alpha(): return 1\n").expect("write");
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("first rebuild"));
+
+    fs::write(corpus.join("src/new.py"), "def added(): return 2\n").expect("write");
+    fs::create_dir_all(corpus.join("monitor")).expect("mkdir monitor");
+    fs::write(corpus.join("monitor/dash.py"), "def board(): return 3\n").expect("write");
+    fs::create_dir_all(corpus.join("scratch")).expect("mkdir scratch");
+    fs::write(corpus.join("scratch/.gitignore"), "*\n").expect("write");
+    fs::write(corpus.join("scratch/junk.py"), "x = 1\n").expect("write");
+
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("second rebuild"));
+
+    let sources = source_file_set(&corpus.join("graphify-out").join("graph.json"));
+    assert!(
+        sources.iter().any(|s| s.contains("src/new.py")),
+        "new file not discovered (#1837)"
+    );
+    assert!(
+        sources.iter().any(|s| s.contains("monitor/dash.py")),
+        "new dir not discovered (#1837)"
+    );
+    assert!(!sources.iter().any(|s| s.contains("scratch/junk.py")));
+}
+
+#[test]
+fn rebuild_code_preserves_nodes_from_excluded_but_alive_file() {
+    // #1795 fail-closed: a file that leaves the corpus (newly ignored) but still
+    // exists on disk was EXCLUDED, not deleted — its nodes survive an incremental
+    // rebuild. (Python also asserts the stdout "fail-closed: kept" message; we
+    // emit it via println! but assert only the behavioural outcome, since a test
+    // cannot capture its own process stdout.)
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::create_dir_all(corpus.join("notes")).expect("mkdir notes");
+    fs::write(corpus.join("auth.py"), "def login(): pass\n").expect("write");
+    fs::write(
+        corpus.join("notes/brainstorm.md"),
+        "# Brainstorm\n\nA local-only design note.\n",
+    )
+    .expect("write");
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("first rebuild"));
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    assert!(node_field_set(&graph_path, "label").contains("brainstorm.md"));
+
+    // The file becomes ignored (leaves the corpus) but stays on disk.
+    fs::write(corpus.join(".graphifyignore"), "notes/\n").expect("write ignore");
+    assert!(
+        rebuild_code(corpus, Some(&[PathBuf::from("auth.py")]), no_cluster_opts())
+            .expect("second rebuild")
+    );
+    assert!(
+        node_field_set(&graph_path, "label").contains("brainstorm.md"),
+        "nodes from an excluded-but-alive file must be preserved, not evicted (#1795)"
+    );
+}
+
+#[test]
+fn rebuild_code_still_evicts_when_excluded_file_is_also_deleted() {
+    // #1795: the fail-closed preserve must not weaken true-deletion eviction.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::create_dir_all(corpus.join("notes")).expect("mkdir notes");
+    fs::write(corpus.join("auth.py"), "def login(): pass\n").expect("write");
+    fs::write(corpus.join("notes/brainstorm.md"), "# Brainstorm\n").expect("write");
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("first rebuild"));
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+
+    fs::remove_file(corpus.join("notes/brainstorm.md")).expect("unlink");
+    assert!(
+        rebuild_code(corpus, Some(&[PathBuf::from("auth.py")]), no_cluster_opts())
+            .expect("second rebuild")
+    );
+    let labels = node_field_set(&graph_path, "label");
+    assert!(
+        !labels.contains("brainstorm.md"),
+        "deleted file's nodes must still be evicted"
+    );
+    assert!(labels.contains("login()"));
+}
+
+fn preserves_semantic_edges_from_reextracted_doc(changed_paths: Option<&[PathBuf]>) {
+    use serde_json::json;
+    // #1865: an AST-only update must not evict semantic edges whose source is a
+    // re-extracted document; only that source's AST-tier edges are replaced.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::write(
+        corpus.join("auth.md"),
+        "# Token Validation\n\nVerifies bearer tokens.\n",
+    )
+    .expect("write");
+    fs::write(
+        corpus.join("login.md"),
+        "# Session Verification\n\nVerifies login sessions.\n",
+    )
+    .expect("write");
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("first rebuild"));
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let mut data = read_graph(&graph_path);
+    let ids = node_ids(&data);
+    assert!(ids.contains("auth_token_validation") && ids.contains("login_session_verification"));
+
+    let links = data["links"].as_array_mut().expect("links");
+    links.push(json!({
+        "source": "auth_token_validation", "target": "login_session_verification",
+        "relation": "semantically_similar_to", "confidence": "INFERRED", "source_file": "auth.md",
+    }));
+    links.push(json!({
+        "source": "auth_token_validation", "target": "login_session_verification",
+        "relation": "references", "_origin": "ast", "source_file": "auth.md",
+    }));
+    write_graph(&graph_path, &data);
+
+    assert!(rebuild_code(corpus, changed_paths, no_cluster_opts()).expect("second rebuild"));
+
+    let after = read_graph(&graph_path);
+    let relations: std::collections::HashSet<(String, String, String)> = after["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                e.get("target")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                e.get("relation")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        relations.contains(&(
+            "auth_token_validation".to_string(),
+            "login_session_verification".to_string(),
+            "semantically_similar_to".to_string()
+        )),
+        "semantic edge from a re-extracted doc must survive an AST-only update"
+    );
+    assert!(
+        !relations.contains(&(
+            "auth_token_validation".to_string(),
+            "login_session_verification".to_string(),
+            "references".to_string()
+        )),
+        "stale AST-tier edge of a re-extracted source must be evicted"
+    );
+}
+
+#[test]
+fn rebuild_code_preserves_semantic_edges_from_reextracted_doc_full_update() {
+    preserves_semantic_edges_from_reextracted_doc(None);
+}
+
+#[test]
+fn rebuild_code_preserves_semantic_edges_from_reextracted_doc_incremental() {
+    preserves_semantic_edges_from_reextracted_doc(Some(&[PathBuf::from("auth.md")]));
 }

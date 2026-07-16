@@ -123,6 +123,28 @@ fi
     };
 }
 
+/// Shell snippet shared by both hooks that no-ops the rebuild inside a linked
+/// worktree (`git worktree add`). With `core.hooksPath` shared across
+/// worktrees, a commit/checkout in any worktree fires the hook; the canonical
+/// `graphify-out/` belongs to the primary checkout, so rebuilding from a
+/// worktree is wasteful, writes a rogue delta-only graph, and races deploy/CI
+/// `git clean` against the detached rebuild (#1809). A linked worktree has
+/// git-dir != git-common-dir; both are resolved to absolute via `cd … && pwd`
+/// before comparing, since git's `--git-common-dir` can be the relative `.git`
+/// on the primary checkout and a raw compare would false-positive it.
+macro_rules! worktree_guard_block {
+    () => {
+        "_GFY_GITDIR=$(cd \"$(git rev-parse --git-dir 2>/dev/null)\" 2>/dev/null && pwd)
+_GFY_COMMONDIR=$(cd \"$(git rev-parse --git-common-dir 2>/dev/null)\" 2>/dev/null && pwd)
+if [ -n \"$_GFY_COMMONDIR\" ] && [ \"$_GFY_GITDIR\" != \"$_GFY_COMMONDIR\" ]; then exit 0; fi
+"
+    };
+}
+
+/// The linked-worktree guard spliced into both hook scripts (#1809). Exposed so
+/// tests can assert both scripts embed it.
+pub const WORKTREE_GUARD: &str = worktree_guard_block!();
+
 /// The full post-commit hook script. Mirrors Python's `_HOOK_SCRIPT` (with the
 /// `_detached_launch` launcher expanded inline) except for the 1 MiB
 /// rebuild-log cap (see the module-level note).
@@ -145,6 +167,10 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 
 [ \"${GRAPHIFY_SKIP_HOOK:-0}\" = \"1\" ] && exit 0
 
+# Skip the rebuild inside a linked worktree (#1809): git-dir != git-common-dir.
+",
+    worktree_guard_block!(),
+    "
 CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD 2>/dev/null)
 if [ -z \"$CHANGED\" ]; then
     exit 0
@@ -276,6 +302,10 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 
 [ \"${GRAPHIFY_SKIP_HOOK:-0}\" = \"1\" ] && exit 0
 
+# Skip the rebuild inside a linked worktree (#1809): git-dir != git-common-dir.
+",
+    worktree_guard_block!(),
+    "
 ",
     windows_worker_cap_block!(),
     python_detect_block!(),

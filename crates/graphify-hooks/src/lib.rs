@@ -29,7 +29,7 @@ mod uninstall;
 
 pub use constants::{
     CHECKOUT_MARKER, CHECKOUT_MARKER_END, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_MARKER_END,
-    HOOK_SCRIPT, PYTHON_DETECT,
+    HOOK_SCRIPT, PYTHON_DETECT, WORKTREE_GUARD,
 };
 pub use error::HooksError;
 pub use git::{hooks_dir, hooks_dir_with, user_hooks_dir};

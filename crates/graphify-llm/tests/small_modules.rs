@@ -114,6 +114,7 @@ fn llm_response_to_value_emits_expected_keys() {
         finish_reason: "stop".into(),
         elapsed_seconds: 1.5,
         failed_chunk_indices: vec![3],
+        uncovered_files: vec!["omitted.md".into()],
     };
     let v = r.to_value();
     assert_eq!(v["input_tokens"], 10);
@@ -121,6 +122,12 @@ fn llm_response_to_value_emits_expected_keys() {
     assert_eq!(v["finish_reason"], "stop");
     assert_eq!(v["model"], "test-model");
     assert_eq!(v["nodes"].as_array().expect("array field").len(), 1);
+    // #1890: uncovered_files is an in-process reconciliation signal, never
+    // persisted to graph.json (matches graphify-py, which drops it from the dict).
+    assert!(
+        v.get("uncovered_files").is_none(),
+        "uncovered_files must not persist"
+    );
 }
 
 // ── read_files chunk variants ──────────────────────────────────────────────

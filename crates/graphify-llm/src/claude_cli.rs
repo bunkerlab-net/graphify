@@ -528,6 +528,7 @@ fn cli_inner_with_dirs(
         finish_reason,
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
+        uncovered_files: vec![],
     })
 }
 

@@ -21,6 +21,6 @@ pub(crate) fn cmd_affected(
         relations.iter().map(String::as_str).collect()
     };
     let report = graphify_affected::format_affected(&graph, query, &relations_refs, depth);
-    println!("{report}");
+    outln!("{report}");
     Ok(())
 }

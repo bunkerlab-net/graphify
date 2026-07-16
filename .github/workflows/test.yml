@@ -35,11 +35,6 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
-          components: llvm-tools
-
-      - name: Capture rustc fingerprint
-        id: rustc
-        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Mise
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
@@ -50,15 +45,6 @@ jobs:
           cache: true
           experimental: true
           install: true
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-test-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-test-${{ steps.rustc.outputs.fingerprint }}-
 
       - name: Install Binstall
         env:
@@ -79,23 +65,9 @@ jobs:
       - name: Install Nextest
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: cargo binstall -y --force cargo-nextest cargo-llvm-cov
+        run: cargo binstall -y --force cargo-nextest
 
-      - run: cargo llvm-cov --workspace nextest
-
-      - if: matrix.runs-on != 'ubuntu-24.04'
-        run: cargo llvm-cov --all-features --workspace nextest
-      - if: matrix.runs-on == 'ubuntu-24.04'
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info nextest
-
-      # TODO: re-enable once Codecov is set up for this repo.
-      # - name: Upload coverage reports to Codecov
-      #   uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
-      #   if: matrix.runs-on == 'ubuntu-24.04'
-      #   with:
-      #     fail_ci_if_error: true
-      #     files: lcov.info
-      #     use_oidc: true
+      - run: cargo nextest run --all-targets --all-features --workspace
 
   # Live integration tests for the optional `postgres` / `falkordb` features,
   # which the feature-flag unit tests can only verify by compilation. Runs the
@@ -157,19 +129,6 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master # zizmor: ignore[ref-version-mismatch]
         with:
           toolchain: stable
-
-      - name: Capture rustc fingerprint
-        id: rustc
-        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-integration-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-integration-${{ steps.rustc.outputs.fingerprint }}-
 
       - name: Install Binstall
         env:

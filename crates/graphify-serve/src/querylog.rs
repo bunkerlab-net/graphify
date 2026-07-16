@@ -1,15 +1,19 @@
-//! Query logging — append-only JSONL, fail-silent (#1128).
+//! Query logging — opt-in, append-only JSONL, fail-silent (#1128, #1797).
 //!
-//! Ports `graphify-py/graphify/querylog.py`. Each query/path/explain (and MCP
-//! tool call) appends one JSON record to `~/.cache/graphify-queries.log` (or the
-//! `GRAPHIFY_QUERY_LOG` override). Logging never raises: any failure — disabled,
-//! unwritable path, serialization error — is swallowed so it can't break a query.
+//! Ports `graphify-py/graphify/querylog.py`. Logging is OFF by default (#1797):
+//! a default-on plaintext record of proprietary queries would contradict
+//! graphify's on-device, no-telemetry posture. When enabled, each query/path/
+//! explain (and MCP tool call) appends one JSON record to the log file. Logging
+//! never raises: any failure — disabled, unwritable path, serialization error —
+//! is swallowed so it can't break a query.
 //!
-//! Env knobs:
-//! - `GRAPHIFY_QUERY_LOG` — override the log path (`~` expanded).
-//! - `GRAPHIFY_QUERY_LOG_DISABLE` — `1`/`true`/`yes` disables logging.
+//! Env knobs (logging is off unless one of the enable vars is set):
+//! - `GRAPHIFY_QUERY_LOG` — enable and write to this path (`~` expanded).
+//! - `GRAPHIFY_QUERY_LOG_ENABLE` — `1`/`true`/`yes` enables at the default path
+//!   `~/.cache/graphify-queries.log`.
+//! - `GRAPHIFY_QUERY_LOG_DISABLE` — `1`/`true`/`yes` forces logging off (wins).
 //! - `GRAPHIFY_QUERY_LOG_RESPONSES` — `1`/`true`/`yes` also records the full
-//!   result text under `response`.
+//!   result text under `response` (when logging is enabled).
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -70,8 +74,12 @@ fn expanduser(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Resolve the log path, honouring the disable/override env vars. `None` when
-/// logging is disabled or no home directory is available.
+/// Resolve the log path (opt-in, #1797). Logging is OFF by default: it is
+/// enabled only by `GRAPHIFY_QUERY_LOG=<path>` (that path) or
+/// `GRAPHIFY_QUERY_LOG_ENABLE` truthy (the default `~/.cache/graphify-queries.log`).
+/// `GRAPHIFY_QUERY_LOG_DISABLE` truthy forces it off (wins, back-compat). A
+/// default-on plaintext record of proprietary queries would contradict
+/// graphify's on-device, no-telemetry posture. Returns `None` when off.
 fn log_path() -> Option<PathBuf> {
     if std::env::var("GRAPHIFY_QUERY_LOG_DISABLE").is_ok_and(|v| truthy(&v)) {
         return None;
@@ -81,7 +89,10 @@ fn log_path() -> Option<PathBuf> {
     if !override_path.is_empty() {
         return Some(expanduser(override_path));
     }
-    home_dir().map(|h| h.join(".cache").join("graphify-queries.log"))
+    if std::env::var("GRAPHIFY_QUERY_LOG_ENABLE").is_ok_and(|v| truthy(&v)) {
+        return home_dir().map(|h| h.join(".cache").join("graphify-queries.log"));
+    }
+    None
 }
 
 /// Whether to record the full response text (`GRAPHIFY_QUERY_LOG_RESPONSES`).

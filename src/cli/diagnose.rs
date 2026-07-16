@@ -52,9 +52,9 @@ fn cmd_diagnose_multigraph(
     )?;
     if as_json {
         let envelope = graphify_diagnostics::format_diagnostic_json(&summary);
-        println!("{}", serde_json::to_string_pretty(&envelope)?);
+        outln!("{}", serde_json::to_string_pretty(&envelope)?);
     } else {
-        println!(
+        outln!(
             "{}",
             graphify_diagnostics::format_diagnostic_report(&summary)
         );

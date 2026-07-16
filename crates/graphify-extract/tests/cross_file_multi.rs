@@ -591,6 +591,108 @@ fn python_qualified_class_method_call_resolves_extracted() {
 }
 
 #[test]
+fn python_module_qualified_call_resolves_extracted() {
+    // `module.func()` where `module` is imported resolves to the callable that
+    // module contains, with an EXTRACTED `calls` edge (#1883). A lowercase
+    // module receiver was previously dropped alongside instance calls.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mathlib = tmp.path().join("mathlib.py");
+    let caller = tmp.path().join("caller.py");
+    fs::write(&mathlib, "def compute(x):\n    return x * 2\n").expect("write mathlib");
+    fs::write(
+        &caller,
+        "import mathlib\n\ndef use_qualified(n):\n    return mathlib.compute(n)\n",
+    )
+    .expect("write caller");
+    let result = extract(&[caller, mathlib], Some(tmp.path()));
+    let idx = index_nodes(&result.nodes);
+    let call_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && endpoint_field(&idx, e, "source", "label").contains("use_qualified")
+                && endpoint_field(&idx, e, "target", "label").contains("compute")
+                && endpoint_field(&idx, e, "target", "source_file").contains("mathlib.py")
+        })
+        .collect();
+    assert_eq!(
+        call_edges.len(),
+        1,
+        "expected one use_qualified->compute edge, got {call_edges:?}"
+    );
+    assert_eq!(
+        call_edges[0].get("confidence").and_then(|v| v.as_str()),
+        Some("EXTRACTED")
+    );
+}
+
+#[test]
+fn python_module_qualified_call_requires_the_import() {
+    // A `module.func()` call resolves only against a module the caller's own file
+    // imports — a local instance `o.compute()` (o is a parameter) must NOT link
+    // to a same-named function in another module (#1883 false-edge guard).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mathlib = tmp.path().join("mathlib.py");
+    let caller = tmp.path().join("caller.py");
+    fs::write(&mathlib, "def compute(x):\n    return x * 2\n").expect("write mathlib");
+    // no `import mathlib`; `o` is just a parameter that happens to expose compute()
+    fs::write(&caller, "def via_obj(o):\n    return o.compute(3)\n").expect("write caller");
+    let result = extract(&[caller, mathlib], Some(tmp.path()));
+    let idx = index_nodes(&result.nodes);
+    let bad: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+                && endpoint_field(&idx, e, "source", "label").contains("via_obj")
+                && endpoint_field(&idx, e, "target", "label").contains("compute")
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "non-imported receiver must not link cross-file: {bad:?}"
+    );
+}
+
+#[test]
+fn rake_files_extract_and_resolve_like_rb() {
+    // #1784: `.rake` files are plain Ruby — they route to the Ruby extractor and
+    // participate in Ruby cross-file member resolution exactly like `.rb`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let rake = tmp.path().join("ops.rake");
+    let rb = tmp.path().join("widget.rb");
+    fs::write(
+        &rake,
+        "class RakeHelper\n  def self.run\n    Widget.tally\n  end\nend\n",
+    )
+    .expect("write rake");
+    fs::write(&rb, "class Widget\n  def self.tally\n    42\n  end\nend\n").expect("write rb");
+    let result = extract(&[rake, rb], Some(tmp.path()));
+    let labels: std::collections::HashSet<&str> = result
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("label").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        labels.contains("RakeHelper"),
+        "RakeHelper node missing: {labels:?}"
+    );
+    assert!(labels.contains(".run()"), ".run() node missing: {labels:?}");
+    let idx = index_nodes(&result.nodes);
+    let resolved = result.edges.iter().any(|e| {
+        e.get("relation").and_then(|v| v.as_str()) == Some("calls")
+            && endpoint_field(&idx, e, "source", "label").contains(".run()")
+            && endpoint_field(&idx, e, "target", "label").contains(".tally()")
+    });
+    assert!(
+        resolved,
+        "cross-file .rake -> .rb member call did not resolve: {:?}",
+        result.edges
+    );
+}
+
+#[test]
 fn python_qualified_call_resolves_when_method_name_collides_with_caller() {
     // A viewset action `approve()` delegates to a SERVICE action of the SAME
     // name via `TaskActions.approve()`. The bare-name in-file lookup would match

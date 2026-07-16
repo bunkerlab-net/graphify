@@ -160,6 +160,12 @@ pub fn build_from_json(
     // ghost / a re-bill. AST-origin nodes are already canonical and untouched.
     crate::migrate::apply_semantic_rekey(&mut extraction, root_str.as_deref());
 
+    // Merge a markdown quick-scan's bare doc node into its semantic `_doc` twin
+    // for the same file, so a document is one node regardless of which pipeline
+    // touched it last (#1799). Runs in the same extraction-mutation phase as the
+    // semantic re-key, before graph construction.
+    apply_doc_twin_remap(&mut extraction);
+
     let mut graph = Graph::new(kind);
     let t = std::time::Instant::now();
     add_nodes(&mut graph, &mut extraction, root_str.as_deref());
@@ -210,6 +216,119 @@ pub fn build_from_json(
     }
 
     Ok(graph)
+}
+
+/// Map a markdown quick-scan's bare doc node `<slug>` to the semantic
+/// `<slug>_doc` node for the SAME file (#1799).
+///
+/// The markdown quick-scan mints a bare `<slug>` file node while the semantic
+/// pass mints `<slug>_doc`; a `graphify update` after a semantic build leaves
+/// both, splitting the file's edges across two disconnected nodes. Both twins
+/// must be `file_type == "document"` with an identical non-empty `source_file`,
+/// so an unrelated code symbol `foo` and `foo_doc` never merge.
+fn doc_twin_remap(nodes: &[Value]) -> IndexMap<String, String> {
+    let mut by_id: IndexMap<&str, &Value> = IndexMap::new();
+    for n in nodes {
+        if let Some(id) = n.get("id").and_then(Value::as_str)
+            && !id.is_empty()
+        {
+            by_id.insert(id, n);
+        }
+    }
+    let mut remap: IndexMap<String, String> = IndexMap::new();
+    for (nid, node) in &by_id {
+        let Some(bare_id) = nid.strip_suffix("_doc") else {
+            continue;
+        };
+        let Some(&bare) = by_id.get(bare_id) else {
+            continue;
+        };
+        let sf = node
+            .get("source_file")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if sf.is_empty() || bare.get("source_file").and_then(Value::as_str) != Some(sf) {
+            continue;
+        }
+        if node.get("file_type").and_then(Value::as_str) != Some("document")
+            || bare.get("file_type").and_then(Value::as_str) != Some("document")
+        {
+            continue;
+        }
+        remap.insert(bare_id.to_string(), (*nid).to_string());
+    }
+    remap
+}
+
+/// Drop bare doc-twin nodes, repoint their edges/hyperedges onto the semantic
+/// `_doc` node, and drop only the self-loops the remap itself collapsed (#1799).
+fn apply_doc_twin_remap(extraction: &mut Value) {
+    let remap = match extraction.get("nodes").and_then(Value::as_array) {
+        Some(nodes) => doc_twin_remap(nodes),
+        None => return,
+    };
+    if remap.is_empty() {
+        return;
+    }
+    let Some(obj) = extraction.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::Array(nodes)) = obj.get_mut("nodes") {
+        nodes.retain(|n| {
+            n.get("id")
+                .and_then(Value::as_str)
+                .is_none_or(|id| !remap.contains_key(id))
+        });
+    }
+    if let Some(Value::Array(edges)) = obj.get_mut("edges") {
+        let mut kept: Vec<Value> = Vec::with_capacity(edges.len());
+        for mut edge in edges.drain(..) {
+            if let Some(map) = edge.as_object_mut() {
+                let s0 = map.get("source").and_then(Value::as_str).map(str::to_owned);
+                let t0 = map.get("target").and_then(Value::as_str).map(str::to_owned);
+                let new_s = s0.as_deref().and_then(|s| remap.get(s)).cloned();
+                let new_t = t0.as_deref().and_then(|t| remap.get(t)).cloned();
+                let remapped = new_s.is_some() || new_t.is_some();
+                if let Some(ns) = &new_s {
+                    map.insert("source".to_string(), Value::String(ns.clone()));
+                }
+                if let Some(nt) = &new_t {
+                    map.insert("target".to_string(), Value::String(nt.clone()));
+                }
+                let final_s = new_s.or(s0);
+                let final_t = new_t.or(t0);
+                // Drop a self-loop only when the remap produced it — i.e. an
+                // endpoint was remapped and the edge now points to itself (a
+                // bare->`_doc` link becoming `doc->doc`). Mirrors graphify-py
+                // `build.py:482` exactly (`source == target and (s0 or t0 in
+                // remap)`): a self-loop whose own node was remapped is also
+                // dropped there, so preserving it would diverge from parity.
+                if remapped && final_s.is_some() && final_s == final_t {
+                    continue;
+                }
+            }
+            kept.push(edge);
+        }
+        *edges = kept;
+    }
+    if let Some(Value::Array(hyperedges)) = obj.get_mut("hyperedges") {
+        for he in hyperedges.iter_mut() {
+            let Some(map) = he.as_object_mut() else {
+                continue;
+            };
+            // Canonicalize `members`/`node_ids` aliases onto `nodes` FIRST (as
+            // graphify-py does before its doc-remap), so an aliased member list
+            // is remapped too and never keeps a removed bare id.
+            normalize_hyperedge_members(map);
+            if let Some(members) = map.get_mut("nodes").and_then(Value::as_array_mut) {
+                for m in members.iter_mut() {
+                    if let Some(new) = m.as_str().and_then(|id| remap.get(id)) {
+                        *m = Value::String(new.clone());
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Member-list alias keys a hyperedge may use in place of the canonical `nodes`.
@@ -383,7 +502,6 @@ pub fn build_merge_with_graph_cap(
     let mut all_chunks: Vec<Value> = Vec::with_capacity(new_chunks.len() + 1);
     let mut existing_node_count = 0usize;
     let mut existing_hyperedges: Vec<Value> = Vec::new();
-    let mut new_sources: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Effective root for relativizing absolute source_file / prune paths back to
     // the stored relative keys. Caller root wins; else fall back to the graph's
@@ -393,6 +511,11 @@ pub fn build_merge_with_graph_cap(
     let eff_root: Option<String> = root
         .map(canonicalize_root_to_string)
         .or_else(|| infer_merge_root(graph_path).map(|p| p.to_string_lossy().into_owned()));
+    // Re-extracted files (present in `new_chunks`) REPLACE their prior
+    // contribution and must never be pruned (#1796). Collect them
+    // unconditionally — even on a first build with no existing graph — so a
+    // source listed in BOTH new_chunks and prune_sources keeps its fresh nodes.
+    let new_sources = collect_new_chunk_sources(new_chunks, eff_root.as_deref());
 
     if graph_existed {
         // Read the JSON directly rather than via a graph round-trip: an
@@ -426,7 +549,6 @@ pub fn build_merge_with_graph_cap(
         // the loaded graph every node/edge whose source_file (raw or
         // root-normalised) is re-emitted in `new_chunks`. Files absent from
         // `new_chunks` stay untouched; deletions go via prune_sources.
-        new_sources = collect_new_chunk_sources(new_chunks, eff_root.as_deref());
         if !new_sources.is_empty() {
             existing_nodes
                 .retain(|n| source_file_not_replaced(n, &new_sources, eff_root.as_deref()));
@@ -443,11 +565,27 @@ pub fn build_merge_with_graph_cap(
     all_chunks.extend(new_chunks.iter().cloned());
     let mut graph = build(&all_chunks, directed, dedup, root)?;
 
-    let pruned = prune_sources.unwrap_or(&[]);
+    // Control flow, the deleted-file COUNT in messages, and the shrink guard use
+    // the RAW `prune_sources`; only the MATCHING set excludes re-extracted files.
+    let pruned_raw = prune_sources.unwrap_or(&[]);
+    // A file just re-extracted (present in `new_chunks`) is being REPLACED, never
+    // deleted — so never prune it, even if the caller also lists it in
+    // `prune_sources` (#1796). Otherwise its fresh, just-built nodes are silently
+    // removed (data loss) when an edit keeps a node's label and the caller
+    // follows the old workflow of passing the changed file in prune_sources.
+    // "replace" wins over a contradictory "delete" of the same source.
+    let pruned_effective: Vec<String> = pruned_raw
+        .iter()
+        .filter(|p| {
+            let norm = crate::normalize::norm_source_file(p, eff_root.as_deref());
+            !new_sources.contains(p.as_str()) && !new_sources.contains(norm.as_str())
+        })
+        .cloned()
+        .collect();
     // Prune set for deleted sources — both raw and root-normalised forms so an
     // absolute deleted path matches a relativised node key (#1007/#1571).
     let mut prune_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for p in pruned {
+    for p in &pruned_effective {
         if p.is_empty() {
             continue;
         }
@@ -460,9 +598,16 @@ pub fn build_merge_with_graph_cap(
 
     // Prune deleted sources FIRST so carried hyperedges can be validated against
     // the FINAL node set below: a hyperedge whose own file survives can still
-    // reference a member node from a file that was pruned or re-extracted.
-    if !pruned.is_empty() {
-        prune_deleted_sources(&mut graph, pruned, eff_root.as_deref().map(Path::new));
+    // reference a member node from a file that was pruned or re-extracted. Gated
+    // on RAW prune_sources so a contradictory replace+delete still emits the
+    // "already clean" message with the raw file count (matching graphify-py).
+    if !pruned_raw.is_empty() {
+        prune_deleted_sources(
+            &mut graph,
+            &pruned_effective,
+            pruned_raw.len(),
+            eff_root.as_deref().map(Path::new),
+        );
     }
 
     // Carry forward hyperedges from files neither re-extracted nor deleted, and
@@ -477,7 +622,7 @@ pub fn build_merge_with_graph_cap(
 
     // Refuse to silently shrink the graph (#479). Shrinkage is intentional when
     // dedup or prune_sources is active, so only guard otherwise.
-    if graph_existed && !dedup && pruned.is_empty() {
+    if graph_existed && !dedup && pruned_raw.is_empty() {
         let now = graph.node_count();
         if now < existing_node_count {
             return Err(BuildError::WouldShrink {
@@ -609,7 +754,12 @@ fn attach_carried_hyperedges(graph: &mut Graph, carried: Vec<Value>) {
 /// `source_file`) and its root-relative normalised form, so manifest absolute
 /// paths still match nodes relativised at build time (#1007). `.canonicalize()`
 /// resolves symlinked roots and redundant `..`/`.` segments.
-fn prune_deleted_sources(graph: &mut Graph, pruned: &[String], root: Option<&Path>) {
+fn prune_deleted_sources(
+    graph: &mut Graph,
+    pruned: &[String],
+    file_count: usize,
+    root: Option<&Path>,
+) {
     let root_str = root.map(canonicalize_root_to_string);
     let mut prune_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     for p in pruned {
@@ -638,10 +788,7 @@ fn prune_deleted_sources(graph: &mut Graph, pruned: &[String], root: Option<&Pat
     let n_nodes = to_remove.len();
     graph.remove_nodes_from(to_remove.iter().map(String::as_str));
     if n_nodes > 0 {
-        eprintln!(
-            "[graphify] Pruned {n_nodes} node(s) from {} deleted source file(s).",
-            pruned.len()
-        );
+        eprintln!("[graphify] Pruned {n_nodes} node(s) from {file_count} deleted source file(s).");
     }
 
     let edges_to_remove: Vec<(String, String)> = graph
@@ -661,8 +808,7 @@ fn prune_deleted_sources(graph: &mut Graph, pruned: &[String], root: Option<&Pat
 
     if n_nodes == 0 && n_edges == 0 {
         eprintln!(
-            "[graphify] {} source file(s) deleted since last run — no matching nodes or edges in graph, already clean.",
-            pruned.len()
+            "[graphify] {file_count} source file(s) deleted since last run — no matching nodes or edges in graph, already clean."
         );
     }
 }

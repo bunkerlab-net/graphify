@@ -1295,6 +1295,12 @@ pub(super) fn walk<'tree>(
         if func_name.is_empty() {
             return;
         }
+        // A name that normalizes to nothing collapses `make_id(prefix, name)` onto
+        // the (absolute-path-derived) prefix, leaking the scan path and colliding
+        // with the file/class node (#1899). No graph signal; skip.
+        if graphify_build::normalize_id(&func_name).is_empty() {
+            return;
+        }
 
         let line = node.start_position().row as u32 + 1;
         let (func_nid, label, parent_nid) = if let Some(parent) = parent_class_nid {

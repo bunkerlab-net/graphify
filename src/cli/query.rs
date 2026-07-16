@@ -55,7 +55,7 @@ pub(crate) fn cmd_query(
         extra,
         ..graphify_serve::QueryLog::default()
     });
-    println!("{result}");
+    outln!("{result}");
     Ok(())
 }
 
@@ -76,12 +76,15 @@ pub(crate) fn cmd_path(from: &str, to: &str, graph: Option<&std::path::Path>) ->
     let src_scored = graphify_serve::graph::score_nodes(&g, &from_terms, &mut idf_cache);
     let tgt_scored = graphify_serve::graph::score_nodes(&g, &to_terms, &mut idf_cache);
 
-    let Some((_, src_id)) = src_scored.first() else {
+    if src_scored.is_empty() {
         anyhow::bail!("No node matching '{from}' found.");
-    };
-    let Some((_, tgt_id)) = tgt_scored.first() else {
+    }
+    if tgt_scored.is_empty() {
         anyhow::bail!("No node matching '{to}' found.");
-    };
+    }
+    // Prefer a full-token label match over the raw score head (#1785).
+    let src_id = graphify_serve::graph::pick_scored_endpoint(&g, &src_scored, from);
+    let tgt_id = graphify_serve::graph::pick_scored_endpoint(&g, &tgt_scored, to);
 
     // Ambiguity guard: both queries collapsed to the same node.
     if src_id == tgt_id {
@@ -91,9 +94,15 @@ pub(crate) fn cmd_path(from: &str, to: &str, graph: Option<&std::path::Path>) ->
         );
     }
 
-    // Warn on close-runner ambiguity (matches Python's 10% threshold).
-    for (name, scored) in [("source", &src_scored), ("target", &tgt_scored)] {
-        if scored.len() >= 2 {
+    // Warn on close-runner ambiguity (matches Python's 10% threshold). Only
+    // meaningful when the raw score head is what got picked — a full-token
+    // override was chosen on token coverage, not score, so its margin is
+    // irrelevant (#1785).
+    for (name, scored, nid) in [
+        ("source", &src_scored, &src_id),
+        ("target", &tgt_scored, &tgt_id),
+    ] {
+        if scored.len() >= 2 && scored.first().is_some_and(|(_, h)| h == nid) {
             let top = scored[0].0;
             let runner = scored[1].0;
             if top > 0.0 && (top - runner) / top < 0.10 {
@@ -104,8 +113,8 @@ pub(crate) fn cmd_path(from: &str, to: &str, graph: Option<&std::path::Path>) ->
         }
     }
 
-    let Some(path_nodes) = graphify_serve::graph::shortest_path(&g, src_id, tgt_id) else {
-        println!("No path found between '{from}' and '{to}'.");
+    let Some(path_nodes) = graphify_serve::graph::shortest_path(&g, &src_id, &tgt_id) else {
+        outln!("No path found between '{from}' and '{to}'.");
         return Ok(());
     };
 
@@ -154,7 +163,7 @@ pub(crate) fn cmd_path(from: &str, to: &str, graph: Option<&std::path::Path>) ->
             segments.push(format!("<--{rel}{conf_str}-- {v_label}"));
         }
     }
-    println!("Shortest path ({hops} hops):\n  {}", segments.join(" "));
+    outln!("Shortest path ({hops} hops):\n  {}", segments.join(" "));
     graphify_serve::log_query(&graphify_serve::QueryLog {
         kind: "path",
         question: &format!("{from} -> {to}"),
@@ -220,7 +229,7 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
     let g = load_graph(&path)?;
     let ids = graphify_serve::graph::find_node(&g, node);
     let Some(node_id) = ids.first() else {
-        println!("No node matching '{node}' found.");
+        outln!("No node matching '{node}' found.");
         return Ok(());
     };
     let attrs = g.node_data(node_id);
@@ -258,16 +267,16 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
     };
     let degree = graphify_serve::graph::node_degree(&g, node_id);
 
-    println!("Node: {label_or_id}");
-    println!("  ID:        {node_id}");
+    outln!("Node: {label_or_id}");
+    outln!("  ID:        {node_id}");
     let src_line = format!("  Source:    {source_file} {source_loc}");
-    println!("{}", src_line.trim_end());
-    println!("  Type:      {file_type}");
-    println!("  Community: {community}");
-    println!("  Degree:    {degree}");
+    outln!("{}", src_line.trim_end());
+    outln!("  Type:      {file_type}");
+    outln!("  Community: {community}");
+    outln!("  Degree:    {degree}");
 
     if let Some(lesson) = learning_lesson_line(&g, node_id) {
-        println!("{lesson}");
+        outln!("{lesson}");
     }
 
     // (direction, neighbor_id, edge_data) — but record direction now and look
@@ -290,7 +299,7 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
                 .cmp(&graphify_serve::graph::node_degree(&g, &a.1))
         });
 
-        println!("\nConnections ({total}):");
+        outln!("\nConnections ({total}):");
         for (direction, nb) in connections.iter().take(20) {
             let edata = if *direction == "out" {
                 g.edge_data(node_id, nb)
@@ -311,10 +320,10 @@ pub(crate) fn cmd_explain(node: &str, graph: Option<&std::path::Path>) -> Result
                 .and_then(|n| n.get("label"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(nb.as_str());
-            println!("  {arrow} {nb_label} [{rel}] [{conf}]");
+            outln!("  {arrow} {nb_label} [{rel}] [{conf}]");
         }
         if total > 20 {
-            println!("  ... and {} more", total - 20);
+            outln!("  ... and {} more", total - 20);
         }
     }
 

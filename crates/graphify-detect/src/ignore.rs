@@ -93,14 +93,90 @@ fn dirs_home() -> Option<PathBuf> {
 
 // ── .graphifyignore / .gitignore loading ─────────────────────────────────────
 
+/// Resolve `$GIT_DIR/info/exclude` for the repo rooted at `vcs_root`.
+///
+/// `info/exclude` records local-only, uncommitted excludes — and is where
+/// `git worktree add` writes nested worktree paths — so a repo can ignore a
+/// directory without any `.gitignore` entry (#1810). Handles the
+/// linked-worktree / submodule case where `.git` is a FILE (`gitdir: <path>`)
+/// and the real excludes live in the shared common git dir (via `commondir`).
+/// Returns `None` when there is no readable exclude file.
+#[must_use]
+pub fn git_info_exclude(vcs_root: &Path) -> Option<PathBuf> {
+    let dot_git = vcs_root.join(".git");
+    let git_dir: PathBuf = if dot_git.is_dir() {
+        dot_git
+    } else if dot_git.is_file() {
+        let content = std::fs::read_to_string(&dot_git).unwrap_or_default();
+        let gd_str = content.trim().strip_prefix("gitdir:")?.trim().to_owned();
+        let gd_raw = PathBuf::from(gd_str);
+        let gd = if gd_raw.is_absolute() {
+            gd_raw
+        } else {
+            let joined = vcs_root.join(&gd_raw);
+            joined.canonicalize().unwrap_or(joined)
+        };
+        // A linked worktree's gitdir holds a `commondir` file pointing at the
+        // shared git dir, where info/exclude actually lives.
+        let commondir = gd.join("commondir");
+        match std::fs::read_to_string(&commondir) {
+            Ok(cd_raw) if !cd_raw.trim().is_empty() => {
+                let cd = PathBuf::from(cd_raw.trim());
+                if cd.is_absolute() {
+                    cd
+                } else {
+                    let joined = gd.join(&cd);
+                    joined.canonicalize().unwrap_or(joined)
+                }
+            }
+            _ => gd,
+        }
+    } else {
+        return None;
+    };
+    let exclude = git_dir.join("info").join("exclude");
+    exclude.is_file().then_some(exclude)
+}
+
+/// Read `.gitignore` then `.graphifyignore` directly inside `dir` (not its
+/// ancestors), returning `(anchor_dir, pattern)` pairs anchored at `dir`.
+///
+/// `.gitignore` is read first and `.graphifyignore` last, so `.graphifyignore`
+/// patterns — including `!` negations — win on conflict via last-match-wins
+/// (#1363; #945 keeps a dir with only a `.gitignore` getting sensible
+/// defaults). Shared by [`load_graphifyignore`] (the ancestor chain, loaded
+/// once before the scan) and the live descendant walk in `walk.rs`, so nested
+/// ignore files below the scan root are honored too — previously only the scan
+/// root and its ancestors were read (#1206).
+#[must_use]
+pub fn load_dir_own_ignore(dir: &Path) -> IgnorePatterns {
+    let mut patterns: IgnorePatterns = Vec::new();
+    for fname in [".gitignore", ".graphifyignore"] {
+        let ignore_file = dir.join(fname);
+        if ignore_file.exists()
+            && let Ok(text) = std::fs::read_to_string(&ignore_file)
+        {
+            for raw in text.lines() {
+                let line = parse_gitignore_line(raw);
+                if !line.is_empty() {
+                    patterns.push((dir.to_path_buf(), line));
+                }
+            }
+        }
+    }
+    patterns
+}
+
 /// Read `.gitignore` then `.graphifyignore` files from `root` upward to the VCS
 /// ceiling and return `(anchor_dir, pattern)` pairs.
 ///
 /// Outer-first (ceiling first, scan root last) so inner rules win via
 /// last-match-wins semantics, matching gitignore behaviour exactly. Within a
-/// single directory both files are read in the order `[.gitignore,
-/// .graphifyignore]` and their patterns merged (#1363), so `.graphifyignore`
-/// patterns — including `!` negations — win over `.gitignore` on conflict.
+/// single directory both files are merged via [`load_dir_own_ignore`] (#1363).
+/// `$GIT_DIR/info/exclude` is prepended at lowest precedence, anchored at the
+/// VCS ceiling, so a nearer `!` re-include still overrides it (#1810). Covers
+/// the scan root and its ancestors only — directories below the scan root are
+/// picked up live during the walk in `walk.rs` (#1206).
 #[must_use]
 pub fn load_graphifyignore(root: &Path) -> IgnorePatterns {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -108,28 +184,23 @@ pub fn load_graphifyignore(root: &Path) -> IgnorePatterns {
     let dirs = build_dir_list(&root, &ceiling);
 
     let mut patterns: IgnorePatterns = Vec::new();
-    for dir in &dirs {
-        // Merge .gitignore and .graphifyignore for this dir (#1363): read
-        // .gitignore first (base) then .graphifyignore (overrides), appending
-        // every pattern from each that exists. Patterns evaluate
-        // last-match-wins, so a .graphifyignore pattern — including a `!`
-        // negation — wins over a conflicting .gitignore rule and can re-enable
-        // a file that .gitignore excluded (subject to the gitignore
-        // parent-exclusion rule enforced in `is_ignored_impl`: a `!` cannot
-        // rescue a file beneath an excluded directory).
-        for fname in [".gitignore", ".graphifyignore"] {
-            let ignore_file = dir.join(fname);
-            if ignore_file.exists()
-                && let Ok(text) = std::fs::read_to_string(&ignore_file)
-            {
-                for raw in text.lines() {
-                    let line = parse_gitignore_line(raw);
-                    if !line.is_empty() {
-                        patterns.push((dir.clone(), line));
-                    }
-                }
+
+    // $GIT_DIR/info/exclude is repo-root-scoped and, per git, ranks below every
+    // per-directory .gitignore/.graphifyignore — so load it first (lowest
+    // priority under last-match-wins) anchored at the VCS ceiling (#1810).
+    if let Some(info_exclude) = git_info_exclude(&ceiling)
+        && let Ok(text) = std::fs::read_to_string(&info_exclude)
+    {
+        for raw in text.lines() {
+            let line = parse_gitignore_line(raw);
+            if !line.is_empty() {
+                patterns.push((ceiling.clone(), line));
             }
         }
+    }
+
+    for dir in &dirs {
+        patterns.extend(load_dir_own_ignore(dir));
     }
     patterns
 }
@@ -274,24 +345,26 @@ fn rel_matches(rel: &str, target_name: &str, p: &str) -> bool {
 
 /// Evaluates all patterns against `target` using last-match-wins, returning the final ignored state.
 ///
-/// Optimised hot path: relative-path strings are computed once per unique
-/// anchor instead of once per pattern. The original implementation re-ran
-/// `target.strip_prefix(anchor)` + `path_to_forward_slash` for every pattern
-/// even when many patterns share the same anchor. Patterns are loaded
-/// outer-first (all patterns from one `.gitignore` are contiguous), so a
-/// single-element cache keyed on the last-seen anchor pointer is sufficient.
-fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
+/// Each pattern is matched ONLY against the path relative to its own anchor
+/// directory (the directory that contained the ignore file). Per gitignore
+/// semantics, patterns from `A/.gitignore` apply only to paths under `A` — so a
+/// nested ignore file's bare `*` cannot leak out and ignore the whole corpus
+/// (#1873). A pattern whose anchor does not contain `target` is skipped, and the
+/// anchor directory itself is exempt (an ignore file governs its directory's
+/// contents, not the directory).
+///
+/// Optimised hot path: the anchor-relative string is computed once per unique
+/// anchor instead of once per pattern. Patterns are loaded outer-first (all
+/// patterns from one ignore file are contiguous), so a single-element cache
+/// keyed on the last-seen anchor pointer is sufficient.
+fn eval_path(target: &Path, patterns: &IgnorePatterns) -> bool {
     let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-    // Precompute `target` relative to `root` once — every non-anchored
-    // pattern reuses it.
-    let root_rel: Option<String> = target.strip_prefix(root).ok().map(path_to_forward_slash);
-
-    // Tracks the last-seen anchor pointer and its cached relativised path.
-    // Patterns are loaded outer-first, so consecutive runs of patterns from
-    // the same `.gitignore` file all share an anchor.
+    // Tracks the last-seen anchor pointer and its cached anchor-relative path
+    // (`None` when `target` lies outside that anchor). The outer `Option` marks
+    // whether the cache slot is populated for the current anchor.
     let mut last_anchor: *const PathBuf = std::ptr::null();
-    let mut last_anchor_rel: Option<String> = None;
+    let mut last_anchor_rel: Option<Option<String>> = None;
 
     let mut result = false;
     for (anchor, pattern) in patterns {
@@ -307,32 +380,41 @@ fn eval_path(target: &Path, root: &Path, patterns: &IgnorePatterns) -> bool {
             continue;
         }
 
-        let need_anchor_rel = anchored || anchor != root;
         let anchor_ptr = std::ptr::from_ref::<PathBuf>(anchor);
-        if need_anchor_rel && !std::ptr::eq(last_anchor, anchor_ptr) {
+        if !std::ptr::eq(last_anchor, anchor_ptr) {
             last_anchor = anchor_ptr;
-            last_anchor_rel = target.strip_prefix(anchor).ok().map(path_to_forward_slash);
+            // Anchors from `load_graphifyignore` are canonicalized. A caller that
+            // passes a non-canonical target (e.g. macOS `/var` vs `/private/var`,
+            // or the XAML/watch scan roots) would fail the direct strip, so fall
+            // back to canonicalizing the target before relativising — keeping the
+            // canonical hot path (detect) allocation- and syscall-free.
+            last_anchor_rel = Some(
+                target
+                    .strip_prefix(anchor)
+                    .ok()
+                    .map(path_to_forward_slash)
+                    .or_else(|| {
+                        target
+                            .canonicalize()
+                            .ok()
+                            .and_then(|c| c.strip_prefix(anchor).map(path_to_forward_slash).ok())
+                    }),
+            );
+        }
+
+        // `target` outside this pattern's anchor: the pattern cannot match it.
+        let Some(Some(rel)) = last_anchor_rel.as_ref() else {
+            continue;
+        };
+        // The anchor dir itself (empty relative path) is exempt.
+        if rel.is_empty() {
+            continue;
         }
 
         let matched = if anchored {
-            // Anchored patterns match the anchor-relative path directly — no
-            // subtree/basename fallback. Without this, `/inbox/` would leak into
-            // `src/inbox/` deep in the tree via segment matching (#1087).
-            last_anchor_rel
-                .as_deref()
-                .is_some_and(|rel| fnmatch(rel, p))
+            fnmatch(rel, p)
         } else {
-            let root_matched = root_rel
-                .as_deref()
-                .is_some_and(|rel| rel_matches(rel, target_name, p));
-
-            let anchor_matched = !root_matched
-                && anchor != root
-                && last_anchor_rel
-                    .as_deref()
-                    .is_some_and(|rel| rel_matches(rel, target_name, p));
-
-            root_matched || anchor_matched
+            rel_matches(rel, target_name, p)
         };
 
         if matched {
@@ -394,17 +476,16 @@ fn is_ignored_impl(
     let mut ancestor = root.to_path_buf();
     for part in rel_parts.iter().take(rel_parts.len().saturating_sub(1)) {
         ancestor = ancestor.join(part);
-        if eval_cached(&ancestor, root, patterns, cache.as_deref_mut()) {
+        if eval_cached(&ancestor, patterns, cache.as_deref_mut()) {
             return true;
         }
     }
-    eval_cached(path, root, patterns, cache)
+    eval_cached(path, patterns, cache)
 }
 
 /// Evaluate `target`, consulting/populating `cache` when present.
 fn eval_cached(
     target: &Path,
-    root: &Path,
     patterns: &IgnorePatterns,
     cache: Option<&mut IgnoreEvalCache>,
 ) -> bool {
@@ -413,11 +494,11 @@ fn eval_cached(
             if let Some(&v) = c.get(target) {
                 return v;
             }
-            let v = eval_path(target, root, patterns);
+            let v = eval_path(target, patterns);
             c.insert(target.to_path_buf(), v);
             v
         }
-        None => eval_path(target, root, patterns),
+        None => eval_path(target, patterns),
     }
 }
 

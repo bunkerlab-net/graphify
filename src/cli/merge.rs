@@ -284,10 +284,10 @@ pub(crate) fn cmd_merge_graphs(
         .get("edges")
         .and_then(serde_json::Value::as_array)
         .map_or(0, Vec::len);
-    println!(
+    outln!(
         "Merged {} graphs -> {n_nodes} nodes, {n_edges} edges",
         graphs.len()
     );
-    println!("Written to: {}", out_path.display());
+    outln!("Written to: {}", out_path.display());
     Ok(())
 }

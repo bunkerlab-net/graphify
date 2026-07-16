@@ -33,6 +33,14 @@ pub struct ManifestEntry {
     pub ast_hash: String,
     /// MD5 hex digest of the file content at the time of the last semantic extraction.
     pub semantic_hash: String,
+    /// `true` only for legacy manifests whose entry was a bare float mtime (no
+    /// stored hash). Such entries cannot be content-verified, so change
+    /// detection falls back to a plain mtime inequality — any delta, including a
+    /// backwards jump (`git checkout` of an older commit, tarball/rsync restore),
+    /// forces a re-extract (#1859). Never persisted (`#[serde(skip)]`): the next
+    /// save promotes the entry into the current dict schema.
+    #[serde(skip)]
+    pub legacy_mtime_only: bool,
 }
 
 /// Normalises a raw JSON value from the manifest into a `ManifestEntry`, handling both legacy `{mtime, hash}` and current `{mtime, ast_hash, semantic_hash}` shapes.
@@ -42,6 +50,7 @@ fn normalise_entry(v: &serde_json::Value) -> Option<ManifestEntry> {
             mtime: n.as_f64().unwrap_or(0.0),
             ast_hash: String::new(),
             semantic_hash: String::new(),
+            legacy_mtime_only: true,
         }),
         serde_json::Value::Object(map) => {
             let mtime = map
@@ -61,6 +70,7 @@ fn normalise_entry(v: &serde_json::Value) -> Option<ManifestEntry> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
+                    legacy_mtime_only: false,
                 })
             } else if let Some(h) = map.get("hash").and_then(|v| v.as_str()) {
                 // Legacy {mtime, hash} → ast_hash only
@@ -68,12 +78,14 @@ fn normalise_entry(v: &serde_json::Value) -> Option<ManifestEntry> {
                     mtime,
                     ast_hash: h.to_string(),
                     semantic_hash: String::new(),
+                    legacy_mtime_only: false,
                 })
             } else {
                 Some(ManifestEntry {
                     mtime,
                     ast_hash: String::new(),
                     semantic_hash: String::new(),
+                    legacy_mtime_only: false,
                 })
             }
         }
@@ -294,6 +306,7 @@ pub fn save_manifest_to_path_with_root(
             mtime: 0.0,
             ast_hash: String::new(),
             semantic_hash: String::new(),
+            legacy_mtime_only: false,
         });
 
         let entry = match kind {
@@ -301,16 +314,19 @@ pub fn save_manifest_to_path_with_root(
                 mtime,
                 ast_hash: h,
                 semantic_hash: prev.semantic_hash,
+                legacy_mtime_only: false,
             },
             "semantic" => ManifestEntry {
                 mtime,
                 ast_hash: prev.ast_hash,
                 semantic_hash: h,
+                legacy_mtime_only: false,
             },
             _ => ManifestEntry {
                 mtime,
                 ast_hash: h.clone(),
                 semantic_hash: h,
+                legacy_mtime_only: false,
             },
         };
         manifest.insert(f, entry);
@@ -334,6 +350,37 @@ pub fn save_manifest_to_path_with_root(
     let json = serde_json::to_string_pretty(&manifest).map_err(DetectError::Json)?;
     std::fs::write(manifest_path, json).map_err(DetectError::Io)?;
     Ok(())
+}
+
+/// Decide whether the file at `p` changed relative to its stored manifest
+/// `entry`, given the freshly-read `current_mtime` and the extraction `kind`
+/// (`"semantic"` / `"ast"`) that selects which stored hash to verify.
+fn manifest_entry_changed(entry: &ManifestEntry, current_mtime: f64, kind: &str, p: &Path) -> bool {
+    if entry.legacy_mtime_only {
+        // Legacy bare-float manifest: no stored hash, so any mtime delta —
+        // forwards OR backwards — re-extracts and an exact match skips (#1859),
+        // mirroring graphify-py's `current_mtime != stored`. The exact compare
+        // is only sound because this crate enables serde_json's `float_roundtrip`
+        // feature: the default parser mis-rounds by ~1 ULP, which made unchanged
+        // files re-extract ~13% of runs (see the bit-exact regression test).
+        #[allow(clippy::float_cmp)]
+        {
+            current_mtime != entry.mtime
+        }
+    } else {
+        let stored_hash = if kind == "semantic" {
+            &entry.semantic_hash
+        } else {
+            &entry.ast_hash
+        };
+        if stored_hash.is_empty() {
+            true
+        } else if (current_mtime - entry.mtime).abs() > MTIME_TOLERANCE {
+            md5_file(p) != *stored_hash
+        } else {
+            false
+        }
+    }
 }
 
 /// Run incremental detection given a previously-saved manifest.
@@ -370,32 +417,12 @@ pub fn detect_incremental_with_manifest(
     // mtime/hash comparison is independent and dominated by I/O.
     let change_check = |f: &String| -> Option<PathBuf> {
         let p = Path::new(f);
-        let stored = manifest.get(f);
         let current_mtime: f64 = file_mtime(p).unwrap_or(0.0);
-
-        let file_changed = match stored {
+        let file_changed = match manifest.get(f) {
             None => true,
-            Some(entry) => {
-                let stored_hash = if kind == "semantic" {
-                    &entry.semantic_hash
-                } else {
-                    &entry.ast_hash
-                };
-                if stored_hash.is_empty() {
-                    true
-                } else if (current_mtime - entry.mtime).abs() > MTIME_TOLERANCE {
-                    md5_file(p) != *stored_hash
-                } else {
-                    false
-                }
-            }
+            Some(entry) => manifest_entry_changed(entry, current_mtime, kind, p),
         };
-
-        if file_changed {
-            Some(PathBuf::from(f))
-        } else {
-            None
-        }
+        file_changed.then(|| PathBuf::from(f))
     };
 
     let changed: Vec<PathBuf> = if all_current.len() >= PARALLEL_HASH_THRESHOLD {
@@ -443,22 +470,26 @@ pub fn detect_incremental_with_manifest(
             mtime: 0.0,
             ast_hash: String::new(),
             semantic_hash: String::new(),
+            legacy_mtime_only: false,
         });
         let entry = match kind {
             "semantic" => ManifestEntry {
                 mtime,
                 ast_hash: prev.ast_hash,
                 semantic_hash: h,
+                legacy_mtime_only: false,
             },
             "ast" => ManifestEntry {
                 mtime,
                 ast_hash: h,
                 semantic_hash: prev.semantic_hash,
+                legacy_mtime_only: false,
             },
             _ => ManifestEntry {
                 mtime,
                 ast_hash: h.clone(),
                 semantic_hash: h,
+                legacy_mtime_only: false,
             },
         };
         updated.insert(key, entry);

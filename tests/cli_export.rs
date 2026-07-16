@@ -626,3 +626,78 @@ fn cluster_only_writes_community_name_from_labels_file() {
          graph.json nodes: {final_graph}"
     );
 }
+
+// ── #1789: graph.json node ids are portable across checkout paths ─────────────
+
+/// The committed `graph.json`'s node ids must be relative to the scan root —
+/// never embedding the absolute path — so the same repo yields identical ids on
+/// any machine/checkout and leaks no local username/home. Extracts the same
+/// corpus from two different absolute prefixes and asserts the id sets match and
+/// carry no path component.
+#[test]
+fn graph_json_node_ids_are_portable_across_checkout_paths() {
+    fn build(root: &Path) -> Vec<String> {
+        fs::create_dir_all(root.join("pkg")).unwrap();
+        fs::write(root.join("pkg").join("mod.py"), "def f(): return 1\n").unwrap();
+        fs::write(
+            root.join("pkg").join("app.py"),
+            "from pkg.mod import f\ndef g(): return f()\n",
+        )
+        .unwrap();
+        cli()
+            .current_dir(root)
+            .arg("extract")
+            .arg(".")
+            .arg("--code-only")
+            .arg("--no-cluster")
+            .assert()
+            .success();
+        let bytes = fs::read(root.join("graphify-out").join("graph.json")).unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut ids: Vec<String> = data["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .iter()
+            .filter_map(|n| {
+                n.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let a = build(&tmp.path().join("alice_home").join("proj"));
+    let b = build(
+        &tmp.path()
+            .join("bob_elsewhere")
+            .join("checkout")
+            .join("proj"),
+    );
+    assert_eq!(
+        a, b,
+        "node ids differ across checkout paths: {a:?} vs {b:?}"
+    );
+    assert!(!a.is_empty(), "extraction produced no nodes");
+    // No id segment may be an absolute-path component (username/home leak).
+    let leak = [
+        "alice_home",
+        "bob_elsewhere",
+        "checkout",
+        "tmp",
+        "private",
+        "users",
+        "home",
+        "var",
+    ];
+    for ident in &a {
+        for part in ident.split('_') {
+            assert!(
+                !leak.contains(&part),
+                "node id embeds an absolute-path component: {a:?}"
+            );
+        }
+    }
+}

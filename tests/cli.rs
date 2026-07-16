@@ -417,6 +417,79 @@ fn path_reverse_arrow() {
     );
 }
 
+/// Build a graph where IDF scoring ranks a partial-token decoy above the full
+/// match. Query "Reject-everything judge": the decoy "Rejection Summary"
+/// prefix-matches the rare token and out-scores "Degenerate Reject-Everything
+/// Judge" (whose full-query tier never fires — the query is a token subset, not
+/// a prefix). Filler nodes keep "judge"/"everything" common. Decoy and target
+/// live in different components, so resolving to the decoy yields "No path
+/// found". Ports `_write_misranking_graph`.
+fn write_misranking_graph(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::fmt::Write as _;
+    let mut nodes = String::from(
+        r#"{"id": "target", "label": "Degenerate Reject-Everything Judge", "community": 0},
+           {"id": "decoy", "label": "Rejection Summary", "community": 0}"#,
+    );
+    for i in 0..30 {
+        let _ = write!(
+            nodes,
+            r#",{{"id": "j{i}", "label": "Judge Helper {i}", "community": 0}}"#
+        );
+        let _ = write!(
+            nodes,
+            r#",{{"id": "e{i}", "label": "Everything Widget {i}", "community": 0}}"#
+        );
+    }
+    let graph = format!(
+        r#"{{"directed": false, "multigraph": false, "graph": {{}},
+            "nodes": [{nodes}],
+            "links": [
+                {{"source": "target", "target": "j0", "relation": "verified_by", "confidence": "EXTRACTED"}},
+                {{"source": "decoy", "target": "e0", "relation": "mentions", "confidence": "EXTRACTED"}}
+            ]}}"#
+    );
+    let p = dir.join("graph.json");
+    fs::write(&p, graph).unwrap();
+    p
+}
+
+/// Ports `test_endpoint_prefers_full_token_match` (#1785): a token-subset query
+/// resolves to the full-match node, not the IDF head.
+#[test]
+fn endpoint_prefers_full_token_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = write_misranking_graph(dir.path());
+    cli()
+        .arg("path")
+        .arg("Reject-everything judge")
+        .arg("Judge Helper 0")
+        .arg("--graph")
+        .arg(&p)
+        .assert()
+        .success()
+        .stdout(contains("Shortest path (1 hops):"))
+        .stdout(contains("Degenerate Reject-Everything Judge"))
+        .stdout(contains("No path found").not());
+}
+
+/// Ports `test_endpoint_falls_back_to_score_head` (#1785): with no full-token
+/// candidate, resolution is exactly the old `scored[0]` pick — here the decoy,
+/// disconnected from the target, so "No path found".
+#[test]
+fn endpoint_falls_back_to_score_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = write_misranking_graph(dir.path());
+    cli()
+        .arg("path")
+        .arg("Rejection judge")
+        .arg("Judge Helper 0")
+        .arg("--graph")
+        .arg(&p)
+        .assert()
+        .success()
+        .stdout(contains("No path found"));
+}
+
 /// Ports `graphify-py/tests/test_explain_cli.py::test_callee_shows_callers_as_inbound`.
 ///
 /// `graphify explain` on a callee must surface inbound callers with `<--`
@@ -1102,4 +1175,56 @@ fn startup_warns_on_newer_skill_and_skips_silent_commands() {
         .assert()
         .success()
         .stderr(contains("downgrade").not());
+}
+
+// ── #1807: survive a downstream reader closing the pipe early ──────────────────
+
+/// A reader that closes the pipe after one line (`| head -n1`) must not turn a
+/// successful `--help` into a nonzero/`SIGPIPE` exit. Uses `std::process`
+/// directly because `assert_cmd`'s `.assert()` drains stdout, hiding the case.
+#[test]
+fn help_survives_reader_closing_pipe_early() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command as StdCommand, Stdio};
+    let mut child = StdCommand::new(env!("CARGO_BIN_EXE_graphify"))
+        .arg("--help")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn graphify --help");
+    {
+        let stdout = child.stdout.take().expect("stdout piped");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line).expect("read first help line");
+        assert!(bytes > 0, "expected at least one line of --help output");
+        // Dropping `reader` here closes the read end mid-help.
+    }
+    let status = child.wait().expect("wait for child");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "help must exit 0 on early pipe close, got {status:?}"
+    );
+}
+
+/// A reader that reads nothing at all before closing must also leave a small,
+/// fully-buffered `--version` at exit 0 (not 101/141).
+#[test]
+fn small_buffered_output_survives_reader_that_reads_nothing() {
+    use std::process::{Command as StdCommand, Stdio};
+    let mut child = StdCommand::new(env!("CARGO_BIN_EXE_graphify"))
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn graphify --version");
+    // Close the read end without consuming any output.
+    drop(child.stdout.take().expect("stdout piped"));
+    let status = child.wait().expect("wait for child");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "version must exit 0 when the reader reads nothing, got {status:?}"
+    );
 }

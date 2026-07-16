@@ -5,8 +5,8 @@
 #![allow(clippy::expect_used, clippy::float_cmp)] // test file
 
 use graphify_dedup::{
-    DedupLlmBackend, JudgeResult, NoOpBackend, deduplicate_entities, entropy, is_variant_pair,
-    norm, numeric_tokens_differ, shingles, short_label_blocked,
+    DedupLlmBackend, JudgeResult, NoOpBackend, deduplicate_entities, defines_id, entropy,
+    is_variant_pair, norm, numeric_tokens_differ, shingles, short_label_blocked,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -621,32 +621,41 @@ fn test_dedup_still_merges_crossfile_true_duplicates() {
     assert_eq!(result_nodes.len(), 1);
 }
 
-// ── #1504: cross-chunk node ID collision (first-writer-wins) ──────────────────
-// Asserts the behavioural contract: on an id collision across differing source
-// files the first node survives. The accompanying stderr WARNING is emitted by
-// `deduplicate_entities`; its exact text is not asserted here (in-process stderr
-// capture is impractical for a library call).
+// ── #1504/#1851: cross-chunk node ID collision (definer-wins) ─────────────────
+// The survivor of an ID collision is chosen by `collision_rank` (a total order),
+// independent of arrival order: a node whose source_file defines the ID beats a
+// mere cross-reference; among equally-defining nodes the shorter, more canonical
+// label wins, then a lexical tiebreak on label then source_file. The stderr
+// warning/note is emitted by `deduplicate_entities`; its exact text is not
+// asserted here (in-process stderr capture is impractical for a library call).
 
 #[test]
-fn test_cross_chunk_id_collision_keeps_first_node() {
+fn test_cross_chunk_id_collision_keeps_lexically_first_definer() {
+    // Both READMEs define the id via the bare `readme` stem, so neither
+    // out-defines the other; the lexically-first source_file wins the tiebreak
+    // (module-a < module-b) regardless of arrival order.
     let nodes = vec![
-        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-a/README.md"}),
         json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-b/README.md"}),
+        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-a/README.md"}),
     ];
     let (result_nodes, _) =
         deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
     assert_eq!(result_nodes.len(), 1);
     assert_eq!(
         result_nodes[0].get("source_file").and_then(Value::as_str),
-        Some("module-a/README.md")
+        Some("module-a/README.md"),
+        "the lexically-first source path wins the collision, not the first-seen node"
     );
 }
 
 #[test]
-fn test_same_id_same_source_file_dedups_to_first() {
+fn test_same_id_same_source_file_keeps_shorter_label() {
+    // Same file, two labels for one id: the shorter, more canonical label wins
+    // by `collision_rank` even though it arrives SECOND (proving the survivor is
+    // rank-driven, not first-writer-wins).
     let nodes = vec![
-        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-a/README.md"}),
         json!({"id": "readme_booking_service", "label": "Booking Service (dupe)", "file_type": "concept", "source_file": "module-a/README.md"}),
+        json!({"id": "readme_booking_service", "label": "Booking Service", "file_type": "concept", "source_file": "module-a/README.md"}),
     ];
     let (result_nodes, _) =
         deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
@@ -655,4 +664,208 @@ fn test_same_id_same_source_file_dedups_to_first() {
         result_nodes[0].get("label").and_then(Value::as_str),
         Some("Booking Service")
     );
+}
+
+// ── #1504/#1851: definition vs cross-reference ────────────────────────────────
+
+/// The defining node and a doc that merely mentions the entity. Both mint the ID
+/// encoded from the *defining* file's path, so they collide by construction.
+fn defining_node() -> Value {
+    json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+           "label": "make-batch-fixtures agent", "file_type": "concept",
+           "source_file": "agents/make-batch-fixtures.md"})
+}
+fn referencing_node() -> Value {
+    json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+           "label": "make-batch-fixtures", "file_type": "concept",
+           "source_file": "available/diagnose-issue/SKILL.md"})
+}
+
+#[test]
+fn test_defining_file_wins_definition_first() {
+    let nodes = vec![defining_node(), referencing_node()];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(
+        result_nodes[0].get("source_file").and_then(Value::as_str),
+        Some("agents/make-batch-fixtures.md")
+    );
+    assert_eq!(
+        result_nodes[0].get("label").and_then(Value::as_str),
+        Some("make-batch-fixtures agent")
+    );
+}
+
+#[test]
+fn test_defining_file_wins_reference_first() {
+    let nodes = vec![referencing_node(), defining_node()];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(
+        result_nodes[0].get("source_file").and_then(Value::as_str),
+        Some("agents/make-batch-fixtures.md")
+    );
+    assert_eq!(
+        result_nodes[0].get("label").and_then(Value::as_str),
+        Some("make-batch-fixtures agent")
+    );
+}
+
+#[test]
+fn test_reference_collision_folds_edges_to_survivor() {
+    // A cross-reference collapsing into the entity it references loses nothing —
+    // edges are keyed by ID and rewire to the survivor. (The stderr silence is
+    // asserted in Python via capsys; here we assert the edge survives.)
+    let edges = vec![json!({
+        "source": "agents_make_batch_fixtures_make_batch_fixtures",
+        "target": "other",
+        "relation": "relates_to"
+    })];
+    let nodes = vec![defining_node(), referencing_node()];
+    let (result_nodes, result_edges) =
+        deduplicate_entities(&nodes, &edges, &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(result_edges.len(), 1);
+}
+
+#[test]
+fn test_absolute_source_path_still_defines_id() {
+    // source_file is absolute in some pipelines and repo-relative in others; the
+    // defining file is recognised either way.
+    let mut absolute = defining_node();
+    absolute["source_file"] = json!("/home/u/proj/agents/make-batch-fixtures.md");
+    let nodes = vec![referencing_node(), absolute];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(
+        result_nodes[0].get("label").and_then(Value::as_str),
+        Some("make-batch-fixtures agent")
+    );
+}
+
+#[test]
+fn test_same_file_relabel_is_deduped() {
+    // Two labels for one ID from one file: the loser's label is discarded. Python
+    // asserts the stderr `note`; here we assert the dedup outcome.
+    let nodes = vec![
+        json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+               "label": "make-batch-fixtures agent", "file_type": "concept",
+               "source_file": "agents/make-batch-fixtures.md"}),
+        json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+               "label": "make-batch-fixtures helper agent", "file_type": "concept",
+               "source_file": "agents/make-batch-fixtures.md"}),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+    assert_eq!(
+        result_nodes[0].get("label").and_then(Value::as_str),
+        Some("make-batch-fixtures agent"),
+        "the shorter, more canonical label survives the relabel"
+    );
+}
+
+#[test]
+fn test_collision_survivor_is_order_independent() {
+    // #1851: definer + same-file relabel + cross-file reference. Across every
+    // insertion order the SAME node (source_file AND label) must survive.
+    let definer = json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+        "label": "make-batch-fixtures agent", "file_type": "concept",
+        "source_file": "agents/make-batch-fixtures.md"});
+    let relabel = json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+        "label": "make-batch-fixtures helper agent", "file_type": "concept",
+        "source_file": "agents/make-batch-fixtures.md"});
+    let xref = json!({"id": "agents_make_batch_fixtures_make_batch_fixtures",
+        "label": "make-batch-fixtures", "file_type": "concept",
+        "source_file": "available/diagnose-issue/SKILL.md"});
+    let base = [definer, relabel, xref];
+    let perms = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let mut survivors: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    for perm in perms {
+        let nodes: Vec<Value> = perm.iter().map(|&i| base[i].clone()).collect();
+        let (out, _) =
+            deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+        assert_eq!(out.len(), 1);
+        survivors.insert((
+            out[0]["source_file"].as_str().unwrap_or("").to_string(),
+            out[0]["label"].as_str().unwrap_or("").to_string(),
+        ));
+    }
+    assert_eq!(
+        survivors.len(),
+        1,
+        "non-deterministic collision survivor: {survivors:?}"
+    );
+    assert!(survivors.contains(&(
+        "agents/make-batch-fixtures.md".to_string(),
+        "make-batch-fixtures agent".to_string()
+    )));
+}
+
+#[test]
+fn test_bare_file_node_defines_its_own_id() {
+    // A file-level semantic node whose id is exactly the slugified path (no
+    // `_entity` suffix) must be recognised as defining its id (#1851 tweak).
+    assert!(defines_id(&json!({
+        "id": "agents_make_batch_fixtures",
+        "source_file": "agents/make-batch-fixtures.md"
+    })));
+}
+
+#[test]
+fn test_defines_id_helper() {
+    assert!(defines_id(&defining_node()));
+    assert!(!defines_id(&referencing_node()));
+    // Pre-#1504 IDs keyed off the bare filename stem.
+    assert!(defines_id(&json!({
+        "id": "readme_booking_service",
+        "source_file": "module-a/README.md"
+    })));
+    // A path that is merely a string-prefix of the ID's path does not define it.
+    assert!(!defines_id(
+        &json!({"id": "agents_foo", "source_file": "agent/foo.md"})
+    ));
+    assert!(!defines_id(
+        &json!({"id": "docs_intro_foo", "source_file": ""})
+    ));
+}
+
+// ── #1857: dedup summary breakdown (emitted to stderr in Rust) ─────────────────
+
+#[test]
+fn test_dedup_summary_fuzzy_only_run_merges() {
+    // Two long, high-entropy, non-code labels on different files: Pass 1 (exact,
+    // same-file) finds nothing; Pass 2 (Jaro-Winkler cross-file) merges them. The
+    // summary line (stderr) reports only the fuzzy count. We assert the merge.
+    let nodes = vec![
+        json!({"id": "g1", "label": "GraphExtractor", "file_type": "concept", "source_file": "a.md"}),
+        json!({"id": "g2", "label": "Graph Extractor", "file_type": "concept", "source_file": "b.md"}),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
+}
+
+#[test]
+fn test_dedup_summary_exact_only_run_merges() {
+    // Same file + same normalized label → Pass 1 exact merge; summary reports
+    // only the exact count.
+    let nodes = vec![
+        json!({"id": "u1", "label": "User Service", "file_type": "concept", "source_file": "svc.md"}),
+        json!({"id": "u2", "label": "user service", "file_type": "concept", "source_file": "svc.md"}),
+    ];
+    let (result_nodes, _) =
+        deduplicate_entities(&nodes, &[], &empty_communities(), None).expect("dedup ok");
+    assert_eq!(result_nodes.len(), 1);
 }

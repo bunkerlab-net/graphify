@@ -297,3 +297,122 @@ fn kind_mcp_query() {
     });
     assert_eq!(read_records(&log)[0]["kind"], "mcp_query");
 }
+
+// ── opt-in gating (#1797) ──────────────────────────────────────────────────
+
+/// Clear every query-log env var so the default (off) applies.
+fn clear_log_env(g: &mut EnvGuard) {
+    g.remove("GRAPHIFY_QUERY_LOG");
+    g.remove("GRAPHIFY_QUERY_LOG_ENABLE");
+    g.remove("GRAPHIFY_QUERY_LOG_DISABLE");
+}
+
+#[test]
+#[serial(env)]
+fn query_log_off_by_default() {
+    // #1797: no opt-in → nothing is written (not even to the default path).
+    let tmp = tempfile::tempdir().unwrap();
+    let mut g = EnvGuard::new();
+    clear_log_env(&mut g);
+    g.set("HOME", &tmp.path().to_string_lossy());
+    log_query(&QueryLog {
+        kind: "query",
+        question: "q",
+        corpus: "/g.json",
+        ..QueryLog::default()
+    });
+    assert!(
+        !tmp.path()
+            .join(".cache")
+            .join("graphify-queries.log")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(env)]
+fn query_log_enabled_by_explicit_flag() {
+    // #1797: GRAPHIFY_QUERY_LOG_ENABLE turns the log on at the default path.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut g = EnvGuard::new();
+    clear_log_env(&mut g);
+    g.set("HOME", &tmp.path().to_string_lossy());
+    g.set("GRAPHIFY_QUERY_LOG_ENABLE", "1");
+    log_query(&QueryLog {
+        kind: "query",
+        question: "q",
+        corpus: "/g.json",
+        ..QueryLog::default()
+    });
+    assert!(
+        tmp.path()
+            .join(".cache")
+            .join("graphify-queries.log")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(env)]
+fn query_log_enabled_by_explicit_path() {
+    // #1797: GRAPHIFY_QUERY_LOG=<path> enables the log at that path.
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("q.log");
+    let mut g = EnvGuard::new();
+    clear_log_env(&mut g);
+    g.set("GRAPHIFY_QUERY_LOG", &log.to_string_lossy());
+    log_query(&QueryLog {
+        kind: "query",
+        question: "q",
+        corpus: "/g.json",
+        ..QueryLog::default()
+    });
+    assert!(log.exists());
+}
+
+#[test]
+#[serial(env)]
+fn query_log_disable_wins() {
+    // #1797: DISABLE forces logging off even when ENABLE is also set.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut g = EnvGuard::new();
+    clear_log_env(&mut g);
+    g.set("HOME", &tmp.path().to_string_lossy());
+    g.set("GRAPHIFY_QUERY_LOG_ENABLE", "1");
+    g.set("GRAPHIFY_QUERY_LOG_DISABLE", "1");
+    log_query(&QueryLog {
+        kind: "query",
+        question: "q",
+        corpus: "/g.json",
+        ..QueryLog::default()
+    });
+    assert!(
+        !tmp.path()
+            .join(".cache")
+            .join("graphify-queries.log")
+            .exists()
+    );
+}
+
+#[test]
+#[serial(env)]
+fn log_query_writes_nothing_by_default() {
+    // #1797 end-to-end: with no opt-in, a real query question is never recorded.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut g = EnvGuard::new();
+    clear_log_env(&mut g);
+    g.set("HOME", &tmp.path().to_string_lossy());
+    log_query(&QueryLog {
+        kind: "query",
+        question: "secret internal ticket TICKET-123",
+        corpus: ".",
+        result: Some("1 node found"),
+        ..QueryLog::default()
+    });
+    assert!(
+        !tmp.path()
+            .join(".cache")
+            .join("graphify-queries.log")
+            .exists()
+    );
+}

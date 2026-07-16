@@ -383,6 +383,61 @@ fn extract_corpus_parallel_empty_files() {
     assert!(resp.nodes.is_empty());
     assert_eq!(failed, 0);
 }
+
+#[test]
+fn omitted_documents_are_reconciled_and_warned() {
+    // #1890: a single chunk returns a clean response that mentions only file0
+    // and file2, silently omitting file1 and file3. Reconciliation must surface
+    // the omitted files in `uncovered_files` (sorted), not drop them.
+    let mut server = mockito::Server::new();
+    let body = json!({
+        "choices": [{
+            "message": {"content": "{\"nodes\":[{\"id\":\"n0\",\"source_file\":\"file0.py\"},{\"id\":\"n2\",\"source_file\":\"file2.py\"}],\"edges\":[]}"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+    })
+    .to_string();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(body)
+        .expect_at_least(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let files = write_files(&tmp, 4);
+    // One chunk holds all four files so the omission is within a single response.
+    let cfg = CorpusConfig {
+        backend: "openai",
+        api_key: Some("k"),
+        model: Some("m"),
+        root: tmp.path(),
+        chunk_size: 8,
+        token_budget: None,
+        max_concurrency: 1,
+        max_retry_depth: 1,
+        deep_mode: false,
+    };
+    let (resp, _failed) = extract_corpus_parallel(&files, &cfg, None);
+    let mut names: Vec<String> = resp
+        .uncovered_files
+        .iter()
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["file1.py".to_string(), "file3.py".to_string()]);
+}
 // ── #1632: parallel merge is deterministic (submission order, not completion) ──
 
 #[test]

@@ -348,11 +348,16 @@ fn questions_for_isolated_nodes(
 ) {
     let isolated: Vec<&str> = graph
         .nodes()
-        .filter_map(|(id, _)| {
+        .filter_map(|(id, attrs)| {
+            // Exclude rationale nodes so this count agrees with report.py's
+            // Knowledge Gaps section, which already filters them (#1768).
+            let is_rationale =
+                attrs.get("file_type").and_then(serde_json::Value::as_str) == Some("rationale");
             (degrees.get(id).copied().unwrap_or(0) <= 1
                 && !is_file_node(graph, id, degrees)
-                && !is_concept_node(graph, id))
-            .then_some(id.as_str())
+                && !is_concept_node(graph, id)
+                && !is_rationale)
+                .then_some(id.as_str())
         })
         .collect();
     if isolated.is_empty() {

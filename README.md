@@ -56,6 +56,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   Verilog/SystemVerilog (`.v`, `.sv`, `.svh`), BYOND DreamMaker
   (`.dm`, `.dme` source plus `.dmi` icon sheets, `.dmm` maps, and `.dmf` interface forms),
   CUDA (`.cu`, `.cuh`) and Metal (`.metal`) routed through the C++ extractor (#1480),
+  Rake build files (`.rake`) routed through the Ruby extractor (#1784),
   and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var _names_ (values are never read).

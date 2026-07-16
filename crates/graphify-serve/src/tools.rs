@@ -17,8 +17,8 @@ use serde_json::Value;
 use crate::ReloadState;
 use crate::ServeError;
 use crate::graph::{
-    community_label, find_node, node_degree, predecessors, query_graph_text, score_nodes,
-    shortest_path, successors,
+    community_label, find_node, node_degree, pick_scored_endpoint, predecessors, query_graph_text,
+    score_nodes, shortest_path, successors,
 };
 
 /// Execute the `query_graph` tool.
@@ -327,8 +327,11 @@ pub fn tool_shortest_path(
         return format!("No node matching target '{target_q}' found.");
     }
 
-    let src_nid = &src_scored[0].1;
-    let tgt_nid = &tgt_scored[0].1;
+    // Prefer a full-token label match over the raw score head (#1785).
+    let src_nid_owned = pick_scored_endpoint(graph, &src_scored, &source_q);
+    let tgt_nid_owned = pick_scored_endpoint(graph, &tgt_scored, &target_q);
+    let src_nid = src_nid_owned.as_str();
+    let tgt_nid = tgt_nid_owned.as_str();
 
     if src_nid == tgt_nid {
         return format!(
@@ -338,8 +341,13 @@ Use a more specific label or the exact node ID."
     }
 
     let mut warnings: Vec<String> = Vec::new();
-    for (name, scored) in [("source", &src_scored), ("target", &tgt_scored)] {
-        if scored.len() >= 2 {
+    // Only meaningful when the raw score head is what got picked — a full-token
+    // override was chosen on token coverage, not score (#1785).
+    for (name, scored, nid) in [
+        ("source", &src_scored, src_nid),
+        ("target", &tgt_scored, tgt_nid),
+    ] {
+        if scored.len() >= 2 && scored.first().is_some_and(|(_, h)| h.as_str() == nid) {
             let top = scored[0].0;
             let runner = scored[1].0;
             if top > 0.0 && (top - runner) / top < 0.10 {

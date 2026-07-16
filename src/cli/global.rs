@@ -26,9 +26,9 @@ pub(crate) fn cmd_global(cmd: GlobalCmd) -> Result<()> {
             let global_path = graphify_global::global_graph_path();
             let summary = graphify_global::global_add(&graph, &tag, &global_path, &manifest_path)?;
             if summary.nodes_added == 0 && summary.nodes_removed == 0 {
-                println!("'{tag}' unchanged since last add - global graph not modified.");
+                outln!("'{tag}' unchanged since last add - global graph not modified.");
             } else {
-                println!(
+                outln!(
                     "Added '{tag}' to global graph: +{} nodes, -{} pruned. Global: {}",
                     summary.nodes_added,
                     summary.nodes_removed,
@@ -40,20 +40,22 @@ pub(crate) fn cmd_global(cmd: GlobalCmd) -> Result<()> {
             let manifest_path = graphify_global::global_manifest_path();
             let global_path = graphify_global::global_graph_path();
             let removed = graphify_global::global_remove(&tag, &global_path, &manifest_path)?;
-            println!("Removed '{tag}' from global graph ({removed} nodes pruned).");
+            outln!("Removed '{tag}' from global graph ({removed} nodes pruned).");
         }
         GlobalCmd::List => {
             let manifest_path = graphify_global::global_manifest_path();
             let entries = graphify_global::global_list(&manifest_path);
             for (tag, entry) in &entries {
-                println!(
+                outln!(
                     "{tag}\t{} nodes\t{} edges\t{}",
-                    entry.node_count, entry.edge_count, entry.added_at
+                    entry.node_count,
+                    entry.edge_count,
+                    entry.added_at
                 );
             }
         }
         GlobalCmd::Path => {
-            println!("{}", graphify_global::global_graph_path().display());
+            outln!("{}", graphify_global::global_graph_path().display());
         }
     }
     Ok(())

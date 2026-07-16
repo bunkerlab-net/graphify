@@ -15,6 +15,6 @@ pub(crate) fn cmd_benchmark(graph: Option<&std::path::Path>) -> Result<()> {
     let start = std::time::Instant::now();
     let result = graphify_benchmark::run_benchmark(path, None, None)?;
     eprintln!("done in {:.1}s", start.elapsed().as_secs_f64());
-    println!("{}", graphify_benchmark::format_benchmark(result.as_ref()));
+    outln!("{}", graphify_benchmark::format_benchmark(result.as_ref()));
     Ok(())
 }

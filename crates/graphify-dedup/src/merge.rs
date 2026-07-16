@@ -311,23 +311,143 @@ fn source_file(node: &Value) -> &str {
         .unwrap_or("")
 }
 
-/// Emit the cross-chunk id-collision WARNING (#1504) when a duplicate id comes
-/// from a different `source_file` than the node already kept. Same-file
-/// duplicates (`existing_sf == new_sf`) are silent. The dropped node is always
-/// the later one (first-writer-wins), so this surfaces otherwise-silent data
-/// loss when two distinct source files resolve to the same node id.
-fn warn_cross_chunk_collision(nid: &str, existing_sf: &str, new_sf: &str) {
-    if existing_sf == new_sf {
-        return;
+/// Slugify-segment regex: any run of non-`[a-z0-9]` chars collapses to `_`.
+#[allow(clippy::expect_used)] // literal pattern; cannot panic at runtime.
+static ID_SEGMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[^a-z0-9]+").expect("static id-segment regex"));
+
+/// Trailing file-extension regex (`.rs`, `.md`, …) anchored at end of path.
+#[allow(clippy::expect_used)] // literal pattern; cannot panic at runtime.
+static EXTENSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\.[^./]+$").expect("static extension regex"));
+
+/// The set of ID prefixes a node extracted from `source_file` may legitimately
+/// mint. An ID is `<path>_<entity>`, where the path is the extension-stripped
+/// source path with each segment slugified and joined by `_`. Every trailing
+/// slice of the path counts (absolute, repo-relative, and pre-#1504 bare-stem
+/// IDs all resolve). Mirrors Python `_id_prefixes`.
+fn id_prefixes(source_file: &str) -> indexmap::IndexSet<String> {
+    let normalized = source_file.replace('\\', "/");
+    let stem = EXTENSION.replace(&normalized, "");
+    let segments: Vec<String> = stem
+        .split('/')
+        .map(|p| {
+            ID_SEGMENT
+                .replace_all(&p.to_lowercase(), "_")
+                .trim_matches('_')
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    (0..segments.len())
+        .map(|i| segments[i..].join("_"))
+        .collect()
+}
+
+/// True when the node's own `source_file` is the file its ID encodes.
+///
+/// A doc that *references* an entity mints the ID of the entity's own file, not
+/// one derived from the doc's path — so the referencing node collides with the
+/// defining node by construction. This separates the two: the definer owns the
+/// ID. Mirrors Python `_defines_id`.
+#[must_use]
+pub fn defines_id(node: &Value) -> bool {
+    let nid = node_id(node);
+    let sf = source_file(node);
+    if nid.is_empty() || sf.is_empty() {
+        return false;
     }
-    eprintln!(
-        "[graphify] WARNING: node '{nid}' from '{new_sf}' collides with a node \
-         already kept from '{existing_sf}' — the second node will be dropped. \
-         This is a cross-chunk ID collision between two different source files \
-         (commonly two files sharing a base name across directories). To avoid \
-         data loss, run 'graphify extract' per subfolder and merge with \
-         'graphify merge-graphs'."
-    );
+    // `nid == prefix` covers a bare file-level node whose id is exactly the
+    // slugified path; `starts_with(prefix + "_")` covers `<path>_<entity>`.
+    id_prefixes(sf)
+        .iter()
+        .any(|prefix| nid == prefix || nid.starts_with(&format!("{prefix}_")))
+}
+
+/// A total order for choosing the survivor of an ID collision, independent of
+/// arrival order. The winner is the node with the SMALLEST rank: a definer
+/// outranks a mere reference; among equally-(non-)defining nodes the shorter,
+/// more canonical label wins, then a lexical tiebreak on label then
+/// `source_file`. Mirrors Python `_collision_rank`.
+fn collision_rank(node: &Value) -> (bool, usize, String, String) {
+    let label = node_label(node);
+    (
+        !defines_id(node),             // definers (false) sort before references (true)
+        label.chars().count(),         // shorter, more canonical label first
+        label.to_string(),             // lexical tiebreak
+        source_file(node).to_string(), // lexically-first source path wins
+    )
+}
+
+/// Report an ID collision in proportion to what dropping each loser costs.
+///
+/// Cross-reference to a definer (edges rewire by ID) → silent. Same file,
+/// different normalised labels → a `note` (one label discarded). Two different
+/// files both minting the ID → a `WARNING` (distinct entities, genuine loss).
+/// Mirrors Python `_report_id_collision`; emitted on `stderr` here.
+fn report_id_collision(nid: &str, survivor: &Value, losers: &[&Value]) {
+    let keep_file = source_file(survivor);
+    let keep_label = node_label(survivor);
+    for loser in losers {
+        let lose_file = source_file(loser);
+        let lose_label = node_label(loser);
+        if lose_file == keep_file {
+            // Same file, different normalised labels: one label discarded.
+            if norm(lose_label) != norm(keep_label) {
+                eprintln!(
+                    "[graphify] note: node '{nid}' was extracted twice from \
+                     '{keep_file}' under different labels — keeping '{keep_label}', \
+                     dropping '{lose_label}'."
+                );
+            }
+        } else if !defines_id(survivor) || defines_id(loser) {
+            // Two different files both mint this ID → distinct entities, genuine
+            // loss. (A loser that merely references the survivor's definition
+            // loses nothing and is silent.)
+            eprintln!(
+                "[graphify] WARNING: node '{nid}' is minted by two different files — \
+                 keeping '{keep_label}' from '{keep_file}', dropping '{lose_label}' \
+                 from '{lose_file}'. An ID is derived from the source path plus the \
+                 entity name, so this one does not identify a single entity and the \
+                 dropped node is lost. To keep them distinct, run 'graphify extract' \
+                 per subfolder and merge with 'graphify merge-graphs'."
+            );
+        }
+    }
+}
+
+/// Collapse duplicate-ID nodes to one survivor per ID, reporting real loss.
+///
+/// The survivor is the node with the smallest [`collision_rank`] (a total
+/// order), so it is independent of chunk arrival order — the definer wins over
+/// a mere cross-reference (#1504, #1851). Returns the survivors in first-seen
+/// order.
+fn resolve_id_collisions(nodes: &[Value]) -> Vec<&Value> {
+    let mut seen_ids: IndexMap<String, &Value> = IndexMap::new();
+    let mut dropped: IndexMap<String, Vec<&Value>> = IndexMap::new();
+    for node in nodes {
+        let nid = node_id(node);
+        if nid.is_empty() {
+            continue;
+        }
+        match seen_ids.get(nid).copied() {
+            None => {
+                seen_ids.insert(nid.to_string(), node);
+            }
+            Some(incumbent) => {
+                if collision_rank(node) < collision_rank(incumbent) {
+                    seen_ids.insert(nid.to_string(), node);
+                    dropped.entry(nid.to_string()).or_default().push(incumbent);
+                } else {
+                    dropped.entry(nid.to_string()).or_default().push(node);
+                }
+            }
+        }
+    }
+    for (nid, losers) in &dropped {
+        report_id_collision(nid, seen_ids[nid], losers);
+    }
+    seen_ids.values().copied().collect()
 }
 
 /// Block label-based merging of file-anchored non-code nodes across files (#1284).
@@ -349,8 +469,10 @@ fn crossfile_fileanchored_blocked(node: &Value, neighbor: &Value) -> bool {
 
 // ── pass 1: exact normalisation ───────────────────────────────────────────────
 
-/// Groups nodes with identical normalised labels within the same source file and unions them in the returned `UnionFind`.
-fn pass1_exact(unique_nodes: &[&Value]) -> Result<UnionFind, DedupError> {
+/// Groups nodes with identical normalised labels within the same source file and
+/// unions them in the returned `UnionFind`. Also returns the number of exact
+/// merges (`sum(len(group) - 1)` over merged same-file groups) for the summary.
+fn pass1_exact(unique_nodes: &[&Value]) -> Result<(UnionFind, usize), DedupError> {
     // Map norm(label) -> indices into unique_nodes.
     let mut norm_to_idx: IndexMap<String, Vec<usize>> = IndexMap::new();
     for (i, node) in unique_nodes.iter().enumerate() {
@@ -366,6 +488,7 @@ fn pass1_exact(unique_nodes: &[&Value]) -> Result<UnionFind, DedupError> {
     }
 
     let mut uf = UnionFind::new();
+    let mut exact_merges = 0usize;
 
     for indices in norm_to_idx.values() {
         if indices.len() <= 1 {
@@ -393,11 +516,12 @@ fn pass1_exact(unique_nodes: &[&Value]) -> Result<UnionFind, DedupError> {
                 for node in file_group {
                     uf.union(winner_id, node_id(node));
                 }
+                exact_merges += file_group.len() - 1;
             }
         }
     }
 
-    Ok(uf)
+    Ok((uf, exact_merges))
 }
 
 // ── pass 2: fuzzy matching ────────────────────────────────────────────────────
@@ -407,7 +531,7 @@ fn pass2_fuzzy(
     unique_nodes: &[&Value],
     uf: &mut UnionFind,
     communities: &IndexMap<String, i64>,
-) -> Result<(), DedupError> {
+) -> Result<usize, DedupError> {
     let mut seen_norms: indexmap::IndexSet<String> = indexmap::IndexSet::new();
     let mut candidates: Vec<&Value> = Vec::new();
     for node in unique_nodes {
@@ -426,7 +550,7 @@ fn pass2_fuzzy(
     }
 
     if candidates.len() < 2 {
-        return Ok(());
+        return Ok(0);
     }
 
     // `make_minhash` is pure, dominated by hashing — fan out across Rayon
@@ -446,6 +570,7 @@ fn pass2_fuzzy(
     };
 
     let pairs = lsh_pairs(&minhashes, LSH_THRESHOLD);
+    let mut fuzzy_merges = 0usize;
 
     for (idx_a, idx_b) in pairs {
         let node_a = candidates[idx_a];
@@ -529,10 +654,11 @@ fn pass2_fuzzy(
             let winner_id = node_id(winner);
             uf.union(winner_id, id_a);
             uf.union(winner_id, id_b);
+            fuzzy_merges += 1;
         }
     }
 
-    Ok(())
+    Ok(fuzzy_merges)
 }
 
 // ── main dedup logic ─────────────────────────────────────────────────────────
@@ -566,21 +692,8 @@ pub fn run(
         return Ok((nodes.to_vec(), edges.to_vec()));
     }
 
-    // Pre-dedup: keep first occurrence of each id (first-writer-wins), warning
-    // on cross-chunk id collisions from differing source files (#1504).
-    let mut seen_ids: IndexMap<String, &Value> = IndexMap::new();
-    for node in nodes {
-        let nid = node_id(node);
-        if nid.is_empty() {
-            continue;
-        }
-        if let Some(&existing) = seen_ids.get(nid) {
-            warn_cross_chunk_collision(nid, source_file(existing), source_file(node));
-        } else {
-            seen_ids.insert(nid.to_string(), node);
-        }
-    }
-    let unique_nodes: Vec<&Value> = seen_ids.values().copied().collect();
+    // Pre-dedup: one node per ID, the definer winning collisions (#1504, #1851).
+    let unique_nodes = resolve_id_collisions(nodes);
 
     if unique_nodes.len() <= 1 {
         let owned: Vec<Value> = unique_nodes.iter().map(|v| (*v).clone()).collect();
@@ -588,10 +701,10 @@ pub fn run(
     }
 
     // Pass 1: exact normalisation.
-    let mut uf = pass1_exact(&unique_nodes)?;
+    let (mut uf, exact_merges) = pass1_exact(&unique_nodes)?;
 
     // Pass 2: MinHash/LSH + Jaro-Winkler.
-    pass2_fuzzy(&unique_nodes, &mut uf, communities)?;
+    let fuzzy_merges = pass2_fuzzy(&unique_nodes, &mut uf, communities)?;
 
     // Pass 3: LLM tiebreaker (opt-in).
     if let Some(backend) = dedup_llm_backend {
@@ -648,6 +761,25 @@ pub fn run(
         let owned: Vec<Value> = unique_nodes.iter().map(|v| (*v).clone()).collect();
         return Ok((owned, edges.to_vec()));
     }
+
+    // Deduplication summary. graphify-py prints this to stdout; this workspace
+    // reserves stdout for structured output, so we emit to stderr (deliberate
+    // divergence). Both counters are reported when non-zero, never nested, so a
+    // fuzzy-only run still shows its count (#1857).
+    let total = remap.len();
+    let mut parts: Vec<String> = Vec::new();
+    if exact_merges > 0 {
+        parts.push(format!("{exact_merges} exact"));
+    }
+    if fuzzy_merges > 0 {
+        parts.push(format!("{fuzzy_merges} fuzzy"));
+    }
+    let breakdown = if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    };
+    eprintln!("[graphify] Deduplicated {total} node(s){breakdown}.");
 
     let deduped_nodes: Vec<Value> = unique_nodes
         .iter()

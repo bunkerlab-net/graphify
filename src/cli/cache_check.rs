@@ -46,7 +46,7 @@ pub(crate) fn cmd_cache_check(files_from: &std::path::Path, root: &std::path::Pa
         out_dir.join(".graphify_uncached.txt"),
         split.uncached_files.join("\n"),
     )?;
-    println!(
+    outln!(
         "Cache: {hit_count} hit, {} miss",
         split.uncached_files.len()
     );

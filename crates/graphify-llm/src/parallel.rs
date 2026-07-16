@@ -8,7 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::file_slice::{Unit, expand_oversized_files};
+use crate::file_slice::{Unit, expand_oversized_files, unit_path};
 use crate::retry::{AdaptiveRetryCtx, extract_with_adaptive_retry_units};
 use crate::tokens::pack_chunks_by_tokens_units;
 use crate::{FILE_CHAR_CAP, LlmResponse};
@@ -105,8 +105,82 @@ pub fn extract_corpus_parallel_with_total(
     let total = chunks.len();
     let workers = resolve_worker_count(cfg, total);
     let outcomes = run_chunks(&chunks, cfg, workers);
-    let (response, failed) = merge_outcomes(outcomes, cfg, total, on_chunk_done);
+    let (mut response, failed) = merge_outcomes(outcomes, cfg, total, on_chunk_done);
+    reconcile_uncovered(&mut response, &chunks, cfg.root);
     (response, failed, total)
+}
+
+/// Reconcile dispatched files against those that returned nodes (#1890).
+///
+/// A semantic chunk can return a clean, non-empty response that omits some of
+/// the documents it was given; those docs then vanish from the graph with no
+/// node and no warning, and are silently re-dispatched (and re-omitted) forever.
+/// Diff the dispatched file set (a slice resolves to its parent file via
+/// [`unit_path`], baking in the #cfc7cf2 fix) against the `source_file`s that
+/// actually returned, record the gap in `merged.uncovered_files`, and print a
+/// loud warning naming the omitted files. Not persisted to `graph.json`.
+fn reconcile_uncovered(merged: &mut LlmResponse, chunks: &[Vec<Unit>], root: &Path) {
+    use std::collections::{BTreeSet, HashSet};
+    // Resolve a path the same way for both sides of the diff: an absolute path
+    // as-is, else joined onto `root`, then canonicalized (with a fallback to the
+    // resolved path so a missing file never aborts the diff). Without the shared
+    // `root` anchor, a relative dispatched path would canonicalize against the
+    // CWD and never match a `source_file` resolved against `root`, reporting
+    // every dispatched file as uncovered.
+    let resolve_key = |p: &Path| -> PathBuf {
+        let resolved = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            root.join(p)
+        };
+        resolved.canonicalize().unwrap_or(resolved)
+    };
+    // Files that returned: each node's `source_file`, resolved for comparison.
+    let covered: HashSet<PathBuf> = merged
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("source_file").and_then(serde_json::Value::as_str))
+        .filter(|sf| !sf.is_empty())
+        .map(|sf| resolve_key(Path::new(sf)))
+        .collect();
+    // Files we dispatched (deduped, sorted). `unit_path` collapses a slice onto
+    // its parent file, so a split document counts once. The report keeps the raw
+    // dispatched path; only the comparison key is root-resolved.
+    let dispatched: BTreeSet<PathBuf> = chunks
+        .iter()
+        .flatten()
+        .map(|u| unit_path(u).to_path_buf())
+        .collect();
+    let uncovered: Vec<String> = dispatched
+        .iter()
+        .filter(|p| !covered.contains(&resolve_key(p)))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    if !uncovered.is_empty() {
+        let shown = uncovered
+            .iter()
+            .take(5)
+            .map(|p| {
+                Path::new(p)
+                    .file_name()
+                    .map_or_else(|| p.clone(), |n| n.to_string_lossy().into_owned())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if uncovered.len() > 5 {
+            format!(" (+{} more)", uncovered.len() - 5)
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "[graphify] WARNING: {}/{} dispatched file(s) produced no nodes and are \
+             absent from the graph: {shown}{more}. The model returned a response but \
+             omitted them; a re-run will retry them.",
+            uncovered.len(),
+            dispatched.len()
+        );
+    }
+    merged.uncovered_files = uncovered;
 }
 
 /// Split `files` into chunks using either the token-budget packer or a fixed
@@ -223,6 +297,7 @@ fn merge_outcomes(
         finish_reason: "stop".to_string(),
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
+        uncovered_files: vec![],
     };
     for outcome in outcomes {
         match outcome {

@@ -54,7 +54,10 @@ pub(crate) fn canonical_topology_for_compare(graph_data: &Value) -> Value {
     let mut canonical = obj.clone();
     canonical.remove("built_at_commit");
 
-    // Normalise nodes: strip community + norm_label, then sort.
+    // Normalise nodes: strip community + community_name + norm_label, then sort.
+    // `community_name` is stripped so the topology-unchanged cache still matches
+    // once graph.json carries readable hub names, avoiding a needless re-cluster
+    // on every subsequent `update` with no code changes (#1808).
     if let Some(Value::Array(nodes)) = canonical.get_mut("nodes") {
         let mut norm_nodes: Vec<Value> = nodes
             .iter()
@@ -62,6 +65,7 @@ pub(crate) fn canonical_topology_for_compare(graph_data: &Value) -> Value {
                 let map = node.as_object()?;
                 let mut n = map.clone();
                 n.remove("community");
+                n.remove("community_name");
                 n.remove("norm_label");
                 Some(Value::Object(n))
             })

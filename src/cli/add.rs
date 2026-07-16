@@ -14,7 +14,7 @@ pub(crate) fn cmd_add(
 ) -> Result<()> {
     eprintln!("fetching {url} ...");
     let path = graphify_ingest::ingest(url, dir, author, contributor)?;
-    println!("Saved to {}", path.display());
-    println!("Run /graphify --update in your AI assistant to update the graph.");
+    outln!("Saved to {}", path.display());
+    outln!("Run /graphify --update in your AI assistant to update the graph.");
     Ok(())
 }

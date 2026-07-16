@@ -35,20 +35,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Capture rustc fingerprint
-        id: rustc
-        run: echo "fingerprint=$(rustc -Vv | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-build-${{ steps.rustc.outputs.fingerprint }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-build-${{ steps.rustc.outputs.fingerprint }}
-
       # `--all-features` enables the `postgres` feature, which pulls `native-tls`.
       # No extra OpenSSL setup step is needed: the GitHub-hosted ubuntu runners
       # ship libssl-dev + pkg-config preinstalled — `lint.yml`'s

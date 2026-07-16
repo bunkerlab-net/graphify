@@ -134,6 +134,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         let mut top_ctx = BashCallCtx {
             str_path: &str_path,
             stem: &stem,
+            path,
             defined_functions: &defined_functions,
             edges: &mut edges,
             seen_calls: &mut top_seen,
@@ -145,6 +146,7 @@ pub fn extract_bash(path: &Path) -> FileResult {
         let mut call_ctx = BashCallCtx {
             str_path: &str_path,
             stem: &stem,
+            path,
             defined_functions: &defined_functions,
             edges: &mut edges,
             seen_calls: &mut seen_calls,
@@ -445,6 +447,7 @@ fn walk_bash(ctx: &mut BashWalkCtx<'_>, node: tree_sitter::Node<'_>, source: &[u
 struct BashCallCtx<'a> {
     str_path: &'a str,
     stem: &'a str,
+    path: &'a Path,
     defined_functions: &'a HashSet<String>,
     edges: &'a mut Vec<Edge>,
     seen_calls: &'a mut HashSet<(String, String)>,
@@ -512,6 +515,130 @@ fn is_literal_command_name(name: &str) -> bool {
     !name.contains(['$', '`', '<', '>', '|', ';', '&'])
 }
 
+/// Shell interpreters that run a script passed as their first argument.
+const BASH_SCRIPT_RUNNERS: &[&str] = &["bash", "sh", "zsh", "ksh", "dash"];
+
+/// Clean a token to its literal value: strip surrounding matching quotes and
+/// reject anything containing shell metacharacters (an expansion is not a
+/// literal path). Mirrors Python `literal(node)`.
+fn literal_token(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let raw = read_text(node, source).trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let bytes = raw.as_bytes();
+    let first = bytes[0];
+    let stripped =
+        if (first == b'\'' || first == b'"') && raw.len() >= 2 && bytes[raw.len() - 1] == first {
+            &raw[1..raw.len() - 1]
+        } else {
+            raw
+        };
+    if !is_literal_command_name(stripped) {
+        return None;
+    }
+    Some(stripped.to_string())
+}
+
+/// True when `value` names a `.sh` script (case-sensitive extension, matching
+/// Python's `endswith(".sh")` without a case-insensitive widening).
+fn has_sh_extension(value: &str) -> bool {
+    std::path::Path::new(value)
+        .extension()
+        .is_some_and(|ext| ext == "sh")
+}
+
+/// Emit a cross-file `script_invocation` `calls` edge when `cmd_node` runs
+/// another script by execution — a bare `./x.sh` or a runner (`bash x.sh`,
+/// `sh x.sh`, …) whose script argument resolves to a real `.sh` file on disk
+/// (#1756). Dynamic (`$VAR`) targets, missing files, and function-shadowed
+/// names never emit an edge; the caller has already excluded defined functions.
+fn try_emit_script_invocation(
+    ctx: &mut BashCallCtx<'_>,
+    cmd_node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_nid: &str,
+    cmd_name: &str,
+) {
+    // The invoked script path: the command itself for a bare `./x.sh`, or the
+    // runner's first argument for `bash x.sh`.
+    let mut raw = if has_sh_extension(cmd_name) && is_literal_command_name(cmd_name) {
+        Some(cmd_name.to_string())
+    } else {
+        None
+    };
+    if BASH_SCRIPT_RUNNERS.contains(&cmd_name) {
+        raw = first_command_arg(cmd_node).and_then(|arg| literal_token(arg, source));
+    }
+    let Some(raw) = raw.filter(|r| has_sh_extension(r)) else {
+        return;
+    };
+    // Resolve against the caller script's directory and require a real file.
+    let Some(resolved) = ctx
+        .path
+        .parent()
+        .map(|p| p.join(&raw))
+        .and_then(|p| p.canonicalize().ok())
+    else {
+        return;
+    };
+    if !resolved.is_file() {
+        return;
+    }
+    // When the caller path is relative, key the target off the CWD-relative path
+    // so it matches the entry node id a corpus `extract()` mints (#1756).
+    let target_path = if ctx.path.is_absolute() {
+        resolved.clone()
+    } else {
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| cwd.canonicalize().ok())
+            .and_then(|cwd| resolved.strip_prefix(&cwd).ok().map(Path::to_path_buf))
+            .unwrap_or_else(|| resolved.clone())
+    };
+    let tgt = format!("{}__entry", make_id1(&target_path.to_string_lossy()));
+    let key = (caller_nid.to_string(), tgt.clone());
+    if !ctx.seen_calls.insert(key) {
+        return;
+    }
+    let line = cmd_node.start_position().row + 1;
+    ctx.edges.push(Edge {
+        external: false,
+        source: caller_nid.to_string(),
+        target: tgt,
+        relation: "calls".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        source_file: ctx.str_path.to_string(),
+        source_location: Some(format!("L{line}")),
+        weight: 1.0,
+        context: Some("script_invocation".to_string()),
+        confidence_score: None,
+        deferred: false,
+        metadata: None,
+    });
+}
+
+/// First `word`/`string`/`concatenation` child of a `command` node that is not
+/// its name node — the script argument for a runner like `bash x.sh`.
+fn first_command_arg(cmd_node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    let name_node = cmd_node.child_by_field_name("name");
+    let mut cur = cmd_node.walk();
+    if cur.goto_first_child() {
+        loop {
+            let c = cur.node();
+            if matches!(c.kind(), "word" | "string" | "concatenation")
+                && Some(c.id()) != name_node.map(|n| n.id())
+            {
+                return Some(c);
+            }
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
 /// Emit a `calls` edge from `caller_nid` to the function targeted by
 /// `cmd_node` (a `command` AST node) — if and only if the command's name is
 /// a literal user-defined function and the edge hasn't already been seen.
@@ -538,13 +665,19 @@ fn emit_call_edge_if_valid(
     let Some(cnn) = cmd_name_node else {
         return;
     };
-    let name = read_text(cnn, source).trim().to_string();
-    // `defined_functions` already constrains us to user-defined function
-    // names, so an extra `BASH_SKIP` filter would only create false
-    // negatives when a script shadows a builtin like `source` — see
-    // graphify-py `walk_calls`, which only checks `defined_functions`.
-    if name.is_empty() || !is_literal_command_name(&name) || !ctx.defined_functions.contains(&name)
-    {
+    // Clean the command name the way graphify-py does (`cmd = literal(...)`):
+    // strip surrounding matching quotes and reject shell-expansion/metachar
+    // tokens, so a quoted `"./child.sh"` invocation is recognised the same as a
+    // bare one (bash.py:164 via the `literal` helper at :92-93). `None` (empty or
+    // a `$`/backtick/redirection token) is not a real call target.
+    let Some(name) = literal_token(cnn, source) else {
+        return;
+    };
+    // A command that is NOT a defined function may still run another script:
+    // a bare `./x.sh` or a runner (`bash x.sh`) resolving to a real .sh file on
+    // disk gets a cross-file `script_invocation` calls edge (#1756).
+    if !ctx.defined_functions.contains(&name) {
+        try_emit_script_invocation(ctx, cmd_node, source, caller_nid, &name);
         return;
     }
     let tgt = make_id(&[ctx.stem, &name]);

@@ -37,7 +37,7 @@ fn language_family(ext: &str) -> Option<&'static str> {
         // call/reference is legitimate, not a phantom (#1547/#1556/#1749).
         "c" | "h" | "cc" | "cpp" | "hpp" | "cxx" | "hh" | "hxx" | "cu" | "cuh" | "metal" | "m"
         | "mm" => Some("c"),
-        "rb" => Some("rb"),
+        "rb" | "rake" => Some("rb"),
         "php" => Some("php"),
         "cs" => Some("cs"),
         "swift" => Some("swift"),

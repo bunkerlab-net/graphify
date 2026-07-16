@@ -22,7 +22,7 @@ quick-xml = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 tempfile = { workspace = true }

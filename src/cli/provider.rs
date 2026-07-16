@@ -78,14 +78,14 @@ fn save_registry(registry: &Map<String, Value>) -> Result<()> {
 fn list() -> Result<()> {
     let registry = load_registry()?;
     if registry.is_empty() {
-        println!("No custom providers registered.");
+        outln!("No custom providers registered.");
     } else {
         for (name, cfg) in &registry {
             let base = cfg
                 .get("base_url")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            println!("  {name}  ({base})");
+            outln!("  {name}  ({base})");
         }
     }
     Ok(())
@@ -98,7 +98,7 @@ fn show(name: &str) -> Result<()> {
     };
     let mut single = Map::new();
     single.insert(name.to_string(), cfg.clone());
-    println!("{}", serde_json::to_string_pretty(&Value::Object(single))?);
+    outln!("{}", serde_json::to_string_pretty(&Value::Object(single))?);
     Ok(())
 }
 
@@ -146,7 +146,7 @@ fn add(
         }),
     );
     save_registry(&registry)?;
-    println!("Provider '{name}' added. Use with: graphify extract . --backend {name}");
+    outln!("Provider '{name}' added. Use with: graphify extract . --backend {name}");
     Ok(())
 }
 
@@ -156,6 +156,6 @@ fn remove(name: &str) -> Result<()> {
         return Err(anyhow!("Provider '{name}' not found."));
     }
     save_registry(&registry)?;
-    println!("Provider '{name}' removed.");
+    outln!("Provider '{name}' removed.");
     Ok(())
 }

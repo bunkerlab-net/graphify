@@ -165,10 +165,15 @@ const JS_CACHE_BYPASS_SUFFIXES: [&str; 10] = [
 
 /// Extract a single file, returning a cached result when available.
 ///
-/// Looks up the on-disk AST cache first; on a miss, dispatches to the language-specific
-/// extractor and writes the result back to the cache. Files with no matching extractor
-/// return an empty `FileResult` rather than an error.
-pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileResult {
+/// Looks up the on-disk AST cache first; on a miss, dispatches to the
+/// language-specific extractor and writes the result back to the cache. Files
+/// with no matching extractor return an empty `FileResult` rather than an error.
+///
+/// `root` anchors the content-hash cache keys, node ids, and the XAML
+/// project-scan boundary (the corpus). `cache_location` is where the cache
+/// directory lives — decoupled from `root` so the cache never lands inside a
+/// read-only/analysed source tree (#1774).
+pub(super) fn extract_single_file(path: &Path, root: &Path, cache_location: &Path) -> FileResult {
     // JS/TS files bypass the AST cache so workspace/sibling import resolution is
     // recomputed each run (#9a7dbfb): a result cached while a sibling was absent
     // would otherwise pin a stale unresolved import edge.
@@ -179,7 +184,9 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
         .and_then(|e| e.to_str())
         .is_some_and(|ext| JS_CACHE_BYPASS_SUFFIXES.contains(&ext.to_ascii_lowercase().as_str()));
 
-    if !bypass_cache && let Some(v) = graphify_cache::load_cached(path, effective_root, "ast") {
+    if !bypass_cache
+        && let Some(v) = graphify_cache::load_cached(path, root, "ast", Some(cache_location))
+    {
         return value_to_file_result(&v);
     }
 
@@ -192,7 +199,7 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
         };
     };
 
-    let result = with_xaml_extract_root(Some(effective_root), || extractor(path));
+    let result = with_xaml_extract_root(Some(root), || extractor(path));
     // Never cache a zero-node result for an extractable file. Every supported
     // source produces at least a file node, so an empty node list is anomalous
     // (e.g. a transient parallel hiccup); caching it makes the empty byte-stable
@@ -201,7 +208,7 @@ pub(super) fn extract_single_file(path: &Path, effective_root: &Path) -> FileRes
     if !bypass_cache && result.error.is_none() && !result.nodes.is_empty() {
         let v = file_result_to_value(&result);
         // best-effort save; ignore failures
-        let _ = graphify_cache::save_cached(path, &v, effective_root, "ast");
+        let _ = graphify_cache::save_cached(path, &v, root, "ast", Some(cache_location));
     }
     result
 }

@@ -63,6 +63,6 @@ pub(crate) fn cmd_clone(
             anyhow::bail!("git clone failed with status {status}");
         }
     }
-    println!("{}", target.display());
+    outln!("{}", target.display());
     Ok(())
 }

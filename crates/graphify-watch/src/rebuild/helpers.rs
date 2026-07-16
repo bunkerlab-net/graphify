@@ -116,12 +116,14 @@ pub(crate) fn build_analysis(
 // ── detect_code_files ─────────────────────────────────────────────────────────
 
 /// Run detection and return the code+document files that have AST extractors.
+/// `extra_excludes` re-applies persisted `--exclude` patterns (#1886).
 pub(crate) fn detect_code_files(
     watch_path: &Path,
     follow_symlinks: bool,
+    extra_excludes: Option<&[String]>,
 ) -> (DetectResult, Vec<PathBuf>) {
     let follow = if follow_symlinks { Some(true) } else { None };
-    let detected = detect(watch_path, follow, None);
+    let detected = detect(watch_path, follow, extra_excludes);
     let mut code_files: Vec<PathBuf> = detected
         .files
         .get("code")

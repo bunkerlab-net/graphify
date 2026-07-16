@@ -245,24 +245,31 @@ pub(super) fn js_extra_walk<'tree>(
                     if is_js_function_value(value.kind()) {
                         if let Some(name_node) = child.child_by_field_name("name") {
                             let func_name = read_text_owned(name_node, source);
-                            let line = child.start_position().row as u32 + 1;
-                            let func_nid = make_id(&[stem, &func_name]);
-                            add_node(
-                                &func_nid,
-                                &format!("{func_name}()"),
-                                line,
-                                str_path,
-                                nodes,
-                                seen_ids,
-                            );
-                            add_edge(file_nid, &func_nid, "contains", line, str_path, None, edges);
-                            callable_def_nids.insert(func_nid.clone());
-                            local_bound_names
-                                .insert(func_nid.clone(), js_local_bound_names(value, source));
-                            if let Some(body) = value.child_by_field_name("body") {
-                                function_bodies.push((func_nid, body));
+                            // A name that normalizes to nothing (e.g. minified `$`)
+                            // collapses the id onto the absolute file-stem and leaks
+                            // the scan path (#1899); skip it (no graph signal).
+                            if !graphify_build::normalize_id(&func_name).is_empty() {
+                                let line = child.start_position().row as u32 + 1;
+                                let func_nid = make_id(&[stem, &func_name]);
+                                add_node(
+                                    &func_nid,
+                                    &format!("{func_name}()"),
+                                    line,
+                                    str_path,
+                                    nodes,
+                                    seen_ids,
+                                );
+                                add_edge(
+                                    file_nid, &func_nid, "contains", line, str_path, None, edges,
+                                );
+                                callable_def_nids.insert(func_nid.clone());
+                                local_bound_names
+                                    .insert(func_nid.clone(), js_local_bound_names(value, source));
+                                if let Some(body) = value.child_by_field_name("body") {
+                                    function_bodies.push((func_nid, body));
+                                }
+                                arrow_found = true;
                             }
-                            arrow_found = true;
                         }
                     } else if matches!(
                         value.kind(),

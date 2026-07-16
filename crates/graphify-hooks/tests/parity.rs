@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use graphify_hooks::{
-    CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT, PYTHON_DETECT, hooks_dir_with,
-    install, status, uninstall, user_hooks_dir,
+    CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT, PYTHON_DETECT, WORKTREE_GUARD,
+    hooks_dir_with, install, status, uninstall, user_hooks_dir,
 };
 use serial_test::serial;
 
@@ -2967,4 +2967,109 @@ fn hook_scripts_cap_windows_rebuild_workers() {
             "the cap must be gated on WINDIR/MSYSTEM"
         );
     }
+}
+
+/// #1809: `GRAPHIFY_SKIP_HOOK=1` must suppress BOTH hooks. post-checkout
+/// previously lacked the check, so the var stopped commit rebuilds but not
+/// branch-switch ones.
+#[test]
+fn hooks_honor_skip_env() {
+    for (name, script) in [
+        ("post-commit", HOOK_SCRIPT),
+        ("post-checkout", CHECKOUT_SCRIPT),
+    ] {
+        assert!(
+            script.contains(r#"[ "${GRAPHIFY_SKIP_HOOK:-0}" = "1" ] && exit 0"#),
+            "{name} does not honor GRAPHIFY_SKIP_HOOK"
+        );
+    }
+}
+
+/// #1809/#1806: both hooks must short-circuit in a linked worktree
+/// (git-dir != common-dir), comparing ABSOLUTE paths so the primary checkout
+/// (where --git-common-dir is the relative ".git") is not false-positived.
+#[test]
+fn hooks_skip_linked_worktrees() {
+    for (name, script) in [
+        ("post-commit", HOOK_SCRIPT),
+        ("post-checkout", CHECKOUT_SCRIPT),
+    ] {
+        assert_eq!(
+            script.matches("_GFY_GITDIR=").count(),
+            1,
+            "{name} guard not present exactly once"
+        );
+        assert!(
+            script.contains("git rev-parse --git-common-dir"),
+            "{name} missing common-dir probe"
+        );
+        // absolute-normalized compare, not a raw string compare of git output
+        assert!(
+            script.contains(r#"cd "$(git rev-parse --git-dir 2>/dev/null)" 2>/dev/null && pwd"#),
+            "{name} does not resolve git-dir to an absolute path"
+        );
+        assert!(
+            script.contains(r#"[ "$_GFY_GITDIR" != "$_GFY_COMMONDIR" ]"#),
+            "{name} missing the git-dir vs common-dir compare"
+        );
+    }
+}
+
+/// End-to-end against a real `git worktree`: [`WORKTREE_GUARD`] falls through on
+/// the primary checkout and exits early inside a linked worktree (#1809, #1806).
+#[test]
+fn worktree_guard_runs_on_primary_skips_linked() {
+    use std::process::Command;
+    if Command::new("git").arg("--version").output().is_err() {
+        return; // git not available
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let primary = tmp.path().join("primary");
+    std::fs::create_dir_all(&primary).expect("mkdir primary");
+
+    let git = |args: &[&str], cwd: &std::path::Path| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git run");
+        assert!(out.status.success(), "git {args:?} failed: {out:?}");
+    };
+    git(&["init", "-q", "."], &primary);
+    git(&["config", "user.email", "t@t.co"], &primary);
+    git(&["config", "user.name", "t"], &primary);
+    std::fs::write(primary.join("a.txt"), "x").expect("write a.txt");
+    git(&["add", "-A"], &primary);
+    git(&["commit", "-qm", "init"], &primary);
+    let linked = tmp.path().join("linked");
+    git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            linked.to_str().expect("utf-8"),
+            "-b",
+            "feature",
+        ],
+        &primary,
+    );
+
+    let snippet = format!("{WORKTREE_GUARD}echo RAN\n");
+    let run = |cwd: &std::path::Path| {
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(&snippet)
+            .current_dir(cwd)
+            .output()
+            .expect("sh run");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(
+        run(&primary).contains("RAN"),
+        "guard wrongly skipped the primary checkout"
+    );
+    assert!(
+        !run(&linked).contains("RAN"),
+        "guard failed to skip the linked worktree"
+    );
 }

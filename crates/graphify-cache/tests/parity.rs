@@ -34,8 +34,8 @@ fn file_hash_consistent() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("sample.txt");
     write_text(&f, "hello world");
-    let h1 = file_hash(&f, tmp.path()).expect("hash");
-    let h2 = file_hash(&f, tmp.path()).expect("hash");
+    let h1 = file_hash(&f, tmp.path(), None).expect("hash");
+    let h2 = file_hash(&f, tmp.path(), None).expect("hash");
     assert_eq!(h1, h2);
     assert_eq!(h1.len(), 64);
 }
@@ -49,8 +49,8 @@ fn file_hash_changes() {
     let f2 = tmp.path().join("b.txt");
     write_text(&f1, "content one");
     write_text(&f2, "content two");
-    let h1 = file_hash(&f1, tmp.path()).expect("hash");
-    let h2 = file_hash(&f2, tmp.path()).expect("hash");
+    let h1 = file_hash(&f1, tmp.path(), None).expect("hash");
+    let h2 = file_hash(&f2, tmp.path(), None).expect("hash");
     assert_ne!(h1, h2);
 }
 
@@ -65,8 +65,8 @@ fn cache_roundtrip() {
         "nodes": [{"id": "n1", "label": "Node1"}],
         "edges": [],
     });
-    save_cached(&f, &result, tmp.path(), "ast").expect("save");
-    let loaded = load_cached(&f, tmp.path(), "ast").expect("loaded");
+    save_cached(&f, &result, tmp.path(), "ast", None).expect("save");
+    let loaded = load_cached(&f, tmp.path(), "ast", None).expect("loaded");
     assert_eq!(loaded, result);
 }
 
@@ -78,11 +78,11 @@ fn cache_miss_on_change() {
     let f = tmp.path().join("sample.txt");
     write_text(&f, "hello world");
     let result = json!({"nodes": [], "edges": [{"source": "a", "target": "b"}]});
-    save_cached(&f, &result, tmp.path(), "ast").expect("save");
+    save_cached(&f, &result, tmp.path(), "ast", None).expect("save");
     _reset_stat_index_for_tests(); // bust stat fastpath so we re-hash
     write_text(&f, "completely different content");
     bump_mtime(&f);
-    assert!(load_cached(&f, tmp.path(), "ast").is_none());
+    assert!(load_cached(&f, tmp.path(), "ast", None).is_none());
 }
 
 #[test]
@@ -95,12 +95,26 @@ fn cached_files_returns_hashes() {
     write_text(&f1, "alpha");
     write_text(&f2, "beta");
 
-    save_cached(&f1, &json!({"nodes": [], "edges": []}), tmp.path(), "ast").expect("save1");
-    save_cached(&f2, &json!({"nodes": [], "edges": []}), tmp.path(), "ast").expect("save2");
+    save_cached(
+        &f1,
+        &json!({"nodes": [], "edges": []}),
+        tmp.path(),
+        "ast",
+        None,
+    )
+    .expect("save1");
+    save_cached(
+        &f2,
+        &json!({"nodes": [], "edges": []}),
+        tmp.path(),
+        "ast",
+        None,
+    )
+    .expect("save2");
 
     let hashes = cached_files(tmp.path());
-    let h1 = file_hash(&f1, tmp.path()).expect("h1");
-    let h2 = file_hash(&f2, tmp.path()).expect("h2");
+    let h1 = file_hash(&f1, tmp.path(), None).expect("h1");
+    let h2 = file_hash(&f2, tmp.path(), None).expect("h2");
     assert!(hashes.contains(&h1));
     assert!(hashes.contains(&h2));
 }
@@ -112,7 +126,14 @@ fn clear_cache_removes_all() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("sample.txt");
     write_text(&f, "hello world");
-    save_cached(&f, &json!({"nodes": [], "edges": []}), tmp.path(), "ast").expect("save");
+    save_cached(
+        &f,
+        &json!({"nodes": [], "edges": []}),
+        tmp.path(),
+        "ast",
+        None,
+    )
+    .expect("save");
     let base = tmp.path().join("graphify-out").join("cache");
     let pre: Vec<_> = walkdir::WalkDir::new(&base)
         .into_iter()
@@ -139,14 +160,14 @@ fn md_frontmatter_only_change_same_hash() {
         &f,
         "---\nreviewed: 2026-01-01\n---\n\n# Title\n\nBody text.",
     );
-    let h1 = file_hash(&f, tmp.path()).expect("h1");
+    let h1 = file_hash(&f, tmp.path(), None).expect("h1");
     _reset_stat_index_for_tests(); // bust stat fastpath
     write_text(
         &f,
         "---\nreviewed: 2026-04-09\n---\n\n# Title\n\nBody text.",
     );
     bump_mtime(&f);
-    let h2 = file_hash(&f, tmp.path()).expect("h2");
+    let h2 = file_hash(&f, tmp.path(), None).expect("h2");
     assert_eq!(h1, h2);
 }
 
@@ -160,14 +181,14 @@ fn md_body_change_different_hash() {
         &f,
         "---\nreviewed: 2026-01-01\n---\n\n# Title\n\nOriginal body.",
     );
-    let h1 = file_hash(&f, tmp.path()).expect("h1");
+    let h1 = file_hash(&f, tmp.path(), None).expect("h1");
     _reset_stat_index_for_tests();
     write_text(
         &f,
         "---\nreviewed: 2026-01-01\n---\n\n# Title\n\nChanged body.",
     );
     bump_mtime(&f);
-    let h2 = file_hash(&f, tmp.path()).expect("h2");
+    let h2 = file_hash(&f, tmp.path(), None).expect("h2");
     assert_ne!(h1, h2);
 }
 
@@ -178,11 +199,11 @@ fn md_no_frontmatter_hashed_normally() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("doc.md");
     write_text(&f, "# Just a heading\n\nNo frontmatter here.");
-    let h1 = file_hash(&f, tmp.path()).expect("h1");
+    let h1 = file_hash(&f, tmp.path(), None).expect("h1");
     _reset_stat_index_for_tests();
     write_text(&f, "# Just a heading\n\nDifferent content.");
     bump_mtime(&f);
-    let h2 = file_hash(&f, tmp.path()).expect("h2");
+    let h2 = file_hash(&f, tmp.path(), None).expect("h2");
     assert_ne!(h1, h2);
 }
 
@@ -193,11 +214,11 @@ fn non_md_file_hashed_fully() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("script.py");
     write_text(&f, "# comment\nx = 1");
-    let h1 = file_hash(&f, tmp.path()).expect("h1");
+    let h1 = file_hash(&f, tmp.path(), None).expect("h1");
     _reset_stat_index_for_tests();
     write_text(&f, "# changed comment\nx = 1");
     bump_mtime(&f);
-    let h2 = file_hash(&f, tmp.path()).expect("h2");
+    let h2 = file_hash(&f, tmp.path(), None).expect("h2");
     assert_ne!(h1, h2);
 }
 
@@ -347,10 +368,10 @@ fn md_edit_above_hr_changes_hash() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("doc.md");
     write_text(&f, "----\nIntro paragraph.\n\n---\nbody");
-    let h1 = file_hash(&f, tmp.path()).expect("hash");
+    let h1 = file_hash(&f, tmp.path(), None).expect("hash");
     bump_mtime(&f);
     write_text(&f, "----\nEdited intro paragraph.\n\n---\nbody");
-    let h2 = file_hash(&f, tmp.path()).expect("hash");
+    let h2 = file_hash(&f, tmp.path(), None).expect("hash");
     assert_ne!(h1, h2);
 }
 
@@ -374,9 +395,9 @@ fn save_cached_relativizes_source_file() {
         "nodes": [{"id": "n1", "label": "foo", "source_file": abs_src.clone()}],
         "edges": [{"source": "n1", "target": "n1", "source_file": abs_src}],
     });
-    save_cached(&src, &result, root, "ast").expect("save");
+    save_cached(&src, &result, root, "ast", None).expect("save");
 
-    let h = file_hash(&src, root).expect("hash");
+    let h = file_hash(&src, root, None).expect("hash");
     let entry = cache_dir(root, "ast")
         .expect("dir")
         .join(format!("{h}.json"));
@@ -408,10 +429,11 @@ fn load_cached_absolutizes_source_file() {
         }),
         root,
         "ast",
+        None,
     )
     .expect("save");
 
-    let loaded = load_cached(&src, root, "ast").expect("loaded");
+    let loaded = load_cached(&src, root, "ast", None).expect("loaded");
     assert_eq!(loaded["nodes"][0]["source_file"], json!(abs_src));
     assert_eq!(loaded["edges"][0]["source_file"], json!(abs_src));
 }
@@ -432,7 +454,7 @@ fn load_cached_passes_through_legacy_absolute_source_file() {
         .into_owned();
 
     // Hand-write a legacy-format cache entry (absolute source_file).
-    let h = file_hash(&src, root).expect("hash");
+    let h = file_hash(&src, root, None).expect("hash");
     let entry = cache_dir(root, "ast")
         .expect("dir")
         .join(format!("{h}.json"));
@@ -442,7 +464,7 @@ fn load_cached_passes_through_legacy_absolute_source_file() {
     .expect("ser");
     fs::write(&entry, payload).expect("write");
 
-    let loaded = load_cached(&src, root, "ast").expect("loaded");
+    let loaded = load_cached(&src, root, "ast", None).expect("loaded");
     assert_eq!(loaded["nodes"][0]["source_file"], json!(abs_src));
 }
 
@@ -465,6 +487,7 @@ fn cache_portable_across_roots() {
         &json!({"nodes": [{"id": "n1", "source_file": abs_a}], "edges": []}),
         &repo_a,
         "ast",
+        None,
     )
     .expect("save");
 
@@ -473,7 +496,7 @@ fn cache_portable_across_roots() {
     copy_dir_all(&repo_a, &repo_b);
 
     let src_b = repo_b.join("src").join("foo.py");
-    let loaded = load_cached(&src_b, &repo_b, "ast").expect("portable");
+    let loaded = load_cached(&src_b, &repo_b, "ast", None).expect("portable");
     let abs_b = src_b
         .canonicalize()
         .expect("canon b")
@@ -504,11 +527,12 @@ fn ast_cache_invalidated_on_version_bump() {
         root,
         "ast",
         "0.8.0",
+        None,
     )
     .expect("save");
-    assert!(load_cached_versioned(&f, root, "ast", "0.8.0").is_some());
+    assert!(load_cached_versioned(&f, root, "ast", "0.8.0", None).is_some());
     assert!(
-        load_cached_versioned(&f, root, "ast", "0.8.1").is_none(),
+        load_cached_versioned(&f, root, "ast", "0.8.1", None).is_none(),
         "AST cache entry from a previous version must not be served"
     );
 }
@@ -528,6 +552,7 @@ fn ast_cache_version_bump_cleans_stale_entries() {
         root,
         "ast",
         "0.8.0",
+        None,
     )
     .expect("save");
     let old_dir = cache_dir_versioned(root, "ast", "0.8.0").expect("old dir");
@@ -548,7 +573,7 @@ fn legacy_unversioned_ast_entries_not_served() {
     let root = tmp.path();
     let f = root.join("mod.py");
     write_text(&f, "def f(): pass\n");
-    let h = file_hash(&f, root).expect("hash");
+    let h = file_hash(&f, root, None).expect("hash");
     let payload =
         serde_json::to_string(&json!({"nodes": [{"id": "stale"}], "edges": []})).expect("ser");
 
@@ -562,7 +587,7 @@ fn legacy_unversioned_ast_entries_not_served() {
     // Legacy flat cache/{hash}.json (pre-0.5.3 layout)
     fs::write(cache_base.join(format!("{h}.json")), &payload).expect("write legacy");
 
-    assert!(load_cached(&f, root, "ast").is_none());
+    assert!(load_cached(&f, root, "ast", None).is_none());
 }
 
 #[test]
@@ -580,13 +605,14 @@ fn semantic_cache_survives_version_bump() {
         root,
         "semantic",
         "0.8.0",
+        None,
     )
     .expect("save");
     let semantic_dir = cache_dir(root, "semantic").expect("semantic dir");
 
     // A version bump triggers AST cleanup; the semantic cache must survive.
     cache_dir_versioned(root, "ast", "0.8.1").expect("bump");
-    assert!(load_cached_versioned(&f, root, "semantic", "0.8.1").is_some());
+    assert!(load_cached_versioned(&f, root, "semantic", "0.8.1", None).is_some());
     assert!(
         dir_has_json(&semantic_dir),
         "semantic entries must survive the version bump and AST cleanup"
@@ -619,10 +645,11 @@ fn save_cached_in_root_symlink_keeps_symlink_name() {
         &json!({"nodes": [{"id": "n1", "source_file": abs_alias}], "edges": []}),
         root,
         "ast",
+        None,
     )
     .expect("save");
 
-    let h = file_hash(&alias, root).expect("hash");
+    let h = file_hash(&alias, root, None).expect("hash");
     let entry = cache_dir(root, "ast")
         .expect("dir")
         .join(format!("{h}.json"));
@@ -663,24 +690,26 @@ fn semantic_prune_removes_orphan_entries() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("doc.md");
     write_text(&f, "# A\n\nContent A.\n");
-    let h_a = file_hash(&f, tmp.path()).expect("h_a");
+    let h_a = file_hash(&f, tmp.path(), None).expect("h_a");
     save_cached(
         &f,
         &json!({"nodes": [{"id": "a"}], "edges": []}),
         tmp.path(),
         "semantic",
+        None,
     )
     .expect("save a");
 
     write_text(&f, "# B\n\nContent B.\n");
     _reset_stat_index_for_tests();
     bump_mtime(&f);
-    let h_b = file_hash(&f, tmp.path()).expect("h_b");
+    let h_b = file_hash(&f, tmp.path(), None).expect("h_b");
     save_cached(
         &f,
         &json!({"nodes": [{"id": "b"}], "edges": []}),
         tmp.path(),
         "semantic",
+        None,
     )
     .expect("save b");
     assert_ne!(h_a, h_b, "content change must produce a new hash");
@@ -711,9 +740,10 @@ fn semantic_prune_keeps_live_unchanged_entries() {
             &json!({"nodes": [{"id": i.to_string()}], "edges": []}),
             tmp.path(),
             "semantic",
+            None,
         )
         .expect("save");
-        live_hashes.insert(file_hash(&f, tmp.path()).expect("hash"));
+        live_hashes.insert(file_hash(&f, tmp.path(), None).expect("hash"));
     }
     let semantic_dir = cache_dir(tmp.path(), "semantic").expect("cache_dir");
     let count = || {
@@ -736,12 +766,13 @@ fn semantic_prune_handles_deleted_file() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("gone.md");
     write_text(&f, "# Gone\n\nWill be deleted.\n");
-    let h = file_hash(&f, tmp.path()).expect("hash");
+    let h = file_hash(&f, tmp.path(), None).expect("hash");
     save_cached(
         &f,
         &json!({"nodes": [{"id": "g"}], "edges": []}),
         tmp.path(),
         "semantic",
+        None,
     )
     .expect("save");
     let semantic_dir = cache_dir(tmp.path(), "semantic").expect("cache_dir");
@@ -768,6 +799,7 @@ fn semantic_prune_ignores_ast_and_tmp() {
         &json!({"nodes": [{"id": "ast"}], "edges": []}),
         tmp.path(),
         "ast",
+        None,
     )
     .expect("save ast");
     let ast_dir = cache_dir(tmp.path(), "ast").expect("ast dir");
@@ -811,6 +843,7 @@ fn test_save_semantic_cache_overwrites_by_default() {
         &[],
         tmp.path(),
         false,
+        None,
     )
     .expect("save 1");
     save_semantic_cache(
@@ -819,9 +852,10 @@ fn test_save_semantic_cache_overwrites_by_default() {
         &[],
         tmp.path(),
         false,
+        None,
     )
     .expect("save 2");
-    let cached = load_cached(&f, tmp.path(), "semantic").expect("cached");
+    let cached = load_cached(&f, tmp.path(), "semantic", None).expect("cached");
     let ids: HashSet<&str> = cached["nodes"]
         .as_array()
         .expect("nodes")
@@ -832,6 +866,97 @@ fn test_save_semantic_cache_overwrites_by_default() {
         ids,
         HashSet::from(["b"]),
         "default must overwrite, not accumulate"
+    );
+}
+
+#[test]
+#[serial]
+fn test_save_semantic_cache_rejects_out_of_scope_source_file() {
+    // #1757: an undispatched file must keep its complete cache entry when a
+    // semantic result misattributes a node to it.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canonicalize");
+    let intended = root.join("intended.md");
+    write_text(&intended, "# Intended\n");
+    let protected = root.join("protected.md");
+    write_text(&protected, "# Protected\n");
+
+    // Seed the protected file's cache entry.
+    save_semantic_cache(
+        &[json!({"id": "original", "source_file": "protected.md"})],
+        &[],
+        &[],
+        &root,
+        false,
+        None,
+    )
+    .expect("seed");
+
+    let nodes = [
+        json!({"id": "expected", "source_file": intended.to_string_lossy()}),
+        json!({"id": "stray", "source_file": "protected.md"}),
+    ];
+    let edges = [json!({"source": "stray", "target": "expected", "source_file": "protected.md"})];
+    let hyperedges =
+        [json!({"id": "stray_hyperedge", "nodes": ["stray"], "source_file": "protected.md"})];
+    let allowed = [std::path::PathBuf::from("intended.md")];
+    let saved = save_semantic_cache(&nodes, &edges, &hyperedges, &root, false, Some(&allowed))
+        .expect("save");
+    assert_eq!(saved, 1, "only the dispatched file may be written");
+
+    let intended_cache = load_cached(&intended, &root, "semantic", None).expect("intended cache");
+    let ids: HashSet<&str> = intended_cache["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    assert_eq!(ids, HashSet::from(["expected"]));
+    // The stray edge/hyperedge carry `source_file: protected.md` (out of the
+    // allowlist), so they must not leak into intended.md's cache either.
+    let edge_ids: HashSet<&str> = intended_cache["edges"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .filter_map(|e| e["source"].as_str())
+        .collect();
+    assert!(
+        !edge_ids.contains("stray"),
+        "stray edge leaked into intended cache"
+    );
+    let hyper_ids: HashSet<&str> = intended_cache["hyperedges"]
+        .as_array()
+        .expect("hyperedges")
+        .iter()
+        .filter_map(|h| h["id"].as_str())
+        .collect();
+    assert!(
+        !hyper_ids.contains("stray_hyperedge"),
+        "stray hyperedge leaked into intended cache"
+    );
+
+    // The protected file keeps its original entry, untouched by the stray node.
+    let protected_cache =
+        load_cached(&protected, &root, "semantic", None).expect("protected cache");
+    let pids: HashSet<&str> = protected_cache["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    assert_eq!(pids, HashSet::from(["original"]));
+    assert!(
+        protected_cache["edges"]
+            .as_array()
+            .expect("edges")
+            .is_empty()
+    );
+    assert!(
+        protected_cache["hyperedges"]
+            .as_array()
+            .expect("hyperedges")
+            .is_empty()
     );
 }
 
@@ -850,6 +975,7 @@ fn test_save_semantic_cache_merge_existing_unions() {
         &[json!({"id": "h1", "nodes": ["a"], "source_file": "big.md"})],
         tmp.path(),
         true,
+        None,
     )
     .expect("chunk 1");
     save_semantic_cache(
@@ -858,9 +984,10 @@ fn test_save_semantic_cache_merge_existing_unions() {
         &[json!({"id": "h2", "nodes": ["b"], "source_file": "big.md"})],
         tmp.path(),
         true,
+        None,
     )
     .expect("chunk 2");
-    let cached = load_cached(&f, tmp.path(), "semantic").expect("cached");
+    let cached = load_cached(&f, tmp.path(), "semantic", None).expect("cached");
     let field = |k: &str, id_key: &str| -> Vec<String> {
         cached[k]
             .as_array()
@@ -919,7 +1046,7 @@ fn word_count_augments_existing_hash_entry() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let f = tmp.path().join("m.py");
     write_text(&f, "x = 1\n"); // -> ["x", "=", "1"] == 3 tokens
-    let h = file_hash(&f, tmp.path()).expect("hash");
+    let h = file_hash(&f, tmp.path(), None).expect("hash");
     assert!(!h.is_empty());
     let wc = cached_word_count(
         &f,
@@ -934,7 +1061,7 @@ fn word_count_augments_existing_hash_entry() {
     );
     assert_eq!(wc, 3);
     // The hash entry survives alongside the word_count (fastpath still returns it).
-    assert_eq!(file_hash(&f, tmp.path()).expect("hash"), h);
+    assert_eq!(file_hash(&f, tmp.path(), None).expect("hash"), h);
 }
 
 /// #1747 / root-keyed stat index: two `cached_word_count` invocations with

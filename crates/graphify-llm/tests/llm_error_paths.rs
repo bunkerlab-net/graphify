@@ -154,6 +154,7 @@ fn llm_response_default_is_sensible() {
         finish_reason: "stop".into(),
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
+        uncovered_files: vec![],
     };
     assert_eq!(r.input_tokens, 0);
 }

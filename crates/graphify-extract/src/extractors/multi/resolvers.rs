@@ -82,7 +82,7 @@ pub(super) fn default_resolvers() -> [LanguageResolver; 9] {
             resolve: python_pass,
         },
         LanguageResolver {
-            suffixes: &[".rb"],
+            suffixes: &[".rb", ".rake"],
             resolve: ruby_pass,
         },
         LanguageResolver {

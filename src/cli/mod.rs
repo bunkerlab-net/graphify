@@ -2,6 +2,36 @@
 //!
 //! Each submodule owns the handler function(s) for the corresponding command
 //! group.  Shared helpers used by more than one command live here.
+//!
+//! The `outln!`/`out!` macros defined here (before the submodule declarations,
+//! so they are in textual scope for every submodule) are broken-pipe-guarded
+//! replacements for `println!`/`print!` (#1807); see [`output`].
+
+/// `println!` that survives a downstream reader closing the pipe early (#1807):
+/// a closed-pipe write exits 0, any other write error exits 1. See [`output`].
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        if let ::std::result::Result::Err(e) = writeln!(::std::io::stdout(), $($arg)*) {
+            $crate::cli::output::handle_stdout_error(&e);
+        }
+    }};
+}
+
+/// `print!` counterpart of [`outln!`] — guarded against an early pipe close.
+///
+/// No bare `print!` call site exists today, but this completes the guarded
+/// output API so a future partial-line write reaches for the guard instead of
+/// the unguarded `print!` and silently reintroducing #1807.
+#[allow(unused_macros)] // paired guard for `outln!`; see doc above.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        if let ::std::result::Result::Err(e) = write!(::std::io::stdout(), $($arg)*) {
+            $crate::cli::output::handle_stdout_error(&e);
+        }
+    }};
+}
 
 pub(crate) mod add;
 pub(crate) mod affected;
@@ -19,6 +49,7 @@ pub(crate) mod hooks;
 pub(crate) mod install;
 pub(crate) mod merge;
 pub(crate) mod merge_chunks;
+pub(crate) mod output;
 pub(crate) mod provider;
 pub(crate) mod prs;
 pub(crate) mod query;
@@ -100,7 +131,7 @@ pub(crate) fn run() -> Result<()> {
     let parsed = args::Cli::parse();
     match parsed.command {
         None => {
-            println!("graphify {} — run with --help", env!("CARGO_PKG_VERSION"));
+            outln!("graphify {} — run with --help", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(cmd) => dispatch::dispatch(cmd),

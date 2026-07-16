@@ -73,18 +73,27 @@ pub fn body_content(content: &[u8]) -> Vec<u8> {
 /// computed (Markdown files have their frontmatter stripped first) and
 /// stored back into the index.
 ///
+/// `cache_root` (when `Some`) relocates the stat-index fastpath file to the
+/// cache location rather than the key anchor `root`, so an `extract <corpus>
+/// --out <elsewhere>` run leaves no `graphify-out/cache/stat-index.json` inside
+/// the analysed source tree (#1774 completion). `None` anchors it at `root`.
+///
 /// # Errors
 ///
 /// Returns [`CacheError::NotAFile`] if `path` is not a regular file, or
 /// [`CacheError::Io`] on read failure.
-pub fn file_hash<P: AsRef<Path>>(path: P, root: &Path) -> Result<String, CacheError> {
+pub fn file_hash<P: AsRef<Path>>(
+    path: P,
+    root: &Path,
+    cache_root: Option<&Path>,
+) -> Result<String, CacheError> {
     let p = normalize_path(path.as_ref());
     let root = normalize_path(root);
     if !p.is_file() {
         return Err(CacheError::NotAFile(p));
     }
 
-    let key = ensure_stat_index(&root, None);
+    let key = ensure_stat_index(&root, cache_root);
     let abs_key = p.canonicalize().unwrap_or_else(|_| p.clone());
     let abs_key_str = abs_key.to_string_lossy().to_string();
 

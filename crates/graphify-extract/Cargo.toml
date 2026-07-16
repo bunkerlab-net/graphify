@@ -77,6 +77,8 @@ postgres = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
 # introspection integration tests (no TLS needed against the CI service).
 graphify-affected = { workspace = true }
 postgres = "0.19"
+serial_test = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

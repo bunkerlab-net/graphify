@@ -82,9 +82,9 @@ pub(crate) fn cmd_merge_chunks(chunks: &[PathBuf], out: &std::path::Path) -> Res
         "output_tokens": output_tokens,
     });
     std::fs::write(out, serde_json::to_string(&merged)?)?;
-    println!(
+    outln!(
         "Merged {chunk_count} chunks: {node_count} nodes, {edge_count} edges, \
-         {input_tokens} in / {output_tokens} out tokens",
+     {input_tokens} in / {output_tokens} out tokens",
     );
     Ok(())
 }
@@ -162,6 +162,6 @@ pub(crate) fn cmd_merge_semantic(
         "hyperedges": all_hyperedges,
     });
     std::fs::write(out, serde_json::to_string(&merged)?)?;
-    println!("Merged: {node_count} nodes, {edge_count} edges");
+    outln!("Merged: {node_count} nodes, {edge_count} edges");
     Ok(())
 }
