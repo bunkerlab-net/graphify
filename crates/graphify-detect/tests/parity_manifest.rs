@@ -773,3 +773,24 @@ fn detect_incremental_legacy_float_skips_when_mtime_matches() {
     );
     assert!(unchanged.iter().any(|f| f.contains("mod.py")));
 }
+
+#[test]
+fn legacy_float_manifest_mtime_parses_bit_exact() {
+    // Deterministic guard for serde_json's `float_roundtrip` feature, which the
+    // legacy-float skip compare in `manifest_entry_changed` depends on. The
+    // decimal `1784222299.0276783` is a real captured mtime whose nearest f64 is
+    // 0x41da_9644_96c1_c57b; serde_json's DEFAULT parser mis-rounds it to
+    // ...c57c (1 ULP off), which made `detect_incremental_legacy_float_*` flaky
+    // (~13% of runs, timestamp-dependent). Loading a bare-float manifest must
+    // reproduce the exact bits. Drop `float_roundtrip` and this fails every run.
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("manifest.json");
+    std::fs::write(&path, r#"{"/x/mod.py": 1784222299.0276783}"#).expect("write manifest");
+    let manifest = load_manifest_from_path(&path).expect("load manifest");
+    let entry = manifest.get("/x/mod.py").expect("entry present");
+    assert_eq!(
+        entry.mtime.to_bits(),
+        0x41da_9644_96c1_c57b,
+        "serde_json must parse f64 correctly-rounded (float_roundtrip feature)"
+    );
+}

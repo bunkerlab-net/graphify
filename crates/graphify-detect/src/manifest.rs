@@ -357,13 +357,12 @@ pub fn save_manifest_to_path_with_root(
 /// (`"semantic"` / `"ast"`) that selects which stored hash to verify.
 fn manifest_entry_changed(entry: &ManifestEntry, current_mtime: f64, kind: &str, p: &Path) -> bool {
     if entry.legacy_mtime_only {
-        // Legacy bare-float manifest: no stored hash to verify against, so any
-        // mtime delta — forwards OR backwards — re-extracts; an exact match
-        // skips (#1859). Exact inequality deliberately mirrors Python's
-        // `current_mtime != stored`: the stored value is a prior `file_mtime`
-        // round-tripped through JSON, so an unchanged file compares bit-equal
-        // and a `git checkout` / tarball restore that moves mtime backwards
-        // still triggers a re-extract.
+        // Legacy bare-float manifest: no stored hash, so any mtime delta —
+        // forwards OR backwards — re-extracts and an exact match skips (#1859),
+        // mirroring graphify-py's `current_mtime != stored`. The exact compare
+        // is only sound because this crate enables serde_json's `float_roundtrip`
+        // feature: the default parser mis-rounds by ~1 ULP, which made unchanged
+        // files re-extract ~13% of runs (see the bit-exact regression test).
         #[allow(clippy::float_cmp)]
         {
             current_mtime != entry.mtime
