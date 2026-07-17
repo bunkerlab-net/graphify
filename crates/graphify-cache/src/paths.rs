@@ -60,14 +60,14 @@ pub(crate) fn semantic_cache_dirs(root: &Path) -> std::io::Result<Vec<PathBuf>> 
     // Only descend a REAL `cache/` directory: a missing, non-dir, or symlinked
     // `cache/` yields nothing — a symlinked cache could otherwise redirect the
     // read_dir below (and any prune/clear) into an external tree.
-    if !fs::symlink_metadata(&cache).is_ok_and(|m| m.is_dir()) {
+    if !is_real_dir(&cache)? {
         return Ok(Vec::new());
     }
     let mut dirs: Vec<PathBuf> = Vec::new();
     // `symlink_metadata` does not follow links, so a symlinked `semantic` is not
     // treated as a real directory.
     let base = cache.join("semantic");
-    if fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
+    if is_real_dir(&base)? {
         dirs.push(base);
     }
     // Propagate read/entry/file-type errors so a mid-enumeration failure never
@@ -87,6 +87,18 @@ pub(crate) fn semantic_cache_dirs(root: &Path) -> std::io::Result<Vec<PathBuf>> 
     }
     dirs.sort();
     Ok(dirs)
+}
+
+/// `Ok(true)` when `p` is a real directory, `Ok(false)` when it is absent, a
+/// non-directory, or a symlink (never followed). Any other metadata error (e.g.
+/// `EACCES`) propagates so a caller never mistakes an unreadable path for
+/// absence — `symlink_metadata` does not follow links.
+fn is_real_dir(p: &Path) -> std::io::Result<bool> {
+    match fs::symlink_metadata(p) {
+        Ok(m) => Ok(m.is_dir()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Return the cache directory for `kind`, creating it if it does not exist.
