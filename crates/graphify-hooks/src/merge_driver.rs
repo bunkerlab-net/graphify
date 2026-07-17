@@ -30,8 +30,16 @@ const DRIVER: &str = "graphify merge-driver %O %A %B";
 #[must_use]
 fn merge_attr_path() -> String {
     let raw = std::env::var("GRAPHIFY_OUT").unwrap_or_default();
+    // Unsafe anywhere: whitespace/backslash and glob metacharacters (`*?[`).
     let unsafe_char = |c: char| c.is_whitespace() || matches!(c, '\\' | '*' | '?' | '[');
-    let out = if raw.is_empty() || Path::new(&raw).is_absolute() || raw.contains(unsafe_char) {
+    // Unsafe only line-leading: gitattributes treats `#` as a comment, `!` as a
+    // negation, and `"` as a quoted-pattern opener.
+    let leads_control = matches!(raw.chars().next(), Some('#' | '!' | '"'));
+    let out = if raw.is_empty()
+        || Path::new(&raw).is_absolute()
+        || raw.contains(unsafe_char)
+        || leads_control
+    {
         "graphify-out"
     } else {
         &raw
@@ -45,28 +53,40 @@ fn merge_attr_line() -> String {
     format!("{} merge=graphify", merge_attr_path())
 }
 
-/// True if a (non-comment) line assigns the graphify merge driver to graphify's
-/// EXACT `graph.json` path. Matches the whole first field against
-/// [`merge_attr_path`] — not a loose `graph.json` suffix — so an unrelated
-/// `othergraph.json merge=graphify` or a user's own `docs/graph.json` entry is
-/// neither counted as registered nor removed on uninstall. DIVERGENCE from
-/// graphify-py `_has_merge_attr` (`hooks.py:520`, `endswith("graph.json")`),
-/// whose loose suffix match false-positives and would delete unrelated lines
-/// (AGENTS.md: fix reference bugs, do not replicate).
+/// True when graphify's merge driver is the EFFECTIVE `merge` setting for its
+/// exact `graph.json` path. Only the whole first field is matched against
+/// [`merge_attr_path`] (not a loose `graph.json` suffix), and — because git
+/// resolves attributes last-match-wins — the LAST `merge`-related token across
+/// matching lines decides: a later `merge=other`, `-merge`, or `!merge` means
+/// graphify's driver is NOT active, so `install` must re-append and `status`
+/// must report it missing. DIVERGENCE from graphify-py `_has_merge_attr`
+/// (`hooks.py:520`): its `endswith("graph.json")` + `"merge=graphify" in fields`
+/// both false-positives on unrelated paths AND misreports "registered" when a
+/// later token overrides graphify's (AGENTS.md: fix reference bugs).
 #[must_use]
 fn has_merge_attr(content: &str) -> bool {
     let expected = merge_attr_path();
-    content.lines().any(|raw| {
+    // `Some(true)` = the last merge token for the path is `merge=graphify`;
+    // `Some(false)` = a different/unset merge token overrode it; `None` = none.
+    let mut effective: Option<bool> = None;
+    for raw in content.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
-            return false;
+            continue;
         }
         let mut fields = line.split_whitespace();
-        match fields.next() {
-            Some(first) if first == expected => fields.any(|f| f == "merge=graphify"),
-            _ => false,
+        if fields.next() != Some(expected.as_str()) {
+            continue;
         }
-    })
+        for f in fields {
+            if f == "merge=graphify" {
+                effective = Some(true);
+            } else if f == "-merge" || f == "!merge" || f.starts_with("merge=") {
+                effective = Some(false);
+            }
+        }
+    }
+    effective == Some(true)
 }
 
 /// Outcome of classifying a `.gitattributes` line for uninstall.
@@ -83,6 +103,7 @@ enum MergeLine {
 }
 
 /// Classify a `.gitattributes` line for token-level uninstall removal.
+#[must_use]
 fn strip_graphify_merge_attr(raw: &str, expected_path: &str) -> MergeLine {
     let line = raw.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -130,7 +151,11 @@ fn attrs_is_symlink(attrs: &Path) -> bool {
 /// persistent-symlink guard the Obsidian prune uses. graphify-py follows the
 /// link (`read_text`/`write_text`); this is a deliberate hardening. Rejected at
 /// each function's start, before any git-config mutation, so a symlinked
-/// `.gitattributes` never leaves config partially changed.
+/// `.gitattributes` never leaves config partially changed. This is a
+/// check-then-use guard (the workspace's `path_guard` model), NOT a
+/// descriptor-relative atomic one, so a residual TOCTOU race is knowingly
+/// accepted; a capability-scoped (`cap-std`) rewrite would close it but the repo
+/// depends on no such crate. (Disputes the atomic-handle review finding.)
 fn reject_symlinked_attrs(attrs: &Path) -> Result<(), crate::error::HooksError> {
     if attrs_is_symlink(attrs) {
         return Err(crate::error::HooksError::Io(std::io::Error::new(
@@ -206,42 +231,47 @@ pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksE
 pub fn unregister_merge_driver(root: &Path) -> Result<String, crate::error::HooksError> {
     let attrs = root.join(".gitattributes");
     reject_symlinked_attrs(&attrs)?;
+    // Do the fallible `.gitattributes` mutation FIRST: a read/write/delete error
+    // aborts here (via `?`) BEFORE any git-config change, so a filesystem failure
+    // never leaves config half-unset. The best-effort config unset then always
+    // runs below (matching graphify-py's unconditional `--unset`), even when
+    // there is no attribute to remove, so a config-only partial registration is
+    // still cleaned.
+    let msg = if attrs.exists() {
+        let content = std::fs::read_to_string(&attrs)?;
+        let expected = merge_attr_path();
+        let mut changed = false;
+        let mut kept: Vec<String> = Vec::with_capacity(content.lines().count());
+        for raw in content.lines() {
+            match strip_graphify_merge_attr(raw, &expected) {
+                MergeLine::Other => kept.push(raw.to_string()),
+                MergeLine::Rewritten(rewritten) => {
+                    changed = true;
+                    kept.push(rewritten);
+                }
+                MergeLine::OnlyMerge => changed = true,
+            }
+        }
+        if !changed {
+            "gitattributes entry not found - nothing to remove.".to_string()
+        } else if kept.iter().all(|l| l.trim().is_empty()) {
+            std::fs::remove_file(&attrs)?;
+            "removed (.gitattributes deleted - no other entries)".to_string()
+        } else {
+            std::fs::write(&attrs, format!("{}\n", kept.join("\n")))?;
+            "removed from .gitattributes (other entries preserved)".to_string()
+        }
+    } else {
+        "not registered - nothing to remove.".to_string()
+    };
     for key in ["merge.graphify.name", "merge.graphify.driver"] {
-        // Best-effort, matching graphify-py `hooks.py:571-579`: `_sp.run(--unset)`
-        // runs WITHOUT `check=True` and catches only `OSError`, so every outcome
-        // (missing key, launch failure, any nonzero exit) is ignored and the
-        // `.gitattributes` line is then removed regardless. Propagating these
-        // would diverge from the reference and fail uninstall on transient git
-        // errors. (Disputes CodeRabbit's "propagate non-missing-key --unset
-        // failures" finding.)
+        // Best-effort, matching graphify-py `hooks.py:571-579`: `--unset` runs
+        // WITHOUT `check=True` and catches only `OSError`, so every outcome
+        // (missing key, launch failure, any nonzero exit) is ignored.
+        // (Disputes CodeRabbit's "propagate non-missing-key --unset" finding.)
         let _ = git_config(root, &["--unset", key]);
     }
-    if !attrs.exists() {
-        return Ok("not registered - nothing to remove.".to_string());
-    }
-    let content = std::fs::read_to_string(&attrs)?;
-    let expected = merge_attr_path();
-    let mut changed = false;
-    let mut kept: Vec<String> = Vec::with_capacity(content.lines().count());
-    for raw in content.lines() {
-        match strip_graphify_merge_attr(raw, &expected) {
-            MergeLine::Other => kept.push(raw.to_string()),
-            MergeLine::Rewritten(rewritten) => {
-                changed = true;
-                kept.push(rewritten);
-            }
-            MergeLine::OnlyMerge => changed = true,
-        }
-    }
-    if !changed {
-        return Ok("gitattributes entry not found - nothing to remove.".to_string());
-    }
-    if kept.iter().all(|l| l.trim().is_empty()) {
-        std::fs::remove_file(&attrs)?;
-        return Ok("removed (.gitattributes deleted - no other entries)".to_string());
-    }
-    std::fs::write(&attrs, format!("{}\n", kept.join("\n")))?;
-    Ok("removed from .gitattributes (other entries preserved)".to_string())
+    Ok(msg)
 }
 
 /// Report whether the merge driver is registered (config + gitattributes).

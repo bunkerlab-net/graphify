@@ -3309,3 +3309,25 @@ fn test_install_rejects_symlinked_gitattributes() {
         "merge-driver config was set despite the symlink rejection"
     );
 }
+
+#[test]
+#[serial]
+fn test_install_reappends_when_merge_overridden_later() {
+    // Last-match-wins (#1902): a later `-merge` on graphify's exact path
+    // overrides an earlier `merge=graphify`, so install must NOT treat it as
+    // already registered. It re-appends a graphify line, making the driver the
+    // effective (last) merge setting again — status then reads fully registered.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(
+        repo.join(".gitattributes"),
+        "graphify-out/graph.json merge=graphify\ngraphify-out/graph.json -merge\n",
+    )
+    .expect("write");
+    install(&repo).expect("install");
+    let s = status(&repo);
+    assert!(
+        s.contains("merge driver: registered"),
+        "graphify must be the effective merge driver after install: {s}"
+    );
+}
