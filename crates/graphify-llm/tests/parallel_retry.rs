@@ -680,6 +680,77 @@ fn out_of_scope_edges_dropped_even_when_all_nodes_in_scope() {
 }
 
 #[test]
+fn out_of_scope_keeps_edge_to_id_also_on_in_scope_node() {
+    // #1895 duplicate attribution: the model emits the same id under both an
+    // in-scope file (A.md) and an undispatched one (B.py). The out-of-scope copy
+    // is dropped, but the id survives via the in-scope node, so an edge to it
+    // must NOT be pruned.
+    let mut server = mockito::Server::new();
+    let inner = json!({
+        "nodes": [
+            {"id": "a_ok", "source_file": "A.md", "file_type": "document"},
+            {"id": "shared", "source_file": "A.md", "file_type": "document"},
+            {"id": "shared", "source_file": "B.py", "file_type": "code"},
+        ],
+        "edges": [
+            {"source": "a_ok", "target": "shared", "source_file": "A.md"},
+        ],
+    })
+    .to_string();
+    let body = json!({
+        "choices": [{"message": {"content": inner}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+    })
+    .to_string();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(body)
+        .expect_at_least(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("A.md");
+    fs::write(&a, "# a\n").expect("write");
+    fs::write(tmp.path().join("B.py"), "def b():\n    pass\n").expect("write");
+
+    let cfg = CorpusConfig {
+        backend: "openai",
+        api_key: Some("k"),
+        model: Some("m"),
+        root: tmp.path(),
+        chunk_size: 8,
+        token_budget: None,
+        max_concurrency: 1,
+        max_retry_depth: 1,
+        deep_mode: false,
+    };
+    let (resp, _failed) = extract_corpus_parallel(&[a], &cfg, None);
+
+    // The out-of-scope B.py copy is counted dropped, but "shared" survives.
+    assert_eq!(resp.out_of_scope_dropped, 1);
+    let ids: std::collections::HashSet<&str> = resp
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(ids.contains("shared") && ids.contains("a_ok"));
+    // The edge to the (surviving) shared id must be kept.
+    assert!(
+        resp.edges.iter().any(|e| {
+            e.get("source").and_then(serde_json::Value::as_str) == Some("a_ok")
+                && e.get("target").and_then(serde_json::Value::as_str) == Some("shared")
+        }),
+        "edge to a shared id that survives in scope was wrongly pruned: {:?}",
+        resp.edges
+    );
+}
+
+#[test]
 fn out_of_scope_drop_count_is_zero_when_all_in_scope() {
     // Counter-test: a clean run records out_of_scope_dropped == 0.
     let mut server = mockito::Server::new();

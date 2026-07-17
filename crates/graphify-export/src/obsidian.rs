@@ -593,10 +593,18 @@ pub fn to_obsidian(
     for rel in stale {
         // Enforce the same containment the write path uses (`owned_write` /
         // `writes_through_symlink`): refuse an absolute/`..` path or one that
-        // traverses a symlinked component, so a stale-note delete can never
-        // escape the vault. Hardening beyond graphify-py, which follows symlinks
-        // (#1896). `remove_file` unlinks a symlinked leaf itself rather than its
-        // target, so it never reaches outside either.
+        // traverses a PERSISTENT symlinked component, rejecting the common
+        // symlink-escape a stale-note delete could otherwise follow out of the
+        // vault. Hardening beyond graphify-py, which follows symlinks (#1896);
+        // `remove_file` unlinks a symlinked leaf itself rather than its target.
+        // This is a check-then-use guard — the same model as
+        // `graphify-security::path_guard` used across the workspace — so it is
+        // NOT descriptor-relative/atomic: a residual TOCTOU race (a directory
+        // swapped to a symlink between this check and the unlink) is NOT closed.
+        // A capability-scoped `openat`/`unlinkat` deletion (e.g. cap-std) would
+        // close it, but the repo uses no such dependency anywhere and staying
+        // consistent is the deliberate choice. (Disputes CodeRabbit's cap-std
+        // deletion finding; the residual race is knowingly accepted.)
         if Path::new(rel).is_absolute()
             || rel.split(['/', '\\']).any(|c| c == "..")
             || writes_through_symlink(output_dir, rel)

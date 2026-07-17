@@ -195,7 +195,23 @@ fn cjs_bypasses_ast_disk_cache() {
     std::fs::create_dir_all(&work).expect("mkdir work");
     let _cwd = CwdGuard::enter(&work);
 
-    let _ = extract(&[corpus.join("main.cjs"), corpus.join("mod.py")], None);
+    let result = extract(&[corpus.join("main.cjs"), corpus.join("mod.py")], None);
+    assert!(
+        result.nodes.iter().any(|n| {
+            n.get("source_file")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| s.ends_with("main.cjs"))
+                || n.get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|s| s.contains("createWindow"))
+        }),
+        ".cjs must be extracted as JavaScript (#1922): {:?}",
+        result
+            .nodes
+            .iter()
+            .filter_map(|n| n.get("label").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+    );
 
     let root = corpus.canonicalize().expect("canonicalize corpus");
     assert!(

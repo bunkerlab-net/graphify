@@ -168,6 +168,16 @@ fn filter_out_of_scope(merged: &mut LlmResponse, chunks: &[Vec<Unit>], root: &Pa
     }
     let dropped_count = merged.nodes.len() - kept_nodes.len();
     merged.out_of_scope_dropped = dropped_count;
+    // A node id attributed to BOTH an out-of-scope and an in-scope file (model
+    // mis-attribution, #1895) still survives via the kept node, so a relationship
+    // to it is not dangling — don't let the out-of-scope copy drop it. Mirrors the
+    // cache prune's duplicate-attribution guard (`semantic.rs`, `skipped_ids -=
+    // written_ids`); graphify-py's merged filter omits this.
+    for n in &kept_nodes {
+        if let Some(id) = n.get("id").and_then(serde_json::Value::as_str) {
+            dropped_ids.remove(id);
+        }
+    }
     merged.nodes = kept_nodes;
     // Filter relationships unconditionally: an edge/hyperedge that is itself
     // out-of-scope (attributed to an undispatched real file) or references a
