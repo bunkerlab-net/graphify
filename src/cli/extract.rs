@@ -767,7 +767,18 @@ fn evict_forced_empty_entries(
     if !run {
         return;
     }
-    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    // Resolve a path to canonical form, anchoring a relative path at
+    // `source_root` just like the `source_file` values below, so a relative
+    // dispatched path and its covered `source_file` compare equal (a bare
+    // `canonicalize` would instead anchor the dispatched path at the CWD).
+    let resolve = |p: &std::path::Path| -> std::path::PathBuf {
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            source_root.join(p)
+        };
+        abs.canonicalize().unwrap_or(abs)
+    };
     let mut covered: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
     for bucket in [&sem_result.nodes, &sem_result.edges, &sem_result.hyperedges] {
@@ -777,20 +788,16 @@ fn evict_forced_empty_entries(
                 .and_then(serde_json::Value::as_str)
                 .filter(|s| !s.is_empty())
             {
-                let p = std::path::Path::new(src);
-                let abs = if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    source_root.join(p)
-                };
-                covered.insert(canon(&abs));
+                covered.insert(resolve(std::path::Path::new(src)));
             }
         }
     }
+    // Collect the RESOLVED (absolute, canonical) paths so the removal keys the
+    // real file regardless of a relative dispatched spelling.
     let stale: Vec<std::path::PathBuf> = dispatched
         .iter()
-        .filter(|p| !covered.contains(&canon(p)))
-        .cloned()
+        .map(|p| resolve(p))
+        .filter(|p| !covered.contains(p))
         .collect();
     let evicted = graphify_cache::remove_semantic_cache_entries(&stale, cache_root, mode);
     if evicted > 0 {
