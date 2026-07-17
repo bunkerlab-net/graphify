@@ -74,6 +74,177 @@ static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("static sql error-fn regex")
 });
 
+/// Blank SQL comments and string/dollar-quoted literals to spaces (newlines
+/// preserved) so [`SQL_ERROR_FN_RE`] cannot recover a line-leading `CREATE`
+/// that lives inside one. A single lexical pass tracks `--` line comments,
+/// nested `/* … */` block comments, `'…'` and `"…"` literals (honouring the
+/// doubled-quote escape), and `$tag$ … $tag$` dollar-quoted bodies. Newlines
+/// are kept in place, so a surviving match's line number is unchanged.
+// A linear single-pass SQL lexer; the per-state arms belong together for
+// readability, so splitting them into fragments would obscure the flow.
+#[allow(clippy::too_many_lines)]
+pub(super) fn mask_sql_noise(text: &str) -> String {
+    enum St {
+        Normal,
+        Line,
+        Block(u32),
+        /// `true` when the opener was an `E'…'` escape string (backslash escapes).
+        Single(bool),
+        Double,
+        Dollar(Vec<char>),
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let mut out = chars.clone();
+    let blank = |out: &mut [char], k: usize| {
+        if out[k] != '\n' {
+            out[k] = ' ';
+        }
+    };
+    let mut st = St::Normal;
+    let mut i = 0;
+    while i < n {
+        match &st {
+            St::Normal => {
+                if chars[i] == '$'
+                    && let Some(open_end) = dollar_tag_end(&chars, i)
+                {
+                    let tag = chars[i..=open_end].to_vec();
+                    for k in i..=open_end {
+                        blank(&mut out, k);
+                    }
+                    st = St::Dollar(tag);
+                    i = open_end + 1;
+                } else if chars[i] == '-' && i + 1 < n && chars[i + 1] == '-' {
+                    st = St::Line;
+                    i += 1;
+                } else if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    st = St::Block(1);
+                    i += 2;
+                } else if chars[i] == '\'' {
+                    // A leading `E`/`e` at a token boundary marks a PostgreSQL
+                    // escape string, where `\` escapes the next char (incl. `\'`).
+                    let escapes = i > 0
+                        && matches!(chars[i - 1], 'E' | 'e')
+                        && (i < 2
+                            || !(chars[i - 2].is_ascii_alphanumeric() || chars[i - 2] == '_'));
+                    blank(&mut out, i);
+                    st = St::Single(escapes);
+                    i += 1;
+                } else if chars[i] == '"' {
+                    blank(&mut out, i);
+                    st = St::Double;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            St::Line => {
+                if chars[i] == '\n' {
+                    st = St::Normal;
+                } else {
+                    blank(&mut out, i);
+                }
+                i += 1;
+            }
+            St::Block(depth) => {
+                let depth = *depth;
+                if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    st = St::Block(depth + 1);
+                    i += 2;
+                } else if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    st = if depth <= 1 {
+                        St::Normal
+                    } else {
+                        St::Block(depth - 1)
+                    };
+                    i += 2;
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+            St::Single(escapes) => {
+                if *escapes && chars[i] == '\\' && i + 1 < n {
+                    // Escape string: `\x` is one escaped char (covers `\'`, `\\`).
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    i += 2;
+                } else if chars[i] == '\'' {
+                    blank(&mut out, i);
+                    if i + 1 < n && chars[i + 1] == '\'' {
+                        blank(&mut out, i + 1); // doubled quote: stay in the literal
+                        i += 2;
+                    } else {
+                        st = St::Normal;
+                        i += 1;
+                    }
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+            St::Double => {
+                // Double-quoted identifiers: no backslash escapes; `""` is a
+                // doubled-quote literal that stays inside.
+                if chars[i] == '"' {
+                    blank(&mut out, i);
+                    if i + 1 < n && chars[i + 1] == '"' {
+                        blank(&mut out, i + 1);
+                        i += 2;
+                    } else {
+                        st = St::Normal;
+                        i += 1;
+                    }
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+            St::Dollar(tag) => {
+                if chars[i] == '$' && i + tag.len() <= n && chars[i..i + tag.len()] == tag[..] {
+                    for k in i..i + tag.len() {
+                        blank(&mut out, k);
+                    }
+                    i += tag.len();
+                    st = St::Normal;
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// If `chars[start] == '$'`, index of the closing `$` of the dollar tag
+/// (`$$` → `start + 1`; `$name$` → the trailing `$`), else `None`. A `$1`
+/// parameter or a lone `$` is not a tag.
+fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
+    // `$$` — empty tag.
+    let first = *chars.get(start + 1)?;
+    if first == '$' {
+        return Some(start + 1);
+    }
+    // `$name$` — a PostgreSQL identifier tag: `[A-Za-z_][A-Za-z0-9_]*`. A
+    // digit-first run (`$1`) is a positional parameter, not a dollar quote.
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    let mut j = start + 2;
+    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+        j += 1;
+    }
+    (j < chars.len() && chars[j] == '$').then_some(j)
+}
+
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
