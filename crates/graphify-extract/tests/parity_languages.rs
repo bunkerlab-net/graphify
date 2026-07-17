@@ -165,20 +165,21 @@ fn sql_plpgsql_functions_survive_parse_errors() {
         assert!(!l.is_empty(), "empty node label");
         assert_ne!(*l, "ERROR");
     }
-    // Every function got a contains edge FROM the file node — the source must be
-    // a non-function container, not merely some node that happens to `contains`
-    // the target.
-    let file_ids: std::collections::HashSet<&str> = result
+    // Every function got a contains edge FROM the file node specifically — the
+    // SQL extractor labels that node with the file name and roots every
+    // `contains` edge at it.
+    let file_nid = result
         .nodes
         .iter()
-        .filter(|n| !n.label.ends_with("()"))
+        .find(|n| n.label == "sample_plpgsql.sql")
         .map(|n| n.id.as_str())
-        .collect();
+        .expect("file node present");
     for n in result.nodes.iter().filter(|n| n.label.ends_with("()")) {
         assert!(
-            result.edges.iter().any(|e| {
-                e.relation == "contains" && e.target == n.id && file_ids.contains(e.source.as_str())
-            }),
+            result
+                .edges
+                .iter()
+                .any(|e| { e.relation == "contains" && e.target == n.id && e.source == file_nid }),
             "function {} has no contains edge from the file node",
             n.label
         );
