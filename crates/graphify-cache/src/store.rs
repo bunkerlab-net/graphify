@@ -195,10 +195,15 @@ fn remove_json_files(dir: &Path, recursive: bool) -> Result<(), CacheError> {
     if is_symlink(dir) {
         return Err(symlink_err(dir));
     }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Ok(());
+    // A missing directory is an empty one; any other read failure (permissions,
+    // I/O) is real and must reach clear_cache rather than silently succeeding.
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(CacheError::Io(e)),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(CacheError::Io)?;
         let p = entry.path();
         // `DirEntry::file_type()` does not follow symlinks (and avoids the extra
         // `symlink_metadata` syscall), so check the link itself first: a

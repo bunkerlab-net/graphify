@@ -1869,11 +1869,18 @@ fn rebuild_code_quick_scans_doc_without_semantic_nodes() {
 
     // A rebuild over the existing graph (still no semantic nodes) keeps scanning.
     assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("second rebuild"));
-    let ids = node_ids(&read_graph(&graph_path));
+    let rebuilt = read_graph(&graph_path);
+    let all_ids: Vec<&str> = rebuilt["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
     for id in ["notes", "notes_alpha", "notes_beta"] {
-        assert!(
-            ids.contains(id),
-            "quick-scan structure dropped on rebuild: {id}"
+        assert_eq!(
+            all_ids.iter().filter(|&&x| x == id).count(),
+            1,
+            "quick-scan node {id} must survive rebuild exactly once (no duplicate)"
         );
     }
 }
@@ -1925,6 +1932,16 @@ fn rebuild_code_polluted_graph_self_heals_on_full_rebuild() {
         has_semantic_edge,
         "seeded guide_doc→auth_flow `explains` edge must survive the self-heal rebuild"
     );
+    for link in healed["links"].as_array().expect("links") {
+        for end in ["source", "target"] {
+            if let Some(nid) = link.get(end).and_then(serde_json::Value::as_str) {
+                assert!(
+                    ids.contains(nid),
+                    "self-heal left a dangling {end} endpoint: {nid}"
+                );
+            }
+        }
+    }
     for id in AST_GUIDE_IDS {
         assert!(
             !ids.contains(id),
