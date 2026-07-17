@@ -741,12 +741,29 @@ fn out_of_scope_keeps_edge_to_id_also_on_in_scope_node() {
 
     // The out-of-scope B.py copy is counted dropped, but "shared" survives.
     assert_eq!(resp.out_of_scope_dropped, 1);
-    let ids: std::collections::HashSet<&str> = resp
+    let ids: Vec<&str> = resp
         .nodes
         .iter()
         .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
         .collect();
-    assert!(ids.contains("shared") && ids.contains("a_ok"));
+    assert!(ids.contains(&"a_ok"), "a_ok must survive: {ids:?}");
+    let shared: Vec<&serde_json::Value> = resp
+        .nodes
+        .iter()
+        .filter(|n| n.get("id").and_then(serde_json::Value::as_str) == Some("shared"))
+        .collect();
+    assert_eq!(
+        shared.len(),
+        1,
+        "exactly one `shared` node must survive: {ids:?}"
+    );
+    assert_eq!(
+        shared[0]
+            .get("source_file")
+            .and_then(serde_json::Value::as_str),
+        Some("A.md"),
+        "the surviving `shared` node must be the in-scope A.md copy"
+    );
     // The edge to the (surviving) shared id must be kept.
     assert!(
         resp.edges.iter().any(|e| {

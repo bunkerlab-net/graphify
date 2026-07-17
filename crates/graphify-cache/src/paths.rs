@@ -49,14 +49,19 @@ pub(crate) fn stat_index_file(root: &Path) -> PathBuf {
 /// (#1894). Only REAL directories are returned (symlinks are skipped, never
 /// followed — a symlinked `semantic-*` could otherwise redirect prune/list into
 /// an external tree); a missing `cache/` yields an empty vec.
-#[must_use]
-pub(crate) fn semantic_cache_dirs(root: &Path) -> Vec<PathBuf> {
+///
+/// # Errors
+///
+/// Returns the underlying [`std::io::Error`] when enumerating `cache/` fails
+/// (the read-dir, a directory entry, or its file-type), so a partial namespace
+/// list is never mistaken for the complete set.
+pub(crate) fn semantic_cache_dirs(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let cache = out_base(root).join("cache");
     // Only descend a REAL `cache/` directory: a missing, non-dir, or symlinked
     // `cache/` yields nothing — a symlinked cache could otherwise redirect the
     // read_dir below (and any prune/clear) into an external tree.
     if !fs::symlink_metadata(&cache).is_ok_and(|m| m.is_dir()) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut dirs: Vec<PathBuf> = Vec::new();
     // `symlink_metadata` does not follow links, so a symlinked `semantic` is not
@@ -65,22 +70,23 @@ pub(crate) fn semantic_cache_dirs(root: &Path) -> Vec<PathBuf> {
     if fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
         dirs.push(base);
     }
-    if let Ok(entries) = fs::read_dir(&cache) {
-        for entry in entries.flatten() {
-            // `DirEntry::file_type` reports the link itself (no follow), so a
-            // symlinked `semantic-*` reads as a symlink, not a dir, and is skipped.
-            if entry.file_type().is_ok_and(|t| t.is_dir())
-                && entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|n| n.starts_with("semantic-"))
-            {
-                dirs.push(entry.path());
-            }
+    // Propagate read/entry/file-type errors so a mid-enumeration failure never
+    // silently shrinks the returned set.
+    for entry in fs::read_dir(&cache)? {
+        let entry = entry?;
+        // `DirEntry::file_type` reports the link itself (no follow), so a
+        // symlinked `semantic-*` reads as a symlink, not a dir, and is skipped.
+        if entry.file_type()?.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("semantic-"))
+        {
+            dirs.push(entry.path());
         }
     }
     dirs.sort();
-    dirs
+    Ok(dirs)
 }
 
 /// Return the cache directory for `kind`, creating it if it does not exist.

@@ -141,7 +141,7 @@ pub fn cached_files(root: &Path) -> BTreeSet<String> {
     collect_json_stems(&base.join("ast"), true, &mut hashes);
     // Every semantic namespace (`semantic/`, `semantic-deep/`, and any future
     // `semantic-<mode>/`), enumerated from disk (#1894).
-    for dir in semantic_cache_dirs(root) {
+    for dir in semantic_cache_dirs(root).unwrap_or_default() {
         collect_json_stems(&dir, false, &mut hashes);
     }
     hashes
@@ -179,7 +179,7 @@ pub fn clear_cache(root: &Path) -> Result<(), CacheError> {
     let base = out_base(root).join("cache");
     remove_json_files(&base, false)?;
     remove_json_files(&base.join("ast"), true)?;
-    for dir in semantic_cache_dirs(root) {
+    for dir in semantic_cache_dirs(root).map_err(CacheError::Io)? {
         remove_json_files(&dir, false)?;
     }
     Ok(())

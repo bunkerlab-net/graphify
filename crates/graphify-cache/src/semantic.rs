@@ -410,6 +410,7 @@ pub fn remove_semantic_cache_entries(files: &[PathBuf], root: &Path, mode: Optio
     // missing/symlinked target yields no dir and we never unlink THROUGH a link
     // into an external tree.
     let Some(dir) = crate::paths::semantic_cache_dirs(root)
+        .unwrap_or_default()
         .into_iter()
         .find(|d| d.file_name().and_then(|n| n.to_str()) == Some(kind.as_str()))
     else {
@@ -469,7 +470,7 @@ pub fn prune_semantic_cache<S: std::hash::BuildHasher>(
     let mut pruned = 0;
     // Every semantic namespace, enumerated from disk so a new `--mode` is pruned
     // without a hard-coded name (#1894).
-    for semantic_dir in crate::paths::semantic_cache_dirs(root) {
+    for semantic_dir in crate::paths::semantic_cache_dirs(root).unwrap_or_default() {
         let Ok(entries) = std::fs::read_dir(&semantic_dir) else {
             continue;
         };
