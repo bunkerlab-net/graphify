@@ -73,9 +73,12 @@ fn detect_incremental_all_new_when_no_manifest() {
     std::fs::write(tmp.path().join("main.py"), "x = 1").expect("test invariant");
     let manifest_path = tmp.path().join("manifest.json");
     // No manifest on disk → everything is new
-    let (changed, deleted, _updated) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
-            .expect("test invariant");
+    let (changed, deleted, _updated) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        graphify_detect::IncrementalOptions::default(),
+    )
+    .expect("test invariant");
     assert!(!changed.is_empty());
     assert!(deleted.is_empty());
 }
@@ -96,9 +99,12 @@ fn detect_incremental_nothing_changed_after_save() {
     save_manifest_to_path(&files, &manifest_path, "both").expect("test invariant");
 
     // Second: incremental should see no changes
-    let (changed, deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
-            .expect("test invariant");
+    let (changed, deleted, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        graphify_detect::IncrementalOptions::default(),
+    )
+    .expect("test invariant");
     assert!(changed.is_empty(), "nothing changed, but got: {changed:?}");
     assert!(deleted.is_empty());
 }
@@ -117,9 +123,12 @@ fn detect_incremental_detects_new_file() {
     // Add a new file
     std::fs::write(tmp.path().join("new.py"), "y = 2").expect("test invariant");
 
-    let (changed, _deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
-            .expect("test invariant");
+    let (changed, _deleted, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        graphify_detect::IncrementalOptions::default(),
+    )
+    .expect("test invariant");
     assert!(
         changed
             .iter()
@@ -144,9 +153,12 @@ fn detect_incremental_detects_deleted_file() {
     // Delete b.py
     std::fs::remove_file(&f2).expect("remove fixture");
 
-    let (_changed, deleted, _) =
-        detect_incremental_with_manifest(tmp.path(), &manifest_path, None, "semantic", None, None)
-            .expect("test invariant");
+    let (_changed, deleted, _) = detect_incremental_with_manifest(
+        tmp.path(),
+        &manifest_path,
+        graphify_detect::IncrementalOptions::default(),
+    )
+    .expect("test invariant");
     assert!(
         deleted
             .iter()
@@ -176,10 +188,10 @@ fn detect_incremental_propagates_follow_symlinks() {
     let (changed_no, _, _) = detect_incremental_with_manifest(
         tmp.path(),
         &manifest_path,
-        Some(false),
-        "semantic",
-        None,
-        None,
+        graphify_detect::IncrementalOptions {
+            follow_symlinks: Some(false),
+            ..Default::default()
+        },
     )
     .expect("test invariant");
     assert!(
@@ -193,10 +205,10 @@ fn detect_incremental_propagates_follow_symlinks() {
     let (changed_yes, _, updated) = detect_incremental_with_manifest(
         tmp.path(),
         &manifest_path,
-        Some(true),
-        "semantic",
-        None,
-        None,
+        graphify_detect::IncrementalOptions {
+            follow_symlinks: Some(true),
+            ..Default::default()
+        },
     )
     .expect("test invariant");
     assert!(
@@ -221,10 +233,10 @@ fn detect_incremental_propagates_follow_symlinks() {
     let (changed_second, _, _) = detect_incremental_with_manifest(
         tmp.path(),
         &manifest_path,
-        Some(true),
-        "semantic",
-        None,
-        None,
+        graphify_detect::IncrementalOptions {
+            follow_symlinks: Some(true),
+            ..Default::default()
+        },
     )
     .expect("test invariant");
     assert_eq!(
@@ -388,7 +400,7 @@ fn detect_incremental_new_total_counts_changed_files_only() {
             base.join("d.py").to_string_lossy().into_owned(),
         ],
     );
-    save_manifest_to_path_with_root(&files, &manifest, "both", Some(&base)).expect("save");
+    save_manifest_to_path_with_root(&files, &manifest, "both", Some(&base), None).expect("save");
 
     // Change only c.py; d.py stays byte-identical.
     std::fs::write(base.join("c.py"), "z = 999").expect("test invariant");
@@ -435,7 +447,8 @@ fn save_manifest_relativizes_keys_when_root_given() {
         ("code", &root.join("src").join("foo.py").to_string_lossy()),
         ("document", &root.join("doc.md").to_string_lossy()),
     ]);
-    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root)).expect("save");
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root), None)
+        .expect("save");
 
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
@@ -560,7 +573,8 @@ fn save_manifest_out_of_root_keeps_absolute() {
 
     let manifest_path = root.join("graphify-out").join("manifest.json");
     let files = files_map(&[("code", &outside.to_string_lossy())]);
-    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(&root)).expect("save");
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(&root), None)
+        .expect("save");
 
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
@@ -587,7 +601,8 @@ fn detect_incremental_portable_across_paths() {
         ("code", &repo_a.join("src").join("foo.py").to_string_lossy()),
         ("document", &repo_a.join("doc.md").to_string_lossy()),
     ]);
-    save_manifest_to_path_with_root(&files, &manifest_a, "both", Some(&repo_a)).expect("save");
+    save_manifest_to_path_with_root(&files, &manifest_a, "both", Some(&repo_a), None)
+        .expect("save");
 
     // Second "machine": same corpus at a different absolute prefix + copied manifest.
     let repo_b = base.join("repo_b");
@@ -631,7 +646,8 @@ fn save_manifest_in_root_symlink_roundtrips() {
         .to_string_lossy()
         .into_owned();
     let files = files_map(&[("code", &alias_key)]);
-    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root)).expect("save");
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root), None)
+        .expect("save");
 
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
@@ -669,10 +685,20 @@ fn incremental_cache_root_is_per_invocation() {
     std::fs::write(corpus_b.path().join("beta.txt"), "four five six").expect("test invariant");
 
     // Two first-run detections (empty manifest), each with its own cache root.
-    detect_incremental_with_cache_root(corpus_a.path(), &Manifest::new(), Some(root_a.path()))
-        .expect("detect A");
-    detect_incremental_with_cache_root(corpus_b.path(), &Manifest::new(), Some(root_b.path()))
-        .expect("detect B");
+    detect_incremental_with_cache_root(
+        corpus_a.path(),
+        &Manifest::new(),
+        Some(root_a.path()),
+        None,
+    )
+    .expect("detect A");
+    detect_incremental_with_cache_root(
+        corpus_b.path(),
+        &Manifest::new(),
+        Some(root_b.path()),
+        None,
+    )
+    .expect("detect B");
     flush_stat_index().expect("flush");
 
     let idx = |root: &Path| {
@@ -793,4 +819,296 @@ fn legacy_float_manifest_mtime_parses_bit_exact() {
         0x41da_9644_96c1_c57b,
         "serde_json must parse f64 correctly-rounded (float_roundtrip feature)"
     );
+}
+
+// ── #1908: manifest must not retain scan-excluded files as permanent "deleted"
+// entries. Full-scan saves prune excluded-but-alive rows; subset saves keep
+// preserving untouched rows (#917); out-of-root rows never prune. ────────────
+
+/// Read the manifest JSON key set.
+fn manifest_keys(path: &Path) -> std::collections::BTreeSet<String> {
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read")).expect("parse");
+    raw.as_object().expect("obj").keys().cloned().collect()
+}
+
+#[test]
+fn save_manifest_full_scan_prunes_excluded_but_alive_row() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    let a = root.join("a.py");
+    let b = root.join("b.py");
+    std::fs::write(&a, "x = 1\n").expect("write");
+    std::fs::write(&b, "y = 2\n").expect("write");
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let a_str = a.to_string_lossy().into_owned();
+    let b_str = b.to_string_lossy().into_owned();
+
+    let files_ab = files_map(&[("code", &a_str), ("code", &b_str)]);
+    save_manifest_to_path_with_root(&files_ab, &manifest_path, "both", Some(&root), None)
+        .expect("save");
+    assert_eq!(
+        manifest_keys(&manifest_path),
+        ["a.py".to_string(), "b.py".to_string()]
+            .into_iter()
+            .collect()
+    );
+
+    // Second full scan no longer covers b.py (excluded), yet b.py is alive.
+    let files_a = files_map(&[("code", &a_str)]);
+    let corpus = vec![a_str.clone()];
+    save_manifest_to_path_with_root(&files_a, &manifest_path, "both", Some(&root), Some(&corpus))
+        .expect("save");
+    assert_eq!(
+        manifest_keys(&manifest_path),
+        ["a.py".to_string()].into_iter().collect(),
+        "excluded-but-alive row must be pruned on a full-scan save"
+    );
+}
+
+#[test]
+fn save_manifest_full_scan_still_prunes_missing_file() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    let a = root.join("a.py");
+    let gone = root.join("gone.py");
+    std::fs::write(&a, "x = 1\n").expect("write");
+    std::fs::write(&gone, "y = 2\n").expect("write");
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let a_str = a.to_string_lossy().into_owned();
+    let gone_str = gone.to_string_lossy().into_owned();
+    save_manifest_to_path_with_root(
+        &files_map(&[("code", &a_str), ("code", &gone_str)]),
+        &manifest_path,
+        "both",
+        Some(&root),
+        None,
+    )
+    .expect("save");
+
+    std::fs::remove_file(&gone).expect("rm");
+    let corpus = vec![a_str.clone()];
+    save_manifest_to_path_with_root(
+        &files_map(&[("code", &a_str)]),
+        &manifest_path,
+        "both",
+        Some(&root),
+        Some(&corpus),
+    )
+    .expect("save");
+    assert_eq!(
+        manifest_keys(&manifest_path),
+        ["a.py".to_string()].into_iter().collect()
+    );
+}
+
+#[test]
+fn save_manifest_subset_save_preserves_untouched_rows() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    let a = root.join("a.py");
+    let b = root.join("b.py");
+    std::fs::write(&a, "x = 1\n").expect("write");
+    std::fs::write(&b, "y = 2\n").expect("write");
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let a_str = a.to_string_lossy().into_owned();
+    let b_str = b.to_string_lossy().into_owned();
+    save_manifest_to_path_with_root(
+        &files_map(&[("code", &a_str), ("code", &b_str)]),
+        &manifest_path,
+        "both",
+        Some(&root),
+        None,
+    )
+    .expect("save");
+
+    // Incremental hook re-stamps only a.py (no scan_corpus); b.py's row survives.
+    save_manifest_to_path_with_root(
+        &files_map(&[("code", &a_str)]),
+        &manifest_path,
+        "both",
+        Some(&root),
+        None,
+    )
+    .expect("save");
+    assert_eq!(
+        manifest_keys(&manifest_path),
+        ["a.py".to_string(), "b.py".to_string()]
+            .into_iter()
+            .collect(),
+        "subset saves must preserve untouched rows (#917)"
+    );
+}
+
+#[test]
+fn save_manifest_full_scan_keeps_out_of_root_rows() {
+    // Parent tempdir holds both the scan `root/` and an out-of-root sibling, so
+    // the fixture is unique per test run and auto-cleaned — no shared parent
+    // filename that parallel tests could collide on or delete.
+    let tmp = tempdir().expect("tempdir");
+    let parent = tmp.path().canonicalize().expect("canon");
+    let root = parent.join("root");
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    let a = root.join("a.py");
+    std::fs::write(&a, "x = 1\n").expect("write");
+    // An out-of-root source (e.g. an --include source), sibling to `root/`.
+    let outside = parent.join("extern.py");
+    std::fs::write(&outside, "z = 3\n").expect("write");
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    let a_str = a.to_string_lossy().into_owned();
+    let outside_str = outside.to_string_lossy().into_owned();
+    save_manifest_to_path_with_root(
+        &files_map(&[("code", &a_str), ("code", &outside_str)]),
+        &manifest_path,
+        "both",
+        Some(&root),
+        None,
+    )
+    .expect("save");
+    let corpus = vec![a_str.clone()];
+    save_manifest_to_path_with_root(
+        &files_map(&[("code", &a_str)]),
+        &manifest_path,
+        "both",
+        Some(&root),
+        Some(&corpus),
+    )
+    .expect("save");
+    let keys = manifest_keys(&manifest_path);
+    assert!(keys.contains("a.py"));
+    assert!(
+        keys.contains(&outside_str),
+        "out-of-root rows must never be pruned to the scan, got {keys:?}"
+    );
+}
+
+/// Save the full detect corpus to the canonical manifest path (relative keys).
+fn seed_full_manifest(root: &Path) {
+    let full = detect(root, None, None);
+    let files: IndexMap<String, Vec<String>> = full.files.into_iter().collect();
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+    save_manifest_to_path_with_root(&files, &manifest_path, "both", Some(root), None)
+        .expect("save");
+}
+
+#[test]
+#[serial]
+fn detect_incremental_reports_excluded_not_deleted() {
+    _reset_stat_index_for_tests();
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    std::fs::write(root.join("a.py"), "x = 1\n").expect("write");
+    std::fs::write(root.join("b.py"), "y = 2\n").expect("write");
+    seed_full_manifest(&root);
+
+    let excludes = vec!["b.py".to_string()];
+    let inc = detect_incremental_with_cache_root(&root, &Manifest::new(), None, Some(&excludes))
+        .expect("incremental");
+    assert!(
+        inc.deleted_files.is_empty(),
+        "excluded-but-alive file misreported as deleted: {:?}",
+        inc.deleted_files
+    );
+    let excluded_names: Vec<String> = inc
+        .excluded_files
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(excluded_names, ["b.py".to_string()]);
+}
+
+#[test]
+#[serial]
+fn detect_incremental_still_reports_real_deletions() {
+    _reset_stat_index_for_tests();
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    std::fs::write(root.join("a.py"), "x = 1\n").expect("write");
+    std::fs::write(root.join("b.py"), "y = 2\n").expect("write");
+    seed_full_manifest(&root);
+
+    std::fs::remove_file(root.join("b.py")).expect("rm");
+    let inc = detect_incremental_with_cache_root(&root, &Manifest::new(), None, None)
+        .expect("incremental");
+    let deleted_names: Vec<String> = inc
+        .deleted_files
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(deleted_names, ["b.py".to_string()]);
+    assert!(inc.excluded_files.is_empty());
+}
+
+#[test]
+#[serial]
+fn detect_incremental_exclusion_stable_across_runs() {
+    _reset_stat_index_for_tests();
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().canonicalize().expect("canon");
+    std::fs::write(root.join("a.py"), "x = 1\n").expect("write");
+    std::fs::write(root.join("b.py"), "y = 2\n").expect("write");
+    seed_full_manifest(&root);
+    let excludes = vec!["b.py".to_string()];
+    let manifest_path = root.join("graphify-out").join("manifest.json");
+
+    // Run 1: b.py newly excluded — reported as excluded; then the full-scan save
+    // (what extract does at run end) prunes its row.
+    let inc1 = detect_incremental_with_cache_root(&root, &Manifest::new(), None, Some(&excludes))
+        .expect("incremental");
+    let excl1: Vec<String> = inc1
+        .excluded_files
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(excl1, ["b.py".to_string()]);
+    assert!(inc1.deleted_files.is_empty());
+    // The corpus is the FULL live set (changed + unchanged), matching Python's
+    // `inc1["files"]` — using only changed_files would be empty here (a.py is
+    // unchanged) and wrongly prune a.py.
+    let mut corpus_files: IndexMap<String, Vec<String>> = inc1.changed_files.clone();
+    for (k, v) in &inc1.unchanged_files {
+        corpus_files
+            .entry(k.clone())
+            .or_default()
+            .extend(v.iter().cloned());
+    }
+    let corpus: Vec<String> = corpus_files.values().flatten().cloned().collect();
+    assert!(
+        corpus.iter().any(|f| f.ends_with("a.py")),
+        "a.py must be in the live corpus"
+    );
+    save_manifest_to_path_with_root(
+        &corpus_files,
+        &manifest_path,
+        "both",
+        Some(&root),
+        Some(&corpus),
+    )
+    .expect("save");
+    // The excluded row is pruned, but a.py survives the save.
+    assert!(
+        manifest_keys(&manifest_path).contains("a.py"),
+        "a.py must remain in the manifest after the full-scan save"
+    );
+
+    // Run 2: steady state — nothing deleted, nothing excluded.
+    let inc2 = detect_incremental_with_cache_root(&root, &Manifest::new(), None, Some(&excludes))
+        .expect("incremental");
+    assert!(inc2.deleted_files.is_empty());
+    assert!(inc2.excluded_files.is_empty());
 }

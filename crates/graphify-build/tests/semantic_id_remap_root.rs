@@ -29,3 +29,68 @@ fn build_from_json_with_root_level_concept_node() {
     let g = build_from_json(combined, false, Some(Path::new("/proj"))).expect("build_from_json");
     assert_eq!(g.node_count(), 2);
 }
+
+// ── #1917: `_semantic_id_remap` must be idempotent (no id accretion) ──────────
+//
+// Exercised through `build_from_json` (the private `_semantic_id_remap` is not
+// exported): a node's id is re-derived from its `source_file`, so the built
+// graph carries the remapped id. `.claude/CLAUDE.md` has canonical stem
+// `claude_claude` over legacy `claude`.
+
+#[test]
+fn semantic_remap_migrates_legacy_stem_once() {
+    // A pre-scheme id under `.claude/CLAUDE.md` remaps once to the canonical stem.
+    let ext = json!({
+        "nodes": [{
+            "id": "claude_graphify_trigger", "label": "trigger", "file_type": "code",
+            "source_file": ".claude/CLAUDE.md", "_origin": "semantic",
+        }],
+        "edges": [],
+    });
+    let g = build_from_json(ext, false, Some(Path::new("."))).expect("build");
+    assert!(
+        g.contains_node("claude_claude_graphify_trigger"),
+        "legacy id must migrate"
+    );
+    assert!(!g.contains_node("claude_graphify_trigger"));
+}
+
+#[test]
+fn semantic_remap_idempotent_on_canonical_stem() {
+    // An id ALREADY carrying the canonical `claude_claude` stem must not gain
+    // another segment on a rebuild (#1917) — without the guard it would become
+    // `claude_claude_claude_graphify_trigger`, defeating the no-change fastpath.
+    let ext = json!({
+        "nodes": [{
+            "id": "claude_claude_graphify_trigger", "label": "trigger", "file_type": "code",
+            "source_file": ".claude/CLAUDE.md", "_origin": "semantic",
+        }],
+        "edges": [],
+    });
+    let g = build_from_json(ext, false, Some(Path::new("."))).expect("build");
+    assert!(
+        g.contains_node("claude_claude_graphify_trigger"),
+        "canonical id preserved"
+    );
+    assert!(
+        !g.contains_node("claude_claude_claude_graphify_trigger"),
+        "id re-prefixed on rebuild (#1917)"
+    );
+}
+
+#[test]
+fn semantic_remap_still_migrates_genuine_legacy_id_under_normal_path() {
+    // The idempotency guard must not block a real one-time legacy migration.
+    let ext = json!({
+        "nodes": [{
+            "id": "readme_booking", "label": "booking", "file_type": "code",
+            "source_file": "api/README.md", "_origin": "semantic",
+        }],
+        "edges": [],
+    });
+    let g = build_from_json(ext, false, Some(Path::new("."))).expect("build");
+    assert!(
+        g.contains_node("api_readme_booking"),
+        "legacy id must migrate to canonical stem"
+    );
+}

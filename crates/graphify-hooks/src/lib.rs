@@ -23,6 +23,7 @@ mod constants;
 mod error;
 mod git;
 mod install;
+mod merge_driver;
 pub mod platform;
 mod status;
 mod uninstall;

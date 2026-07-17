@@ -500,3 +500,151 @@ fn extract_corpus_parallel_merge_order_is_deterministic() {
         "merge order must be identical across runs (deterministic)"
     );
 }
+
+// ── #1895: out-of-scope nodes are dropped from the merged result ──────────────
+
+#[test]
+fn out_of_scope_nodes_are_dropped_from_merged_result() {
+    // #1895: the #1757 cache guard skips the CACHE write for a node attributed to
+    // a real corpus file that was not dispatched, but the node itself still
+    // reached the merged result. Drop such nodes (and edges/hyperedges touching
+    // them), record the count, and keep in-scope sibling + non-file concept
+    // attributions.
+    let mut server = mockito::Server::new();
+    let inner = json!({
+        "nodes": [
+            {"id": "a_ok", "source_file": "A.md", "file_type": "document"},
+            {"id": "c_sibling", "source_file": "C.md", "file_type": "document"},
+            {"id": "b_stray", "source_file": "B.py", "file_type": "code"},
+            {"id": "auth_flow", "source_file": "auth flow", "file_type": "concept"},
+        ],
+        "edges": [
+            {"source": "a_ok", "target": "c_sibling", "source_file": "A.md"},
+            {"source": "a_ok", "target": "b_stray", "source_file": "A.md"},
+        ],
+        "hyperedges": [
+            {"id": "h_bad", "nodes": ["a_ok", "c_sibling", "b_stray"], "source_file": "A.md"},
+            {"id": "h_ok", "nodes": ["a_ok", "c_sibling", "auth_flow"], "source_file": "A.md"},
+        ],
+    })
+    .to_string();
+    let body = json!({
+        "choices": [{"message": {"content": inner}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+    })
+    .to_string();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(body)
+        .expect_at_least(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("A.md");
+    fs::write(&a, "# a\n").expect("write");
+    let c = tmp.path().join("C.md");
+    fs::write(&c, "# c\n").expect("write");
+    // B.py exists on disk but is NOT dispatched — the #1895 out-of-scope case.
+    fs::write(tmp.path().join("B.py"), "def b():\n    pass\n").expect("write");
+
+    let cfg = CorpusConfig {
+        backend: "openai",
+        api_key: Some("k"),
+        model: Some("m"),
+        root: tmp.path(),
+        chunk_size: 8,
+        token_budget: None,
+        max_concurrency: 1,
+        max_retry_depth: 1,
+        deep_mode: false,
+    };
+    let (resp, _failed) = extract_corpus_parallel(&[a, c], &cfg, None);
+
+    let ids: std::collections::HashSet<&str> = resp
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        !ids.contains("b_stray"),
+        "out-of-scope node leaked: {ids:?}"
+    );
+    for id in ["a_ok", "c_sibling", "auth_flow"] {
+        assert!(ids.contains(id), "in-scope attribution dropped: {id}");
+    }
+    assert_eq!(resp.out_of_scope_dropped, 1);
+    assert!(
+        resp.edges.iter().all(|e| {
+            let src = e.get("source").and_then(serde_json::Value::as_str);
+            let tgt = e.get("target").and_then(serde_json::Value::as_str);
+            src != Some("b_stray") && tgt != Some("b_stray")
+        }),
+        "edge to dropped node survived: {:?}",
+        resp.edges
+    );
+    let he_ids: Vec<&str> = resp
+        .hyperedges
+        .iter()
+        .filter_map(|h| h.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    assert_eq!(he_ids, ["h_ok"], "hyperedge touching dropped node kept");
+    assert!(
+        resp.uncovered_files.is_empty(),
+        "dispatched files all produced nodes"
+    );
+}
+
+#[test]
+fn out_of_scope_drop_count_is_zero_when_all_in_scope() {
+    // Counter-test: a clean run records out_of_scope_dropped == 0.
+    let mut server = mockito::Server::new();
+    let inner = json!({
+        "nodes": [{"id": "a_ok", "source_file": "A.md", "file_type": "document"}],
+        "edges": [],
+        "hyperedges": [],
+    })
+    .to_string();
+    let body = json!({
+        "choices": [{"message": {"content": inner}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+    })
+    .to_string();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(body)
+        .expect_at_least(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("A.md");
+    fs::write(&a, "# a\n").expect("write");
+    let cfg = CorpusConfig {
+        backend: "openai",
+        api_key: Some("k"),
+        model: Some("m"),
+        root: tmp.path(),
+        chunk_size: 1,
+        token_budget: None,
+        max_concurrency: 1,
+        max_retry_depth: 1,
+        deep_mode: false,
+    };
+    let (resp, _failed) = extract_corpus_parallel(&[a], &cfg, None);
+    assert_eq!(resp.out_of_scope_dropped, 0);
+    let ids: Vec<&str> = resp
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    assert_eq!(ids, ["a_ok"]);
+}

@@ -58,6 +58,15 @@ static SQL_END_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:^|\n)(?:CREATE|SET\s+TERM|ALTER)\s").expect("static sql end regex")
 });
 
+#[allow(clippy::expect_used)] // literal pattern; build cannot panic
+static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // Schema-qualified names are kept whole (`[\w$.]+` includes `.`), unlike
+    // SQL_FB_HDR_RE. Used only to recover CREATE FUNCTION/PROCEDURE objects from
+    // tree-sitter ERROR blobs (PL/pgSQL bodies), #1910.
+    Regex::new(r"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([\w$.]+)")
+        .expect("static sql error-fn regex")
+});
+
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
@@ -177,7 +186,7 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
                 }
             } else if matches!(
                 stmt.kind(),
-                "fb_proc_or_trigger" | "set_term" | "declare_external_function"
+                "fb_proc_or_trigger" | "set_term" | "declare_external_function" | "ERROR"
             ) {
                 walk_sql(&mut walk_ctx, stmt, source);
             }

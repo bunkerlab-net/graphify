@@ -577,6 +577,34 @@ pub fn to_obsidian(
         &mut skipped,
     )?;
 
+    // #1896: prune notes for nodes that dropped out of the graph. Only files the
+    // manifest says graphify owns are candidates, and anything written or skipped
+    // this run is excluded — so a user's own note is never touched (foreign files
+    // land in `skipped`, never `owned`). Each rel path is kept inside the vault in
+    // case a corrupt/hostile manifest holds `..`/absolute entries.
+    let written_set: HashSet<&str> = written.iter().map(String::as_str).collect();
+    let skipped_set: HashSet<&str> = skipped.iter().map(String::as_str).collect();
+    let mut stale: Vec<&String> = owned
+        .iter()
+        .filter(|f| !written_set.contains(f.as_str()) && !skipped_set.contains(f.as_str()))
+        .collect();
+    stale.sort();
+    let mut pruned = 0usize;
+    for rel in stale {
+        if Path::new(rel).is_absolute() || rel.split(['/', '\\']).any(|c| c == "..") {
+            continue; // never delete outside the vault
+        }
+        match std::fs::remove_file(output_dir.join(rel)) {
+            Ok(()) => pruned += 1,
+            // Already gone — Python's `unlink(missing_ok=True)` counts it too.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => pruned += 1,
+            Err(_) => {}
+        }
+    }
+    if pruned > 0 {
+        eprintln!("[graphify] pruned {pruned} note(s) for nodes no longer in the graph");
+    }
+
     // Persist the manifest of files graphify owns; warn (once, aggregated) about
     // any pre-existing file we refused to overwrite.
     written.sort();

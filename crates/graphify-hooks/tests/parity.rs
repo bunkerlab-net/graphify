@@ -20,7 +20,7 @@ use std::process::Command;
 
 use graphify_hooks::{
     CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT, PYTHON_DETECT, WORKTREE_GUARD,
-    hooks_dir_with, install, status, uninstall, user_hooks_dir,
+    hooks_dir, hooks_dir_with, install, status, uninstall, user_hooks_dir,
 };
 use serial_test::serial;
 
@@ -3071,5 +3071,129 @@ fn worktree_guard_runs_on_primary_skips_linked() {
     assert!(
         !run(&linked).contains("RAN"),
         "guard failed to skip the linked worktree"
+    );
+}
+
+// ── #1907: hooks_dir tolerates git's duplicate keys / repeated sections ───────
+
+/// Append duplicate keys and a repeated section to `.git/config` — the shape
+/// VS Code and other tools legally write that a strict configparser rejected.
+fn append_duplicate_config_entries(repo: &Path) {
+    let cfg = repo.join(".git").join("config");
+    let mut content = fs::read_to_string(&cfg).expect("read .git/config");
+    content.push_str(
+        "[remote \"origin\"]\n\
+         \tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+         \tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+         [core]\n\
+         \tignorecase = true\n",
+    );
+    fs::write(&cfg, content).expect("write .git/config");
+}
+
+#[test]
+#[serial]
+fn test_hooks_dir_no_warning_on_duplicate_config_keys() {
+    // git legally allows duplicate keys/sections; hooks_dir must resolve cleanly
+    // (a strict configparser broke on VS Code configs, #1907).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    append_duplicate_config_entries(&repo);
+    let d = hooks_dir(&repo).expect("hooks_dir resolves cleanly");
+    let expected = repo.join(".git").join("hooks");
+    assert_eq!(d, expected.canonicalize().unwrap_or(expected));
+}
+
+#[test]
+#[serial]
+fn test_hooks_dir_duplicate_config_keys_honor_custom_hookspath() {
+    // With duplicate keys present, a custom core.hooksPath is still honored.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    set_hookspath(&repo, ".husky");
+    append_duplicate_config_entries(&repo);
+    let d = hooks_dir(&repo).expect("hooks_dir resolves cleanly");
+    let expected = repo.join(".husky");
+    assert_eq!(d, expected.canonicalize().unwrap_or(expected));
+}
+
+// ── #1902: hook install registers the graph.json union merge driver ───────────
+
+fn git_config_get(repo: &Path, key: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "config", "--get", key])
+        .output()
+        .expect("git config --get");
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[test]
+#[serial]
+fn test_install_registers_merge_driver() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    let result = install(&repo).expect("install");
+    let driver = git_config_get(&repo, "merge.graphify.driver").expect("driver set");
+    assert!(driver.contains("merge-driver %O %A %B"), "driver: {driver}");
+    let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read .gitattributes");
+    assert!(
+        attrs
+            .lines()
+            .any(|l| l.contains("graph.json") && l.contains("merge=graphify")),
+        "gitattributes: {attrs}"
+    );
+    assert!(result.contains("merge driver"), "result: {result}");
+}
+
+#[test]
+#[serial]
+fn test_install_merge_driver_idempotent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    install(&repo).expect("install 1");
+    install(&repo).expect("install 2");
+    let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    let matches = attrs
+        .lines()
+        .filter(|l| l.contains("merge=graphify"))
+        .count();
+    assert_eq!(matches, 1, "merge attr duplicated: {attrs}");
+}
+
+#[test]
+#[serial]
+fn test_install_preserves_existing_gitattributes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(repo.join(".gitattributes"), "*.png binary\n").expect("write");
+    install(&repo).expect("install");
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(content.contains("*.png binary"), "clobbered: {content}");
+    assert!(content.contains("merge=graphify"));
+}
+
+#[test]
+#[serial]
+fn test_uninstall_removes_merge_driver_keeps_other_attrs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(repo.join(".gitattributes"), "*.png binary\n").expect("write");
+    install(&repo).expect("install");
+    uninstall(&repo).expect("uninstall");
+    assert!(
+        git_config_get(&repo, "merge.graphify.driver").is_none(),
+        "merge driver config not unset"
+    );
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(
+        content.contains("*.png binary"),
+        "other attrs lost: {content}"
+    );
+    assert!(
+        !content.contains("merge=graphify"),
+        "merge attr not removed: {content}"
     );
 }

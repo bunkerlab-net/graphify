@@ -681,3 +681,60 @@ fn merge_preserved_into_result(
         "output_tokens": 0,
     });
 }
+
+/// #1915: exclude documents already represented by a SEMANTIC (LLM) layer in the
+/// existing graph from the AST-quick-scan `extract_targets`. Their semantic
+/// nodes are the sole representation; AST-scanning them mints heading nodes on
+/// top, doubling the doc (~4x graph bloat vs the CLI update path, which
+/// AST-extracts only code). Semantic supersedes AST per doc source. The docs
+/// stay in `code_files` (caller-owned) so corpus membership (#1795 deletion
+/// evidence) and shrink accounting still cover them — only extraction is
+/// skipped, letting a previously-bloated graph self-heal on a full rebuild.
+#[must_use]
+pub(crate) fn filter_semantic_backed_docs(
+    extract_targets: Vec<PathBuf>,
+    existing_graph_path: &Path,
+    out: &Path,
+    project_root: &Path,
+    watch_root: &Path,
+) -> Vec<PathBuf> {
+    if !existing_graph_path.exists()
+        || graphify_security::check_graph_file_size_cap(existing_graph_path).is_err()
+    {
+        return extract_targets;
+    }
+    let Ok(text) = std::fs::read_to_string(existing_graph_path) else {
+        return extract_targets;
+    };
+    let Ok(existing) = serde_json::from_str::<Value>(&text) else {
+        return extract_targets;
+    };
+    let source_paths = StoredSourcePaths::new(&existing, out, project_root, watch_root);
+    // Semantic doc nodes lack the AST origin marker. Gate on file_type ==
+    // "document" too so a pre-#1865 graph whose AST nodes lack the `_origin`
+    // marker isn't misread as semantic-backed via some other marker-less kind.
+    let semantic_doc_identities: HashSet<String> = existing
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter(|n| {
+                    n.get("_origin").and_then(Value::as_str) != Some("ast")
+                        && n.get("file_type").and_then(Value::as_str) == Some("document")
+                })
+                .filter_map(|n| source_paths.identity(n.get("source_file").and_then(Value::as_str)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if semantic_doc_identities.is_empty() {
+        return extract_targets;
+    }
+    extract_targets
+        .into_iter()
+        .filter(|p| {
+            source_paths
+                .absolute_identity_for(p)
+                .is_none_or(|id| !semantic_doc_identities.contains(&id))
+        })
+        .collect()
+}

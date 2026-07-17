@@ -187,35 +187,82 @@ pub fn build_from_json(
         );
     }
 
-    if let Some(arr) = extraction
+    attach_validated_hyperedges(
+        &mut graph,
+        &mut extraction,
+        &ghost_remap,
+        root_str.as_deref(),
+    );
+
+    Ok(graph)
+}
+
+/// Relativise, validate, and attach hyperedges to the built graph (#1916/#1418).
+///
+/// Members absent from the built node set are pruned — mismatched ids remapped
+/// through the same endpoint index `add_edges` uses (ghost + legacy aliases) —
+/// and a hyperedge with no surviving member is dropped whole. `source_file` is
+/// relativised so `to_json` (which writes `graph.hyperedges` verbatim and has no
+/// root) never leaks an absolute path.
+fn attach_validated_hyperedges(
+    graph: &mut Graph,
+    extraction: &mut Value,
+    ghost_remap: &indexmap::IndexMap<String, String>,
+    root_str: Option<&str>,
+) {
+    let Some(arr) = extraction
         .as_object_mut()
         .and_then(|o| o.get_mut("hyperedges"))
         .and_then(Value::as_array_mut)
-        && !arr.is_empty()
-    {
-        // Relativize hyperedge source_file the same way nodes and edges are, so
-        // `to_json` — which writes `graph.hyperedges` verbatim and has no root —
-        // never leaks an absolute path from a semantic subagent (#1418).
-        for he in arr.iter_mut() {
-            let Some(map) = he.as_object_mut() else {
-                continue;
-            };
-            normalize_hyperedge_members(map);
-            let Some(sf) = map.get("source_file").and_then(Value::as_str) else {
-                continue;
-            };
-            if sf.is_empty() {
-                continue;
-            }
-            let normalized = norm_source_file(sf, root_str.as_deref());
+        .filter(|a| !a.is_empty())
+    else {
+        return;
+    };
+    let (node_ids, norm_to_id) = crate::ingest::build_endpoint_index(graph, ghost_remap);
+    let mut kept: Vec<Value> = Vec::with_capacity(arr.len());
+    for he in arr.iter_mut() {
+        let Some(map) = he.as_object_mut() else {
+            kept.push(he.clone());
+            continue;
+        };
+        normalize_hyperedge_members(map);
+        if let Some(sf) = map.get("source_file").and_then(Value::as_str)
+            && !sf.is_empty()
+        {
+            let normalized = norm_source_file(sf, root_str);
             map.insert("source_file".to_string(), Value::String(normalized));
         }
+        if let Some(members) = map.get("nodes").and_then(Value::as_array) {
+            let original = members.clone();
+            let mut valid: Vec<Value> = Vec::with_capacity(original.len());
+            for m in &original {
+                let Some(s) = m.as_str() else {
+                    continue; // non-string member: unresolvable
+                };
+                let resolved = crate::ingest::resolve_edge_id(s, &node_ids, &norm_to_id);
+                if node_ids.contains(&resolved) {
+                    valid.push(Value::String(resolved));
+                }
+            }
+            if valid.is_empty() {
+                let id = map.get("id").and_then(Value::as_str).unwrap_or("?");
+                eprintln!(
+                    "[graphify] WARNING: dropping hyperedge '{id}' — none of its \
+                     members match built nodes."
+                );
+                continue;
+            }
+            if valid != original {
+                map.insert("nodes".to_string(), Value::Array(valid));
+            }
+        }
+        kept.push(he.clone());
+    }
+    if !kept.is_empty() {
         graph
             .graph_attrs
-            .insert("hyperedges".to_string(), Value::Array(arr.clone()));
+            .insert("hyperedges".to_string(), Value::Array(kept));
     }
-
-    Ok(graph)
 }
 
 /// Map a markdown quick-scan's bare doc node `<slug>` to the semantic

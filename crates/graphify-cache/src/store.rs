@@ -129,7 +129,7 @@ pub fn save_cached_versioned(
 
 /// Return the set of file hashes that have at least one cache entry
 /// (legacy flat layout + `ast/` recursively, covering per-version subdirs,
-/// + `semantic/`).
+/// + `semantic/` + `semantic-deep/`).
 #[must_use]
 pub fn cached_files(root: &Path) -> BTreeSet<String> {
     let mut hashes = BTreeSet::new();
@@ -138,8 +138,10 @@ pub fn cached_files(root: &Path) -> BTreeSet<String> {
     // Legacy flat entries directly under cache/.
     collect_json_stems(&base, false, &mut hashes);
     // AST entries recurse into per-version subdirs; semantic stays flat.
+    // `semantic-deep/` holds `--mode deep` entries (#1894).
     collect_json_stems(&base.join("ast"), true, &mut hashes);
     collect_json_stems(&base.join("semantic"), false, &mut hashes);
+    collect_json_stems(&base.join("semantic-deep"), false, &mut hashes);
     hashes
 }
 
@@ -166,7 +168,7 @@ fn collect_json_stems(dir: &Path, recursive: bool, out: &mut BTreeSet<String>) {
 /// Delete every cache entry under `<root>/graphify-out/cache/`.
 ///
 /// Includes the legacy flat layout, the `ast/` tree (recursively, covering
-/// per-version subdirectories), and `semantic/`.
+/// per-version subdirectories), `semantic/`, and `semantic-deep/`.
 ///
 /// # Errors
 ///
@@ -176,6 +178,7 @@ pub fn clear_cache(root: &Path) -> Result<(), CacheError> {
     remove_json_files(&base, false)?;
     remove_json_files(&base.join("ast"), true)?;
     remove_json_files(&base.join("semantic"), false)?;
+    remove_json_files(&base.join("semantic-deep"), false)?;
     Ok(())
 }
 

@@ -24,8 +24,8 @@ pub mod walk;
 
 pub use error::DetectError;
 pub use extensions::{
-    CODE_EXTENSIONS, FileType, GOOGLE_WORKSPACE_EXTENSIONS, PACKAGE_MANIFEST_NAMES, classify_file,
-    is_package_manifest_path,
+    CODE_EXTENSIONS, DOC_EXTENSIONS, FileType, GOOGLE_WORKSPACE_EXTENSIONS, IMAGE_EXTENSIONS,
+    PACKAGE_MANIFEST_NAMES, PAPER_EXTENSIONS, classify_file, is_package_manifest_path,
 };
 pub use ignore::{
     IgnoreEvalCache, could_contain_included_path, find_vcs_root, is_ignored, is_ignored_with_cache,
@@ -36,8 +36,8 @@ pub use incremental::{
     load_manifest, save_manifest,
 };
 pub use manifest::{
-    MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, load_manifest_from_path,
-    load_manifest_from_path_with_root, md5_file, save_manifest_to_path,
+    IncrementalOptions, MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest,
+    load_manifest_from_path, load_manifest_from_path_with_root, md5_file, save_manifest_to_path,
     save_manifest_to_path_with_root,
 };
 pub use sensitive::{SKIP_DIRS, SKIP_FILES, is_noise_dir, is_sensitive};

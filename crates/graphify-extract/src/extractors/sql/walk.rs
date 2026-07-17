@@ -2,8 +2,8 @@
 
 use super::refs::walk_from_refs;
 use super::{
-    SQL_FB_HDR_RE, SQL_FOR_RE, SQL_FROM_RE, SQL_NON_TABLES, SQL_REF_RE, SQL_UPDATE_RE, obj_name,
-    read_text,
+    SQL_ERROR_FN_RE, SQL_FB_HDR_RE, SQL_FOR_RE, SQL_FROM_RE, SQL_NON_TABLES, SQL_REF_RE,
+    SQL_UPDATE_RE, obj_name, read_text,
 };
 use crate::ids::make_id;
 use crate::types::{Edge, Node};
@@ -394,6 +394,31 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
                         metadata: None,
                     });
                 }
+            }
+        }
+        "ERROR" => {
+            // tree-sitter-sequel cannot parse PL/pgSQL CREATE FUNCTION/PROCEDURE
+            // bodies (OUT/INOUT params, tagged dollar quotes, PERFORM, :=) and
+            // emits an ERROR node instead, silently dropping the object. Regex-
+            // scan the raw text as a fallback, mirroring fb_proc_or_trigger. One
+            // ERROR blob can swallow several statements, so scan for every CREATE
+            // in it. We deliberately do NOT scan the body for FROM/JOIN refs:
+            // PL/pgSQL loop variables and locals would produce junk reads_from
+            // targets (#1910).
+            let text = read_text(node, source);
+            for m in SQL_ERROR_FN_RE.captures_iter(text) {
+                let Some(whole) = m.get(0) else { continue };
+                let name = m[1].to_string();
+                let m_line = line + text[..whole.start()].matches('\n').count();
+                let nid = make_id(&[ctx.stem, &name]);
+                add_node(
+                    &nid,
+                    &format!("{name}()"),
+                    m_line,
+                    ctx.nodes,
+                    ctx.edges,
+                    ctx.seen_ids,
+                );
             }
         }
         "fb_proc_or_trigger" => {

@@ -57,6 +57,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   (`.dm`, `.dme` source plus `.dmi` icon sheets, `.dmm` maps, and `.dmf` interface forms),
   CUDA (`.cu`, `.cuh`) and Metal (`.metal`) routed through the C++ extractor (#1480),
   Rake build files (`.rake`) routed through the Ruby extractor (#1784),
+  CommonJS `.cjs` sources routed through the JavaScript extractor,
   and MCP config files (`.mcp.json`,
   `claude_desktop_config.json`, `mcp.json`, `mcp_servers.json`) — servers, commands, packages,
   and env-var _names_ (values are never read).
@@ -66,6 +67,7 @@ a Rust equivalent, and outputs are byte-identical where the test suite asserts i
   reference-style, and `[[wikilinks]]`) become `references` edges so hub docs (`index.md`, tables of contents)
   connect to the documents they link instead of orphaning.
 - **Documents, papers, images, video** — PDF, DOCX, audio transcription, OCR, Google Workspace exports.
+  Agent skill files (`.skill`) are classified as documents (Markdown).
   Untrusted office/PDF files are screened before parsing (50 MiB on-disk cap; `.docx`/`.xlsx` zip-bomb guard at
   512 MiB decompressed / 200:1 ratio) and silently skipped if they exceed the limits, so a malicious corpus file
   cannot OOM a scan.

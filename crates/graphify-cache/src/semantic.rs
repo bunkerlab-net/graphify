@@ -23,19 +23,51 @@ pub struct SemanticCacheSplit {
     pub uncached_files: Vec<String>,
 }
 
+/// Options for [`save_semantic_cache`].
+///
+/// Bundles the write-behaviour flags (Python keyword-only args) so the function
+/// keeps a four-argument `(nodes, edges, hyperedges, root)` core instead of a
+/// positional tail of a `bool`, an `Option<&[PathBuf]>`, and an `Option<&str>`.
+#[derive(Default, Clone, Copy)]
+pub struct SemanticCacheOptions<'a> {
+    /// Concatenate with any existing entry instead of overwriting (#1715).
+    pub merge_existing: bool,
+    /// When `Some`, only these files may be used as cache-write keys (#1757).
+    pub allowed_source_files: Option<&'a [PathBuf]>,
+    /// Cache namespace selector: `None` → `cache/semantic/`; `Some("deep")` →
+    /// `cache/semantic-deep/`, so deep-mode results never shadow standard ones
+    /// (and vice versa) for the same content (#1894).
+    pub mode: Option<&'a str>,
+}
+
+/// The cache namespace (kind) for a given semantic `mode`. Centralised so the
+/// read path ([`check_semantic_cache`]) and write path ([`save_semantic_cache`])
+/// can never diverge.
+#[must_use]
+pub fn semantic_kind(mode: Option<&str>) -> String {
+    mode.map_or_else(|| "semantic".to_string(), |m| format!("semantic-{m}"))
+}
+
 /// Check the semantic extraction cache for a list of file paths.
 ///
-/// For each path, loads the cached `nodes`/`edges`/`hyperedges` if its
-/// hash matches; otherwise records the path in `uncached_files`.
+/// For each path, loads the cached `nodes`/`edges`/`hyperedges` if its hash
+/// matches; otherwise records the path in `uncached_files`. `mode` selects the
+/// cache namespace (see [`SemanticCacheOptions::mode`]): `None` reads
+/// `cache/semantic/`, byte-identical to the historical behaviour.
 #[must_use]
-pub fn check_semantic_cache(files: &[String], root: &Path) -> SemanticCacheSplit {
+pub fn check_semantic_cache(
+    files: &[String],
+    root: &Path,
+    mode: Option<&str>,
+) -> SemanticCacheSplit {
+    let kind = semantic_kind(mode);
     let mut split = SemanticCacheSplit::default();
     for fpath in files {
         let mut p = PathBuf::from(fpath);
         if !p.is_absolute() {
             p = root.join(&p);
         }
-        if let Some(Value::Object(map)) = load_cached(&p, root, "semantic", None) {
+        if let Some(Value::Object(map)) = load_cached(&p, root, &kind, None) {
             if let Some(Value::Array(ns)) = map.get("nodes") {
                 split.cached_nodes.extend(ns.iter().cloned());
             }
@@ -52,23 +84,127 @@ pub fn check_semantic_cache(files: &[String], root: &Path) -> SemanticCacheSplit
     split
 }
 
+/// Bucket nodes/edges/hyperedges by their non-empty `source_file` field.
+type SemanticBuckets = (Vec<Value>, Vec<Value>, Vec<Value>);
+
+fn bucket_by_source_file(
+    nodes: &[Value],
+    edges: &[Value],
+    hyperedges: &[Value],
+) -> IndexMap<String, SemanticBuckets> {
+    let mut by_file: IndexMap<String, SemanticBuckets> = IndexMap::new();
+    let mut push = |items: &[Value], slot: usize| {
+        for it in items {
+            if let Some(src) = it.get("source_file").and_then(Value::as_str)
+                && !src.is_empty()
+            {
+                let bucket = by_file.entry(src.to_string()).or_default();
+                match slot {
+                    0 => bucket.0.push(it.clone()),
+                    1 => bucket.1.push(it.clone()),
+                    _ => bucket.2.push(it.clone()),
+                }
+            }
+        }
+    };
+    push(nodes, 0);
+    push(edges, 1);
+    push(hyperedges, 2);
+    by_file
+}
+
+/// True when a `source_file` group is skipped by the write loop: its path is not
+/// a real file (ghost path) or is out-of-scope per the #1757 allowlist.
+fn group_skipped(fpath: &str, allowed: &HashSet<PathBuf>, root_path: &Path) -> bool {
+    let p = resolved_source_path(Path::new(fpath), root_path);
+    !p.is_file() || !allowed.contains(&p)
+}
+
+/// Hashable-scalar key for a JSON id/endpoint value, mirroring Python's use of
+/// the raw value in a `set`. Type-prefixed so the string `"1"` and the number
+/// `1` stay distinct (as they are in Python). `None` for arrays/objects, which
+/// are unhashable in Python — callers treat those as "not a match" so an
+/// untrusted result cannot make the prune misbehave.
+fn scalar_key(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(format!("s:{s}")),
+        Value::Number(n) => Some(format!("n:{n}")),
+        Value::Bool(b) => Some(format!("b:{b}")),
+        Value::Null => Some("null".to_string()),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// Dangling-reference pruning (#1916). A node group skipped by the write loop
+/// (ghost path or out-of-scope) contributes node ids that never reach the cache;
+/// an edge/hyperedge in an ALLOWED group referencing such an id would be written
+/// verbatim and dangle forever on replay. Drop those references. Gated on the
+/// allowlist so unscoped callers stay byte-identical.
+fn prune_dangling_refs(
+    by_file: &mut IndexMap<String, SemanticBuckets>,
+    allowed: &HashSet<PathBuf>,
+    root_path: &Path,
+) {
+    let mut skipped_ids: HashSet<String> = HashSet::new();
+    let mut written_ids: HashSet<String> = HashSet::new();
+    for (fpath, (n, _, _)) in &*by_file {
+        let target = if group_skipped(fpath, allowed, root_path) {
+            &mut skipped_ids
+        } else {
+            &mut written_ids
+        };
+        for node in n {
+            if let Some(id) = node.get("id").and_then(scalar_key) {
+                target.insert(id);
+            }
+        }
+    }
+    // A duplicate-attribution node (defined in a skipped AND a written group)
+    // still reaches the cache — don't over-prune references to it.
+    for id in &written_ids {
+        skipped_ids.remove(id);
+    }
+    if skipped_ids.is_empty() {
+        return;
+    }
+    // An endpoint that is not a hashable scalar is left alone (Python's `x in
+    // set` raises TypeError, caught as "not dangling").
+    let endpoint_dangles = |e: &Value, key: &str| {
+        e.get(key)
+            .and_then(scalar_key)
+            .is_some_and(|k| skipped_ids.contains(&k))
+    };
+    // A hyperedge with ANY non-scalar member is kept whole: Python's
+    // `set(members)` raises on an unhashable member, so `hyperedge_dangles`
+    // returns False for the whole hyperedge rather than pruning on the rest.
+    let hyperedge_dangles = |h: &Value| -> bool {
+        let Some(members) = h.get("nodes").and_then(Value::as_array) else {
+            return false;
+        };
+        let mut keys = Vec::with_capacity(members.len());
+        for m in members {
+            match scalar_key(m) {
+                Some(k) => keys.push(k),
+                None => return false, // unhashable member → keep whole hyperedge
+            }
+        }
+        keys.iter().any(|k| skipped_ids.contains(k))
+    };
+    for (fpath, (_, e, h)) in by_file.iter_mut() {
+        if group_skipped(fpath, allowed, root_path) {
+            continue;
+        }
+        e.retain(|edge| !(endpoint_dangles(edge, "source") || endpoint_dangles(edge, "target")));
+        h.retain(|hyper| !hyperedge_dangles(hyper));
+    }
+}
+
 /// Save semantic extraction results to the cache, keyed by `source_file`.
 ///
-/// Buckets the input nodes/edges/hyperedges by their `source_file` field
-/// and writes one cache entry per source file. Returns the number of
-/// source files actually cached.
-///
-/// When `merge_existing` is `true`, any already-cached entry for a file is
-/// concatenated (`prev + new`, in order, no dedup) with the new results
-/// instead of being overwritten. This lets callers checkpoint incrementally (e.g. once
-/// per chunk) without dropping a prior slice of a large file split across
-/// chunks (#1715). `false` overwrites, the default authoritative behaviour.
-///
-/// When `allowed_source_files` is `Some`, only those files may be used as
-/// cache-write keys. Semantic nodes can legitimately mention another corpus
-/// file, but a model must not replace that file's complete cache entry unless
-/// the file was part of the current extraction batch (#1757). Out-of-scope
-/// files are skipped (with a warning) and not counted.
+/// Buckets the input nodes/edges/hyperedges by their `source_file` field and
+/// writes one cache entry per source file. Returns the number of source files
+/// actually cached. See [`SemanticCacheOptions`] for the write-behaviour flags
+/// (`merge_existing` #1715, `allowed_source_files` #1757, `mode` #1894).
 ///
 /// # Errors
 ///
@@ -79,44 +215,15 @@ pub fn save_semantic_cache(
     edges: &[Value],
     hyperedges: &[Value],
     root: &Path,
-    merge_existing: bool,
-    allowed_source_files: Option<&[PathBuf]>,
+    opts: SemanticCacheOptions<'_>,
 ) -> Result<usize, CacheError> {
-    type SemanticBuckets = (Vec<Value>, Vec<Value>, Vec<Value>);
-    let mut by_file: IndexMap<String, SemanticBuckets> = IndexMap::new();
-    for n in nodes {
-        if let Some(src) = n.get("source_file").and_then(Value::as_str)
-            && !src.is_empty()
-        {
-            by_file
-                .entry(src.to_string())
-                .or_default()
-                .0
-                .push(n.clone());
-        }
-    }
-    for e in edges {
-        if let Some(src) = e.get("source_file").and_then(Value::as_str)
-            && !src.is_empty()
-        {
-            by_file
-                .entry(src.to_string())
-                .or_default()
-                .1
-                .push(e.clone());
-        }
-    }
-    for h in hyperedges {
-        if let Some(src) = h.get("source_file").and_then(Value::as_str)
-            && !src.is_empty()
-        {
-            by_file
-                .entry(src.to_string())
-                .or_default()
-                .2
-                .push(h.clone());
-        }
-    }
+    let SemanticCacheOptions {
+        merge_existing,
+        allowed_source_files,
+        mode,
+    } = opts;
+    let kind = semantic_kind(mode);
+    let mut by_file = bucket_by_source_file(nodes, edges, hyperedges);
 
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let allowed_paths: Option<HashSet<PathBuf>> = allowed_source_files.map(|allowed| {
@@ -125,6 +232,9 @@ pub fn save_semantic_cache(
             .map(|p| resolved_source_path(p, &root_path))
             .collect()
     });
+    if let Some(allowed) = &allowed_paths {
+        prune_dangling_refs(&mut by_file, allowed, &root_path);
+    }
 
     let mut saved = 0;
     for (fpath, (n, e, h)) in &by_file {
@@ -147,7 +257,7 @@ pub fn save_semantic_cache(
         let payload = if merge_existing {
             // Accumulate a prior slice (a large file split across chunks)
             // instead of overwriting it: prev + new, in order (#1715).
-            let prev = load_cached(&p, root, "semantic", None);
+            let prev = load_cached(&p, root, &kind, None);
             let prev_obj = prev.as_ref().and_then(Value::as_object);
             let merged = |key: &str, new: &[Value]| -> Vec<Value> {
                 let mut out: Vec<Value> = prev_obj
@@ -170,7 +280,7 @@ pub fn save_semantic_cache(
                 "hyperedges": h,
             })
         };
-        save_cached(&p, &payload, root, "semantic", None)?;
+        save_cached(&p, &payload, root, &kind, None)?;
         saved += 1;
     }
     Ok(saved)
@@ -200,39 +310,45 @@ fn resolved_source_path(value: &Path, root_path: &Path) -> PathBuf {
 /// version-cleanup, so every content change or file deletion leaves a permanent
 /// orphan that accumulates unbounded (#1527).
 ///
-/// This sweeps `cache/semantic/*.json` and deletes any entry whose stem (the
-/// content hash) is not in `live_hashes` — the hashes of the current live
-/// document set. `*.tmp` atomic-write temporaries are skipped, and only this
-/// directory is touched (never `cache/ast/**`). Best-effort: each unlink failure
-/// is ignored (worst case is a surviving orphan, never wrong output). Mirrors
-/// Python `prune_semantic_cache`.
+/// This sweeps `cache/semantic/*.json` AND `cache/semantic-deep/*.json` (the
+/// `--mode deep` namespace, #1894) and deletes any entry whose stem (the content
+/// hash) is not in `live_hashes` — the hashes of the current live document set.
+/// Both namespaces are pruned against the SAME live set: liveness is
+/// content-based and mode-independent, so a hash live for one namespace is live
+/// for both; skipping the deep namespace would re-grow the unbounded-orphan
+/// problem (#1527). `*.tmp` atomic-write temporaries are skipped, and only these
+/// directories are touched (never `cache/ast/**`). Best-effort: each unlink
+/// failure is ignored. Mirrors Python `prune_semantic_cache`.
 #[must_use]
 pub fn prune_semantic_cache<S: std::hash::BuildHasher>(
     root: &Path,
     live_hashes: &HashSet<String, S>,
 ) -> usize {
-    let semantic_dir = crate::paths::out_base(root).join("cache").join("semantic");
-    if !semantic_dir.is_dir() {
-        return 0;
-    }
-    let Ok(entries) = std::fs::read_dir(&semantic_dir) else {
-        return 0;
-    };
+    let cache_base = crate::paths::out_base(root).join("cache");
     let mut pruned = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // Only `*.json`; `*.tmp` atomic-write temporaries are left untouched.
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+    for kind in ["semantic", "semantic-deep"] {
+        let semantic_dir = cache_base.join(kind);
+        if !semantic_dir.is_dir() {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        let Ok(entries) = std::fs::read_dir(&semantic_dir) else {
             continue;
         };
-        if live_hashes.contains(stem) {
-            continue;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            pruned += 1;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Only `*.json`; `*.tmp` atomic-write temporaries are left untouched.
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if live_hashes.contains(stem) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                pruned += 1;
+            }
         }
     }
     pruned

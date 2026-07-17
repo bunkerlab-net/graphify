@@ -136,6 +136,7 @@ pub fn call_openai_compat(req: &OpenAiRequest<'_>) -> Result<LlmResponse, LlmErr
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
         uncovered_files: vec![],
+        out_of_scope_dropped: 0,
     })
 }
 

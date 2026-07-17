@@ -11,7 +11,11 @@ use crate::cli::graphify_out_dir;
 /// checks the semantic cache, writes the results to
 /// `<root>/graphify-out/.graphify_cached.json` and
 /// `<root>/graphify-out/.graphify_uncached.txt`, and prints a summary.
-pub(crate) fn cmd_cache_check(files_from: &std::path::Path, root: &std::path::Path) -> Result<()> {
+pub(crate) fn cmd_cache_check(
+    files_from: &std::path::Path,
+    root: &std::path::Path,
+    mode: Option<&str>,
+) -> Result<()> {
     let contents = std::fs::read_to_string(files_from)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", files_from.display()))?;
     let files: Vec<String> = contents
@@ -21,7 +25,7 @@ pub(crate) fn cmd_cache_check(files_from: &std::path::Path, root: &std::path::Pa
         .map(str::to_string)
         .collect();
     let total = files.len();
-    let split = graphify_cache::check_semantic_cache(&files, root);
+    let split = graphify_cache::check_semantic_cache(&files, root, mode);
     let hit_count = total - split.uncached_files.len();
 
     // Write results to the output dir, mirroring the Python behaviour.

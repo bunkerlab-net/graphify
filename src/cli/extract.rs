@@ -43,6 +43,10 @@ pub(crate) struct IntrospectOptions<'a> {
 }
 
 /// Aggregated arguments for [`cmd_extract`].
+// A flat one-to-one aggregation of independent `extract` CLI flags (mirrors the
+// clap `Extract` variant), not a behavioural state combination — grouping the
+// four unrelated bools into an artificial sub-struct would obscure the mapping.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ExtractOptions<'a> {
     pub path: &'a std::path::Path,
     pub out: Option<&'a std::path::Path>,
@@ -57,6 +61,9 @@ pub(crate) struct ExtractOptions<'a> {
     /// `--code-only`: index code (local AST, no LLM key) and skip doc/paper/image
     /// files, so a mixed repo builds a code graph without a semantic backend (#1734).
     pub code_only: bool,
+    /// `--force` (or `GRAPHIFY_FORCE=1`): skip the semantic cache reads so every
+    /// semantic file is re-dispatched, re-extracting over a warm cache (#1894).
+    pub force: bool,
 }
 
 /// Run the headless full extraction pipeline (AST + optional LLM semantic enrichment).
@@ -86,6 +93,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         introspect,
         timing,
         code_only,
+        force,
     } = opts;
     let LlmOptions {
         backend,
@@ -103,6 +111,19 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         exclude_hubs,
     } = cluster;
     let GlobalOptions { global, as_tag } = global;
+    // `--force` or `GRAPHIFY_FORCE=1` (env parity with `update`): skip the
+    // semantic cache reads so a warm, unchanged tree still re-dispatches (#1894).
+    let force = force
+        || matches!(
+            std::env::var("GRAPHIFY_FORCE")
+                .unwrap_or_default()
+                .to_lowercase()
+                .as_str(),
+            "1" | "true" | "yes"
+        );
+    if force {
+        eprintln!("[graphify extract] --force: semantic cache reads skipped, re-dispatching");
+    }
 
     let extra_excludes: Option<&[String]> = if exclude.is_empty() {
         None
@@ -158,6 +179,7 @@ pub(crate) fn cmd_extract(opts: ExtractOptions<'_>) -> Result<()> {
         token_budget,
         max_concurrency,
         code_only,
+        force,
     };
     let SemanticOutcome {
         mut extraction_json,
@@ -362,7 +384,12 @@ fn run_detect_phase(
         let manifest_file = resolved_out_dir.join("manifest.json");
         let prev = graphify_detect::load_manifest_from_path_with_root(&manifest_file, Some(path))
             .unwrap_or_default();
-        match graphify_detect::detect_incremental_with_cache_root(path, &prev, cache_root) {
+        match graphify_detect::detect_incremental_with_cache_root(
+            path,
+            &prev,
+            cache_root,
+            extra_excludes,
+        ) {
             Ok(inc) => {
                 let new_total: usize = inc.changed_files.values().map(Vec::len).sum();
                 let unchanged_total: usize = inc.unchanged_files.values().map(Vec::len).sum();
@@ -423,6 +450,9 @@ fn detect_result_from_incremental(
         unclassified: Vec::new(),
         // Incremental reconstruction performs no fresh filesystem walk.
         walk_errors: Vec::new(),
+        // Carried through from the underlying detect() so the ignore diagnostic
+        // survives an incremental run (#1922).
+        ignored: inc.ignored.clone(),
         graphifyignore_patterns: 0,
         scan_root: path.to_string_lossy().into_owned(),
     }
@@ -538,6 +568,9 @@ struct SemanticConfig<'a> {
     /// `--code-only`: skip the semantic (LLM) pass entirely so code is indexed by
     /// local AST alone — no LLM call even when a backend is configured (#1734).
     code_only: bool,
+    /// `--force`/`GRAPHIFY_FORCE`: skip semantic cache reads so every file is
+    /// re-dispatched, even over a warm cache (#1894).
+    force: bool,
 }
 
 /// Output of [`run_semantic_phase`]: merged JSON plus token totals.
@@ -579,19 +612,20 @@ fn run_semantic_phase(
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    // Deep mode forces a full re-extraction. The semantic cache is keyed by file
-    // content only (size+mtime fastpath, then sha256 — mode-agnostic, matching
-    // graphify-py), so honouring a prior *shallow* cache hit would silently skip
-    // the richer deep-mode prompt. graphify-py reads the cache regardless, making
-    // `--mode deep` a no-op on already-cached files; we bypass the read so deep
-    // mode actually runs. Fresh results still populate the cache for next time.
-    let cache_split = if cfg.deep_mode {
+    // Deep mode reads/writes its OWN cache namespace (cache/semantic-deep/) so a
+    // deep run never serves a shallow cache hit and never overwrites the standard
+    // entries — and over a warm STANDARD cache the deep namespace is cold, so
+    // `--mode deep` actually re-dispatches (#1894). `--force` skips the read
+    // entirely so every file re-dispatches regardless of namespace; the save
+    // below still runs, replacing the stale entries.
+    let sem_cache_mode = if cfg.deep_mode { Some("deep") } else { None };
+    let cache_split = if cfg.force {
         graphify_cache::SemanticCacheSplit {
             uncached_files: sem_paths.clone(),
             ..Default::default()
         }
     } else {
-        graphify_cache::check_semantic_cache(&sem_paths, cache_root)
+        graphify_cache::check_semantic_cache(&sem_paths, cache_root, sem_cache_mode)
     };
     let cache_hits = sem_paths
         .len()
@@ -660,7 +694,7 @@ fn run_semantic_phase(
     // file's cache entry unless that file was sent for extraction (#1757).
     // Rust has no per-chunk checkpoint (this single post-hoc save covers the
     // same contract as Python's `_checkpoint_chunk` scoping, cfc7cf2 included).
-    save_semantic_cache_safe(&sem_result, cache_root, &uncached_files);
+    save_semantic_cache_safe(&sem_result, cache_root, &uncached_files, sem_cache_mode);
     // Prune orphaned semantic cache entries against the FULL live document set
     // (sem_paths), NOT the incremental cache-miss subset, which would delete every
     // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
@@ -694,6 +728,7 @@ fn save_semantic_cache_safe(
     sem_result: &graphify_llm::LlmResponse,
     path: &std::path::Path,
     allowed: &[std::path::PathBuf],
+    mode: Option<&str>,
 ) {
     if (!sem_result.nodes.is_empty() || !sem_result.edges.is_empty())
         && let Err(e) = graphify_cache::save_semantic_cache(
@@ -701,8 +736,11 @@ fn save_semantic_cache_safe(
             &sem_result.edges,
             &sem_result.hyperedges,
             path,
-            false,
-            Some(allowed),
+            graphify_cache::SemanticCacheOptions {
+                allowed_source_files: Some(allowed),
+                mode,
+                ..Default::default()
+            },
         )
     {
         eprintln!("      warning: failed to save semantic cache: {e}");
@@ -974,6 +1012,7 @@ fn persist_manifest(
         &manifest_path,
         "both",
         Some(root),
+        None,
     ) {
         eprintln!("      warning: could not write manifest: {e}");
     }

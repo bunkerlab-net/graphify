@@ -173,3 +173,37 @@ fn cache_keys_stay_relative_for_out_of_cwd_corpus() {
         .into_owned();
     assert_ne!(key, key_with(&abs_rel));
 }
+
+#[test]
+#[serial]
+fn cjs_bypasses_ast_disk_cache() {
+    // `.cjs` is in JS_CACHE_BYPASS_SUFFIXES (#1922): like `.js`/`.mjs`, its AST
+    // result must NOT round-trip through the on-disk cache (sibling-resolution
+    // staleness), whereas a `.py` file in the same run IS cached. Removing `cjs`
+    // from the bypass set would make the negative assertion below fail.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path().join("corpus");
+    std::fs::create_dir_all(&corpus).expect("mkdir corpus");
+    std::fs::write(
+        corpus.join("main.cjs"),
+        "function createWindow() {}\nmodule.exports = { createWindow };\n",
+    )
+    .expect("write main.cjs");
+    std::fs::write(corpus.join("mod.py"), "def hello():\n    return 1\n").expect("write mod.py");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).expect("mkdir work");
+    let _cwd = CwdGuard::enter(&work);
+
+    let _ = extract(&[corpus.join("main.cjs"), corpus.join("mod.py")], None);
+
+    let root = corpus.canonicalize().expect("canonicalize corpus");
+    assert!(
+        load_cached(&corpus.join("mod.py"), &root, "ast", Some(Path::new("."))).is_some(),
+        ".py should be written to the AST cache (positive control)"
+    );
+    assert!(
+        load_cached(&corpus.join("main.cjs"), &root, "ast", Some(Path::new("."))).is_none(),
+        ".cjs must bypass the AST disk cache (JS_CACHE_BYPASS_SUFFIXES)"
+    );
+}

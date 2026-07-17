@@ -1215,3 +1215,226 @@ fn save_result_requires_answer_or_answer_file() {
         .failure()
         .stderr(contains("--answer").and(contains("--answer-file")));
 }
+
+// ── #1894: --force re-dispatch + cache-check namespace selection ────────────
+
+/// A minimal valid openai `/chat/completions` body. The single node is
+/// attributed to `src/main.py` (the dispatched file written by
+/// [`write_python_project`]) and carries a `label`, so it survives the #1895
+/// out-of-scope filter and the build validator — otherwise the semantic result
+/// would be empty and never cached, and the cache could never warm. Mirrors
+/// `graphify-llm/tests/parallel_retry.rs`.
+fn good_response_body() -> String {
+    serde_json::json!({
+        "choices": [{
+            "message": {
+                "content": "{\"nodes\":[{\"id\":\"main_fn\",\"label\":\"main\",\"source_file\":\"src/main.py\"}],\"edges\":[]}"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+    })
+    .to_string()
+}
+
+/// An `extract` command wired to a mock openai backend: private-IP guard lifted,
+/// base URL pointed at the mock, a dummy key set, and `--backend openai` forced
+/// so the semantic pass reaches the wire. One code file → one chunk → one POST
+/// per dispatched run.
+fn mock_extract(dir: &Path, url: &str) -> Command {
+    let mut cmd = cli_no_backend();
+    cmd.env("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1")
+        .env("GRAPHIFY_OPENAI_BASE_URL", url)
+        .env("OPENAI_API_KEY", "k")
+        .arg("extract")
+        .arg(dir)
+        .arg("--backend")
+        .arg("openai")
+        .arg("--no-cluster");
+    cmd
+}
+
+#[test]
+fn extract_force_flag_redispatches_over_warm_cache() {
+    // #1894: over a warm standard cache a plain re-run serves the hit (no
+    // dispatch); `--force` bypasses the read AND repopulates. Exactly two POSTs
+    // across four runs (populate, warm no-op, forced, warm no-op) prove the cache
+    // read, the force bypass, and that the forced run rewrote a reusable entry —
+    // a banner-only check cannot distinguish these.
+    let mut server = mockito::Server::new();
+    let m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(good_response_body())
+        .expect(2)
+        .create();
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+
+    mock_extract(dir.path(), &server.url()).assert().success();
+    mock_extract(dir.path(), &server.url())
+        .assert()
+        .success()
+        .stderr(contains("semantic cache: 1 hit"));
+    mock_extract(dir.path(), &server.url())
+        .arg("--force")
+        .assert()
+        .success()
+        .stderr(contains("re-dispatching"));
+    // The forced run must REPOPULATE the standard cache: a following plain run
+    // serves the hit again with no fourth POST.
+    mock_extract(dir.path(), &server.url())
+        .assert()
+        .success()
+        .stderr(contains("semantic cache: 1 hit"));
+
+    m.assert();
+
+    // Parity with test_extract_cli.py:395-403: the forced run stamps the
+    // dispatched file's `semantic_hash` in the manifest (non-empty).
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join("graphify-out").join("manifest.json"))
+            .expect("manifest present"),
+    )
+    .expect("manifest json");
+    let hash = manifest
+        .get("src/main.py")
+        .and_then(|e| e.get("semantic_hash"))
+        .and_then(serde_json::Value::as_str)
+        .expect("main.py manifest entry carries semantic_hash");
+    assert!(
+        !hash.is_empty(),
+        "forced run must stamp a non-empty semantic_hash"
+    );
+}
+
+#[test]
+fn extract_graphify_force_env_redispatches_over_warm_cache() {
+    // #1894: `GRAPHIFY_FORCE=1` is env parity for `--force`. If the env were
+    // ignored the warm second run would serve the cache (one POST total); two
+    // POSTs prove the env forced a re-dispatch.
+    let mut server = mockito::Server::new();
+    let m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(good_response_body())
+        .expect(2)
+        .create();
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+
+    mock_extract(dir.path(), &server.url()).assert().success();
+    mock_extract(dir.path(), &server.url())
+        .env("GRAPHIFY_FORCE", "1")
+        .assert()
+        .success()
+        .stderr(contains("re-dispatching"));
+
+    m.assert();
+}
+
+#[test]
+fn extract_mode_deep_redispatches_over_warm_standard_cache() {
+    // #1894: a warm STANDARD cache must not satisfy a deep run. `--mode deep`
+    // reads the (cold) `cache/semantic-deep/` namespace and re-dispatches, then
+    // writes a REUSABLE deep entry — a second deep run serves it (no third POST)
+    // and the deep namespace holds a cache file. Two POSTs total (standard
+    // populate + first deep) prove isolation and reuse.
+    let mut server = mockito::Server::new();
+    let m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(good_response_body())
+        .expect(2)
+        .create();
+    let dir = tempfile::tempdir().unwrap();
+    write_python_project(dir.path());
+
+    mock_extract(dir.path(), &server.url()).assert().success();
+    mock_extract(dir.path(), &server.url())
+        .arg("--mode")
+        .arg("deep")
+        .assert()
+        .success();
+    mock_extract(dir.path(), &server.url())
+        .arg("--mode")
+        .arg("deep")
+        .assert()
+        .success()
+        .stderr(contains("semantic cache: 1 hit"));
+
+    let deep_dir = dir
+        .path()
+        .join("graphify-out")
+        .join("cache")
+        .join("semantic-deep");
+    let has_entry = fs::read_dir(&deep_dir)
+        .expect("deep namespace dir")
+        .filter_map(Result::ok)
+        .any(|e| e.path().extension().is_some_and(|x| x == "json"));
+    assert!(
+        has_entry,
+        "deep run must persist a semantic-deep cache entry"
+    );
+
+    m.assert();
+}
+
+#[test]
+fn cache_check_deep_reads_deep_namespace() {
+    // #1894: `cache-check --deep` consults `cache/semantic-deep/`, not the
+    // standard `cache/semantic/`. Seed ONLY the deep namespace for a file, then
+    // prove `--deep` hits it while the default run misses.
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("doc.md");
+    fs::write(&doc, "# Doc\n\nBody.\n").unwrap();
+    let written = graphify_cache::save_semantic_cache(
+        &[serde_json::json!({"id": "d", "source_file": doc.to_string_lossy()})],
+        &[],
+        &[],
+        dir.path(),
+        graphify_cache::SemanticCacheOptions {
+            mode: Some("deep"),
+            ..Default::default()
+        },
+    )
+    .expect("seed deep cache");
+    assert_eq!(written, 1, "deep namespace entry must be written");
+
+    let files_from = dir.path().join("files.txt");
+    fs::write(&files_from, doc.to_string_lossy().as_ref()).unwrap();
+
+    // `--mode deep` (explicit long form, per test_extract_cli.py:442) reads
+    // cache/semantic-deep/ → hit.
+    cli()
+        .arg("cache-check")
+        .arg(&files_from)
+        .arg("--root")
+        .arg(dir.path())
+        .arg("--mode")
+        .arg("deep")
+        .assert()
+        .success()
+        .stdout(contains("Cache: 1 hit, 0 miss"));
+
+    // `--deep` shorthand resolves to the same namespace → hit.
+    cli()
+        .arg("cache-check")
+        .arg(&files_from)
+        .arg("--root")
+        .arg(dir.path())
+        .arg("--deep")
+        .assert()
+        .success()
+        .stdout(contains("Cache: 1 hit, 0 miss"));
+
+    // Default → reads the (empty) cache/semantic/ → miss.
+    cli()
+        .arg("cache-check")
+        .arg(&files_from)
+        .arg("--root")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(contains("Cache: 0 hit, 1 miss"));
+}

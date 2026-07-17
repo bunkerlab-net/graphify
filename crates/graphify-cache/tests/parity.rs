@@ -6,10 +6,10 @@ use std::fs;
 use std::path::Path;
 
 use graphify_cache::{
-    _reset_stat_index_for_tests, StatIndexFlushGuard, body_content, cache_dir, cache_dir_versioned,
-    cached_files, cached_word_count, clear_cache, file_hash, flush_stat_index, load_cached,
-    load_cached_versioned, prune_semantic_cache, save_cached, save_cached_versioned,
-    save_semantic_cache,
+    _reset_stat_index_for_tests, SemanticCacheOptions, StatIndexFlushGuard, body_content,
+    cache_dir, cache_dir_versioned, cached_files, cached_word_count, check_semantic_cache,
+    clear_cache, file_hash, flush_stat_index, load_cached, load_cached_versioned,
+    prune_semantic_cache, save_cached, save_cached_versioned, save_semantic_cache,
 };
 use serde_json::{Value, json};
 use serial_test::serial;
@@ -842,8 +842,11 @@ fn test_save_semantic_cache_overwrites_by_default() {
         &[],
         &[],
         tmp.path(),
-        false,
-        None,
+        graphify_cache::SemanticCacheOptions {
+            merge_existing: false,
+            allowed_source_files: None,
+            ..Default::default()
+        },
     )
     .expect("save 1");
     save_semantic_cache(
@@ -851,8 +854,11 @@ fn test_save_semantic_cache_overwrites_by_default() {
         &[],
         &[],
         tmp.path(),
-        false,
-        None,
+        graphify_cache::SemanticCacheOptions {
+            merge_existing: false,
+            allowed_source_files: None,
+            ..Default::default()
+        },
     )
     .expect("save 2");
     let cached = load_cached(&f, tmp.path(), "semantic", None).expect("cached");
@@ -888,8 +894,11 @@ fn test_save_semantic_cache_rejects_out_of_scope_source_file() {
         &[],
         &[],
         &root,
-        false,
-        None,
+        graphify_cache::SemanticCacheOptions {
+            merge_existing: false,
+            allowed_source_files: None,
+            ..Default::default()
+        },
     )
     .expect("seed");
 
@@ -901,8 +910,18 @@ fn test_save_semantic_cache_rejects_out_of_scope_source_file() {
     let hyperedges =
         [json!({"id": "stray_hyperedge", "nodes": ["stray"], "source_file": "protected.md"})];
     let allowed = [std::path::PathBuf::from("intended.md")];
-    let saved = save_semantic_cache(&nodes, &edges, &hyperedges, &root, false, Some(&allowed))
-        .expect("save");
+    let saved = save_semantic_cache(
+        &nodes,
+        &edges,
+        &hyperedges,
+        &root,
+        graphify_cache::SemanticCacheOptions {
+            merge_existing: false,
+            allowed_source_files: Some(&allowed),
+            ..Default::default()
+        },
+    )
+    .expect("save");
     assert_eq!(saved, 1, "only the dispatched file may be written");
 
     let intended_cache = load_cached(&intended, &root, "semantic", None).expect("intended cache");
@@ -974,8 +993,11 @@ fn test_save_semantic_cache_merge_existing_unions() {
         &[json!({"source": "a", "target": "x", "source_file": "big.md"})],
         &[json!({"id": "h1", "nodes": ["a"], "source_file": "big.md"})],
         tmp.path(),
-        true,
-        None,
+        graphify_cache::SemanticCacheOptions {
+            merge_existing: true,
+            allowed_source_files: None,
+            ..Default::default()
+        },
     )
     .expect("chunk 1");
     save_semantic_cache(
@@ -983,8 +1005,11 @@ fn test_save_semantic_cache_merge_existing_unions() {
         &[json!({"source": "b", "target": "y", "source_file": "big.md"})],
         &[json!({"id": "h2", "nodes": ["b"], "source_file": "big.md"})],
         tmp.path(),
-        true,
-        None,
+        graphify_cache::SemanticCacheOptions {
+            merge_existing: true,
+            allowed_source_files: None,
+            ..Default::default()
+        },
     )
     .expect("chunk 2");
     let cached = load_cached(&f, tmp.path(), "semantic", None).expect("cached");
@@ -1252,4 +1277,501 @@ fn flush_continues_past_a_failing_root() {
         "the healthy root must still be flushed despite the failing one"
     );
     _reset_stat_index_for_tests();
+}
+
+// ── #1894: mode-namespaced semantic cache + #1916 dangling-ref pruning ────────
+
+fn ids(nodes: &[Value]) -> Vec<String> {
+    nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
+fn deep_opts<'a>() -> SemanticCacheOptions<'a> {
+    SemanticCacheOptions {
+        mode: Some("deep"),
+        ..Default::default()
+    }
+}
+
+#[test]
+#[serial]
+fn semantic_cache_deep_mode_roundtrip_under_deep_namespace() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n\nBody.\n");
+    let saved = save_semantic_cache(
+        &[json!({"id": "deep_n", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save");
+    assert_eq!(saved, 1);
+
+    let h = file_hash(&f, tmp.path(), None).expect("hash");
+    let base = tmp.path().join("graphify-out").join("cache");
+    assert!(
+        base.join("semantic-deep")
+            .join(format!("{h}.json"))
+            .exists()
+    );
+    assert!(!base.join("semantic").join(format!("{h}.json")).exists());
+
+    let split = check_semantic_cache(
+        &[f.to_string_lossy().into_owned()],
+        tmp.path(),
+        Some("deep"),
+    );
+    assert_eq!(ids(&split.cached_nodes), ["deep_n"]);
+    assert!(split.uncached_files.is_empty());
+}
+
+#[test]
+#[serial]
+fn semantic_cache_deep_invisible_to_plain_reads_and_vice_versa() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let deep_doc = tmp.path().join("deep.md");
+    write_text(&deep_doc, "# Deep\n");
+    let plain_doc = tmp.path().join("plain.md");
+    write_text(&plain_doc, "# Plain\n");
+    save_semantic_cache(
+        &[json!({"id": "d", "source_file": "deep.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save deep");
+    save_semantic_cache(
+        &[json!({"id": "p", "source_file": "plain.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save plain");
+
+    let paths = [
+        deep_doc.to_string_lossy().into_owned(),
+        plain_doc.to_string_lossy().into_owned(),
+    ];
+    let plain = check_semantic_cache(&paths, tmp.path(), None);
+    assert_eq!(ids(&plain.cached_nodes), ["p"]);
+    assert_eq!(
+        plain.uncached_files,
+        [deep_doc.to_string_lossy().into_owned()]
+    );
+
+    let deep = check_semantic_cache(&paths, tmp.path(), Some("deep"));
+    assert_eq!(ids(&deep.cached_nodes), ["d"]);
+    assert_eq!(
+        deep.uncached_files,
+        [plain_doc.to_string_lossy().into_owned()]
+    );
+}
+
+#[test]
+#[serial]
+fn semantic_cache_mode_none_layout_unchanged() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n");
+    save_semantic_cache(
+        &[json!({"id": "n", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save");
+    let h = file_hash(&f, tmp.path(), None).expect("hash");
+    let base = tmp.path().join("graphify-out").join("cache");
+    assert!(base.join("semantic").join(format!("{h}.json")).exists());
+    assert!(
+        !base.join("semantic-deep").exists(),
+        "mode=None must never create the deep namespace"
+    );
+    let split = check_semantic_cache(&[f.to_string_lossy().into_owned()], tmp.path(), None);
+    assert_eq!(ids(&split.cached_nodes), ["n"]);
+    assert!(split.uncached_files.is_empty());
+}
+
+#[test]
+#[serial]
+fn clear_cache_removes_deep_namespace() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n");
+    save_semantic_cache(
+        &[json!({"id": "p", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save p");
+    save_semantic_cache(
+        &[json!({"id": "d", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save d");
+    clear_cache(tmp.path()).expect("clear");
+    let base = tmp.path().join("graphify-out").join("cache");
+    for kind in ["semantic", "semantic-deep"] {
+        let dir = base.join(kind);
+        let remaining = fs::read_dir(&dir).map_or(0, |rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .count()
+        });
+        assert_eq!(remaining, 0, "clear_cache must sweep {kind}");
+    }
+}
+
+#[test]
+#[serial]
+fn cached_files_includes_deep_namespace() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n");
+    save_semantic_cache(
+        &[json!({"id": "d", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save");
+    let h = file_hash(&f, tmp.path(), None).expect("hash");
+    assert!(cached_files(tmp.path()).contains(&h));
+}
+
+#[test]
+#[serial]
+fn semantic_prune_sweeps_both_namespaces_against_same_live_set() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# A\n\nContent A.\n");
+    let h_old = file_hash(&f, tmp.path(), None).expect("h_old");
+    save_semantic_cache(
+        &[json!({"id": "pa", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save");
+    save_semantic_cache(
+        &[json!({"id": "da", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save");
+
+    _reset_stat_index_for_tests();
+    write_text(&f, "# B\n\nContent B.\n");
+    bump_mtime(&f);
+    let h_live = file_hash(&f, tmp.path(), None).expect("h_live");
+    save_semantic_cache(
+        &[json!({"id": "pb", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save");
+    save_semantic_cache(
+        &[json!({"id": "db", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save");
+
+    let base = tmp.path().join("graphify-out").join("cache");
+    let plain_dir = base.join("semantic");
+    let deep_dir = base.join("semantic-deep");
+    for d in [&plain_dir, &deep_dir] {
+        assert!(d.join(format!("{h_old}.json")).exists());
+        assert!(d.join(format!("{h_live}.json")).exists());
+    }
+
+    let live: HashSet<String> = [h_live.clone()].into_iter().collect();
+    let pruned = prune_semantic_cache(tmp.path(), &live);
+    assert_eq!(pruned, 2, "one orphan in EACH namespace must be pruned");
+    for d in [&plain_dir, &deep_dir] {
+        assert!(!d.join(format!("{h_old}.json")).exists(), "orphan survived");
+        assert!(
+            d.join(format!("{h_live}.json")).exists(),
+            "live entry pruned"
+        );
+    }
+}
+/// Scoped-save option with a single allowed file.
+fn scoped(allowed: &[std::path::PathBuf]) -> SemanticCacheOptions<'_> {
+    SemanticCacheOptions {
+        allowed_source_files: Some(allowed),
+        ..Default::default()
+    }
+}
+
+#[test]
+#[serial]
+fn save_semantic_cache_drops_edges_to_out_of_scope_nodes() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_text(&tmp.path().join("allowed.md"), "# Allowed\n");
+    write_text(&tmp.path().join("outside.md"), "# Outside\n");
+    let nodes = [
+        json!({"id": "kept", "source_file": "allowed.md"}),
+        json!({"id": "stray", "source_file": "outside.md"}),
+        json!({"id": "dup", "source_file": "allowed.md"}),
+        json!({"id": "dup", "source_file": "outside.md"}),
+    ];
+    let edges = [
+        json!({"source": "kept", "target": "stray", "source_file": "allowed.md"}),
+        json!({"source": "stray", "target": "kept", "source_file": "allowed.md"}),
+        json!({"source": "kept", "target": "dup", "source_file": "allowed.md"}),
+    ];
+    let allowed = [std::path::PathBuf::from("allowed.md")];
+    let saved =
+        save_semantic_cache(&nodes, &edges, &[], tmp.path(), scoped(&allowed)).expect("save");
+    assert_eq!(saved, 1);
+
+    let split = check_semantic_cache(
+        &[tmp.path().join("allowed.md").to_string_lossy().into_owned()],
+        tmp.path(),
+        None,
+    );
+    assert!(split.uncached_files.is_empty());
+    let node_ids: HashSet<String> = ids(&split.cached_nodes).into_iter().collect();
+    assert_eq!(
+        node_ids,
+        ["kept".to_string(), "dup".to_string()]
+            .into_iter()
+            .collect()
+    );
+    let pairs: Vec<(String, String)> = split
+        .cached_edges
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                e.get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(pairs, [("kept".to_string(), "dup".to_string())]);
+}
+
+#[test]
+#[serial]
+fn save_semantic_cache_drops_edges_to_ghost_file_nodes() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_text(&tmp.path().join("real.md"), "# Real\n");
+    let nodes = [
+        json!({"id": "kept", "source_file": "real.md"}),
+        json!({"id": "phantom", "source_file": "ghost.md"}),
+    ];
+    let edges = [
+        json!({"source": "kept", "target": "phantom", "source_file": "real.md"}),
+        json!({"source": "kept", "target": "kept", "relation": "self", "source_file": "real.md"}),
+    ];
+    let allowed = [std::path::PathBuf::from("real.md")];
+    let saved =
+        save_semantic_cache(&nodes, &edges, &[], tmp.path(), scoped(&allowed)).expect("save");
+    assert_eq!(saved, 1);
+
+    let split = check_semantic_cache(
+        &[tmp.path().join("real.md").to_string_lossy().into_owned()],
+        tmp.path(),
+        None,
+    );
+    assert_eq!(ids(&split.cached_nodes), ["kept"]);
+    let pairs: Vec<(String, String)> = split
+        .cached_edges
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                e.get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(pairs, [("kept".to_string(), "kept".to_string())]);
+}
+
+#[test]
+#[serial]
+fn save_semantic_cache_drops_hyperedges_touching_skipped_nodes() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_text(&tmp.path().join("allowed.md"), "# Allowed\n");
+    write_text(&tmp.path().join("outside.md"), "# Outside\n");
+    let nodes = [
+        json!({"id": "kept", "source_file": "allowed.md"}),
+        json!({"id": "kept2", "source_file": "allowed.md"}),
+        json!({"id": "stray", "source_file": "outside.md"}),
+    ];
+    let hyperedges = [
+        json!({"id": "he_bad", "nodes": ["kept", "stray"], "source_file": "allowed.md"}),
+        json!({"id": "he_ok", "nodes": ["kept", "kept2"], "source_file": "allowed.md"}),
+    ];
+    let allowed = [std::path::PathBuf::from("allowed.md")];
+    save_semantic_cache(&nodes, &[], &hyperedges, tmp.path(), scoped(&allowed)).expect("save");
+
+    let split = check_semantic_cache(
+        &[tmp.path().join("allowed.md").to_string_lossy().into_owned()],
+        tmp.path(),
+        None,
+    );
+    let he_ids: HashSet<String> = split
+        .cached_hyperedges
+        .iter()
+        .filter_map(|h| h.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    assert_eq!(he_ids, ["he_ok".to_string()].into_iter().collect());
+}
+
+#[test]
+#[serial]
+fn save_semantic_cache_unscoped_preserves_dangling_refs_verbatim() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let doc = tmp.path().join("doc.md");
+    write_text(&doc, "# Doc\n");
+    let nodes = [
+        json!({"id": "a", "source_file": "doc.md"}),
+        json!({"id": "ghost_n", "source_file": "ghost.md"}),
+    ];
+    let edges = [json!({"source": "a", "target": "ghost_n", "source_file": "doc.md"})];
+    let hyperedges = [json!({"id": "he", "nodes": ["a", "ghost_n"], "source_file": "doc.md"})];
+    let saved = save_semantic_cache(
+        &nodes,
+        &edges,
+        &hyperedges,
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save");
+    assert_eq!(saved, 1);
+
+    let h = file_hash(&doc, tmp.path(), None).expect("hash");
+    let entry = cache_dir(tmp.path(), "semantic")
+        .expect("dir")
+        .join(format!("{h}.json"));
+    let raw: Value =
+        serde_json::from_str(&fs::read_to_string(&entry).expect("read")).expect("parse");
+    assert_eq!(raw["edges"], json!(edges.to_vec()));
+    assert_eq!(raw["hyperedges"], json!(hyperedges.to_vec()));
+}
+
+#[test]
+#[serial]
+fn save_semantic_cache_merge_existing_prunes_only_incoming() {
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let big = tmp.path().join("big.md");
+    write_text(&big, "# Big\n");
+    write_text(&tmp.path().join("other.md"), "# Other\n");
+    let allowed = [std::path::PathBuf::from("big.md")];
+
+    save_semantic_cache(
+        &[json!({"id": "a", "source_file": "big.md"})],
+        &[json!({"source": "a", "target": "a", "relation": "self", "source_file": "big.md"})],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions {
+            merge_existing: true,
+            allowed_source_files: Some(&allowed),
+            ..Default::default()
+        },
+    )
+    .expect("chunk 1");
+    let nodes2 = [
+        json!({"id": "b", "source_file": "big.md"}),
+        json!({"id": "stray", "source_file": "other.md"}),
+    ];
+    let edges2 = [
+        json!({"source": "b", "target": "stray", "source_file": "big.md"}),
+        json!({"source": "a", "target": "b", "source_file": "big.md"}),
+    ];
+    save_semantic_cache(
+        &nodes2,
+        &edges2,
+        &[],
+        tmp.path(),
+        SemanticCacheOptions {
+            merge_existing: true,
+            allowed_source_files: Some(&allowed),
+            ..Default::default()
+        },
+    )
+    .expect("chunk 2");
+
+    let cached = load_cached(&big, tmp.path(), "semantic", None).expect("cached");
+    let node_ids: HashSet<String> = cached["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    assert_eq!(
+        node_ids,
+        ["a".to_string(), "b".to_string()].into_iter().collect()
+    );
+    let pairs: Vec<(String, String)> = cached["edges"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                e.get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        pairs.contains(&("a".to_string(), "a".to_string())),
+        "prior edge survives"
+    );
+    assert!(
+        pairs.contains(&("a".to_string(), "b".to_string())),
+        "incoming valid edge kept"
+    );
+    assert!(!pairs.iter().any(|(s, t)| s == "stray" || t == "stray"));
 }

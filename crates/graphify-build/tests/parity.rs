@@ -858,6 +858,38 @@ fn build_drops_inferred_calls_when_one_side_has_unknown_extension() {
     assert_eq!(g.edge_count(), 0);
 }
 
+#[test]
+fn build_keeps_inferred_calls_between_cjs_and_js() {
+    // `.cjs` (explicit CommonJS) joins the `js` language family, so an INFERRED
+    // cross-file `calls` edge between a `.cjs` and a `.js` file must survive the
+    // cross-language suppression (same family), unlike `.cjs` <-> `.py` (#1922).
+    let same_family = json!({
+        "nodes": [
+            {"id": "cjs", "label": "createWindow", "file_type": "code", "source_file": "src/main.cjs"},
+            {"id": "js", "label": "helper", "file_type": "code", "source_file": "src/util.js"},
+        ],
+        "edges": [
+            {"source": "cjs", "target": "js", "relation": "calls",
+             "confidence": "INFERRED", "source_file": "src/main.cjs"},
+        ],
+    });
+    let g = build_from_json(same_family, true, None).expect("build");
+    assert_eq!(g.edge_count(), 1, ".cjs and .js share the js family");
+
+    let cross_family = json!({
+        "nodes": [
+            {"id": "cjs", "label": "createWindow", "file_type": "code", "source_file": "src/main.cjs"},
+            {"id": "py", "label": "helper", "file_type": "code", "source_file": "src/util.py"},
+        ],
+        "edges": [
+            {"source": "cjs", "target": "py", "relation": "calls",
+             "confidence": "INFERRED", "source_file": "src/main.cjs"},
+        ],
+    });
+    let g = build_from_json(cross_family, true, None).expect("build");
+    assert_eq!(g.edge_count(), 0, ".cjs and .py are different families");
+}
+
 // ── #1145 (extended #1271): LLM ghost-duplicate merge into AST canonical ────
 
 #[test]
@@ -1794,5 +1826,55 @@ fn reextracted_source_survives_prune_on_first_build() {
     assert!(
         node_labels(&g).contains("Widget Cache Design"),
         "re-extracted node was wrongly pruned on a first build"
+    );
+}
+
+/// #1916: `build_from_json` validates hyperedge members against the built node
+/// set. A member absent from the graph is pruned (matching dangling pairwise
+/// edges), and a hyperedge with no surviving member is dropped whole.
+#[test]
+fn build_from_json_prunes_dangling_hyperedge_members() {
+    let ext = json!({
+        "nodes": [
+            {"id": "alpha", "label": "alpha", "file_type": "code", "source_file": "a.py"},
+            {"id": "beta", "label": "beta", "file_type": "code", "source_file": "a.py"},
+        ],
+        "edges": [],
+        "hyperedges": [
+            {"id": "he_partial", "nodes": ["alpha", "beta", "ghost_member"], "source_file": "a.py"},
+            {"id": "he_all_ghost", "nodes": ["ghost1", "ghost2"], "source_file": "a.py"},
+        ],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    let hes = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ids: std::collections::HashSet<&str> = hes
+        .iter()
+        .filter_map(|h| h.get("id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        ids,
+        ["he_partial"].into_iter().collect(),
+        "an all-dangling hyperedge must be dropped"
+    );
+    let partial = hes
+        .iter()
+        .find(|h| h.get("id").and_then(Value::as_str) == Some("he_partial"))
+        .expect("he_partial present");
+    let members: Vec<&str> = partial
+        .get("nodes")
+        .and_then(Value::as_array)
+        .expect("members")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(
+        members,
+        ["alpha", "beta"],
+        "the ghost member must be pruned"
     );
 }

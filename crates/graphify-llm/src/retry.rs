@@ -67,6 +67,7 @@ pub(crate) fn empty_llm_response(model: Option<&str>) -> LlmResponse {
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
         uncovered_files: vec![],
+        out_of_scope_dropped: 0,
     }
 }
 
@@ -102,6 +103,7 @@ pub(crate) fn merge_responses(
         elapsed_seconds: left.elapsed_seconds + right.elapsed_seconds,
         failed_chunk_indices,
         uncovered_files,
+        out_of_scope_dropped: left.out_of_scope_dropped + right.out_of_scope_dropped,
     }
 }
 

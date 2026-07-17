@@ -459,6 +459,58 @@ fn test_query_terms_all_stopwords_falls_back_to_unfiltered() {
     );
 }
 
+#[test]
+fn test_query_terms_drops_german_question_stopwords() {
+    // #1900: German full-sentence queries reduce to the content noun. In a
+    // mostly-English corpus "wie"/"funktioniert" are rare, get high IDF weight,
+    // and out-seed the actual keyword unless dropped here.
+    assert_eq!(
+        query_terms("Wie funktioniert die Authentifizierung?"),
+        vec!["authentifizierung".to_string()]
+    );
+}
+
+#[test]
+fn test_query_terms_all_german_stopwords_falls_back_to_unfiltered() {
+    // The all-stopword fallback applies to German fillers too.
+    assert_eq!(
+        query_terms("wie funktioniert das"),
+        vec![
+            "wie".to_string(),
+            "funktioniert".to_string(),
+            "das".to_string()
+        ]
+    );
+}
+
+#[test]
+fn test_pick_seeds_german_query_seeds_content_node_not_heading_noise() {
+    // End-to-end for #1900: a German question over a graph with German
+    // heading-noise nodes must seed on the content noun, not on nodes that
+    // happen to contain 'die'/'wie'/'wird'.
+    let mut g = Graph::new(GraphKind::DiGraph);
+    let mk = |label: &str, src: &str| {
+        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
+        a.insert("label".to_string(), json!(label));
+        a.insert("source_file".to_string(), json!(src));
+        a
+    };
+    g.add_node("cfg", mk("Die Konfiguration", "docs/konfiguration.md"));
+    g.add_node("sec", mk("Wie wird gesichert", "docs/sicherheit.md"));
+    g.add_node("auth", mk("Authentifizierung", "src/auth.py"));
+    g.add_node("helper", mk("login_helper", "src/auth.py"));
+    g.add_edge("helper", "auth", indexmap::IndexMap::new());
+
+    let terms = query_terms("Wie funktioniert die Authentifizierung?");
+    let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+    let mut cache = HashMap::new();
+    let scored = score_nodes(&g, &term_refs, &mut cache);
+    let seeds = pick_seeds_diverse(&scored, 3, 0.2, &g, &term_refs, &mut cache);
+    assert!(seeds.contains(&"auth".to_string()), "seeds: {seeds:?}");
+    assert!(!seeds.contains(&"cfg".to_string()), "seeds: {seeds:?}");
+    assert!(!seeds.contains(&"sec".to_string()), "seeds: {seeds:?}");
+}
+
 // ── _normalize_context_filters alias resolution ──────────────────────────────
 
 #[test]

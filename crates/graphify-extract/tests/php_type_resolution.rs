@@ -1,0 +1,191 @@
+//! PHP namespace/`use` type-reference resolution (#1923).
+//!
+//! Ports `graphify-py/tests/test_php_type_resolution.py`. A bare-name reference
+//! to a class that shares its simple name with an internal class from a
+//! different namespace must not collapse onto the internal one; it resolves via
+//! the referencing file's `namespace` + `use` imports instead.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use graphify_extract::extract;
+use indexmap::IndexMap;
+use serde_json::Value;
+
+type Obj = IndexMap<String, Value>;
+
+fn write(path: &Path, text: &str) -> PathBuf {
+    fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    fs::write(path, text).expect("write");
+    path.to_path_buf()
+}
+
+fn s(m: &Obj, k: &str) -> String {
+    m.get(k).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+fn node_by_id<'a>(nodes: &'a [Obj], id: &str) -> Option<&'a Obj> {
+    nodes.iter().find(|n| s(n, "id") == id)
+}
+
+/// Source-backed class definitions with the given label.
+fn class_defs<'a>(nodes: &'a [Obj], label: &str) -> Vec<&'a Obj> {
+    nodes
+        .iter()
+        .filter(|n| s(n, "label") == label && !s(n, "source_file").is_empty())
+        .collect()
+}
+
+fn inherits_from<'a>(edges: &'a [Obj], source_needle: &str) -> Vec<&'a Obj> {
+    edges
+        .iter()
+        .filter(|e| {
+            s(e, "relation") == "inherits" && s(e, "source").to_lowercase().contains(source_needle)
+        })
+        .collect()
+}
+
+#[test]
+fn php_external_namespaced_base_does_not_collapse_onto_internal_class() {
+    // #1923: `App\Models\Page` (internal) and `Filament\Pages\Page` (external,
+    // via `use`) share the simple name `Page`. The bare-name rewire must NOT
+    // collapse the external supertype reference onto the only internal `Page`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let model = write(
+        &tmp.path().join("app/Models/Page.php"),
+        "<?php\nnamespace App\\Models;\nclass Page extends Model {}\n",
+    );
+    let page = write(
+        &tmp.path().join("app/Filament/Pages/ManageSiteSettings.php"),
+        "<?php\nnamespace App\\Filament\\Pages;\n\
+         use Filament\\Pages\\Page;\n\
+         class ManageSiteSettings extends Page {}\n",
+    );
+    let result = extract(&[model, page], Some(tmp.path()));
+
+    let page_defs = class_defs(&result.nodes, "Page");
+    assert_eq!(page_defs.len(), 1, "exactly one internal Page def");
+    let internal_page_id = s(page_defs[0], "id");
+    assert!(s(page_defs[0], "source_file").contains("Models"));
+
+    let inherits = inherits_from(&result.edges, "managesitesettings");
+    assert!(!inherits.is_empty(), "expected an inherits edge");
+    for e in &inherits {
+        assert_ne!(
+            s(e, "target"),
+            internal_page_id,
+            "inherits wrongly collapsed onto internal App\\Models\\Page (#1923)"
+        );
+        let tgt = node_by_id(&result.nodes, &s(e, "target")).expect("target node");
+        assert!(
+            s(tgt, "source_file").is_empty(),
+            "external stub is sourceless"
+        );
+        assert_eq!(s(tgt, "label"), "Filament\\Pages\\Page");
+    }
+
+    // The file-level import edge must not target the internal Page either.
+    for e in result.edges.iter().filter(|e| {
+        s(e, "relation") == "imports"
+            && s(e, "source").to_lowercase().contains("managesitesettings")
+    }) {
+        assert_ne!(s(e, "target"), internal_page_id);
+    }
+}
+
+#[test]
+fn php_ambiguous_base_disambiguated_by_use() {
+    // Two internal same-named `Page` classes; a `use` picks the right one.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let m = write(
+        &tmp.path().join("app/Models/Page.php"),
+        "<?php\nnamespace App\\Models;\nclass Page {}\n",
+    );
+    let c = write(
+        &tmp.path().join("app/Cms/Page.php"),
+        "<?php\nnamespace App\\Cms;\nclass Page {}\n",
+    );
+    let editor = write(
+        &tmp.path().join("app/Cms/Editor.php"),
+        "<?php\nnamespace App\\Cms;\n\
+         use App\\Cms\\Page;\n\
+         class Editor extends Page {}\n",
+    );
+    let result = extract(&[m, c, editor], Some(tmp.path()));
+
+    let inherits = inherits_from(&result.edges, "editor");
+    assert_eq!(inherits.len(), 1);
+    let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).expect("target");
+    let src = s(tgt, "source_file");
+    assert!(!src.is_empty());
+    assert!(src.contains("Cms") && !src.contains("Models"));
+}
+
+#[test]
+fn php_use_alias_resolves() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let bar = write(
+        &tmp.path().join("src/Foo/Bar.php"),
+        "<?php\nnamespace Foo;\nclass Bar {}\n",
+    );
+    let x = write(
+        &tmp.path().join("src/App/X.php"),
+        "<?php\nnamespace App;\n\
+         use Foo\\Bar as Baz;\n\
+         class X extends Baz {}\n",
+    );
+    let result = extract(&[bar, x], Some(tmp.path()));
+
+    let inherits = inherits_from(&result.edges, "_x");
+    assert!(!inherits.is_empty());
+    let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).expect("target");
+    assert!(!s(tgt, "source_file").is_empty());
+    assert!(s(tgt, "source_file").contains("Foo"));
+}
+
+#[test]
+fn php_fully_qualified_base_resolves() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let page = write(
+        &tmp.path().join("app/Models/Page.php"),
+        "<?php\nnamespace App\\Models;\nclass Page {}\n",
+    );
+    let y = write(
+        &tmp.path().join("app/Http/Y.php"),
+        "<?php\nnamespace App\\Http;\n\
+         class Y extends \\App\\Models\\Page {}\n",
+    );
+    let result = extract(&[page, y], Some(tmp.path()));
+
+    let inherits = inherits_from(&result.edges, "_y");
+    assert!(!inherits.is_empty());
+    let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).expect("target");
+    assert!(!s(tgt, "source_file").is_empty());
+    assert!(s(tgt, "source_file").contains("Models"));
+}
+
+#[test]
+fn php_plain_no_namespace_inheritance_preserved() {
+    // Guards the legacy unique-label rewire path: no namespaces anywhere.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = write(&tmp.path().join("src/Base.php"), "<?php\nclass Base {}\n");
+    let child = write(
+        &tmp.path().join("src/Child.php"),
+        "<?php\nclass Child extends Base {}\n",
+    );
+    let result = extract(&[base, child], Some(tmp.path()));
+
+    let inherits: Vec<&Obj> = result
+        .edges
+        .iter()
+        .filter(|e| s(e, "relation") == "inherits")
+        .collect();
+    assert!(!inherits.is_empty());
+    let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).expect("target");
+    assert!(
+        !s(tgt, "source_file").is_empty(),
+        "no-namespace inheritance must resolve to the real Base def"
+    );
+    assert_eq!(s(tgt, "label"), "Base");
+}

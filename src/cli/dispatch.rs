@@ -85,8 +85,20 @@ pub(crate) fn dispatch(cmd: Command) -> Result<()> {
             graph,
         } => cli::affected::cmd_affected(&query, &relations, depth, graph.as_deref()),
         Command::Diagnose { cmd } => cli::diagnose::cmd_diagnose(cmd),
-        Command::CacheCheck { files_from, root } => {
-            cli::cache_check::cmd_cache_check(&files_from, &root)
+        Command::CacheCheck {
+            files_from,
+            root,
+            mode,
+            deep,
+        } => {
+            // `--deep` is shorthand for `--mode deep`; an explicit non-empty
+            // `--mode` otherwise selects the namespace (#1894).
+            let resolved = if deep {
+                Some("deep")
+            } else {
+                mode.as_deref().filter(|m| !m.is_empty())
+            };
+            cli::cache_check::cmd_cache_check(&files_from, &root, resolved)
         }
         // Cross-platform no-op — mirrors Python `__main__.py:1905-1909`.
         // Codex Desktop rejects hookSpecificOutput.additionalContext on
@@ -362,6 +374,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         postgres,
         timing,
         code_only,
+        force,
     } = cmd
     else {
         unreachable!("dispatch_extract invoked with wrong variant")
@@ -397,6 +410,7 @@ fn dispatch_extract(cmd: Command) -> Result<()> {
         },
         timing,
         code_only,
+        force,
     })
 }
 

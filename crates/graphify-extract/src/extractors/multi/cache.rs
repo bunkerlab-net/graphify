@@ -159,8 +159,8 @@ fn value_to_file_result(v: &Value) -> FileResult {
 /// when a sibling `.cs` changes. The in-memory `clear_xaml_csharp_class_cache()` only
 /// covers staleness *within* one run; bypassing the on-disk cache covers it *across*
 /// runs too. graphify-py has the same disk-cache staleness bug here (it omits `.xaml`).
-const JS_CACHE_BYPASS_SUFFIXES: [&str; 10] = [
-    "js", "jsx", "mjs", "ts", "tsx", "mts", "cts", "vue", "svelte", "xaml",
+const JS_CACHE_BYPASS_SUFFIXES: [&str; 11] = [
+    "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte", "xaml",
 ];
 
 /// Extract a single file, returning a cached result when available.

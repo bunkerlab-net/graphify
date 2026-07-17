@@ -139,6 +139,17 @@ fn semantic_id_remap(nodes: &[Value], root: Option<&str>) -> IndexMap<String, St
             continue;
         }
         let norm_nid = normalize_id(nid);
+        // Idempotency guard (#1917): an id already carrying its canonical stem
+        // is done — do not re-run the legacy branch on it. When the canonical
+        // stem contains a shorter legacy stem as a prefix (parent dir name ==
+        // file stem, e.g. `.claude/CLAUDE.md` -> `claude_claude` over legacy
+        // `claude`), an already-migrated id like `claude_claude_x` still matches
+        // the legacy `claude_` prefix below and would gain another stem segment
+        // on every build, defeating the same_topology/no_change short-circuits.
+        // Mirrors the canonical check in `graph_has_legacy_ids`.
+        if norm_nid == new_stem || norm_nid.starts_with(&format!("{new_stem}_")) {
+            continue;
+        }
         let mut new_id: Option<String> = None;
         for old_stem in old_file_stems(rel) {
             if old_stem == new_stem {

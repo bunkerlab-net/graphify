@@ -79,8 +79,9 @@ pub fn uninstall(path: &Path) -> Result<String, HooksError> {
     let commit_msg = uninstall_hook(&hdir, "post-commit", HOOK_MARKER, HOOK_MARKER_END)?;
     let checkout_msg =
         uninstall_hook(&hdir, "post-checkout", CHECKOUT_MARKER, CHECKOUT_MARKER_END)?;
+    let merge_msg = crate::merge_driver::unregister_merge_driver(&root);
 
     Ok(format!(
-        "post-commit: {commit_msg}\npost-checkout: {checkout_msg}"
+        "post-commit: {commit_msg}\npost-checkout: {checkout_msg}\nmerge driver: {merge_msg}"
     ))
 }

@@ -14,6 +14,7 @@
 //! - `ast/v{version}/<hash>.json` — AST extraction results, namespaced by
 //!   graphify version (entries from other versions are swept on first use)
 //! - `semantic/<hash>.json` — LLM/semantic extraction results (unversioned)
+//! - `semantic-deep/<hash>.json` — `--mode deep` semantic results (unversioned, #1894)
 //! - `stat-index.json` — file stat fastpath
 //!
 //! `GRAPHIFY_OUT` env var overrides the output dir name (relative or
@@ -30,7 +31,8 @@ pub use error::CacheError;
 pub use hash::{body_content, cached_word_count, file_hash};
 pub use paths::{EXTRACTOR_VERSION, cache_dir, cache_dir_versioned};
 pub use semantic::{
-    SemanticCacheSplit, check_semantic_cache, prune_semantic_cache, save_semantic_cache,
+    SemanticCacheOptions, SemanticCacheSplit, check_semantic_cache, prune_semantic_cache,
+    save_semantic_cache, semantic_kind,
 };
 pub use stat_index::{_reset_stat_index_for_tests, StatIndexFlushGuard, flush_stat_index};
 pub use store::{

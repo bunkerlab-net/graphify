@@ -145,6 +145,58 @@ fn sql_complex_fixture_extracts_many_objects() {
 }
 
 #[test]
+fn sql_plpgsql_functions_survive_parse_errors() {
+    // PL/pgSQL bodies make the SQL grammar emit ERROR nodes; the functions must
+    // still be extracted (#1910), without cascading into later statements.
+    let result = extract_sql(&fixtures().join("sample_plpgsql.sql"));
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    // Both PL/pgSQL functions extracted, schema-qualified name kept whole.
+    assert!(
+        labels.contains(&"exposed.important_function()"),
+        "{labels:?}"
+    );
+    assert!(labels.contains(&"tagged_quote_fn()"), "{labels:?}");
+    // Tables before and after the broken functions still extract.
+    assert!(labels.iter().any(|l| l.contains("accounts")));
+    assert!(labels.iter().any(|l| l.contains("audit_log")));
+    // No spurious or empty nodes from the error recovery.
+    for l in &labels {
+        assert!(!l.is_empty(), "empty node label");
+        assert_ne!(*l, "ERROR");
+    }
+    // Every function got a contains edge from the file node.
+    let contains_targets: std::collections::HashSet<&str> = result
+        .edges
+        .iter()
+        .filter(|e| e.relation == "contains")
+        .map(|e| e.target.as_str())
+        .collect();
+    for n in result.nodes.iter().filter(|n| n.label.ends_with("()")) {
+        assert!(
+            contains_targets.contains(n.id.as_str()),
+            "function {} has no contains edge",
+            n.label
+        );
+    }
+}
+
+#[test]
+fn sql_plpgsql_clean_function_not_double_emitted() {
+    // A cleanly-parsed LANGUAGE sql function in the same file is emitted once,
+    // and no node id is duplicated.
+    let result = extract_sql(&fixtures().join("sample_plpgsql.sql"));
+    let plain_count = result
+        .nodes
+        .iter()
+        .filter(|n| n.label == "plain_sql_fn()")
+        .count();
+    assert_eq!(plain_count, 1, "plain_sql_fn emitted {plain_count} times");
+    let ids: std::collections::HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids.len(), result.nodes.len(), "duplicate node ids");
+}
+
+#[test]
 fn julia_extractor_produces_nodes() {
     let result = extract_julia(&fixtures().join("sample.jl"));
     assert!(result.error.is_none(), "{:?}", result.error);

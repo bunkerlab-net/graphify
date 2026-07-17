@@ -115,6 +115,7 @@ fn llm_response_to_value_emits_expected_keys() {
         elapsed_seconds: 1.5,
         failed_chunk_indices: vec![3],
         uncovered_files: vec!["omitted.md".into()],
+        out_of_scope_dropped: 0,
     };
     let v = r.to_value();
     assert_eq!(v["input_tokens"], 10);
