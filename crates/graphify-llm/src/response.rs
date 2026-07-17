@@ -30,6 +30,10 @@ pub struct LlmResponse {
     /// rather than silently dropped. Not persisted to `graph.json` (Python
     /// does not persist it either — see [`LlmResponse::to_value`]).
     pub uncovered_files: Vec<String>,
+    /// Number of nodes dropped by the out-of-scope filter (#1895): nodes the
+    /// model attributed to a real corpus file that was not dispatched. Recorded
+    /// for observability; not persisted to `graph.json`.
+    pub out_of_scope_dropped: usize,
 }
 
 impl LlmResponse {

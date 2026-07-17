@@ -25,6 +25,18 @@ fn classify_typescript_module_extensions() {
     assert_eq!(classify_file(Path::new("mod.cts")), Some(FileType::Code));
 }
 
+/// #1922 / .cjs (explicit CommonJS): must classify as code so it routes to the
+/// JS extractor, mirroring `.mjs`. `.skill` (agent skill docs, #1901) classifies
+/// as a document.
+#[test]
+fn classify_cjs_and_skill_extensions() {
+    assert_eq!(classify_file(Path::new("main.cjs")), Some(FileType::Code));
+    assert_eq!(
+        classify_file(Path::new("AGENT.skill")),
+        Some(FileType::Document)
+    );
+}
+
 /// #1315: `.psm1` PowerShell modules were never indexed (a `CODE_EXTENSIONS` gap).
 #[test]
 fn classify_powershell_module() {

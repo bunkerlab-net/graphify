@@ -330,7 +330,7 @@ pub fn resolve_js_module_path(p: &Path) -> PathBuf {
     }
     // Try appending extensions
     let exts = [
-        ".ts", ".tsx", ".mts", ".cts", ".svelte", ".js", ".jsx", ".mjs",
+        ".ts", ".tsx", ".mts", ".cts", ".svelte", ".js", ".jsx", ".mjs", ".cjs",
     ];
     if let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) {
         for ext in exts {

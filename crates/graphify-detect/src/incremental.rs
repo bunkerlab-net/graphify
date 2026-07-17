@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 
 use crate::error::DetectError;
 use crate::manifest::{
-    MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, file_mtime,
+    IncrementalOptions, MANIFEST_PATH, ManifestEntry, detect_incremental_with_manifest, file_mtime,
     load_manifest_from_path, save_manifest_to_path,
 };
 use crate::walk;
@@ -25,9 +25,13 @@ pub struct IncrementalDetectResult {
     /// Files whose content hash has changed, keyed by file type
     /// (e.g. `"code"`).
     pub changed_files: IndexMap<String, Vec<String>>,
-    /// Paths that existed in the previous manifest but are no longer
-    /// on disk.
+    /// Paths that were in the previous manifest and are gone from disk
+    /// (genuine deletions — their cached nodes are now ghosts).
     pub deleted_files: Vec<PathBuf>,
+    /// Paths that were in the previous manifest, still exist on disk, but left
+    /// the current scan corpus — excluded by an ignore/`--exclude` change, not
+    /// deleted (#1908). Reported separately so they are not treated as gone.
+    pub excluded_files: Vec<PathBuf>,
     /// Updated manifest after the incremental scan.
     pub manifest: Manifest,
     /// Files that are present but unchanged, keyed by file type.
@@ -38,6 +42,10 @@ pub struct IncrementalDetectResult {
     /// `true` when a manifest existed (i.e. this was a real
     /// incremental run, not a first scan).
     pub incremental: bool,
+    /// Files/directories dropped by an ignore/`--exclude` rule during the walk
+    /// (#1922). Carried through from the underlying `detect()` so the diagnostic
+    /// survives an incremental run, mirroring Python's dict-augmentation.
+    pub ignored: Vec<String>,
 }
 
 /// Persist a manifest to disk.
@@ -83,7 +91,7 @@ pub fn detect_incremental(
     root: &Path,
     prev: &Manifest,
 ) -> Result<IncrementalDetectResult, DetectError> {
-    detect_incremental_with_cache_root(root, prev, None)
+    detect_incremental_with_cache_root(root, prev, None, None)
 }
 
 /// [`detect_incremental`] with an explicit cache root for the word-count /
@@ -105,6 +113,7 @@ pub fn detect_incremental_with_cache_root(
     root: &Path,
     prev: &Manifest,
     cache_root: Option<&Path>,
+    extra_excludes: Option<&[String]>,
 ) -> Result<IncrementalDetectResult, DetectError> {
     let manifest_path = root.join(MANIFEST_PATH);
     let had_manifest = manifest_path.exists() || !prev.is_empty();
@@ -113,10 +122,16 @@ pub fn detect_incremental_with_cache_root(
     // changed" branch and the per-type bucketing below. `cache_root` is threaded
     // through the corpus walk's word-count cache so this run's stat index is
     // keyed to the `--out` root, not the scanned corpus (#1747).
-    let full = walk::detect_with_cache_root(root, None, None, cache_root);
+    let mut full = walk::detect_with_cache_root(root, None, extra_excludes, cache_root);
+    let ignored = std::mem::take(&mut full.ignored);
 
-    let (changed_paths, deleted_files, manifest) = if manifest_path.exists() {
-        detect_incremental_with_manifest(root, &manifest_path, None, "semantic", None, cache_root)?
+    let (changed_paths, raw_left_scan, manifest) = if manifest_path.exists() {
+        let opts = IncrementalOptions {
+            extra_excludes,
+            cache_root,
+            ..Default::default()
+        };
+        detect_incremental_with_manifest(root, &manifest_path, opts)?
     } else if prev.is_empty() {
         // No previous run at all — everything is new. Seed the returned
         // manifest with the current files so callers can persist it
@@ -146,8 +161,26 @@ pub fn detect_incremental_with_cache_root(
             .map_err(DetectError::Io)?;
         let json = serde_json::to_string_pretty(prev).map_err(DetectError::Json)?;
         std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(DetectError::Io)?;
-        detect_incremental_with_manifest(root, tmp.path(), None, "semantic", None, cache_root)?
+        let opts = IncrementalOptions {
+            extra_excludes,
+            cache_root,
+            ..Default::default()
+        };
+        detect_incremental_with_manifest(root, tmp.path(), opts)?
     };
+
+    // Split the "left the scan corpus" rows: a file gone from disk is a genuine
+    // deletion; one still on disk was excluded (ignore/--exclude change), not
+    // deleted (#1908). Mirrors the watch-side excluded-vs-deleted distinction.
+    let mut deleted_files: Vec<PathBuf> = Vec::new();
+    let mut excluded_files: Vec<PathBuf> = Vec::new();
+    for f in raw_left_scan {
+        if f.exists() {
+            excluded_files.push(f);
+        } else {
+            deleted_files.push(f);
+        }
+    }
 
     let changed_set: HashSet<PathBuf> = changed_paths.iter().cloned().collect();
     let mut changed_files: IndexMap<String, Vec<String>> = IndexMap::new();
@@ -173,9 +206,11 @@ pub fn detect_incremental_with_cache_root(
     Ok(IncrementalDetectResult {
         changed_files,
         deleted_files,
+        excluded_files,
         manifest,
         unchanged_files,
         new_total,
         incremental: had_manifest,
+        ignored,
     })
 }

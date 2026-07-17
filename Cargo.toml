@@ -44,7 +44,7 @@ license = "Apache-2.0"
 publish = false
 repository = "https://github.com/bunkerlab-net/graphify"
 rust-version = "1.95"
-version = "0.9.16"
+version = "0.9.17"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -185,6 +185,7 @@ http = ["graphify-serve/http"]
 
 [dev-dependencies]
 assert_cmd = "2"
+mockito = { workspace = true }
 predicates = "3"
 serde_json = { workspace = true }
 tempfile = { workspace = true }

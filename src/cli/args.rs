@@ -350,6 +350,11 @@ pub(crate) enum Command {
         /// mixed repo (#1734).
         #[arg(long = "code-only")]
         code_only: bool,
+        /// Full semantic re-dispatch: skip the semantic cache reads so every
+        /// semantic file is re-extracted, even over a warm cache (detection stays
+        /// incremental; env: `GRAPHIFY_FORCE=1`, #1894).
+        #[arg(long)]
+        force: bool,
     },
 
     /// Export graph to various formats.
@@ -498,6 +503,13 @@ pub(crate) enum Command {
         files_from: PathBuf,
         #[arg(long, default_value = ".")]
         root: PathBuf,
+        /// Cache namespace to consult: a non-empty mode reads
+        /// `cache/semantic-<mode>/` instead of `cache/semantic/` (#1894).
+        #[arg(long)]
+        mode: Option<String>,
+        /// Shorthand for `--mode deep`; mutually exclusive with `--mode`.
+        #[arg(long, conflicts_with = "mode")]
+        deep: bool,
     },
 
     /// Silent gate run on every editor tool use.

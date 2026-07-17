@@ -97,6 +97,7 @@ graphify extract . --google-workspace    # also export .gdoc/.gsheet/.gslides si
 graphify extract . --global              # merge result into ~/.graphify/global-graph.json
 graphify extract . --global --as my-repo # custom tag for --global
 graphify extract . --mode deep           # aggressive INFERRED-edge semantic extraction
+graphify extract . --force               # bypass semantic-cache reads: re-dispatch every file (env: GRAPHIFY_FORCE=1)
 graphify extract . --cargo               # also add crate→crate dependency edges from Cargo.toml
 graphify extract . --postgres "$DSN"     # also add a live PostgreSQL schema (needs the `postgres` build feature)
 graphify extract . --timing              # print per-stage wall-clock timings to stderr (#1490)
@@ -133,7 +134,13 @@ Optional LLM-driven semantic extraction is wired through `--backend`/`--model`/`
 [LLM backends](#llm-backends) section). `--mode deep` is the only mode beyond the default; it appends a
 deep-extraction instruction to the LLM system prompt so the model emits richer `INFERRED` architectural
 edges (shared data contracts, lifecycle coupling, multi-step flows). An unknown `--mode` value exits with
-status 2.
+status 2. Deep runs read and write their **own** semantic-cache namespace (`graphify-out/cache/semantic-deep/`),
+kept separate from the default `cache/semantic/`, so a deep pass never serves — or is served by — a shallow
+cache entry; over a warm standard cache the deep namespace is cold and re-dispatches (#1894).
+
+`--force` (or `GRAPHIFY_FORCE=1`) skips the semantic-cache **reads** so every file re-dispatches to the LLM even
+over a warm, unchanged tree; fresh results still repopulate the cache for next time (#1894). This is distinct
+from `update --force`, which bypasses the shrink guard rather than the semantic cache.
 
 If a semantic chunk returns a valid response that silently omits some of the documents it was handed, those
 files produce no node; graphify diffs the dispatched files against the ones that returned and prints a loud
@@ -726,11 +733,13 @@ graphify benchmark                        # token reduction vs naive full-corpus
 graphify benchmark other/graph.json
 graphify check-update <path>             # cron-safe: exit 0 if graph is fresh, 1 if stale
 graphify cache-check files.txt --root .  # report which files have a fresh semantic cache entry
+graphify cache-check files.txt --root . --deep  # consult the deep namespace (cache/semantic-deep/)
 ```
 
 `cache-check` reads a newline-separated list of file paths from `files.txt` (resolved relative to `--root`) and prints
 which ones already have a valid entry in the semantic cache. Useful in CI to decide whether a re-extraction is worth
-the LLM spend.
+the LLM spend. `--mode <name>` consults the `cache/semantic-<name>/` namespace instead of the default
+`cache/semantic/`; `--deep` is shorthand for `--mode deep`, matching `extract --mode deep` (#1894).
 
 ---
 
@@ -770,7 +779,7 @@ re-applies it instead of silently re-indexing the excluded paths (#1886).
 | Variable                         | Effect                                                                                                                                              |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GRAPHIFY_OUT`                   | Override the output directory (default `graphify-out`); a relative name or an absolute path, honoured everywhere.                                   |
-| `GRAPHIFY_FORCE`                 | Same effect as `--force` on `update`.                                                                                                               |
+| `GRAPHIFY_FORCE`                 | Truthy (`1`/`true`/`yes`): `extract` skips semantic-cache reads, `update` bypasses the shrink guard (both `--force`).                               |
 | `GRAPHIFY_VIZ_NODE_LIMIT`        | Cap nodes before HTML export is skipped (default 5000).                                                                                             |
 | `GRAPHIFY_GOOGLE_WORKSPACE`      | Truthy value enables `.gdoc/.gsheet/.gslides` export by default.                                                                                    |
 | `GRAPHIFY_BEDROCK_MODEL`         | Override the default model for the Bedrock backend.                                                                                                 |

@@ -19,7 +19,9 @@ use crate::rebuild::pipeline_helpers::{
     finalise_rebuild, load_or_default_labels, render_report_phase, resolve_project_root,
     run_analysis, run_no_cluster_path, topology_unchanged, write_graph_tmp,
 };
-use crate::rebuild::reconcile::{rebase_relative_source_files, reconcile_existing_graph};
+use crate::rebuild::reconcile::{
+    filter_semantic_backed_docs, rebase_relative_source_files, reconcile_existing_graph,
+};
 use crate::rebuild::relativize::relativize_source_files;
 
 /// Inner rebuild pipeline, called after the lock has been acquired.
@@ -67,7 +69,17 @@ pub(crate) fn rebuild_code_inner(
     else {
         return Ok(true);
     };
-    let extract_targets = targets.wanted;
+    // #1915: never AST-quick-scan a doc already represented by a semantic (LLM)
+    // layer in the prior graph — that would mint heading nodes on top of the
+    // preserved semantic nodes. The doc stays in `code_files` (corpus + shrink),
+    // only its extraction is skipped, so a bloated graph self-heals.
+    let extract_targets = filter_semantic_backed_docs(
+        targets.wanted,
+        &existing_graph_path,
+        &out,
+        &project_root,
+        &watch_root,
+    );
     let mut deleted_paths = targets.deleted_paths;
     let deleted_source_identities = targets.deleted_source_identities;
 
@@ -101,7 +113,22 @@ pub(crate) fn rebuild_code_inner(
     // shrink-guard bypass keys off any evicted source (`deleted_paths` now
     // includes reconciliation-discovered removals). Mirrors Python's
     // `had_explicit_deletions=bool(deleted_paths)`.
-    let rebuilt_sources = compute_rebuilt_sources(&extract_targets, &deleted_paths, &project_root);
+    // Full rebuild: every in-corpus source is a legitimate shrink basis. A
+    // semantic-backed doc excluded from AST extraction stays in `code_files`, so
+    // its stale `_origin=="ast"` heading nodes may be shed (self-heal, #1915)
+    // while its SEMANTIC nodes are preserved by the origin-aware reconcile
+    // (`preserved_nodes`/`preserved_edges`), NOT removed by this shrink basis.
+    // Incremental: only the re-extracted targets. Mirrors graphify-py
+    // `watch.py:1035-1041` (full → code_files, else → extract_targets) exactly;
+    // excluding semantic docs here would diverge and wrongly refuse a legitimate
+    // self-heal shrink. (Disputes CodeRabbit's "origin-aware rebuilt basis"
+    // finding — origin-awareness lives in the node reconcile, not the basis.)
+    let rebuilt_basis: &[PathBuf] = if changed_paths.is_none() {
+        &code_files
+    } else {
+        &extract_targets
+    };
+    let rebuilt_sources = compute_rebuilt_sources(rebuilt_basis, &deleted_paths, &project_root);
     let had_explicit_deletions = !deleted_paths.is_empty();
 
     std::fs::create_dir_all(&out).map_err(WatchError::Io)?;

@@ -173,3 +173,53 @@ fn cache_keys_stay_relative_for_out_of_cwd_corpus() {
         .into_owned();
     assert_ne!(key, key_with(&abs_rel));
 }
+
+#[test]
+#[serial]
+fn cjs_bypasses_ast_disk_cache() -> Result<(), Box<dyn std::error::Error>> {
+    // `.cjs` is in JS_CACHE_BYPASS_SUFFIXES (#1922): like `.js`/`.mjs`, its AST
+    // result must NOT round-trip through the on-disk cache (sibling-resolution
+    // staleness), whereas a `.py` file in the same run IS cached. Removing `cjs`
+    // from the bypass set would make the negative assertion below fail.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir()?;
+    let corpus = tmp.path().join("corpus");
+    std::fs::create_dir_all(&corpus)?;
+    std::fs::write(
+        corpus.join("main.cjs"),
+        "function createWindow() {}\nmodule.exports = { createWindow };\n",
+    )?;
+    std::fs::write(corpus.join("mod.py"), "def hello():\n    return 1\n")?;
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work)?;
+    let _cwd = CwdGuard::enter(&work);
+
+    let result = extract(&[corpus.join("main.cjs"), corpus.join("mod.py")], None);
+    assert!(
+        result.nodes.iter().any(|n| {
+            n.get("source_file")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| s.ends_with("main.cjs"))
+                || n.get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|s| s.contains("createWindow"))
+        }),
+        ".cjs must be extracted as JavaScript (#1922): {:?}",
+        result
+            .nodes
+            .iter()
+            .filter_map(|n| n.get("label").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+    );
+
+    let root = corpus.canonicalize()?;
+    assert!(
+        load_cached(&corpus.join("mod.py"), &root, "ast", Some(Path::new("."))).is_some(),
+        ".py should be written to the AST cache (positive control)"
+    );
+    assert!(
+        load_cached(&corpus.join("main.cjs"), &root, "ast", Some(Path::new("."))).is_none(),
+        ".cjs must bypass the AST disk cache (JS_CACHE_BYPASS_SUFFIXES)"
+    );
+    Ok(())
+}

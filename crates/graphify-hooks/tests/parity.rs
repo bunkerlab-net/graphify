@@ -20,7 +20,7 @@ use std::process::Command;
 
 use graphify_hooks::{
     CHECKOUT_MARKER, CHECKOUT_SCRIPT, HOOK_MARKER, HOOK_SCRIPT, PYTHON_DETECT, WORKTREE_GUARD,
-    hooks_dir_with, install, status, uninstall, user_hooks_dir,
+    hooks_dir, hooks_dir_with, install, status, uninstall, user_hooks_dir,
 };
 use serial_test::serial;
 
@@ -3071,5 +3071,333 @@ fn worktree_guard_runs_on_primary_skips_linked() {
     assert!(
         !run(&linked).contains("RAN"),
         "guard failed to skip the linked worktree"
+    );
+}
+
+// ── #1907: hooks_dir tolerates git's duplicate keys / repeated sections ───────
+
+/// Append duplicate keys and a repeated section to `.git/config` — the shape
+/// VS Code and other tools legally write that a strict configparser rejected.
+fn append_duplicate_config_entries(repo: &Path) {
+    let cfg = repo.join(".git").join("config");
+    let mut content = fs::read_to_string(&cfg).expect("read .git/config");
+    content.push_str(
+        "[remote \"origin\"]\n\
+         \tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+         \tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+         [core]\n\
+         \tignorecase = true\n",
+    );
+    fs::write(&cfg, content).expect("write .git/config");
+}
+
+#[test]
+#[serial]
+fn test_hooks_dir_no_warning_on_duplicate_config_keys() {
+    // git legally allows duplicate keys/sections; hooks_dir must resolve cleanly
+    // (a strict configparser broke on VS Code configs, #1907).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    append_duplicate_config_entries(&repo);
+    let d = hooks_dir(&repo).expect("hooks_dir resolves cleanly");
+    let expected = repo.join(".git").join("hooks");
+    assert_eq!(d, expected.canonicalize().unwrap_or(expected));
+}
+
+#[test]
+#[serial]
+fn test_hooks_dir_duplicate_config_keys_honor_custom_hookspath() {
+    // With duplicate keys present, a custom core.hooksPath is still honored.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    set_hookspath(&repo, ".husky");
+    append_duplicate_config_entries(&repo);
+    let d = hooks_dir(&repo).expect("hooks_dir resolves cleanly");
+    let expected = repo.join(".husky");
+    assert_eq!(d, expected.canonicalize().unwrap_or(expected));
+}
+
+// ── #1902: hook install registers the graph.json union merge driver ───────────
+
+fn git_config_get(repo: &Path, key: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "config", "--get", key])
+        .output()
+        .expect("git config --get");
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[test]
+#[serial]
+fn test_install_registers_merge_driver() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    let result = install(&repo).expect("install");
+    let driver = git_config_get(&repo, "merge.graphify.driver").expect("driver set");
+    assert!(driver.contains("merge-driver %O %A %B"), "driver: {driver}");
+    let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read .gitattributes");
+    assert!(
+        attrs
+            .lines()
+            .any(|l| l.contains("graph.json") && l.contains("merge=graphify")),
+        "gitattributes: {attrs}"
+    );
+    assert!(result.contains("merge driver"), "result: {result}");
+}
+
+#[test]
+#[serial]
+fn test_install_merge_driver_idempotent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    install(&repo).expect("install 1");
+    install(&repo).expect("install 2");
+    let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    let matches = attrs
+        .lines()
+        .filter(|l| l.contains("merge=graphify"))
+        .count();
+    assert_eq!(matches, 1, "merge attr duplicated: {attrs}");
+}
+
+#[test]
+#[serial]
+fn test_install_preserves_existing_gitattributes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(repo.join(".gitattributes"), "*.png binary\n").expect("write");
+    install(&repo).expect("install");
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(content.contains("*.png binary"), "clobbered: {content}");
+    assert!(content.contains("merge=graphify"));
+}
+
+#[test]
+#[serial]
+fn test_uninstall_removes_merge_driver_keeps_other_attrs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(repo.join(".gitattributes"), "*.png binary\n").expect("write");
+    install(&repo).expect("install");
+    uninstall(&repo).expect("uninstall");
+    assert!(
+        git_config_get(&repo, "merge.graphify.driver").is_none(),
+        "merge driver config not unset"
+    );
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(
+        content.contains("*.png binary"),
+        "other attrs lost: {content}"
+    );
+    assert!(
+        !content.contains("merge=graphify"),
+        "merge attr not removed: {content}"
+    );
+}
+
+#[test]
+#[serial]
+fn test_uninstall_keeps_unrelated_graph_json_merge_attr() {
+    // Exact-path match (#1902): a user's unrelated `othergraph.json merge=graphify`
+    // line ends with `graph.json` but is NOT graphify's `graphify-out/graph.json`
+    // entry, so uninstall must leave it untouched (graphify-py's `endswith` match
+    // would wrongly delete it).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(
+        repo.join(".gitattributes"),
+        "othergraph.json merge=graphify\n",
+    )
+    .expect("write");
+    install(&repo).expect("install");
+    uninstall(&repo).expect("uninstall");
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(
+        content.contains("othergraph.json merge=graphify"),
+        "unrelated merge attr wrongly removed: {content}"
+    );
+    assert!(
+        !content.contains("graphify-out/graph.json"),
+        "graphify's own entry not removed: {content}"
+    );
+}
+
+#[test]
+#[serial]
+fn test_status_rejects_foreign_merge_driver_command() {
+    // Exact-command match (#1902): a `merge.graphify.driver` set to some other
+    // command must not read as a healthy graphify registration (graphify-py's
+    // nonempty check would).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "config",
+            "merge.graphify.driver",
+            "some-other-tool %O %A %B",
+        ])
+        .output()
+        .expect("git config");
+    fs::write(
+        repo.join(".gitattributes"),
+        "graphify-out/graph.json merge=graphify\n",
+    )
+    .expect("write");
+    let s = status(&repo);
+    assert!(
+        s.contains(
+            "merge driver: partially registered (.gitattributes line set, git config mismatched)"
+        ),
+        "foreign driver command read as registered: {s}"
+    );
+}
+
+#[test]
+#[serial]
+fn test_uninstall_preserves_coresident_attrs_on_merge_line() {
+    // Token-level removal (#1902): only `merge=graphify` is stripped; other
+    // attributes sharing the line (e.g. `text eol=lf`) survive.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(
+        repo.join(".gitattributes"),
+        "graphify-out/graph.json merge=graphify text eol=lf\n",
+    )
+    .expect("write");
+    uninstall(&repo).expect("uninstall");
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(
+        content.contains("graphify-out/graph.json") && content.contains("text eol=lf"),
+        "co-resident attributes lost: {content}"
+    );
+    assert!(
+        !content.contains("merge=graphify"),
+        "merge token not removed: {content}"
+    );
+}
+
+/// Restores a `GRAPHIFY_OUT` override on drop so a panic mid-test cannot leak
+/// it into sibling serial tests sharing the process environment.
+struct GraphifyOutGuard {
+    prev: Option<String>,
+}
+
+impl GraphifyOutGuard {
+    fn set(value: &str) -> Self {
+        let prev = std::env::var("GRAPHIFY_OUT").ok();
+        // SAFETY: test-only env override; `#[serial]` serialises env access.
+        unsafe { std::env::set_var("GRAPHIFY_OUT", value) };
+        Self { prev }
+    }
+}
+
+impl Drop for GraphifyOutGuard {
+    fn drop(&mut self) {
+        // SAFETY: see `set` — serialised by `#[serial]`.
+        match &self.prev {
+            Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
+            None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn test_uninstall_removes_custom_path_after_graphify_out_change() {
+    // #1902 follow-up: install records the registered `.gitattributes` path in
+    // git config, so uninstall removes THAT line even when GRAPHIFY_OUT has since
+    // changed. graphify-py recomputes from the env and would strand the line.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+
+    // Install under a custom GRAPHIFY_OUT; the guard restores the original on
+    // drop — even if an assertion below panics mid-test.
+    let _out_guard = GraphifyOutGuard::set("custom-out");
+    install(&repo).expect("install with custom GRAPHIFY_OUT");
+    let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read attrs");
+    assert!(
+        attrs.contains("custom-out/graph.json merge=graphify"),
+        "install must register the custom path: {attrs}"
+    );
+
+    // Uninstall under the DEFAULT environment — the stored path must still resolve.
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("GRAPHIFY_OUT") };
+    uninstall(&repo).expect("uninstall under default GRAPHIFY_OUT");
+
+    let content = fs::read_to_string(repo.join(".gitattributes")).unwrap_or_default();
+    assert!(
+        !content.contains("merge=graphify"),
+        "custom-path merge line must be removed after GRAPHIFY_OUT changed: {content}"
+    );
+    let stored = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "config",
+            "--get",
+            "merge.graphify.attrpath",
+        ])
+        .output()
+        .expect("git config");
+    assert!(
+        !stored.status.success(),
+        "merge.graphify.attrpath must be unset after uninstall"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[serial]
+fn test_install_rejects_symlinked_gitattributes() {
+    // #1902 hardening: a symlinked `.gitattributes` must not be written THROUGH
+    // to a file outside the repo.
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    let outside = dir.path().join("outside.txt");
+    fs::write(&outside, "precious\n").expect("write");
+    symlink(&outside, repo.join(".gitattributes")).expect("symlink");
+    assert!(
+        install(&repo).is_err(),
+        "install through a symlinked .gitattributes must fail"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).expect("read").trim(),
+        "precious",
+        "the out-of-repo symlink target was modified"
+    );
+    // The symlink preflight must run BEFORE any git-config mutation, so the
+    // merge driver is never left half-registered.
+    assert!(
+        git_config_get(&repo, "merge.graphify.driver").is_none(),
+        "merge-driver config was set despite the symlink rejection"
+    );
+}
+
+#[test]
+#[serial]
+fn test_install_reappends_when_merge_overridden_later() {
+    // Last-match-wins (#1902): a later `-merge` on graphify's exact path
+    // overrides an earlier `merge=graphify`, so install must NOT treat it as
+    // already registered. It re-appends a graphify line, making the driver the
+    // effective (last) merge setting again — status then reads fully registered.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(
+        repo.join(".gitattributes"),
+        "graphify-out/graph.json merge=graphify\ngraphify-out/graph.json -merge\n",
+    )
+    .expect("write");
+    install(&repo).expect("install");
+    let s = status(&repo);
+    assert!(
+        s.contains("merge driver: registered"),
+        "graphify must be the effective merge driver after install: {s}"
     );
 }

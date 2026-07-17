@@ -19,6 +19,36 @@ const PARALLEL_HASH_THRESHOLD: usize = 16;
 /// Typed result from [`detect_incremental_with_manifest`].
 pub type IncrementalResult = (Vec<PathBuf>, Vec<PathBuf>, IndexMap<String, ManifestEntry>);
 
+/// Options for [`detect_incremental_with_manifest`].
+///
+/// Bundles the walk-tuning knobs (Python keyword-only args on
+/// `detect_incremental`) into one struct so the function keeps a two-argument
+/// `(root, manifest_path)` core rather than a long positional tail of
+/// same-shaped `Option<&Path>` / `Option<&[String]>` values that are easy to
+/// miswire. Construct with `..Default::default()` and set only what differs.
+#[derive(Clone, Copy)]
+pub struct IncrementalOptions<'a> {
+    /// Follow symlinked directories during the walk (default: `None` → off).
+    pub follow_symlinks: Option<bool>,
+    /// Hash field checked for changes: `"semantic"` (default) or `"ast"`.
+    pub kind: &'a str,
+    /// Extra `.gitignore`-style exclude patterns anchored at the scan root.
+    pub extra_excludes: Option<&'a [String]>,
+    /// Route the word-count / stat-index cache under this root (`--out` dir).
+    pub cache_root: Option<&'a Path>,
+}
+
+impl Default for IncrementalOptions<'_> {
+    fn default() -> Self {
+        Self {
+            follow_symlinks: None,
+            kind: "semantic",
+            extra_excludes: None,
+            cache_root: None,
+        }
+    }
+}
+
 /// The on-disk path for the manifest, relative to the scan root.
 pub const MANIFEST_PATH: &str = "graphify-out/manifest.json";
 
@@ -238,7 +268,80 @@ pub fn save_manifest_to_path(
     manifest_path: &Path,
     kind: &str,
 ) -> Result<(), DetectError> {
-    save_manifest_to_path_with_root(files, manifest_path, kind, None)
+    save_manifest_to_path_with_root(files, manifest_path, kind, None, None)
+}
+
+/// Seed a fresh manifest from `existing`, pruning rows that should not survive:
+/// files gone from disk (genuine deletions) and, when `scan_corpus` is supplied,
+/// in-root rows the scan no longer covers (excluded-but-alive, #1908).
+///
+/// A row is "in scan" if its key matches the corpus directly or after
+/// canonicalization (relative/symlink spellings). "In root" without a `root`
+/// fails open (keeps the row) so out-of-root corpora are never pruned.
+#[must_use]
+fn seed_surviving_rows(
+    existing: &IndexMap<String, ManifestEntry>,
+    root: Option<&Path>,
+    scan_corpus: Option<&[String]>,
+) -> IndexMap<String, ManifestEntry> {
+    // Include each corpus entry both as written AND canonicalized, so a symlink
+    // spelling or path alias in the manifest key still matches its live corpus
+    // entry (a raw-only set would prune the row as out-of-scan).
+    let scan_set: Option<std::collections::HashSet<String>> = scan_corpus.map(|c| {
+        c.iter()
+            .flat_map(|s| {
+                let canon = Path::new(s)
+                    .canonicalize()
+                    .map(|p| p.to_string_lossy().into_owned());
+                std::iter::once(s.clone()).chain(canon)
+            })
+            .collect()
+    });
+    let root_res: Option<PathBuf> =
+        root.map(|r| r.canonicalize().unwrap_or_else(|_| r.to_path_buf()));
+    let in_scan = |f: &str| -> bool {
+        match &scan_set {
+            None => true,
+            Some(s) => {
+                s.contains(f)
+                    || Path::new(f)
+                        .canonicalize()
+                        .is_ok_and(|c| s.contains(c.to_string_lossy().as_ref()))
+            }
+        }
+    };
+    let in_root = |f: &str| -> bool {
+        match &root_res {
+            None => false,
+            Some(r) => {
+                let p = Path::new(f);
+                p.strip_prefix(r).is_ok()
+                    || p.canonicalize().is_ok_and(|c| c.strip_prefix(r).is_ok())
+            }
+        }
+    };
+
+    let mut manifest: IndexMap<String, ManifestEntry> = IndexMap::new();
+    for (f, entry) in existing {
+        // Drop a row only when the path is CONFIRMED gone (`Ok(false)`); an
+        // `Err` (e.g. EACCES) means existence is undetermined, so keep the row
+        // rather than silently untracking a file we merely failed to stat.
+        // graphify-py `detect.py:1563` (`if not Path(f).exists(): continue`)
+        // swallows such errors as "missing" — retaining on error is a deliberate,
+        // safer divergence. Only the excluded-but-alive prune below is root-gated
+        // (fail-open when root is None); preserving out-of-root MISSING rows would
+        // resurrect tracking for deleted files forever. (Disputes CodeRabbit's
+        // "prune missing only inside root" finding — that diverges from the
+        // reference.)
+        if matches!(Path::new(f).try_exists(), Ok(false)) {
+            continue;
+        }
+        if scan_set.is_some() && !in_scan(f) && in_root(f) {
+            continue; // excluded-but-alive: drop the stale row (#1908)
+        }
+        manifest.insert(f.clone(), entry.clone());
+    }
+    manifest
 }
 
 /// Like [`save_manifest_to_path`] but, when `root` is `Some`, relativizes keys
@@ -246,6 +349,16 @@ pub fn save_manifest_to_path(
 /// is portable across machines and checkout locations (#777). Out-of-root
 /// entries are written as absolute so they still round-trip on the saving
 /// machine. When `root` is `None` the legacy absolute-keyed format is preserved.
+///
+/// `scan_corpus` (#1908): full-scan callers pass the COMPLETE detect corpus
+/// (absolute paths). A seeded row for an in-root file that is still alive on
+/// disk but no longer part of the scan (newly excluded via
+/// `.graphifyignore`/`.gitignore`/`--exclude`) is dropped instead of surviving
+/// forever and masquerading as a deletion in `detect_incremental`. Only rows
+/// still alive on disk are root-scoped: an out-of-root row MISSING from disk is
+/// dropped like any deletion (the loop below is unconditional), while a live
+/// out-of-root row is preserved. Subset callers (changed-paths hooks, #917) pass
+/// `None` so their untouched rows are preserved.
 ///
 /// # Errors
 ///
@@ -255,16 +368,10 @@ pub fn save_manifest_to_path_with_root(
     manifest_path: &Path,
     kind: &str,
     root: Option<&Path>,
+    scan_corpus: Option<&[String]>,
 ) -> Result<(), DetectError> {
     let existing = load_manifest_from_path_with_root(manifest_path, root)?;
-
-    // Seed from existing; prune entries for deleted files.
-    let mut manifest: IndexMap<String, ManifestEntry> = IndexMap::new();
-    for (f, entry) in &existing {
-        if Path::new(f).try_exists().unwrap_or(false) {
-            manifest.insert(f.clone(), entry.clone());
-        }
-    }
+    let mut manifest = seed_surviving_rows(&existing, root, scan_corpus);
 
     // Flatten the per-type file lists into a single ordered Vec so the
     // hashing pass can fan out across Rayon threads in one shot.
@@ -397,11 +504,14 @@ fn manifest_entry_changed(entry: &ManifestEntry, current_mtime: f64, kind: &str,
 pub fn detect_incremental_with_manifest(
     root: &Path,
     manifest_path: &Path,
-    follow_symlinks: Option<bool>,
-    kind: &str,
-    extra_excludes: Option<&[String]>,
-    cache_root: Option<&Path>,
+    opts: IncrementalOptions<'_>,
 ) -> Result<IncrementalResult, DetectError> {
+    let IncrementalOptions {
+        follow_symlinks,
+        kind,
+        extra_excludes,
+        cache_root,
+    } = opts;
     // #1747: route the word-count / stat-index cache under `cache_root` (the
     // `--out` dir) rather than the scanned corpus on the incremental run too.
     let full =
@@ -431,7 +541,10 @@ pub fn detect_incremental_with_manifest(
         all_current.iter().filter_map(change_check).collect()
     };
 
-    // Files in manifest that no longer exist → deleted
+    // Manifest rows not covered by the current corpus. This is the raw
+    // "left the scan" set — a caller that needs to distinguish a genuine
+    // deletion (gone from disk) from an exclusion (still on disk, dropped by
+    // an ignore/--exclude rule) splits it by disk existence (#1908).
     let current_set: std::collections::HashSet<&str> =
         all_current.iter().map(String::as_str).collect();
     let deleted: Vec<PathBuf> = manifest

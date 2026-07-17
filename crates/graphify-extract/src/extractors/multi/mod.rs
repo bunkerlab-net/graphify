@@ -19,6 +19,7 @@ mod java;
 mod js;
 mod objc;
 mod pascal_resolution;
+mod php;
 mod python;
 mod resolvers;
 mod ruby;
@@ -53,6 +54,11 @@ use std::path::{Path, PathBuf};
 /// a direct cross-file call from one is real only with import evidence (#1659).
 const JS_TS_CALL_SUFFIXES: [&str; 8] =
     [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
+/// PHP source extensions routed to `extract_php` and recognised by the PHP
+/// type-resolver. One list, so extraction and resolution can never drift
+/// (`.blade.php` is intercepted earlier by `get_extractor`'s suffix check).
+const PHP_EXTENSIONS: [&str; 7] = ["php", "phtml", "php3", "php4", "php5", "php7", "phps"];
 
 const PARALLEL_THRESHOLD: usize = 20;
 
@@ -229,9 +235,18 @@ fn shebang_extractor(interp: &str) -> Option<ExtractFn> {
 /// [`get_extractor`] so the case-insensitive fallback (#1671) can probe key
 /// membership via `dispatch_ext(...).is_some()`.
 fn dispatch_ext(ext: &str) -> Option<ExtractFn> {
+    // #1923 consistency: every PHP-like extension must produce PHP nodes, else
+    // the type-resolver (`php_type_paths`, same `PHP_EXTENSIONS`) is dead code
+    // for it. `.blade.php` is intercepted earlier by `get_extractor`'s suffix
+    // check. DIVERGENCE: graphify-py's `_DISPATCH` (`extract.py:3866`) routes
+    // only `.php`, skipping the variants its own `_php_exts` treats as PHP
+    // (AGENTS.md: fix reference bugs).
+    if PHP_EXTENSIONS.contains(&ext) {
+        return Some(extract_php);
+    }
     match ext {
         "py" => Some(extract_python),
-        "js" | "jsx" | "mjs" | "ts" | "tsx" | "mts" | "cts" => Some(extract_js),
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" => Some(extract_js),
         "vue" => Some(extract_vue),
         "go" => Some(extract_go),
         "rs" => Some(extract_rust),
@@ -243,7 +258,6 @@ fn dispatch_ext(ext: &str) -> Option<ExtractFn> {
         "cs" => Some(extract_csharp),
         "kt" | "kts" => Some(extract_kotlin),
         "scala" => Some(extract_scala),
-        "php" => Some(extract_php),
         "swift" => Some(extract_swift),
         "lua" | "luau" | "toc" => Some(extract_lua),
         "zig" => Some(extract_zig),
@@ -260,7 +274,7 @@ fn dispatch_ext(ext: &str) -> Option<ExtractFn> {
         "dart" => Some(extract_dart),
         "v" | "sv" | "svh" => Some(extract_verilog),
         "sql" => Some(extract_sql),
-        "md" | "mdx" | "qmd" => Some(extract_markdown),
+        "md" | "mdx" | "qmd" | "skill" => Some(extract_markdown),
         "pas" | "pp" | "dpr" | "dpk" | "lpr" | "inc" => Some(extract_pascal),
         "dfm" => Some(extract_delphi_form),
         "lfm" => Some(extract_lazarus_form),
@@ -784,6 +798,28 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         &mut all_raw_calls,
         &root,
     );
+
+    // PHP namespace/`use` type-reference disambiguation MUST run BEFORE the
+    // unique-stub rewire: the false merge (#1923) is manufactured inside the
+    // rewire when a bare-name stub matches a unique internal class from a
+    // different namespace. `.blade.php` templates are excluded (Blade view
+    // files, not PHP class sources).
+    let php_type_paths: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| PHP_EXTENSIONS.iter().any(|p| p.eq_ignore_ascii_case(e)))
+                && !p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.to_ascii_lowercase().ends_with(".blade.php"))
+        })
+        .cloned()
+        .collect();
+    if !php_type_paths.is_empty() {
+        php::resolve_php_type_references(&php_type_paths, &mut all_nodes, &mut all_edges);
+    }
 
     // Rewire cross-language inheritance stub nodes (no `source_file`) onto
     // a unique real definition with the same label. Drops the stub when

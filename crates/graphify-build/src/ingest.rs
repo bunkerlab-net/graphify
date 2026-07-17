@@ -122,10 +122,12 @@ pub(crate) fn add_nodes(graph: &mut Graph, extraction: &mut Value, root_str: Opt
     }
 }
 
-/// Resolve a raw edge endpoint string to an exact node ID, falling back
-/// to the normalised-ID lookup table when the raw string does not match
-/// any existing node verbatim.
-fn resolve_edge_id(
+/// Resolve a raw edge/hyperedge endpoint string to an exact node ID, falling
+/// back to the normalised-ID lookup table when the raw string does not match
+/// any existing node verbatim. Shared by [`add_edges`] and the hyperedge-member
+/// validation in `build_from_json` so the two cannot drift (#1916).
+#[must_use]
+pub(crate) fn resolve_edge_id(
     raw: &str,
     node_ids: &IndexSet<String>,
     norm_to_id: &IndexMap<String, String>,
@@ -410,6 +412,24 @@ fn edge_source_file(
     Some(norm_source_file(&raw, root_str))
 }
 
+/// Build the endpoint-resolution index for a fully-built graph: the exact node
+/// id set plus a normalised-id lookup that folds in `ghost_remap` and the
+/// pre-migration legacy-id aliases (#1504). Shared by [`add_edges`] and the
+/// hyperedge-member validation so edge and hyperedge resolution can never drift
+/// (#1916).
+#[must_use]
+pub(crate) fn build_endpoint_index(
+    graph: &Graph,
+    ghost_remap: &IndexMap<String, String>,
+) -> (IndexSet<String>, IndexMap<String, String>) {
+    let node_ids: IndexSet<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
+    let mut norm_to_id = build_norm_to_id(&node_ids, ghost_remap);
+    let node_source_files = snapshot_source_files(graph);
+    let node_labels = snapshot_labels(graph);
+    crate::migrate::register_legacy_id_aliases(&mut norm_to_id, &node_source_files, &node_labels);
+    (node_ids, norm_to_id)
+}
+
 pub(crate) fn add_edges(
     graph: &mut Graph,
     extraction: &Value,
@@ -423,14 +443,11 @@ pub(crate) fn add_edges(
     else {
         return;
     };
-    let node_ids: IndexSet<String> = graph.nodes().map(|(id, _)| id.clone()).collect();
-    let mut norm_to_id = build_norm_to_id(&node_ids, ghost_remap);
+    // Shared endpoint index (node ids + normalised lookup with ghost + legacy
+    // aliases) — identical to what hyperedge-member validation uses (#1916).
+    let (node_ids, norm_to_id) = build_endpoint_index(graph, ghost_remap);
+    // Source-file snapshot for the cross-language `calls`-family gate below.
     let node_source_files = snapshot_source_files(graph);
-    let node_labels = snapshot_labels(graph);
-    // Pre-migration alias index (#1504): register each canonical node's OLD-stem
-    // id forms so a stale-id edge endpoint from an un-re-keyed fragment still
-    // resolves to the migrated node instead of dangling.
-    crate::migrate::register_legacy_id_aliases(&mut norm_to_id, &node_source_files, &node_labels);
 
     // Per-edge resolution is pure read-only work over `node_ids` and
     // `norm_to_id` — fan out across Rayon. We collect the resolved

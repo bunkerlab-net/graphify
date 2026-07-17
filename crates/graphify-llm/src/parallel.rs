@@ -106,8 +106,133 @@ pub fn extract_corpus_parallel_with_total(
     let workers = resolve_worker_count(cfg, total);
     let outcomes = run_chunks(&chunks, cfg, workers);
     let (mut response, failed) = merge_outcomes(outcomes, cfg, total, on_chunk_done);
+    // #1895: drop nodes the model mis-attributed to a real file it was not given
+    // (the cache guard refuses to WRITE such an entry, but the node still flowed
+    // into the merged result and reached graph.json). Runs BEFORE the #1890
+    // covered/uncovered reconciliation so that diff reflects the post-filter graph.
+    filter_out_of_scope(&mut response, &chunks, cfg.root);
     reconcile_uncovered(&mut response, &chunks, cfg.root);
     (response, failed, total)
+}
+
+/// Drop nodes the model attributed to a REAL corpus file that was not dispatched
+/// for this extraction (#1895), plus the edges/hyperedges that reference them.
+///
+/// The #1757 cache guard already refuses to WRITE a cache entry for such a node,
+/// but the node itself still flowed into the merged result and landed in
+/// graph.json. Mirror the guard: resolve each `source_file` against `root` and
+/// drop the node only when it resolves to an existing file outside the
+/// dispatched set — non-file `source_file`s (concepts, model-invented anchors)
+/// pass through untouched.
+fn filter_out_of_scope(merged: &mut LlmResponse, chunks: &[Vec<Unit>], root: &Path) {
+    use std::collections::{BTreeSet, HashSet};
+    let resolve_key = |p: &Path| -> PathBuf {
+        let resolved = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            root.join(p)
+        };
+        resolved.canonicalize().unwrap_or(resolved)
+    };
+    let dispatched: HashSet<PathBuf> = chunks
+        .iter()
+        .flatten()
+        .map(|u| resolve_key(unit_path(u)))
+        .collect();
+    let out_of_scope = |item: &serde_json::Value| -> bool {
+        let Some(sf) = item
+            .get("source_file")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            return false;
+        };
+        let p = resolve_key(Path::new(sf));
+        p.is_file() && !dispatched.contains(&p)
+    };
+
+    let mut dropped_ids: HashSet<String> = HashSet::new();
+    let mut dropped_files: BTreeSet<String> = BTreeSet::new();
+    let mut kept_nodes: Vec<serde_json::Value> = Vec::with_capacity(merged.nodes.len());
+    for n in &merged.nodes {
+        if out_of_scope(n) {
+            if let Some(id) = n.get("id").and_then(serde_json::Value::as_str) {
+                dropped_ids.insert(id.to_string());
+            }
+            if let Some(sf) = n.get("source_file").and_then(serde_json::Value::as_str) {
+                dropped_files.insert(sf.to_string());
+            }
+        } else {
+            kept_nodes.push(n.clone());
+        }
+    }
+    let dropped_count = merged.nodes.len() - kept_nodes.len();
+    merged.out_of_scope_dropped = dropped_count;
+    // A node id attributed to BOTH an out-of-scope and an in-scope file (model
+    // mis-attribution, #1895) still survives via the kept node, so a relationship
+    // to it is not dangling — don't let the out-of-scope copy drop it. Mirrors the
+    // cache prune's duplicate-attribution guard (`semantic.rs`, `skipped_ids -=
+    // written_ids`); graphify-py's merged filter omits this.
+    for n in &kept_nodes {
+        if let Some(id) = n.get("id").and_then(serde_json::Value::as_str) {
+            dropped_ids.remove(id);
+        }
+    }
+    merged.nodes = kept_nodes;
+    // Filter relationships unconditionally: an edge/hyperedge that is itself
+    // out-of-scope (attributed to an undispatched real file) or references a
+    // dropped node's id must not survive. DIVERGENCE (#1895): graphify-py gates
+    // this whole block behind `if dropped_node_count` (`llm.py:2041`), so an
+    // out-of-scope hyperedge whose members are all in-scope leaks into its graph
+    // when no node was dropped. The per-item `_out_of_scope` check is meaningful
+    // on its own, so the node-count gate is a reference bug; we always filter
+    // (AGENTS.md: fix reference bugs, do not replicate them).
+    let endpoint_dropped = |e: &serde_json::Value, key: &str| {
+        e.get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|v| dropped_ids.contains(v))
+    };
+    merged.edges.retain(|e| {
+        !out_of_scope(e) && !endpoint_dropped(e, "source") && !endpoint_dropped(e, "target")
+    });
+    merged.hyperedges.retain(|h| {
+        !out_of_scope(h)
+            && !h
+                .get("nodes")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|members| {
+                    members
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .any(|m| dropped_ids.contains(m))
+                })
+    });
+
+    // The warning concerns dropped NODES; only emit it when a node was dropped.
+    if dropped_count == 0 {
+        return;
+    }
+    let mut names: Vec<String> = dropped_files
+        .iter()
+        .map(|f| {
+            Path::new(f)
+                .file_name()
+                .map_or_else(|| f.clone(), |n| n.to_string_lossy().into_owned())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    let shown = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    let more = if names.len() > 5 {
+        format!(" (+{} more)", names.len() - 5)
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "[graphify] WARNING: dropped {dropped_count} out-of-scope node(s) attributed to \
+         file(s) not dispatched for extraction: {shown}{more}. The model mis-attributed \
+         them to another corpus file; they were excluded from the graph (#1895)."
+    );
 }
 
 /// Reconcile dispatched files against those that returned nodes (#1890).
@@ -298,6 +423,7 @@ fn merge_outcomes(
         elapsed_seconds: 0.0,
         failed_chunk_indices: vec![],
         uncovered_files: vec![],
+        out_of_scope_dropped: 0,
     };
     for outcome in outcomes {
         match outcome {

@@ -1,25 +1,23 @@
 //! File-extension constants used by the watcher.
 
-/// All extensions the watcher pays attention to (code + doc + paper +
-/// image).
+use std::sync::LazyLock;
+
+use graphify_detect::{CODE_EXTENSIONS, DOC_EXTENSIONS, IMAGE_EXTENSIONS, PAPER_EXTENSIONS};
+
+/// All extensions the watcher pays attention to (code + doc + paper + image).
 ///
-/// Corresponds to `_WATCHED_EXTENSIONS` in the Python reference.
-/// Elements are bare extensions **without** a leading dot, matching
-/// `graphify_detect::extensions::CODE_EXTENSIONS` et al.
-///
-/// Built as the concatenation of the four upstream slices. In const
-/// context we cannot call heap-allocating helpers, so we list the
-/// combined set explicitly, keeping it in sync with the detect crate
-/// slices.
-pub const WATCHED_EXTENSIONS: &[&str] = &[
-    // CODE_EXTENSIONS
-    "py", "ts", "js", "jsx", "tsx", "mjs", "ejs", "go", "rs", "java", "groovy", "gradle", "cpp",
-    "cc", "cxx", "c", "h", "hpp", "rb", "swift", "kt", "kts", "cs", "scala", "php", "lua", "luau",
-    "toc", "zig", "ps1", "ex", "exs", "m", "mm", "jl", "vue", "svelte", "astro", "dart", "v", "sv",
-    "sql", "r", "f", "F", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08", "pas", "pp",
-    "dpr", "dpk", "lpr", "inc", "dfm", "lfm", "lpk", "sh", "bash", "json",
-    // DOC_EXTENSIONS
-    "md", "mdx", "qmd", "txt", "rst", "html", "yaml", "yml", // PAPER_EXTENSIONS
-    "pdf", // IMAGE_EXTENSIONS
-    "png", "jpg", "jpeg", "gif", "webp", "svg",
-];
+/// Corresponds to `_WATCHED_EXTENSIONS` in the Python reference, which is
+/// literally `CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS |
+/// IMAGE_EXTENSIONS` (watch.py). Composed here from the same four authoritative
+/// `graphify_detect` slices so a new extension registered in detect propagates
+/// automatically instead of drifting from a hand-maintained copy. Elements are
+/// bare extensions **without** a leading dot.
+pub static WATCHED_EXTENSIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    CODE_EXTENSIONS
+        .iter()
+        .chain(DOC_EXTENSIONS)
+        .chain(PAPER_EXTENSIONS)
+        .chain(IMAGE_EXTENSIONS)
+        .copied()
+        .collect()
+});

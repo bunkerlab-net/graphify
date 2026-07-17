@@ -38,5 +38,6 @@ pub fn status(path: &Path) -> String {
 
     let commit = check_hook(&hdir, "post-commit", HOOK_MARKER);
     let checkout = check_hook(&hdir, "post-checkout", CHECKOUT_MARKER);
-    format!("post-commit: {commit}\npost-checkout: {checkout}")
+    let merge = crate::merge_driver::merge_driver_status(&root);
+    format!("post-commit: {commit}\npost-checkout: {checkout}\nmerge driver: {merge}")
 }

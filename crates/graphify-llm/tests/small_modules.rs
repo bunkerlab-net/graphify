@@ -115,6 +115,7 @@ fn llm_response_to_value_emits_expected_keys() {
         elapsed_seconds: 1.5,
         failed_chunk_indices: vec![3],
         uncovered_files: vec!["omitted.md".into()],
+        out_of_scope_dropped: 7,
     };
     let v = r.to_value();
     assert_eq!(v["input_tokens"], 10);
@@ -127,6 +128,13 @@ fn llm_response_to_value_emits_expected_keys() {
     assert!(
         v.get("uncovered_files").is_none(),
         "uncovered_files must not persist"
+    );
+    // #1895: out_of_scope_dropped is an in-process diagnostic, never persisted to
+    // graph.json (matches graphify-py, which drops it from the dict) — even when
+    // nonzero.
+    assert!(
+        v.get("out_of_scope_dropped").is_none(),
+        "out_of_scope_dropped must not persist even when nonzero"
     );
 }
 

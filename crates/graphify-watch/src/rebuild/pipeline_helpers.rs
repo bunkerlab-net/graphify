@@ -632,12 +632,17 @@ pub(crate) fn commit_rebuild_outputs(args: &CommitArgs<'_>) -> Result<(), WatchE
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     // Relativise manifest keys against the project root so a committed
-    // graphify-out/ ports across clones (#777).
+    // graphify-out/ ports across clones (#777). This is a full-scan save, so
+    // pass the complete corpus as scan_corpus: rows for files that left the scan
+    // but still exist on disk (newly excluded) are pruned instead of surviving
+    // as phantom "deleted" entries (#1908).
+    let scan_corpus: Vec<String> = files_indexed.values().flatten().cloned().collect();
     if let Err(e) = graphify_detect::save_manifest_to_path_with_root(
         &files_indexed,
         &manifest_path,
         "ast",
         Some(args.project_root),
+        Some(&scan_corpus),
     ) {
         println!("[graphify watch] warning: could not write manifest: {e}");
     }

@@ -26,8 +26,13 @@ const PARALLEL_COUNT_THRESHOLD: usize = 64;
 /// scan in [`detect`]. The downstream serial merge dispatches each variant
 /// without touching shared mutable state until that point.
 enum FileDecision {
-    /// File is filtered out (ignored, converted sidecar).
+    /// File is filtered out with no diagnostic (converted sidecar, `converted/`
+    /// subtree). Ignore-rule drops use [`FileDecision::Ignored`] instead.
     Skip,
+    /// File dropped by a `.gitignore`/`.graphifyignore`/`--exclude` rule —
+    /// recorded in `ignored` so an over-broad ignore is visible instead of
+    /// silently vanishing (#1922).
+    Ignored(String),
     /// File was considered but has no supported extension / shebang — surfaced in
     /// `unclassified` so it is visible rather than silently dropped (#1692).
     Unclassified(String),
@@ -67,7 +72,7 @@ fn classify_one(
     // feature was left inert there; the Rust port completes it.)
     if !in_memory && is_ignored(p, root, ignore_patterns) && !is_included(p, root, include_patterns)
     {
-        return FileDecision::Skip;
+        return FileDecision::Ignored(p.to_string_lossy().into_owned());
     }
     if is_sensitive(p) {
         return FileDecision::Sensitive(p.to_string_lossy().into_owned());
@@ -132,6 +137,12 @@ pub struct DetectResult {
     /// than silently producing a partial `graph.json`. Each entry is
     /// `"<path>: <error>"`; a matching warning is printed to stderr as it happens.
     pub walk_errors: Vec<String>,
+    /// Files and directories dropped by a `.gitignore`/`.graphifyignore`/
+    /// `--exclude` rule (#1922). Directory entries carry a trailing separator and
+    /// keep the list bounded — a pruned `data/` is one entry, not one per
+    /// contained file. Recorded so an over-broad ignore is visible instead of
+    /// silently vanishing from the corpus. Sorted.
+    pub ignored: Vec<String>,
     /// Number of active ignore patterns loaded from `.graphifyignore` / `.gitignore` files.
     pub graphifyignore_patterns: usize,
     /// Canonicalized path of the scan root as a UTF-8 string.
@@ -218,10 +229,14 @@ impl Drop for LocalBuffer {
 // per-worker collect callback, and result/error/symlink extraction are one flow;
 // splitting fragments the shared-state threading.
 #[allow(clippy::too_many_lines)]
-fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> (Vec<PathBuf>, Vec<String>, Vec<String>) {
+fn walk_dir_parallel(
+    ctx: &WalkCtx<'_>,
+    dir: &Path,
+) -> (Vec<PathBuf>, Vec<String>, Vec<String>, Vec<String>) {
     let shared: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
     let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let sym_skipped: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let ignored: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = WalkBuilder::new(dir);
     builder
@@ -233,6 +248,7 @@ fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> (Vec<PathBuf>, Vec<String
     let ignore_patterns = ctx.ignore_patterns.clone();
     let include_patterns = ctx.include_patterns.clone();
     let sym_c = Arc::clone(&sym_skipped);
+    let ignored_c = Arc::clone(&ignored);
     builder.filter_entry(move |entry| {
         let file_type = entry.file_type();
         let is_dir = file_type.is_some_and(|ft| ft.is_dir());
@@ -273,6 +289,21 @@ fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> (Vec<PathBuf>, Vec<String
         if is_ignored(path, &root, &ignore_patterns)
             && !could_contain_included_path(path, &root, &include_patterns)
         {
+            // Record the pruned subtree (dir + trailing separator) so an
+            // over-broad ignore is visible; one entry covers the whole subtree.
+            // Filesystem roots (`/`, `C:\`) already end in a separator — don't
+            // double it.
+            let shown = path.display().to_string();
+            let sep = std::path::MAIN_SEPARATOR;
+            let subtree = if shown.ends_with(sep) {
+                shown
+            } else {
+                format!("{shown}{sep}")
+            };
+            ignored_c
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(subtree);
             return false;
         }
         true
@@ -346,7 +377,13 @@ fn walk_dir_parallel(ctx: &WalkCtx<'_>, dir: &Path) -> (Vec<PathBuf>, Vec<String
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         std::mem::take(&mut *guard)
     };
-    (files, errs, sym)
+    let ignored = {
+        let mut guard = ignored
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *guard)
+    };
+    (files, errs, sym, ignored)
 }
 
 /// Recursively collect all files under `dir`, respecting ignore/include patterns and noise-dir pruning.
@@ -571,13 +608,15 @@ pub fn detect_with_cache_root(
         ignore_patterns: &ignore_patterns,
         include_patterns: &include_patterns,
     };
-    let (all_files, walk_errors, sym_skipped) = run_walk_phase(&ctx, &root, &memory_dir);
+    let (all_files, walk_errors, sym_skipped, mut ignored) =
+        run_walk_phase(&ctx, &root, &memory_dir);
 
     let ClassifyOutput {
         files,
         to_count,
         mut skipped_sensitive,
         unclassified,
+        ignored: ignored_files,
     } = run_classify_phase(
         &all_files,
         &root,
@@ -590,6 +629,9 @@ pub fn detect_with_cache_root(
     // Symlink targets that escaped the scan root (dirs pruned mid-walk + files
     // filtered post-walk) are surfaced alongside sensitive-file skips (009a98b).
     skipped_sensitive.extend(sym_skipped);
+    // Merge dir-level (walk) and file-level (classify) ignores; sort once (#1922).
+    ignored.extend(ignored_files);
+    ignored.sort();
 
     let total_words = run_word_count_phase(&to_count, &root, cache_root);
     let total_files: usize = files.values().map(Vec::len).sum();
@@ -605,6 +647,7 @@ pub fn detect_with_cache_root(
         skipped_sensitive,
         unclassified,
         walk_errors,
+        ignored,
         graphifyignore_patterns,
         scan_root: root.to_string_lossy().into_owned(),
     }
@@ -720,7 +763,7 @@ fn run_walk_phase(
     ctx: &WalkCtx<'_>,
     root: &Path,
     memory_dir: &Path,
-) -> (Vec<PathBuf>, Vec<String>, Vec<String>) {
+) -> (Vec<PathBuf>, Vec<String>, Vec<String>, Vec<String>) {
     let scan_paths: Vec<(PathBuf, bool)> = {
         let mut v = vec![(root.to_path_buf(), false)];
         if memory_dir.exists() {
@@ -732,6 +775,7 @@ fn run_walk_phase(
     let mut all_files: Vec<PathBuf> = Vec::new();
     let mut walk_errors: Vec<String> = Vec::new();
     let mut sym_skipped: Vec<String> = Vec::new();
+    let mut ignored: Vec<String> = Vec::new();
     let t_walk = std::time::Instant::now();
     for (scan_root, in_memory) in &scan_paths {
         if *in_memory {
@@ -748,7 +792,7 @@ fn run_walk_phase(
             );
         } else {
             // Main project tree: dispatch to the parallel walker.
-            let (found, errs, sym) = walk_dir_parallel(ctx, scan_root);
+            let (found, errs, sym, ign) = walk_dir_parallel(ctx, scan_root);
             for p in found {
                 if seen.insert(p.clone()) {
                     all_files.push(p);
@@ -756,6 +800,7 @@ fn run_walk_phase(
             }
             walk_errors.extend(errs);
             sym_skipped.extend(sym);
+            ignored.extend(ign);
         }
     }
     // Per-file containment (009a98b): drop symlinked files whose target escapes
@@ -776,7 +821,9 @@ fn run_walk_phase(
             all_files.len()
         );
     }
-    (all_files, walk_errors, sym_skipped)
+    // `ignored` (dir-level prunes) is merged with file-level ignores and sorted
+    // once in `detect_with_cache_root`.
+    (all_files, walk_errors, sym_skipped, ignored)
 }
 
 /// Output of [`run_classify_phase`].
@@ -785,6 +832,7 @@ struct ClassifyOutput {
     to_count: Vec<(PathBuf, FileType)>,
     skipped_sensitive: Vec<String>,
     unclassified: Vec<String>,
+    ignored: Vec<String>,
 }
 
 /// Classify each file, dispatch sidecar conversions, and return the per-kind file
@@ -805,6 +853,7 @@ fn run_classify_phase(
     let mut to_count: Vec<(PathBuf, FileType)> = Vec::new();
     let mut skipped_sensitive: Vec<String> = Vec::new();
     let mut unclassified: Vec<String> = Vec::new();
+    let mut ignored: Vec<String> = Vec::new();
 
     let t_phase1 = std::time::Instant::now();
     // Phase 1a (parallel): classify each file independently.
@@ -848,6 +897,7 @@ fn run_classify_phase(
         to_count: &mut to_count,
         skipped_sensitive: &mut skipped_sensitive,
         unclassified: &mut unclassified,
+        ignored: &mut ignored,
     };
     for (p, decision) in all_files.iter().zip(decisions) {
         apply_file_decision(&mut convert_ctx, p, decision, google_workspace);
@@ -872,6 +922,7 @@ fn run_classify_phase(
         to_count,
         skipped_sensitive,
         unclassified,
+        ignored,
     }
 }
 
@@ -886,6 +937,7 @@ fn apply_file_decision(
         FileDecision::Skip => {}
         FileDecision::Unclassified(rendered) => ctx.unclassified.push(rendered),
         FileDecision::Sensitive(rendered) => ctx.skipped_sensitive.push(rendered),
+        FileDecision::Ignored(rendered) => ctx.ignored.push(rendered),
         FileDecision::Direct(ftype) => {
             ctx.files
                 .entry(ftype.as_str().to_string())
@@ -959,6 +1011,7 @@ struct ConvertCtx<'a> {
     to_count: &'a mut Vec<(PathBuf, FileType)>,
     skipped_sensitive: &'a mut Vec<String>,
     unclassified: &'a mut Vec<String>,
+    ignored: &'a mut Vec<String>,
 }
 
 impl ConvertCtx<'_> {

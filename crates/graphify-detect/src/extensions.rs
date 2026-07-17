@@ -45,7 +45,7 @@ impl FileType {
 /// entry sits at the tail of the TypeScript-family run rather than in the
 /// middle of an unrelated group.
 pub const CODE_EXTENSIONS: &[&str] = &[
-    "py", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "ejs", "ets", "go", "rs", "java",
+    "py", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "ejs", "ets", "go", "rs", "java",
     "groovy", "gradle", "cpp", "cc", "cxx", "c", "h", "hpp", "cu", "cuh", "metal", "rb", "rake",
     "swift", "kt", "kts", "cs", "scala", "php", "lua", "luau", "toc", "zig", "ps1", "psm1", "psd1",
     "ex", "exs", "m", "mm", "jl", "vue", "svelte", "astro", "dart", "v", "sv", "svh", "sql", "r",
@@ -69,11 +69,16 @@ pub const PACKAGE_MANIFEST_NAMES: &[(&str, &str)] = &[
     ("pom.xml", "maven"),
 ];
 
-const DOC_EXTENSIONS: &[&str] = &["md", "mdx", "qmd", "txt", "rst", "html", "yaml", "yml"];
+/// Prose-document file extensions (without the leading dot). Matches Python `DOC_EXTENSIONS`.
+pub const DOC_EXTENSIONS: &[&str] = &[
+    "md", "mdx", "qmd", "skill", "txt", "rst", "html", "yaml", "yml",
+];
 
-const PAPER_EXTENSIONS: &[&str] = &["pdf"];
+/// Paper/PDF file extensions (without the leading dot). Matches Python `PAPER_EXTENSIONS`.
+pub const PAPER_EXTENSIONS: &[&str] = &["pdf"];
 
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg"];
+/// Image file extensions (without the leading dot). Matches Python `IMAGE_EXTENSIONS`.
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg"];
 
 const OFFICE_EXTENSIONS: &[&str] = &["docx", "xlsx"];
 

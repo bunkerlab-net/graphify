@@ -201,6 +201,24 @@ fn nudges_on_framework_source() {
 }
 
 #[test]
+fn nudges_on_cjs_source() {
+    // `.cjs` (explicit CommonJS, Electron main/preload) is a real source type
+    // and must nudge — regression lock for its addition to _HOOK_SOURCE_EXTS.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cmd = read_hook_command(tmp.path());
+    let out = run(
+        &cmd,
+        &json!({"file_path": "src/preload.cjs"}),
+        tmp.path(),
+        true,
+    );
+    assert!(
+        stdout_of(&out).contains("graphify query"),
+        ".cjs should nudge"
+    );
+}
+
+#[test]
 fn astro_glob_nudges() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let cmd = read_hook_command(tmp.path());

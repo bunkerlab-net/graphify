@@ -21,6 +21,16 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// Copy a committed SQL fixture into a fresh tempdir and return it alongside the
+/// `TempDir` guard (held for the test's lifetime). Isolates each filesystem test
+/// per AGENTS.md, so nothing reads the shared `tests/fixtures/` tree in place.
+fn sql_fixture(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dst = tmp.path().join(name);
+    std::fs::copy(fixtures().join(name), &dst).expect("copy sql fixture");
+    (tmp, dst)
+}
+
 fn assert_no_dangling_edges(result: &graphify_extract::FileResult) {
     let ids: std::collections::HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
     for edge in &result.edges {
@@ -103,7 +113,8 @@ fn lazarus_package_extractor_produces_nodes() {
 
 #[test]
 fn sql_extractor_produces_nodes() {
-    let result = extract_sql(&fixtures().join("sample.sql"));
+    let (_tmp, sql) = sql_fixture("sample.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no sql nodes");
     assert_no_dangling_edges(&result);
@@ -111,14 +122,16 @@ fn sql_extractor_produces_nodes() {
 
 #[test]
 fn sql_alter_fk_extractor() {
-    let result = extract_sql(&fixtures().join("sample_alter_fk.sql"));
+    let (_tmp, sql) = sql_fixture("sample_alter_fk.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no nodes for alter fk sql");
 }
 
 #[test]
 fn sql_schema_qualified_extractor() {
-    let result = extract_sql(&fixtures().join("sample_schema_qualified.sql"));
+    let (_tmp, sql) = sql_fixture("sample_schema_qualified.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(
         !result.nodes.is_empty(),
@@ -131,7 +144,8 @@ fn sql_complex_fixture_extracts_many_objects() {
     // Exercises CREATE TABLE+constraints, CREATE VIEW, CREATE MATERIALIZED VIEW,
     // CREATE FUNCTION, CREATE PROCEDURE, CREATE TRIGGER, CREATE INDEX,
     // ALTER TABLE ADD CONSTRAINT, CREATE SEQUENCE, JOIN references, etc.
-    let result = extract_sql(&fixtures().join("sample_complex.sql"));
+    let (_tmp, sql) = sql_fixture("sample_complex.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     // Many objects → many nodes.
     assert!(
@@ -142,6 +156,103 @@ fn sql_complex_fixture_extracts_many_objects() {
     // FK references should produce `references` edges.
     let has_refs = result.edges.iter().any(|e| e.relation == "references");
     assert!(has_refs, "expected references edges from FK constraints");
+}
+
+#[test]
+fn sql_plpgsql_functions_survive_parse_errors() {
+    // PL/pgSQL bodies make the SQL grammar emit ERROR nodes; the functions must
+    // still be extracted (#1910), without cascading into later statements.
+    let (_tmp, sql) = sql_fixture("sample_plpgsql.sql");
+    let result = extract_sql(&sql);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    // Both PL/pgSQL functions extracted, schema-qualified name kept whole.
+    assert!(
+        labels.contains(&"exposed.important_function()"),
+        "{labels:?}"
+    );
+    assert!(labels.contains(&"tagged_quote_fn()"), "{labels:?}");
+    // Tables before and after the broken functions still extract.
+    assert!(labels.iter().any(|l| l.contains("accounts")));
+    assert!(labels.iter().any(|l| l.contains("audit_log")));
+    // No spurious or empty nodes from the error recovery.
+    for l in &labels {
+        assert!(!l.is_empty(), "empty node label");
+        assert_ne!(*l, "ERROR");
+    }
+    // Every function got a contains edge FROM the file node specifically — the
+    // SQL extractor labels that node with the file name and roots every
+    // `contains` edge at it.
+    let file_nid = result
+        .nodes
+        .iter()
+        .find(|n| n.label == "sample_plpgsql.sql")
+        .map(|n| n.id.as_str())
+        .expect("file node present");
+    for n in result.nodes.iter().filter(|n| n.label.ends_with("()")) {
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|e| { e.relation == "contains" && e.target == n.id && e.source == file_nid }),
+            "function {} has no contains edge from the file node",
+            n.label
+        );
+    }
+}
+
+#[test]
+fn sql_plpgsql_clean_function_not_double_emitted() {
+    // A cleanly-parsed LANGUAGE sql function in the same file is emitted once,
+    // and no node id is duplicated.
+    let (_tmp, sql) = sql_fixture("sample_plpgsql.sql");
+    let result = extract_sql(&sql);
+    let plain_count = result
+        .nodes
+        .iter()
+        .filter(|n| n.label == "plain_sql_fn()")
+        .count();
+    assert_eq!(plain_count, 1, "plain_sql_fn emitted {plain_count} times");
+    let ids: std::collections::HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids.len(), result.nodes.len(), "duplicate node ids");
+}
+
+#[test]
+fn sql_error_node_recovery_ignores_ddl_inside_body() {
+    // #1910 hardening: CREATE FUNCTION/PROCEDURE text inside a PL/pgSQL body —
+    // whether mid-line (string literals) OR line-leading — must NOT mint a
+    // spurious object. The recovery masks comments and string/dollar-quoted
+    // bodies before scanning, so only the real top-level CREATE survives.
+    let (_tmp, sql) = sql_fixture("sample_body_ddl.sql");
+    let result = extract_sql(&sql);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert!(
+        labels.iter().any(|l| l.contains("real_fn")),
+        "the real top-level function must be extracted: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l.contains("estr_fn")),
+        "the real E-string function header must be extracted: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l.contains("blk_fn")),
+        "the real block-comment function header must be extracted: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l.contains("uni_fn")),
+        "the real Unicode-tagged function header must be extracted: {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|l| l.contains("body_leading_fake")
+            || l.contains("quoted_fake")
+            || l.contains("proc_fake")
+            || l.contains("estr_fake")
+            || l.contains("block_fake")
+            || l.contains("combining_fake")),
+        "DDL inside a dollar body (ASCII or Unicode-tagged), string literal, \
+         E-string escape, or block comment must not mint nodes: {labels:?}"
+    );
 }
 
 #[test]

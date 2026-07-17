@@ -1713,3 +1713,239 @@ fn rebuild_code_preserves_semantic_edges_from_reextracted_doc_full_update() {
 fn rebuild_code_preserves_semantic_edges_from_reextracted_doc_incremental() {
     preserves_semantic_edges_from_reextracted_doc(Some(&[PathBuf::from("auth.md")]));
 }
+
+// ── #1915: semantic-backed docs must not be double-represented by AST scan ────
+
+const SEMANTIC_GUIDE_IDS: [&str; 3] = ["guide_doc", "auth_flow", "session_model"];
+const AST_GUIDE_IDS: [&str; 4] = ["guide", "guide_overview", "guide_setup", "guide_usage"];
+
+/// Build a code-only graph, then add `guide.md` represented ONLY semantically
+/// (a `_doc` node + concept nodes, none carrying `_origin`, no AST headings) —
+/// mimicking a graph produced by the CLI update path.
+fn seed_semantic_doc_graph(corpus: &Path) -> PathBuf {
+    use serde_json::json;
+    fs::write(corpus.join("app.py"), "def handle_login():\n    return 1\n").expect("write");
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("seed rebuild"));
+
+    fs::write(
+        corpus.join("guide.md"),
+        "# Overview\n\nIntro.\n\n## Setup\n\nSteps.\n\n## Usage\n\nMore.\n",
+    )
+    .expect("write");
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    let mut data = read_graph(&graph_path);
+    let code_node_id = data["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .find(|n| n.get("source_file").and_then(serde_json::Value::as_str) == Some("app.py"))
+        .and_then(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .expect("code node")
+        .to_string();
+    let nodes = data["nodes"].as_array_mut().expect("nodes");
+    nodes.push(json!({"id": "guide_doc", "label": "Guide", "file_type": "document", "source_file": "guide.md"}));
+    nodes.push(json!({"id": "auth_flow", "label": "Auth Flow", "file_type": "concept", "source_file": "guide.md"}));
+    nodes.push(json!({"id": "session_model", "label": "Session Model", "file_type": "concept", "source_file": "guide.md"}));
+    let links = data["links"].as_array_mut().expect("links");
+    links.push(json!({"source": "guide_doc", "target": "auth_flow", "relation": "explains", "confidence": "INFERRED", "source_file": "guide.md"}));
+    links.push(json!({"source": "auth_flow", "target": code_node_id, "relation": "implemented_by", "confidence": "INFERRED", "source_file": "guide.md"}));
+    write_graph(&graph_path, &data);
+    graph_path
+}
+
+#[test]
+fn rebuild_code_semantic_doc_not_double_represented_on_full_rebuild() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    let graph_path = seed_semantic_doc_graph(corpus);
+    let before = read_graph(&graph_path);
+    let before_count = before["nodes"].as_array().expect("nodes").len();
+
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("rebuild"));
+
+    let after = read_graph(&graph_path);
+    let ids = node_ids(&after);
+    for id in SEMANTIC_GUIDE_IDS {
+        assert!(ids.contains(id), "semantic node {id} must be preserved");
+    }
+    for id in AST_GUIDE_IDS {
+        assert!(
+            !ids.contains(id),
+            "AST heading node {id} minted for a semantic doc (#1915)"
+        );
+    }
+    let after_count = after["nodes"].as_array().expect("nodes").len();
+    assert_eq!(after_count, before_count, "node count inflated (#1915)");
+}
+
+fn incremental_preserves_semantic_doc(changed: &[PathBuf]) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    let graph_path = seed_semantic_doc_graph(corpus);
+
+    assert!(rebuild_code(corpus, Some(changed), no_cluster_opts()).expect("incremental rebuild"));
+
+    let after = read_graph(&graph_path);
+    let ids = node_ids(&after);
+    for id in SEMANTIC_GUIDE_IDS {
+        assert!(
+            ids.contains(id),
+            "semantic node {id} wiped by incremental rebuild"
+        );
+    }
+    let relations: std::collections::HashSet<(String, String, String)> = after["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                e.get("target")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                e.get("relation")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        relations.contains(&("guide_doc".into(), "auth_flow".into(), "explains".into())),
+        "semantic doc edge dropped by incremental rebuild"
+    );
+    let app_id = after["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .find(|n| n.get("source_file").and_then(serde_json::Value::as_str) == Some("app.py"))
+        .and_then(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .expect("app.py code node")
+        .to_string();
+    assert!(
+        relations.contains(&("auth_flow".into(), app_id, "implemented_by".into())),
+        "doc-to-code semantic edge dropped or retargeted by incremental rebuild"
+    );
+    for id in AST_GUIDE_IDS {
+        assert!(
+            !ids.contains(id),
+            "incremental AST-scanned a semantic-backed doc (#1915)"
+        );
+    }
+}
+
+#[test]
+fn rebuild_code_incremental_preserves_semantic_doc_nodes_and_edges_doc_only() {
+    incremental_preserves_semantic_doc(&[PathBuf::from("guide.md")]);
+}
+
+#[test]
+fn rebuild_code_incremental_preserves_semantic_doc_nodes_and_edges_doc_plus_code() {
+    incremental_preserves_semantic_doc(&[PathBuf::from("guide.md"), PathBuf::from("app.py")]);
+}
+
+#[test]
+fn rebuild_code_quick_scans_doc_without_semantic_nodes() {
+    // #09b33b7 guard: a doc with NO semantic layer still gets the AST quick-scan
+    // so no-LLM corpora keep their heading structure — #1915 must not regress it.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::write(corpus.join("app.py"), "def f():\n    return 1\n").expect("write");
+    fs::write(corpus.join("notes.md"), "# Alpha\n\n## Beta\n").expect("write");
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("first rebuild"));
+    let ids = node_ids(&read_graph(&graph_path));
+    for id in ["notes", "notes_alpha", "notes_beta"] {
+        assert!(
+            ids.contains(id),
+            "doc without semantic layer must be quick-scanned: {id}"
+        );
+    }
+
+    // A rebuild over the existing graph (still no semantic nodes) keeps scanning.
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("second rebuild"));
+    let rebuilt = read_graph(&graph_path);
+    let all_ids: Vec<&str> = rebuilt["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    for id in ["notes", "notes_alpha", "notes_beta"] {
+        assert_eq!(
+            all_ids.iter().filter(|&&x| x == id).count(),
+            1,
+            "quick-scan node {id} must survive rebuild exactly once (no duplicate)"
+        );
+    }
+}
+
+#[test]
+fn rebuild_code_polluted_graph_self_heals_on_full_rebuild() {
+    use serde_json::json;
+    // #1915: a graph already bloated (semantic doc nodes PLUS stale `_origin=ast`
+    // heading nodes for the same doc) sheds the heading nodes on the next full
+    // rebuild via the AST-ownership rule — and the shrink guard accepts the
+    // smaller write without force.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let corpus = tmp.path();
+    fs::write(corpus.join("app.py"), "def handle_login():\n    return 1\n").expect("write");
+    fs::write(
+        corpus.join("guide.md"),
+        "# Overview\n\n## Setup\n\n## Usage\n",
+    )
+    .expect("write");
+    let graph_path = corpus.join("graphify-out").join("graph.json");
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("first rebuild"));
+    let ids = node_ids(&read_graph(&graph_path));
+    for id in AST_GUIDE_IDS {
+        assert!(ids.contains(id), "initial quick-scan must mint {id}");
+    }
+
+    // Layer the semantic representation on top → the double-represented state.
+    let mut data = read_graph(&graph_path);
+    let nodes = data["nodes"].as_array_mut().expect("nodes");
+    nodes.push(json!({"id": "guide_doc", "label": "Guide", "file_type": "document", "source_file": "guide.md"}));
+    nodes.push(json!({"id": "auth_flow", "label": "Auth Flow", "file_type": "concept", "source_file": "guide.md"}));
+    data["links"].as_array_mut().expect("links").push(json!({"source": "guide_doc", "target": "auth_flow", "relation": "explains", "confidence": "INFERRED", "source_file": "guide.md"}));
+    write_graph(&graph_path, &data);
+
+    // No force: the self-heal shrink must be accepted by the guard.
+    assert!(rebuild_code(corpus, None, no_cluster_opts()).expect("self-heal rebuild"));
+    let ids = node_ids(&read_graph(&graph_path));
+    assert!(
+        ids.contains("guide_doc") && ids.contains("auth_flow"),
+        "semantic nodes preserved"
+    );
+    let healed = read_graph(&graph_path);
+    let has_semantic_edge = healed["links"].as_array().expect("links").iter().any(|e| {
+        e.get("source").and_then(serde_json::Value::as_str) == Some("guide_doc")
+            && e.get("target").and_then(serde_json::Value::as_str) == Some("auth_flow")
+            && e.get("relation").and_then(serde_json::Value::as_str) == Some("explains")
+    });
+    assert!(
+        has_semantic_edge,
+        "seeded guide_doc→auth_flow `explains` edge must survive the self-heal rebuild"
+    );
+    for link in healed["links"].as_array().expect("links") {
+        for end in ["source", "target"] {
+            if let Some(nid) = link.get(end).and_then(serde_json::Value::as_str) {
+                assert!(
+                    ids.contains(nid),
+                    "self-heal left a dangling {end} endpoint: {nid}"
+                );
+            }
+        }
+    }
+    for id in AST_GUIDE_IDS {
+        assert!(
+            !ids.contains(id),
+            "stale AST heading node {id} must be shed (#1915)"
+        );
+    }
+}

@@ -791,6 +791,77 @@ fn nested_gitignore_patterns_still_apply_inside_their_dir() {
 }
 
 #[test]
+fn detect_records_ignored_sibling_subtree() {
+    // #1922: a nested .gitignore (`data/`) in one project must not drop a
+    // sibling project's data/ files, and the drop must be recorded in the
+    // `ignored` diagnostic rather than silently vanishing.
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::write(root.join("run.py"), "x = 1").expect("write");
+    let pa = root.join("project_a").join("data");
+    std::fs::create_dir_all(&pa).expect("mkdir");
+    std::fs::write(pa.join("loader.py"), "def load(): pass").expect("write");
+    let pb = root.join("project_b");
+    std::fs::create_dir_all(pb.join("data")).expect("mkdir");
+    std::fs::write(pb.join(".gitignore"), "data/\n").expect("write");
+    std::fs::write(pb.join("data").join("dump.csv"), "a,b\n1,2\n").expect("write");
+
+    let result = detect(root, None, None);
+
+    let all_paths: Vec<&String> = result.files.values().flatten().collect();
+    assert!(
+        all_paths
+            .iter()
+            .any(|f| f.replace('\\', "/").ends_with("project_a/data/loader.py")),
+        "sibling project_a/data/loader.py must survive project_b's nested ignore"
+    );
+    assert!(!all_paths.iter().any(|f| f.ends_with("dump.csv")));
+    // The legitimately-ignored subtree is recorded, not silently dropped.
+    assert!(
+        result.ignored.iter().any(|e| {
+            let e = e.replace('\\', "/");
+            e.trim_end_matches('/').ends_with("project_b/data")
+        }),
+        "ignored subtree should be recorded in detect().ignored: {:?}",
+        result.ignored
+    );
+}
+
+#[test]
+fn detect_records_ignored_file_without_trailing_separator() {
+    // #1922: a directly-ignored FILE (not under a pruned directory) is recorded
+    // in `ignored` via the file-level classify path, as the plain file path with
+    // NO trailing separator (that suffix marks directory-level prunes only).
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::write(root.join(".graphifyignore"), "secret.py\n").expect("write");
+    std::fs::write(root.join("main.py"), "x = 1").expect("write");
+    std::fs::write(root.join("secret.py"), "token = 1").expect("write");
+
+    let result = detect(root, None, None);
+
+    assert!(
+        result.files["code"].iter().any(|f| f.ends_with("main.py")),
+        "main.py must be indexed"
+    );
+    assert!(
+        !result.files["code"]
+            .iter()
+            .any(|f| f.ends_with("secret.py")),
+        "secret.py must be excluded"
+    );
+    let sep = std::path::MAIN_SEPARATOR;
+    assert!(
+        result
+            .ignored
+            .iter()
+            .any(|e| { e.ends_with("secret.py") && !e.ends_with(sep) }),
+        "ignored file must be recorded without a trailing separator: {:?}",
+        result.ignored
+    );
+}
+
+#[test]
 fn gitignore_nested_below_root_excludes_file() {
     // #1206: a `.gitignore` in a subdirectory below the scan root is honored.
     let tmp = tempdir().expect("tempdir");

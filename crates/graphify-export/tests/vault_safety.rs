@@ -318,3 +318,116 @@ fn to_obsidian_community_notes_case_collision() -> TestResult {
     assert_eq!(lowered.len(), comm.len(), "{comm:?}");
     Ok(())
 }
+
+// ── #1896: re-export prunes graphify's own notes for dropped nodes ────────────
+
+#[must_use]
+fn four_node_two_community_graph() -> (Graph, IndexMap<i64, Vec<String>>) {
+    let g = build(
+        json!([
+            {"id": "n1", "label": "Database", "file_type": "code", "source_file": "app/db.py"},
+            {"id": "n2", "label": "Server", "file_type": "code", "source_file": "app/srv.py"},
+            {"id": "n3", "label": "Cache", "file_type": "code", "source_file": "infra/cache.py"},
+            {"id": "n4", "label": "Queue", "file_type": "code", "source_file": "infra/queue.py"},
+        ]),
+        json!([
+            {"source": "n1", "target": "n2", "relation": "calls", "confidence": "EXTRACTED", "source_file": "app/db.py"},
+            {"source": "n3", "target": "n4", "relation": "calls", "confidence": "EXTRACTED", "source_file": "infra/cache.py"},
+        ]),
+    );
+    let communities: IndexMap<i64, Vec<String>> = IndexMap::from([
+        (0, vec!["n1".to_string(), "n2".to_string()]),
+        (1, vec!["n3".to_string(), "n4".to_string()]),
+    ]);
+    (g, communities)
+}
+
+#[test]
+fn to_obsidian_rerun_prunes_removed_nodes() -> TestResult {
+    // #1896: re-exporting into the same vault deletes graphify's own notes for
+    // nodes (and communities) that dropped out of the graph; user files survive.
+    let (g4, comm4) = four_node_two_community_graph();
+    let (g2, comm2) = two_node_graph();
+    let l4: IndexMap<i64, String> =
+        IndexMap::from([(0, "Backend".to_string()), (1, "Infra".to_string())]);
+    let l2: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
+    let tmp = tempfile::tempdir()?;
+    let out = tmp.path().join("obsidian");
+
+    to_obsidian(&g4, &comm4, &out, Some(&l4), None)?;
+    assert!(out.join("Cache.md").exists());
+    assert!(out.join("_COMMUNITY_Infra.md").exists());
+    std::fs::write(out.join("MyOwnNote.md"), "mine\n")?;
+
+    to_obsidian(&g2, &comm2, &out, Some(&l2), None)?;
+    // Notes for removed nodes and the stale community overview are pruned.
+    assert!(!out.join("Cache.md").exists());
+    assert!(!out.join("Queue.md").exists());
+    assert!(!out.join("_COMMUNITY_Infra.md").exists());
+    // Surviving graphify notes and the user's own note remain.
+    assert!(out.join("Database.md").exists());
+    assert!(out.join("Server.md").exists());
+    assert!(out.join("_COMMUNITY_Backend.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(out.join("MyOwnNote.md"))?.trim(),
+        "mine"
+    );
+    Ok(())
+}
+
+#[test]
+fn to_obsidian_removed_node_returning_is_writable_again() -> TestResult {
+    // #1896 follow-on: a node that disappears and later returns is writable
+    // again — the manifest is rewritten to the current run, so the returning
+    // node is not disowned and re-skipped as a "pre-existing user file".
+    let (g_ab, comm_ab) = two_node_graph();
+    let g_a = build(
+        json!([{"id": "n1", "label": "Database", "file_type": "code", "source_file": "app/db.py"}]),
+        json!([]),
+    );
+    let comm_a: IndexMap<i64, Vec<String>> = IndexMap::from([(0, vec!["n1".to_string()])]);
+    let labels: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
+    let tmp = tempfile::tempdir()?;
+    let out = tmp.path().join("obsidian");
+
+    to_obsidian(&g_ab, &comm_ab, &out, Some(&labels), None)?;
+    to_obsidian(&g_a, &comm_a, &out, Some(&labels), None)?;
+    assert!(!out.join("Server.md").exists(), "pruned while absent");
+
+    to_obsidian(&g_ab, &comm_ab, &out, Some(&labels), None)?;
+    // The returned node's note exists with current content, written this run.
+    assert!(out.join("Server.md").exists());
+    assert!(std::fs::read_to_string(out.join("Server.md"))?.contains("# Server"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn to_obsidian_prune_refuses_symlinked_component() -> TestResult {
+    // #1896 hardening: a manifest entry whose path traverses a symlinked
+    // directory must NOT let the stale-note prune delete a file outside the
+    // vault. The write path already refuses such paths; the prune must too.
+    use std::os::unix::fs::symlink;
+    let (g2, comm2) = two_node_graph();
+    let labels: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
+    let tmp = tempfile::tempdir()?;
+    let out = tmp.path().join("obsidian");
+    std::fs::create_dir_all(&out)?;
+    // A victim file outside the vault, reachable via a symlinked component.
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&outside)?;
+    let victim = outside.join("victim.md");
+    std::fs::write(&victim, "precious\n")?;
+    symlink(&outside, out.join("evil"))?;
+    // Pre-seed a manifest that (hostilely) claims to own the traversing path, so
+    // the re-export treats `evil/victim.md` as a stale-note prune candidate.
+    std::fs::write(
+        out.join(".graphify_obsidian_manifest.json"),
+        r#"{"files": ["evil/victim.md"]}"#,
+    )?;
+
+    to_obsidian(&g2, &comm2, &out, Some(&labels), None)?;
+    assert!(victim.exists(), "prune escaped the vault via a symlink");
+    assert_eq!(std::fs::read_to_string(&victim)?.trim(), "precious");
+    Ok(())
+}

@@ -11,7 +11,11 @@ use crate::cli::graphify_out_dir;
 /// checks the semantic cache, writes the results to
 /// `<root>/graphify-out/.graphify_cached.json` and
 /// `<root>/graphify-out/.graphify_uncached.txt`, and prints a summary.
-pub(crate) fn cmd_cache_check(files_from: &std::path::Path, root: &std::path::Path) -> Result<()> {
+pub(crate) fn cmd_cache_check(
+    files_from: &std::path::Path,
+    root: &std::path::Path,
+    mode: Option<&str>,
+) -> Result<()> {
     let contents = std::fs::read_to_string(files_from)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", files_from.display()))?;
     let files: Vec<String> = contents
@@ -21,13 +25,14 @@ pub(crate) fn cmd_cache_check(files_from: &std::path::Path, root: &std::path::Pa
         .map(str::to_string)
         .collect();
     let total = files.len();
-    let split = graphify_cache::check_semantic_cache(&files, root);
+    let split = graphify_cache::check_semantic_cache(&files, root, mode);
     let hit_count = total - split.uncached_files.len();
 
     // Write results to the output dir, mirroring the Python behaviour.
     let out_dir = root.join(graphify_out_dir());
     std::fs::create_dir_all(&out_dir)?;
 
+    let cached_path = out_dir.join(".graphify_cached.json");
     if !split.cached_nodes.is_empty()
         || !split.cached_edges.is_empty()
         || !split.cached_hyperedges.is_empty()
@@ -37,10 +42,17 @@ pub(crate) fn cmd_cache_check(files_from: &std::path::Path, root: &std::path::Pa
             "edges": split.cached_edges,
             "hyperedges": split.cached_hyperedges,
         });
-        std::fs::write(
-            out_dir.join(".graphify_cached.json"),
-            serde_json::to_string(&cached_json)?,
-        )?;
+        std::fs::write(&cached_path, serde_json::to_string(&cached_json)?)?;
+    } else {
+        // No cached results this run: clear a stale file from a prior deep-cache
+        // hit so a standard-cache miss doesn't serve last run's cached nodes.
+        // Unconditional remove avoids an exists()/remove race; only a missing
+        // file is benign — any other error propagates.
+        match std::fs::remove_file(&cached_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
     std::fs::write(
         out_dir.join(".graphify_uncached.txt"),

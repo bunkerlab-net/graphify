@@ -125,6 +125,38 @@ fn test_watched_extensions_excludes_noise() {
     assert!(!WATCHED_EXTENSIONS.contains(&"log"));
 }
 
+/// Drift lock: `WATCHED_EXTENSIONS` must be exactly the union of the four
+/// authoritative `graphify_detect` slices (Python `_WATCHED_EXTENSIONS =
+/// CODE | DOC | PAPER | IMAGE`). Guards against a future hand-maintained copy
+/// re-introducing drift (previously it silently omitted `mts`/`cts`/`ets`/
+/// `cu`/`tf`/… present in `CODE_EXTENSIONS`).
+#[test]
+fn test_watched_extensions_is_detect_union() {
+    use std::collections::BTreeSet;
+    let expected: BTreeSet<&str> = graphify_detect::CODE_EXTENSIONS
+        .iter()
+        .chain(graphify_detect::DOC_EXTENSIONS)
+        .chain(graphify_detect::PAPER_EXTENSIONS)
+        .chain(graphify_detect::IMAGE_EXTENSIONS)
+        .copied()
+        .collect();
+    let actual: BTreeSet<&str> = WATCHED_EXTENSIONS.iter().copied().collect();
+    assert_eq!(actual, expected);
+    // Set semantics: the collection must carry no duplicates (a duplicate would
+    // mean two detect categories share an extension — itself a detect bug).
+    assert_eq!(
+        WATCHED_EXTENSIONS.len(),
+        expected.len(),
+        "duplicate extension"
+    );
+    // Extensions the old hand-maintained list dropped are now watched.
+    for ext in ["mts", "cts", "ets", "cu", "cuh", "tf", "cjs"] {
+        assert!(WATCHED_EXTENSIONS.contains(&ext), "missing code ext {ext}");
+    }
+    // `.skill` docs (#1901) are watched.
+    assert!(WATCHED_EXTENSIONS.contains(&"skill"));
+}
+
 // ---------------------------------------------------------------------------
 // check_update tests
 // ---------------------------------------------------------------------------

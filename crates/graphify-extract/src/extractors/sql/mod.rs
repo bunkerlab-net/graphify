@@ -58,6 +58,252 @@ static SQL_END_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:^|\n)(?:CREATE|SET\s+TERM|ALTER)\s").expect("static sql end regex")
 });
 
+#[allow(clippy::expect_used)] // literal pattern; build cannot panic
+static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // Schema-qualified names are kept whole — `[\w$]+(?:\.[\w$]+)*` accepts dotted
+    // paths but a component must follow each `.`, so a capture never ends in `.`.
+    // Best-effort recovery of CREATE FUNCTION/PROCEDURE objects from tree-sitter
+    // ERROR blobs (PL/pgSQL bodies), #1910. Anchored to line start (indentation
+    // only) like SQL_END_RE, which drops the common false-positive of a mid-line
+    // body statement (`PERFORM 'CREATE FUNCTION fake()'`). A dedicated lexical
+    // pass (`mask_sql_noise`, applied in `walk.rs` before this regex) blanks
+    // comments and string/dollar-quoted bodies, so a line-leading `CREATE` inside
+    // a block comment or a `$$…$$` body no longer matches. This goes beyond
+    // graphify-py `sql.py:204` (an unanchored `finditer` that matches mid-line
+    // body text); anchor + masking are a strict improvement over the reference.
+    //
+    // Quoted qualified names (`app."MixedName"`) are NOT recovered from an ERROR
+    // blob: the masker blanks double-quoted delimited identifiers (a multi-line
+    // one could otherwise embed a line-leading CREATE and false-positive), so the
+    // `"MixedName"` component is already spaces here. The trailing `.` left behind
+    // is not consumed (a component must follow it), so nothing past `app` is
+    // captured — no garbage `app.` name. Recovering the quoted identifier would
+    // need header-position-aware masking state, disproportionate for a heuristic
+    // that fires ONLY on malformed SQL; well-formed quoted DDL is parsed by
+    // tree-sitter and its name read from the AST (this path never runs).
+    // graphify-py `sql.py:204` recovers no quoted names either. (Disputes
+    // CodeRabbit's "recover quoted qualified routine declarations" finding.)
+    Regex::new(
+        r"(?im)^[ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([\w$]+(?:\.[\w$]+)*)",
+    )
+    .expect("static sql error-fn regex")
+});
+
+/// Blank SQL comments and string/dollar-quoted literals to spaces (newlines
+/// preserved) so [`SQL_ERROR_FN_RE`] cannot recover a line-leading `CREATE`
+/// that lives inside one. A single lexical pass tracks `--` line comments,
+/// nested `/* … */` block comments, `'…'` and `"…"` literals (honouring the
+/// doubled-quote escape), and `$tag$ … $tag$` dollar-quoted bodies. Newlines
+/// are kept in place and each blanked char is replaced by as many spaces as its
+/// UTF-8 byte length, so the result is byte-for-byte the same length as `text`
+/// and a surviving match's offsets/line number map back to the source.
+// A linear single-pass SQL lexer; the per-state arms belong together for
+// readability, so splitting them into fragments would obscure the flow.
+#[allow(clippy::too_many_lines)]
+pub(super) fn mask_sql_noise(text: &str) -> String {
+    enum St {
+        Normal,
+        Line,
+        Block(u32),
+        /// `true` when the opener was an `E'…'` escape string (backslash escapes).
+        Single(bool),
+        Double,
+        Dollar(Vec<char>),
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let mut out = chars.clone();
+    let blank = |out: &mut [char], k: usize| {
+        if out[k] != '\n' {
+            out[k] = ' ';
+        }
+    };
+    let mut st = St::Normal;
+    let mut i = 0;
+    while i < n {
+        match &st {
+            St::Normal => {
+                if chars[i] == '$'
+                    && let Some(open_end) = dollar_tag_end(&chars, i)
+                {
+                    let tag = chars[i..=open_end].to_vec();
+                    for k in i..=open_end {
+                        blank(&mut out, k);
+                    }
+                    st = St::Dollar(tag);
+                    i = open_end + 1;
+                } else if chars[i] == '-' && i + 1 < n && chars[i + 1] == '-' {
+                    st = St::Line;
+                    i += 1;
+                } else if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    st = St::Block(1);
+                    i += 2;
+                } else if chars[i] == '\'' {
+                    // A leading `E`/`e` at a token boundary marks a PostgreSQL
+                    // escape string, where `\` escapes the next char (incl. `\'`).
+                    let escapes = i > 0
+                        && matches!(chars[i - 1], 'E' | 'e')
+                        && (i < 2
+                            || !(chars[i - 2].is_ascii_alphanumeric() || chars[i - 2] == '_'));
+                    blank(&mut out, i);
+                    st = St::Single(escapes);
+                    i += 1;
+                } else if chars[i] == '"' {
+                    blank(&mut out, i);
+                    st = St::Double;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            St::Line => {
+                if chars[i] == '\n' {
+                    st = St::Normal;
+                } else {
+                    blank(&mut out, i);
+                }
+                i += 1;
+            }
+            St::Block(depth) => {
+                let depth = *depth;
+                if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    st = St::Block(depth + 1);
+                    i += 2;
+                } else if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    st = if depth <= 1 {
+                        St::Normal
+                    } else {
+                        St::Block(depth - 1)
+                    };
+                    i += 2;
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+            St::Single(escapes) => {
+                if *escapes && chars[i] == '\\' && i + 1 < n {
+                    // Escape string: `\x` is one escaped char (covers `\'`, `\\`).
+                    blank(&mut out, i);
+                    blank(&mut out, i + 1);
+                    i += 2;
+                } else if chars[i] == '\'' {
+                    blank(&mut out, i);
+                    if i + 1 < n && chars[i + 1] == '\'' {
+                        blank(&mut out, i + 1); // doubled quote: stay in the literal
+                        i += 2;
+                    } else {
+                        st = St::Normal;
+                        i += 1;
+                    }
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+            St::Double => {
+                // Double-quoted identifiers: no backslash escapes; `""` is a
+                // doubled-quote literal that stays inside.
+                if chars[i] == '"' {
+                    blank(&mut out, i);
+                    if i + 1 < n && chars[i + 1] == '"' {
+                        blank(&mut out, i + 1);
+                        i += 2;
+                    } else {
+                        st = St::Normal;
+                        i += 1;
+                    }
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+            St::Dollar(tag) => {
+                if chars[i] == '$' && i + tag.len() <= n && chars[i..i + tag.len()] == tag[..] {
+                    for k in i..i + tag.len() {
+                        blank(&mut out, k);
+                    }
+                    i += tag.len();
+                    st = St::Normal;
+                } else {
+                    blank(&mut out, i);
+                    i += 1;
+                }
+            }
+        }
+    }
+    // Rebuild the masked text: a kept char contributes its own bytes; a blanked
+    // char (`out[k]` now differs from the source) contributes as many spaces as
+    // its UTF-8 byte length, so the masked string is byte-for-byte the same
+    // length as the source and every match offset maps back to the original.
+    let mut masked = String::with_capacity(text.len());
+    for k in 0..n {
+        if out[k] == chars[k] {
+            masked.push(chars[k]);
+        } else {
+            for _ in 0..chars[k].len_utf8() {
+                masked.push(' ');
+            }
+        }
+    }
+    masked
+}
+
+/// If `chars[start] == '$'`, index of the closing `$` of the dollar tag
+/// (`$$` → `start + 1`; `$name$` → the trailing `$`), else `None`. A `$1`
+/// parameter, a lone `$`, or a `$` glued to a preceding identifier character
+/// is not a tag.
+fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
+    // A `$` immediately preceded by an identifier character is part of that
+    // identifier — PostgreSQL allows `$` inside identifiers, so `a$$` is the
+    // identifier `a$$`, not an empty dollar-quote opener.
+    if start > 0 && is_pg_ident_char(chars[start - 1]) {
+        return None;
+    }
+    // `$$` — empty tag.
+    let first = *chars.get(start + 1)?;
+    if first == '$' {
+        return Some(start + 1);
+    }
+    // `$name$` — a PostgreSQL dollar-quote tag follows the unquoted-identifier
+    // rules (minus `$`): an ident-start char, then ident-continuation chars.
+    // A digit-first run (`$1`) is a positional parameter, not a tag.
+    if !is_pg_ident_start(first) {
+        return None;
+    }
+    let mut j = start + 2;
+    while j < chars.len() && is_pg_ident_cont(chars[j]) {
+        j += 1;
+    }
+    (j < chars.len() && chars[j] == '$').then_some(j)
+}
+
+// PostgreSQL's lexer (scan.l) defines identifiers as `[A-Za-z\200-\377_]` then
+// `[A-Za-z\200-\377_0-9$]`: any non-ASCII byte counts, with no Unicode XID
+// validation, so combining marks and CJK letters are all accepted verbatim.
+
+/// A `PostgreSQL` identifier-start char: ASCII letter, `_`, or any non-ASCII char.
+fn is_pg_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
+}
+
+/// A `PostgreSQL` identifier-continuation char, excluding `$` (a dollar-quote
+/// tag cannot contain `$`): ASCII alphanumeric, `_`, or any non-ASCII char.
+fn is_pg_ident_cont(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii()
+}
+
+/// A `PostgreSQL` identifier char (any position): [`is_pg_ident_cont`] plus `$`.
+fn is_pg_ident_char(c: char) -> bool {
+    is_pg_ident_cont(c) || c == '$'
+}
+
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
 fn read_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
@@ -177,7 +423,7 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
                 }
             } else if matches!(
                 stmt.kind(),
-                "fb_proc_or_trigger" | "set_term" | "declare_external_function"
+                "fb_proc_or_trigger" | "set_term" | "declare_external_function" | "ERROR"
             ) {
                 walk_sql(&mut walk_ctx, stmt, source);
             }
