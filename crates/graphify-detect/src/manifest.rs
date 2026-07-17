@@ -278,13 +278,25 @@ pub fn save_manifest_to_path(
 /// A row is "in scan" if its key matches the corpus directly or after
 /// canonicalization (relative/symlink spellings). "In root" without a `root`
 /// fails open (keeps the row) so out-of-root corpora are never pruned.
+#[must_use]
 fn seed_surviving_rows(
     existing: &IndexMap<String, ManifestEntry>,
     root: Option<&Path>,
     scan_corpus: Option<&[String]>,
 ) -> IndexMap<String, ManifestEntry> {
-    let scan_set: Option<std::collections::HashSet<&str>> =
-        scan_corpus.map(|c| c.iter().map(String::as_str).collect());
+    // Include each corpus entry both as written AND canonicalized, so a symlink
+    // spelling or path alias in the manifest key still matches its live corpus
+    // entry (a raw-only set would prune the row as out-of-scan).
+    let scan_set: Option<std::collections::HashSet<String>> = scan_corpus.map(|c| {
+        c.iter()
+            .flat_map(|s| {
+                let canon = Path::new(s)
+                    .canonicalize()
+                    .map(|p| p.to_string_lossy().into_owned());
+                std::iter::once(s.clone()).chain(canon)
+            })
+            .collect()
+    });
     let root_res: Option<PathBuf> =
         root.map(|r| r.canonicalize().unwrap_or_else(|_| r.to_path_buf()));
     let in_scan = |f: &str| -> bool {
@@ -311,14 +323,17 @@ fn seed_surviving_rows(
 
     let mut manifest: IndexMap<String, ManifestEntry> = IndexMap::new();
     for (f, entry) in existing {
-        if !Path::new(f).try_exists().unwrap_or(false) {
-            // A file gone from disk is a genuine deletion and its row is dropped
-            // regardless of root — mirroring graphify-py `detect.py:1563`
-            // (`if not Path(f).exists(): continue`, unconditional). Only the
-            // excluded-but-alive prune below is root-gated (fail-open when root is
-            // None); preserving out-of-root MISSING rows would resurrect tracking
-            // for deleted files forever. (Disputes CodeRabbit's "prune missing
-            // only inside root" finding — it diverges from the reference.)
+        // Drop a row only when the path is CONFIRMED gone (`Ok(false)`); an
+        // `Err` (e.g. EACCES) means existence is undetermined, so keep the row
+        // rather than silently untracking a file we merely failed to stat.
+        // graphify-py `detect.py:1563` (`if not Path(f).exists(): continue`)
+        // swallows such errors as "missing" — retaining on error is a deliberate,
+        // safer divergence. Only the excluded-but-alive prune below is root-gated
+        // (fail-open when root is None); preserving out-of-root MISSING rows would
+        // resurrect tracking for deleted files forever. (Disputes CodeRabbit's
+        // "prune missing only inside root" finding — that diverges from the
+        // reference.)
+        if matches!(Path::new(f).try_exists(), Ok(false)) {
             continue;
         }
         if scan_set.is_some() && !in_scan(f) && in_root(f) {

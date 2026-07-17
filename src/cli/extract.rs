@@ -724,17 +724,27 @@ fn run_semantic_phase(
 // scopes cache writes per chunk file as each chunk lands. Rust performs a single
 // post-hoc `save_semantic_cache` gated by the U4 allowlist (`allowed`), which
 // yields the same observable contract — only files that actually returned nodes
-// are cached, so an omitted document is not stamped and is retried next run.
-// The `uncovered_files` reconciliation (in graphify-llm) surfaces those omissions.
-// A dispatched file that returns NO records (a `--force` re-extraction, or a
-// transient LLM miss) intentionally keeps its prior entry rather than being
-// tombstoned: on a content change the old entry sits under a now-stale hash key
-// and `prune_semantic_cache_safe` sweeps it on a later run, while on unchanged
-// content the earlier good result is worth more than an empty overwrite from a
-// flaky call. graphify-py does not tombstone dispatched-but-empty files either,
-// so preserving the entry is the reference behaviour. (Disputes CodeRabbit's
-// "remove/replace forced empty entries with tombstones" finding — tombstones
-// would add non-parity complexity and let LLM flakiness erase good cache.)
+// are cached. A NEVER-cached file that the model omits is therefore not stamped
+// and is retried on the next run (it stays a cache MISS); the `uncovered_files`
+// reconciliation (in graphify-llm) surfaces those omissions.
+//
+// A dispatched file with a PRIOR entry that returns no records this run (only
+// possible under `--force`, which bypasses the cache read) keeps that entry — it
+// is NOT evicted or tombstoned. This is safe and matches the reference:
+//   * The cache is content-hash-keyed, so a later hit means the file's current
+//     content equals the cached key — the entry can never be "stale" for that
+//     content. If the content changed, its hash changed too, so the old entry is
+//     an orphan under a dead key (swept by `prune_semantic_cache_safe`) and the
+//     new content is a MISS that re-extracts.
+//   * An empty forced result for unchanged content is almost always LLM flakiness;
+//     preserving the earlier good extraction beats erasing it on a transient miss.
+//   * graphify-py's `save_semantic_cache` (cache.py:707) iterates `by_file`, built
+//     ONLY from files that produced records, so it likewise never evicts a
+//     dispatched-but-empty file.
+// (Disputes CodeRabbit's "remove/tombstone forced empty entries" finding: eviction
+// would diverge from the reference AND let a flaky call wipe valid content-keyed
+// cache. A tombstone would still cache-HIT — serving empty — so it cannot deliver
+// the "retry next run" the finding wants anyway.)
 fn save_semantic_cache_safe(
     sem_result: &graphify_llm::LlmResponse,
     path: &std::path::Path,
