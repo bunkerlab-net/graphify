@@ -3281,6 +3281,31 @@ fn test_uninstall_preserves_coresident_attrs_on_merge_line() {
     );
 }
 
+/// Restores a `GRAPHIFY_OUT` override on drop so a panic mid-test cannot leak
+/// it into sibling serial tests sharing the process environment.
+struct GraphifyOutGuard {
+    prev: Option<String>,
+}
+
+impl GraphifyOutGuard {
+    fn set(value: &str) -> Self {
+        let prev = std::env::var("GRAPHIFY_OUT").ok();
+        // SAFETY: test-only env override; `#[serial]` serialises env access.
+        unsafe { std::env::set_var("GRAPHIFY_OUT", value) };
+        Self { prev }
+    }
+}
+
+impl Drop for GraphifyOutGuard {
+    fn drop(&mut self) {
+        // SAFETY: see `set` — serialised by `#[serial]`.
+        match &self.prev {
+            Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
+            None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
+        }
+    }
+}
+
 #[test]
 #[serial]
 fn test_uninstall_removes_custom_path_after_graphify_out_change() {
@@ -3290,9 +3315,9 @@ fn test_uninstall_removes_custom_path_after_graphify_out_change() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = make_git_repo(dir.path());
 
-    let prev = std::env::var("GRAPHIFY_OUT").ok();
-    // SAFETY: test-only env override; `#[serial]` serialises env access.
-    unsafe { std::env::set_var("GRAPHIFY_OUT", "custom-out") };
+    // Install under a custom GRAPHIFY_OUT; the guard restores the original on
+    // drop — even if an assertion below panics mid-test.
+    let _out_guard = GraphifyOutGuard::set("custom-out");
     install(&repo).expect("install with custom GRAPHIFY_OUT");
     let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read attrs");
     assert!(
@@ -3304,13 +3329,6 @@ fn test_uninstall_removes_custom_path_after_graphify_out_change() {
     // SAFETY: see above.
     unsafe { std::env::remove_var("GRAPHIFY_OUT") };
     uninstall(&repo).expect("uninstall under default GRAPHIFY_OUT");
-
-    // Restore the environment for sibling serial tests.
-    match prev {
-        // SAFETY: see above.
-        Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
-        None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
-    }
 
     let content = fs::read_to_string(repo.join(".gitattributes")).unwrap_or_default();
     assert!(

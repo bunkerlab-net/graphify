@@ -43,10 +43,16 @@ pub(crate) fn cmd_cache_check(
             "hyperedges": split.cached_hyperedges,
         });
         std::fs::write(&cached_path, serde_json::to_string(&cached_json)?)?;
-    } else if cached_path.exists() {
+    } else {
         // No cached results this run: clear a stale file from a prior deep-cache
         // hit so a standard-cache miss doesn't serve last run's cached nodes.
-        std::fs::remove_file(&cached_path)?;
+        // Unconditional remove avoids an exists()/remove race; only a missing
+        // file is benign — any other error propagates.
+        match std::fs::remove_file(&cached_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
     std::fs::write(
         out_dir.join(".graphify_uncached.txt"),

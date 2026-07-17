@@ -240,13 +240,18 @@ fn sql_error_node_recovery_ignores_ddl_inside_body() {
         "the real block-comment function header must be extracted: {labels:?}"
     );
     assert!(
+        labels.iter().any(|l| l.contains("uni_fn")),
+        "the real Unicode-tagged function header must be extracted: {labels:?}"
+    );
+    assert!(
         !labels.iter().any(|l| l.contains("body_leading_fake")
             || l.contains("quoted_fake")
             || l.contains("proc_fake")
             || l.contains("estr_fake")
-            || l.contains("block_fake")),
-        "DDL inside a dollar body, string literal, E-string escape, or block \
-         comment must not mint nodes: {labels:?}"
+            || l.contains("block_fake")
+            || l.contains("combining_fake")),
+        "DDL inside a dollar body (ASCII or Unicode-tagged), string literal, \
+         E-string escape, or block comment must not mint nodes: {labels:?}"
     );
 }
 

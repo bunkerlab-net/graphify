@@ -23,3 +23,13 @@ $$;
 CREATE FUNCTION estr_fn() RETURNS text LANGUAGE sql AS E'prefix \'
 CREATE FUNCTION estr_fake();
 suffix';
+
+-- A dollar-quote tag with a non-ASCII continuation char (`e` + U+0301 combining
+-- acute): PostgreSQL's lexer treats any non-ASCII byte as an identifier char, so
+-- this is a valid `$…$` body. Its line-leading CREATE must not surface as a
+-- top-level object (tree-sitter parses the body; the masker's dollar-tag lexer
+-- also recognises the Unicode tag, so a fallback recovery pass would blank it).
+CREATE FUNCTION uni_fn() RETURNS int LANGUAGE plpgsql AS $é$
+CREATE FUNCTION combining_fake();
+BEGIN RETURN 2; END;
+$é$;

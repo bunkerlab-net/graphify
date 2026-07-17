@@ -200,9 +200,10 @@ fn remove_json_files(dir: &Path, recursive: bool) -> Result<(), CacheError> {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        // `is_dir()` follows symlinks, so check the link itself first: a
+        // `DirEntry::file_type()` does not follow symlinks (and avoids the extra
+        // `symlink_metadata` syscall), so check the link itself first: a
         // symlinked subdir could redirect deletion outside the cache tree.
-        if is_symlink(&p) {
+        if entry.file_type().is_ok_and(|t| t.is_symlink()) {
             if p.is_dir() {
                 return Err(symlink_err(&p));
             }

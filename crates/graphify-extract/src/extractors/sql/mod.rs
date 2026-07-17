@@ -243,23 +243,51 @@ pub(super) fn mask_sql_noise(text: &str) -> String {
 
 /// If `chars[start] == '$'`, index of the closing `$` of the dollar tag
 /// (`$$` → `start + 1`; `$name$` → the trailing `$`), else `None`. A `$1`
-/// parameter or a lone `$` is not a tag.
+/// parameter, a lone `$`, or a `$` glued to a preceding identifier character
+/// is not a tag.
 fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
+    // A `$` immediately preceded by an identifier character is part of that
+    // identifier — PostgreSQL allows `$` inside identifiers, so `a$$` is the
+    // identifier `a$$`, not an empty dollar-quote opener.
+    if start > 0 && is_pg_ident_char(chars[start - 1]) {
+        return None;
+    }
     // `$$` — empty tag.
     let first = *chars.get(start + 1)?;
     if first == '$' {
         return Some(start + 1);
     }
-    // `$name$` — a PostgreSQL identifier tag: `[A-Za-z_][A-Za-z0-9_]*`. A
-    // digit-first run (`$1`) is a positional parameter, not a dollar quote.
-    if !(first.is_ascii_alphabetic() || first == '_') {
+    // `$name$` — a PostgreSQL dollar-quote tag follows the unquoted-identifier
+    // rules (minus `$`): an ident-start char, then ident-continuation chars.
+    // A digit-first run (`$1`) is a positional parameter, not a tag.
+    if !is_pg_ident_start(first) {
         return None;
     }
     let mut j = start + 2;
-    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+    while j < chars.len() && is_pg_ident_cont(chars[j]) {
         j += 1;
     }
     (j < chars.len() && chars[j] == '$').then_some(j)
+}
+
+// PostgreSQL's lexer (scan.l) defines identifiers as `[A-Za-z\200-\377_]` then
+// `[A-Za-z\200-\377_0-9$]`: any non-ASCII byte counts, with no Unicode XID
+// validation, so combining marks and CJK letters are all accepted verbatim.
+
+/// A `PostgreSQL` identifier-start char: ASCII letter, `_`, or any non-ASCII char.
+fn is_pg_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
+}
+
+/// A `PostgreSQL` identifier-continuation char, excluding `$` (a dollar-quote
+/// tag cannot contain `$`): ASCII alphanumeric, `_`, or any non-ASCII char.
+fn is_pg_ident_cont(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii()
+}
+
+/// A `PostgreSQL` identifier char (any position): [`is_pg_ident_cont`] plus `$`.
+fn is_pg_ident_char(c: char) -> bool {
+    is_pg_ident_cont(c) || c == '$'
 }
 
 /// Return the source bytes covered by `node` as a UTF-8 `&str`, or `""` on bad UTF-8.
