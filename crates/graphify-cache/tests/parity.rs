@@ -1405,6 +1405,35 @@ fn remove_semantic_cache_entries_evicts_only_named_files() {
     assert_eq!(ids(&deep.cached_nodes), ["da"]);
 }
 
+#[cfg(unix)]
+#[test]
+#[serial]
+fn remove_semantic_cache_entries_never_follows_symlinked_namespace() {
+    // #1894 hardening: eviction must not unlink THROUGH a symlinked `semantic/`
+    // namespace into an external tree — a JSON in the pointed-at dir survives.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("a.md");
+    write_text(&a, "# A\n\nBody A.\n");
+    // The hash an eviction WOULD target if it followed the link.
+    let h = file_hash(&a, tmp.path(), None).expect("hash");
+    let outside = tempfile::tempdir().expect("outside");
+    let external = outside.path().join(format!("{h}.json"));
+    write_text(&external, "{}");
+
+    let cache = tmp.path().join("graphify-out").join("cache");
+    std::fs::create_dir_all(&cache).expect("mkdir cache");
+    std::os::unix::fs::symlink(outside.path(), cache.join("semantic")).expect("symlink");
+
+    // The symlinked namespace is skipped, so nothing is removed and the external
+    // target is untouched.
+    assert_eq!(
+        remove_semantic_cache_entries(std::slice::from_ref(&a), tmp.path(), None),
+        0
+    );
+    assert!(external.exists(), "eviction followed a symlinked namespace");
+}
+
 #[test]
 #[serial]
 fn semantic_cache_deep_invisible_to_plain_reads_and_vice_versa() {

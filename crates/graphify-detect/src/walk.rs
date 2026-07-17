@@ -291,10 +291,19 @@ fn walk_dir_parallel(
         {
             // Record the pruned subtree (dir + trailing separator) so an
             // over-broad ignore is visible; one entry covers the whole subtree.
+            // Filesystem roots (`/`, `C:\`) already end in a separator — don't
+            // double it.
+            let shown = path.display().to_string();
+            let sep = std::path::MAIN_SEPARATOR;
+            let subtree = if shown.ends_with(sep) {
+                shown
+            } else {
+                format!("{shown}{sep}")
+            };
             ignored_c
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(format!("{}{}", path.display(), std::path::MAIN_SEPARATOR));
+                .push(subtree);
             return false;
         }
         true

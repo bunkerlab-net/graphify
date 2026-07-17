@@ -386,7 +386,16 @@ pub fn save_semantic_cache(
 #[must_use]
 pub fn remove_semantic_cache_entries(files: &[PathBuf], root: &Path, mode: Option<&str>) -> usize {
     let kind = semantic_kind(mode);
-    let dir = crate::paths::out_base(root).join("cache").join(&kind);
+    // Resolve the namespace dir ONLY from the symlink-verified set: a symlinked
+    // `cache/` or `cache/semantic*` is skipped by `semantic_cache_dirs`, so a
+    // missing/symlinked target yields no dir and we never unlink THROUGH a link
+    // into an external tree.
+    let Some(dir) = crate::paths::semantic_cache_dirs(root)
+        .into_iter()
+        .find(|d| d.file_name().and_then(|n| n.to_str()) == Some(kind.as_str()))
+    else {
+        return 0;
+    };
     let mut removed = 0;
     for f in files {
         let Ok(hash) = crate::hash::file_hash(f, root, None) else {

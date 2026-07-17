@@ -244,12 +244,15 @@ fn attach_validated_hyperedges(
         };
         let original = members.clone();
         let mut valid: Vec<Value> = Vec::with_capacity(original.len());
+        let mut seen = indexmap::IndexSet::new();
         for m in &original {
             let Some(s) = m.as_str() else {
                 continue; // non-string member: unresolvable
             };
             let resolved = crate::ingest::resolve_edge_id(s, &node_ids, &norm_to_id);
-            if node_ids.contains(&resolved) {
+            // Two distinct raw members can resolve to the same canonical id;
+            // keep only the first so a hyperedge never lists a node twice.
+            if node_ids.contains(&resolved) && seen.insert(resolved.clone()) {
                 valid.push(Value::String(resolved));
             }
         }
