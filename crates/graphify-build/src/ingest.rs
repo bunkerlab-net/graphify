@@ -126,6 +126,7 @@ pub(crate) fn add_nodes(graph: &mut Graph, extraction: &mut Value, root_str: Opt
 /// back to the normalised-ID lookup table when the raw string does not match
 /// any existing node verbatim. Shared by [`add_edges`] and the hyperedge-member
 /// validation in `build_from_json` so the two cannot drift (#1916).
+#[must_use]
 pub(crate) fn resolve_edge_id(
     raw: &str,
     node_ids: &IndexSet<String>,
@@ -416,6 +417,7 @@ fn edge_source_file(
 /// pre-migration legacy-id aliases (#1504). Shared by [`add_edges`] and the
 /// hyperedge-member validation so edge and hyperedge resolution can never drift
 /// (#1916).
+#[must_use]
 pub(crate) fn build_endpoint_index(
     graph: &Graph,
     ghost_remap: &IndexMap<String, String>,

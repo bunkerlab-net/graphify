@@ -809,7 +809,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractOutput {
         .filter(|p| {
             p.extension()
                 .and_then(|e| e.to_str())
-                .is_some_and(|e| PHP_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+                .is_some_and(|e| PHP_EXTENSIONS.iter().any(|p| p.eq_ignore_ascii_case(e)))
                 && !p
                     .file_name()
                     .and_then(|n| n.to_str())

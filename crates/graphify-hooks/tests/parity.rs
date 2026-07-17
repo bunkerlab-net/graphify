@@ -3281,6 +3281,58 @@ fn test_uninstall_preserves_coresident_attrs_on_merge_line() {
     );
 }
 
+#[test]
+#[serial]
+fn test_uninstall_removes_custom_path_after_graphify_out_change() {
+    // #1902 follow-up: install records the registered `.gitattributes` path in
+    // git config, so uninstall removes THAT line even when GRAPHIFY_OUT has since
+    // changed. graphify-py recomputes from the env and would strand the line.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+
+    let prev = std::env::var("GRAPHIFY_OUT").ok();
+    // SAFETY: test-only env override; `#[serial]` serialises env access.
+    unsafe { std::env::set_var("GRAPHIFY_OUT", "custom-out") };
+    install(&repo).expect("install with custom GRAPHIFY_OUT");
+    let attrs = fs::read_to_string(repo.join(".gitattributes")).expect("read attrs");
+    assert!(
+        attrs.contains("custom-out/graph.json merge=graphify"),
+        "install must register the custom path: {attrs}"
+    );
+
+    // Uninstall under the DEFAULT environment — the stored path must still resolve.
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("GRAPHIFY_OUT") };
+    uninstall(&repo).expect("uninstall under default GRAPHIFY_OUT");
+
+    // Restore the environment for sibling serial tests.
+    match prev {
+        // SAFETY: see above.
+        Some(v) => unsafe { std::env::set_var("GRAPHIFY_OUT", v) },
+        None => unsafe { std::env::remove_var("GRAPHIFY_OUT") },
+    }
+
+    let content = fs::read_to_string(repo.join(".gitattributes")).unwrap_or_default();
+    assert!(
+        !content.contains("merge=graphify"),
+        "custom-path merge line must be removed after GRAPHIFY_OUT changed: {content}"
+    );
+    let stored = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "config",
+            "--get",
+            "merge.graphify.attrpath",
+        ])
+        .output()
+        .expect("git config");
+    assert!(
+        !stored.status.success(),
+        "merge.graphify.attrpath must be unset after uninstall"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 #[serial]

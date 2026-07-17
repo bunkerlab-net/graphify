@@ -394,8 +394,9 @@ fn resolved_source_path(value: &Path, root_path: &Path) -> PathBuf {
 /// version-cleanup, so every content change or file deletion leaves a permanent
 /// orphan that accumulates unbounded (#1527).
 ///
-/// This sweeps `cache/semantic/*.json` AND `cache/semantic-deep/*.json` (the
-/// `--mode deep` namespace, #1894) and deletes any entry whose stem (the content
+/// This sweeps every `cache/semantic*/` namespace — `semantic/`, the `--mode
+/// deep` `semantic-deep/`, and any future `semantic-<mode>/` (#1894) — and
+/// deletes any entry whose stem (the content
 /// hash) is not in `live_hashes` — the hashes of the current live document set.
 /// Both namespaces are pruned against the SAME live set: liveness is
 /// content-based and mode-independent, so a hash live for one namespace is live
@@ -408,13 +409,10 @@ pub fn prune_semantic_cache<S: std::hash::BuildHasher>(
     root: &Path,
     live_hashes: &HashSet<String, S>,
 ) -> usize {
-    let cache_base = crate::paths::out_base(root).join("cache");
     let mut pruned = 0;
-    for kind in ["semantic", "semantic-deep"] {
-        let semantic_dir = cache_base.join(kind);
-        if !semantic_dir.is_dir() {
-            continue;
-        }
+    // Every semantic namespace, enumerated from disk so a new `--mode` is pruned
+    // without a hard-coded name (#1894).
+    for semantic_dir in crate::paths::semantic_cache_dirs(root) {
         let Ok(entries) = std::fs::read_dir(&semantic_dir) else {
             continue;
         };

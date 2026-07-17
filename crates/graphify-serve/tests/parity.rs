@@ -490,10 +490,10 @@ fn test_pick_seeds_german_query_seeds_content_node_not_heading_noise() {
     // happen to contain 'die'/'wie'/'wird'.
     let mut g = Graph::new(GraphKind::DiGraph);
     let mk = |label: &str, src: &str| {
-        let mut a: indexmap::IndexMap<String, serde_json::Value> = indexmap::IndexMap::new();
-        a.insert("label".to_string(), json!(label));
-        a.insert("source_file".to_string(), json!(src));
-        a
+        indexmap::IndexMap::<String, serde_json::Value>::from([
+            ("label".to_string(), json!(label)),
+            ("source_file".to_string(), json!(src)),
+        ])
     };
     g.add_node("cfg", mk("Die Konfiguration", "docs/konfiguration.md"));
     g.add_node("sec", mk("Wie wird gesichert", "docs/sicherheit.md"));

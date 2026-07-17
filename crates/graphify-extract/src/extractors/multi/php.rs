@@ -37,10 +37,12 @@ struct PhpFacts {
     ns: String,
     /// Lowercased alias/simple-name → fully-qualified name from `use` clauses.
     uses: HashMap<String, String>,
-    /// `(relation, lowercased-bare-name)` → the raw (possibly qualified)
-    /// reference text, or `None` when two different raws share the bare name
-    /// (e.g. `implements A\I, B\I` — never guess).
-    raws: HashMap<(String, String), Option<String>>,
+    /// `(owning-class-lower, relation, lowercased-bare-name)` → the raw
+    /// (possibly qualified) reference text, or `None` when two different raws
+    /// share that key (e.g. `implements A\I, B\I` on one class — never guess).
+    /// Class-scoping keeps `A extends X\Page` and `B extends Y\Page` in one file
+    /// separately resolvable (#1923).
+    raws: HashMap<(String, String, String), Option<String>>,
 }
 
 /// Resolve a raw (possibly qualified) PHP class reference to a fully-qualified
@@ -83,18 +85,21 @@ fn node_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 struct FactsBuilder {
     namespaces: Vec<String>,
     uses: HashMap<String, String>,
-    raws: HashMap<(String, String), Option<String>>,
+    raws: HashMap<(String, String, String), Option<String>>,
 }
 
 impl FactsBuilder {
-    /// Record a raw supertype reference under `(relation, bare-lower)`, marking
-    /// the key ambiguous (`None`) when a different raw already claimed it.
-    fn record_raw(&mut self, relation: &str, raw: &str) {
+    /// Record a raw supertype reference under `(class-lower, relation, bare-lower)`,
+    /// marking the key ambiguous (`None`) when a different raw already claimed it.
+    /// Scoping by the owning class keeps two classes in one file that reference
+    /// distinct FQNs sharing a bare name (`X\Page`, `Y\Page`) separately
+    /// resolvable (#1923).
+    fn record_raw(&mut self, class: &str, relation: &str, raw: &str) {
         let bare = raw.rsplit('\\').next().unwrap_or(raw).trim().to_lowercase();
         if bare.is_empty() {
             return;
         }
-        let key = (relation.to_string(), bare);
+        let key = (class.to_lowercase(), relation.to_string(), bare);
         match self.raws.get(&key) {
             Some(Some(existing)) if existing != raw => {
                 self.raws.insert(key, None);
@@ -183,6 +188,14 @@ fn walk_php_facts(node: tree_sitter::Node<'_>, source: &[u8], b: &mut FactsBuild
             return; // do not recurse into the use declaration
         }
         "class_declaration" => {
+            // The class's own simple name scopes its raw supertype refs, so two
+            // classes in one file (`A extends X\Page`, `B extends Y\Page`) keep
+            // separate qualified raws instead of colliding on the bare `page`
+            // key and being marked ambiguous (#1923).
+            let class_name = node
+                .child_by_field_name("name")
+                .map(|c| node_text(c, source).to_string())
+                .unwrap_or_default();
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 match child.kind() {
@@ -190,7 +203,7 @@ fn walk_php_facts(node: tree_sitter::Node<'_>, source: &[u8], b: &mut FactsBuild
                         let mut sc = child.walk();
                         for sub in child.children(&mut sc) {
                             if matches!(sub.kind(), "name" | "qualified_name") {
-                                b.record_raw("inherits", node_text(sub, source));
+                                b.record_raw(&class_name, "inherits", node_text(sub, source));
                             }
                         }
                     }
@@ -198,7 +211,7 @@ fn walk_php_facts(node: tree_sitter::Node<'_>, source: &[u8], b: &mut FactsBuild
                         let mut sc = child.walk();
                         for sub in child.children(&mut sc) {
                             if matches!(sub.kind(), "name" | "qualified_name") {
-                                b.record_raw("implements", node_text(sub, source));
+                                b.record_raw(&class_name, "implements", node_text(sub, source));
                             }
                         }
                     }
@@ -211,7 +224,7 @@ fn walk_php_facts(node: tree_sitter::Node<'_>, source: &[u8], b: &mut FactsBuild
                             let mut uc = member.walk();
                             for sub in member.children(&mut uc) {
                                 if matches!(sub.kind(), "name" | "qualified_name") {
-                                    b.record_raw("mixes_in", node_text(sub, source));
+                                    b.record_raw(&class_name, "mixes_in", node_text(sub, source));
                                 }
                             }
                         }
@@ -315,6 +328,11 @@ pub(super) fn resolve_php_type_references(
         return;
     }
     let fqn_to_id = build_fqn_index(all_nodes, &facts);
+    // id → owning class's lowercased simple name, to look up class-scoped raws.
+    let id_to_class_lower: HashMap<String, String> = all_nodes
+        .iter()
+        .map(|n| (n.id.clone(), n.label.to_lowercase()))
+        .collect();
 
     let mut node_ids: HashSet<String> = all_nodes.iter().map(|n| n.id.clone()).collect();
     // Bare sourceless stubs: id → label.
@@ -341,8 +359,12 @@ pub(super) fn resolve_php_type_references(
         let bare = label.trim().to_lowercase();
 
         let raw: Option<String> = if PHP_SUPERTYPE_RELATIONS.contains(&edge.relation.as_str()) {
+            let src_class = id_to_class_lower
+                .get(&edge.source)
+                .cloned()
+                .unwrap_or_default();
             f.raws
-                .get(&(edge.relation.clone(), bare.clone()))
+                .get(&(src_class, edge.relation.clone(), bare.clone()))
                 .and_then(Clone::clone)
         } else {
             None

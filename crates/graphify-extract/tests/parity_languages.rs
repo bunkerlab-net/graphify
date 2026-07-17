@@ -21,6 +21,16 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// Copy a committed SQL fixture into a fresh tempdir and return it alongside the
+/// `TempDir` guard (held for the test's lifetime). Isolates each filesystem test
+/// per AGENTS.md, so nothing reads the shared `tests/fixtures/` tree in place.
+fn sql_fixture(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dst = tmp.path().join(name);
+    std::fs::copy(fixtures().join(name), &dst).expect("copy sql fixture");
+    (tmp, dst)
+}
+
 fn assert_no_dangling_edges(result: &graphify_extract::FileResult) {
     let ids: std::collections::HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
     for edge in &result.edges {
@@ -103,7 +113,8 @@ fn lazarus_package_extractor_produces_nodes() {
 
 #[test]
 fn sql_extractor_produces_nodes() {
-    let result = extract_sql(&fixtures().join("sample.sql"));
+    let (_tmp, sql) = sql_fixture("sample.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no sql nodes");
     assert_no_dangling_edges(&result);
@@ -111,14 +122,16 @@ fn sql_extractor_produces_nodes() {
 
 #[test]
 fn sql_alter_fk_extractor() {
-    let result = extract_sql(&fixtures().join("sample_alter_fk.sql"));
+    let (_tmp, sql) = sql_fixture("sample_alter_fk.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(!result.nodes.is_empty(), "no nodes for alter fk sql");
 }
 
 #[test]
 fn sql_schema_qualified_extractor() {
-    let result = extract_sql(&fixtures().join("sample_schema_qualified.sql"));
+    let (_tmp, sql) = sql_fixture("sample_schema_qualified.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(
         !result.nodes.is_empty(),
@@ -131,7 +144,8 @@ fn sql_complex_fixture_extracts_many_objects() {
     // Exercises CREATE TABLE+constraints, CREATE VIEW, CREATE MATERIALIZED VIEW,
     // CREATE FUNCTION, CREATE PROCEDURE, CREATE TRIGGER, CREATE INDEX,
     // ALTER TABLE ADD CONSTRAINT, CREATE SEQUENCE, JOIN references, etc.
-    let result = extract_sql(&fixtures().join("sample_complex.sql"));
+    let (_tmp, sql) = sql_fixture("sample_complex.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     // Many objects → many nodes.
     assert!(
@@ -148,7 +162,8 @@ fn sql_complex_fixture_extracts_many_objects() {
 fn sql_plpgsql_functions_survive_parse_errors() {
     // PL/pgSQL bodies make the SQL grammar emit ERROR nodes; the functions must
     // still be extracted (#1910), without cascading into later statements.
-    let result = extract_sql(&fixtures().join("sample_plpgsql.sql"));
+    let (_tmp, sql) = sql_fixture("sample_plpgsql.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
     // Both PL/pgSQL functions extracted, schema-qualified name kept whole.
@@ -190,7 +205,8 @@ fn sql_plpgsql_functions_survive_parse_errors() {
 fn sql_plpgsql_clean_function_not_double_emitted() {
     // A cleanly-parsed LANGUAGE sql function in the same file is emitted once,
     // and no node id is duplicated.
-    let result = extract_sql(&fixtures().join("sample_plpgsql.sql"));
+    let (_tmp, sql) = sql_fixture("sample_plpgsql.sql");
+    let result = extract_sql(&sql);
     let plain_count = result
         .nodes
         .iter()
@@ -207,7 +223,8 @@ fn sql_error_node_recovery_ignores_ddl_inside_body() {
     // whether mid-line (string literals) OR line-leading — must NOT mint a
     // spurious object. The recovery masks comments and string/dollar-quoted
     // bodies before scanning, so only the real top-level CREATE survives.
-    let result = extract_sql(&fixtures().join("sample_body_ddl.sql"));
+    let (_tmp, sql) = sql_fixture("sample_body_ddl.sql");
+    let result = extract_sql(&sql);
     assert!(result.error.is_none(), "{:?}", result.error);
     let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
     assert!(
@@ -219,11 +236,17 @@ fn sql_error_node_recovery_ignores_ddl_inside_body() {
         "the real E-string function header must be extracted: {labels:?}"
     );
     assert!(
+        labels.iter().any(|l| l.contains("blk_fn")),
+        "the real block-comment function header must be extracted: {labels:?}"
+    );
+    assert!(
         !labels.iter().any(|l| l.contains("body_leading_fake")
             || l.contains("quoted_fake")
             || l.contains("proc_fake")
-            || l.contains("estr_fake")),
-        "DDL inside a dollar body, string literal, or E-string escape must not mint nodes: {labels:?}"
+            || l.contains("estr_fake")
+            || l.contains("block_fake")),
+        "DDL inside a dollar body, string literal, E-string escape, or block \
+         comment must not mint nodes: {labels:?}"
     );
 }
 

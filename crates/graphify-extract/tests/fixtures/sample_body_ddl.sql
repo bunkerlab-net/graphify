@@ -10,6 +10,14 @@ CREATE FUNCTION body_leading_fake();
 END;
 $$;
 
+-- A block comment (in the errored definition, before the `$$` body) whose body
+-- has a line-leading CREATE: block-comment masking must blank it, not recover it.
+CREATE FUNCTION blk_fn() RETURNS int LANGUAGE plpgsql AS /*
+CREATE FUNCTION block_fake();
+*/ $$
+BEGIN RETURN 1; END;
+$$;
+
 -- An `E'…'` escape string: the `\'` is an escaped quote, NOT a close, so the
 -- line-leading CREATE inside the string must stay masked.
 CREATE FUNCTION estr_fn() RETURNS text LANGUAGE sql AS E'prefix \'

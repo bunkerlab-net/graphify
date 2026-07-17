@@ -689,18 +689,20 @@ fn run_semantic_phase(
         );
     }
 
+    // Prune orphaned semantic cache entries against the FULL live document set
+    // (sem_paths), NOT the incremental cache-miss subset, which would delete every
+    // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
+    // unversioned, so it is never swept by the AST version-cleanup: every content
+    // change or file deletion leaves a permanent orphan otherwise (#1527). Prune
+    // runs BEFORE the save so a stale excluded-file entry can't survive to protect
+    // edges this run deletes (mirrors graphify-py's order).
+    prune_semantic_cache_safe(cache_root, &sem_paths);
     // Scope cache writes to the dispatched (uncached) files: the model may mint
     // semantic nodes mentioning other corpus files, but must not overwrite a
     // file's cache entry unless that file was sent for extraction (#1757).
     // Rust has no per-chunk checkpoint (this single post-hoc save covers the
     // same contract as Python's `_checkpoint_chunk` scoping, cfc7cf2 included).
     save_semantic_cache_safe(&sem_result, cache_root, &uncached_files, sem_cache_mode);
-    // Prune orphaned semantic cache entries against the FULL live document set
-    // (sem_paths), NOT the incremental cache-miss subset, which would delete every
-    // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
-    // unversioned, so it is never swept by the AST version-cleanup: every content
-    // change or file deletion leaves a permanent orphan otherwise (#1527).
-    prune_semantic_cache_safe(cache_root, &sem_paths);
     merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);
     let extraction_json = serde_json::json!({
         "nodes": sem_result.nodes,
@@ -1007,12 +1009,22 @@ fn persist_manifest(
     root: &std::path::Path,
 ) {
     let manifest_path = out_dir.join("manifest.json");
+    // Pass the COMPLETE detected corpus (absolute) as the scan set so a row for an
+    // in-root file that is now excluded-but-alive is pruned instead of surviving
+    // and being misreported as a deletion on later incremental runs (#1908).
+    // detect_files keys are root-relative; re-anchor to absolute so they match the
+    // manifest's re-anchored keys.
+    let scan_corpus: Vec<String> = detect_files
+        .values()
+        .flatten()
+        .map(|f| root.join(f).to_string_lossy().into_owned())
+        .collect();
     if let Err(e) = graphify_detect::save_manifest_to_path_with_root(
         detect_files,
         &manifest_path,
         "both",
         Some(root),
-        None,
+        Some(&scan_corpus),
     ) {
         eprintln!("      warning: could not write manifest: {e}");
     }

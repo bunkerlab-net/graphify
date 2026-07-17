@@ -42,6 +42,41 @@ pub(crate) fn stat_index_file(root: &Path) -> PathBuf {
     out_base(root).join("cache").join("stat-index.json")
 }
 
+/// Every existing semantic-cache namespace directory under `cache/`: the base
+/// `semantic/` plus each mode-namespaced `semantic-<mode>/` (`--mode deep` →
+/// `semantic-deep`; a future `--mode custom` → `semantic-custom`). Enumerated
+/// from disk and sorted so a new mode is listed/swept without a hard-coded name
+/// (#1894). Only REAL directories are returned (symlinks are skipped, never
+/// followed — a symlinked `semantic-*` could otherwise redirect prune/list into
+/// an external tree); a missing `cache/` yields an empty vec.
+#[must_use]
+pub(crate) fn semantic_cache_dirs(root: &Path) -> Vec<PathBuf> {
+    let cache = out_base(root).join("cache");
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    // `symlink_metadata` does not follow links, so a symlinked `semantic` is not
+    // treated as a real directory.
+    let base = cache.join("semantic");
+    if fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
+        dirs.push(base);
+    }
+    if let Ok(entries) = fs::read_dir(&cache) {
+        for entry in entries.flatten() {
+            // `DirEntry::file_type` reports the link itself (no follow), so a
+            // symlinked `semantic-*` reads as a symlink, not a dir, and is skipped.
+            if entry.file_type().is_ok_and(|t| t.is_dir())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with("semantic-"))
+            {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs.sort();
+    dirs
+}
+
 /// Return the cache directory for `kind`, creating it if it does not exist.
 ///
 /// AST entries live under a per-version subdirectory

@@ -17,6 +17,12 @@ use std::process::Command;
 /// interpreter path.
 const DRIVER: &str = "graphify merge-driver %O %A %B";
 
+/// Git config key recording the `.gitattributes` path graphify actually
+/// registered. `status`/`uninstall` read it so they locate the installed line
+/// even when the current `GRAPHIFY_OUT` differs from install time — closing a
+/// gap graphify-py leaves open (it always recomputes from the environment).
+const ATTR_PATH_KEY: &str = "merge.graphify.attrpath";
+
 /// The repo-relative `graph.json` path graphify assigns the merge driver to,
 /// e.g. `graphify-out/graph.json`. The graph lives under the configured output
 /// dir (`GRAPHIFY_OUT`); gitattributes patterns are repo-relative, so a value
@@ -53,40 +59,43 @@ fn merge_attr_line() -> String {
     format!("{} merge=graphify", merge_attr_path())
 }
 
-/// True when graphify's merge driver is the EFFECTIVE `merge` setting for its
-/// exact `graph.json` path. Only the whole first field is matched against
-/// [`merge_attr_path`] (not a loose `graph.json` suffix), and — because git
-/// resolves attributes last-match-wins — the LAST `merge`-related token across
-/// matching lines decides: a later `merge=other`, `-merge`, or `!merge` means
-/// graphify's driver is NOT active, so `install` must re-append and `status`
-/// must report it missing. DIVERGENCE from graphify-py `_has_merge_attr`
-/// (`hooks.py:520`): its `endswith("graph.json")` + `"merge=graphify" in fields`
-/// both false-positives on unrelated paths AND misreports "registered" when a
-/// later token overrides graphify's (AGENTS.md: fix reference bugs).
+/// True when git resolves `merge=graphify` as the EFFECTIVE merge attribute for
+/// graphify's exact `graph.json` path (`expected_path`). Delegates to
+/// `git check-attr` so git's own last-match-wins precedence — across the repo
+/// `.gitattributes`, `$GIT_DIR/info/attributes`, and the global/system files —
+/// decides: a later `merge=other`, `-merge`, or `!merge` yields a
+/// non-`graphify` value and reads as NOT registered, so `install` re-appends
+/// and `status` reports it missing. Only an exact value of `graphify` counts;
+/// `unspecified` (no rule), `unset`, or a foreign driver name all return false.
+/// DIVERGENCE from graphify-py `_has_merge_attr` (`hooks.py:520`), whose
+/// `endswith("graph.json")` + membership test both false-positives on unrelated
+/// paths AND misreports "registered" when a later token overrides graphify's
+/// (AGENTS.md: fix reference bugs).
 #[must_use]
-fn has_merge_attr(content: &str) -> bool {
-    let expected = merge_attr_path();
-    // `Some(true)` = the last merge token for the path is `merge=graphify`;
-    // `Some(false)` = a different/unset merge token overrode it; `None` = none.
-    let mut effective: Option<bool> = None;
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut fields = line.split_whitespace();
-        if fields.next() != Some(expected.as_str()) {
-            continue;
-        }
-        for f in fields {
-            if f == "merge=graphify" {
-                effective = Some(true);
-            } else if f == "-merge" || f == "!merge" || f.starts_with("merge=") {
-                effective = Some(false);
-            }
-        }
+fn has_merge_attr(root: &Path, expected_path: &str) -> bool {
+    // `check-attr -z` emits NUL-separated `<path>\0<attr>\0<value>\0` records;
+    // for a single-attr query the value is the third field.
+    let Ok(out) = git_check_attr_merge(root, expected_path) else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
     }
-    effective == Some(true)
+    out.stdout
+        .split(|&b| b == 0)
+        .nth(2)
+        .is_some_and(|v| v == b"graphify")
+}
+
+/// Run `git -C <root> check-attr -z merge -- <path>`. The path need not exist on
+/// disk; git evaluates it against the attribute files.
+fn git_check_attr_merge(root: &Path, path: &str) -> std::io::Result<std::process::Output> {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["check-attr", "-z", "merge", "--"])
+        .arg(path)
+        .output()
 }
 
 /// Outcome of classifying a `.gitattributes` line for uninstall.
@@ -138,6 +147,18 @@ fn git_config(root: &Path, args: &[&str]) -> std::io::Result<std::process::Outpu
         .output()
 }
 
+/// The `.gitattributes` path recorded at install time (git config
+/// [`ATTR_PATH_KEY`]), falling back to the env-derived [`merge_attr_path`] when
+/// none was stored (fresh clone, or a registration predating this key).
+fn effective_attr_path(root: &Path) -> String {
+    git_config(root, &["--get", ATTR_PATH_KEY])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(merge_attr_path)
+}
+
 /// True when `.gitattributes` is a symlink; following it could read or write a
 /// file outside the repo.
 fn attrs_is_symlink(attrs: &Path) -> bool {
@@ -187,7 +208,7 @@ pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksE
         ("merge.graphify.name", "graphify graph.json union merge"),
         ("merge.graphify.driver", DRIVER),
     ] {
-        match git_config(root, &[key, value]) {
+        match git_config(root, &["--replace-all", key, value]) {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 return Ok(format!(
@@ -198,11 +219,15 @@ pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksE
             Err(e) => return Ok(format!("not registered (git config failed: {e})")),
         }
     }
+    // Record the path we just registered so uninstall/status find this exact
+    // `.gitattributes` line even if GRAPHIFY_OUT changes later (best-effort: a
+    // failure just falls back to the env-derived path).
+    let _ = git_config(root, &["--replace-all", ATTR_PATH_KEY, &merge_attr_path()]);
 
     let line = merge_attr_line();
     if attrs.exists() {
         let content = std::fs::read_to_string(&attrs)?;
-        if has_merge_attr(&content) {
+        if has_merge_attr(root, &merge_attr_path()) {
             return Ok(format!("already registered ({line})"));
         }
         // Never clobber other entries; preserve a trailing newline.
@@ -239,7 +264,7 @@ pub fn unregister_merge_driver(root: &Path) -> Result<String, crate::error::Hook
     // still cleaned.
     let msg = if attrs.exists() {
         let content = std::fs::read_to_string(&attrs)?;
-        let expected = merge_attr_path();
+        let expected = effective_attr_path(root);
         let mut changed = false;
         let mut kept: Vec<String> = Vec::with_capacity(content.lines().count());
         for raw in content.lines() {
@@ -264,12 +289,17 @@ pub fn unregister_merge_driver(root: &Path) -> Result<String, crate::error::Hook
     } else {
         "not registered - nothing to remove.".to_string()
     };
-    for key in ["merge.graphify.name", "merge.graphify.driver"] {
-        // Best-effort, matching graphify-py `hooks.py:571-579`: `--unset` runs
-        // WITHOUT `check=True` and catches only `OSError`, so every outcome
-        // (missing key, launch failure, any nonzero exit) is ignored.
-        // (Disputes CodeRabbit's "propagate non-missing-key --unset" finding.)
-        let _ = git_config(root, &["--unset", key]);
+    for key in [
+        "merge.graphify.name",
+        "merge.graphify.driver",
+        ATTR_PATH_KEY,
+    ] {
+        // `--unset-all` removes EVERY matching value (so duplicate installs are
+        // fully cleaned), and is best-effort like graphify-py `hooks.py:571-579`:
+        // no `check=True`, so every outcome (missing key, launch failure, any
+        // nonzero exit) is ignored. (Disputes CodeRabbit's "propagate
+        // non-missing-key --unset" finding.)
+        let _ = git_config(root, &["--unset-all", key]);
     }
     Ok(msg)
 }
@@ -285,9 +315,8 @@ pub fn merge_driver_status(root: &Path) -> String {
     let cfg_ok = git_config(root, &["--get", "merge.graphify.driver"])
         .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == DRIVER);
     let attrs = root.join(".gitattributes");
-    let attr_ok = attrs.exists()
-        && !attrs_is_symlink(&attrs)
-        && std::fs::read_to_string(&attrs).is_ok_and(|c| has_merge_attr(&c));
+    let expected = effective_attr_path(root);
+    let attr_ok = attrs.exists() && !attrs_is_symlink(&attrs) && has_merge_attr(root, &expected);
     match (cfg_ok, attr_ok) {
         (true, true) => "registered".to_string(),
         (true, false) => {

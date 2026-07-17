@@ -1459,6 +1459,98 @@ fn cached_files_includes_deep_namespace() {
 
 #[test]
 #[serial]
+fn semantic_namespaces_cover_arbitrary_mode() {
+    // #1894: a future `--mode custom` writes `cache/semantic-custom/`. Namespace
+    // enumeration must list, prune, and clear it without a hard-coded name — the
+    // old code only knew `semantic` + `semantic-deep`.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = tmp.path().join("doc.md");
+    write_text(&f, "# Doc\n");
+    save_semantic_cache(
+        &[json!({"id": "c", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions {
+            mode: Some("custom"),
+            ..Default::default()
+        },
+    )
+    .expect("save custom");
+    let base = tmp.path().join("graphify-out").join("cache");
+    let custom_dir = base.join("semantic-custom");
+    let h = file_hash(&f, tmp.path(), None).expect("hash");
+    assert!(
+        custom_dir.join(format!("{h}.json")).exists(),
+        "custom-mode entry written to semantic-custom/"
+    );
+    // cached_files enumerates the custom namespace.
+    assert!(
+        cached_files(tmp.path()).contains(&h),
+        "cached_files must include the custom namespace"
+    );
+    // prune_semantic_cache sweeps it against an empty live set.
+    let empty: HashSet<String> = HashSet::new();
+    assert_eq!(
+        prune_semantic_cache(tmp.path(), &empty),
+        1,
+        "custom-namespace orphan must be pruned"
+    );
+    assert!(!custom_dir.join(format!("{h}.json")).exists());
+    // clear_cache sweeps a freshly-saved custom entry too.
+    save_semantic_cache(
+        &[json!({"id": "c", "source_file": "doc.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions {
+            mode: Some("custom"),
+            ..Default::default()
+        },
+    )
+    .expect("re-save custom");
+    clear_cache(tmp.path()).expect("clear");
+    let remaining = fs::read_dir(&custom_dir).map_or(0, |rd| {
+        rd.flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count()
+    });
+    assert_eq!(remaining, 0, "clear_cache must sweep semantic-custom");
+}
+
+#[cfg(unix)]
+#[test]
+#[serial]
+fn prune_and_clear_never_follow_symlinked_namespace() {
+    // A symlinked `semantic-*` under `cache/` must never be followed: prune must
+    // not read_dir it (and delete JSON in the external target), and clear must
+    // reject rather than traverse it. A JSON in the pointed-at tree survives.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let external = outside.path().join("external.json");
+    write_text(&external, "{}");
+    let cache = tmp.path().join("graphify-out").join("cache");
+    std::fs::create_dir_all(&cache).expect("mkdir cache");
+    std::os::unix::fs::symlink(outside.path(), cache.join("semantic-evil")).expect("symlink");
+
+    let empty: HashSet<String> = HashSet::new();
+    assert_eq!(
+        prune_semantic_cache(tmp.path(), &empty),
+        0,
+        "prune must not follow a symlinked namespace"
+    );
+    // clear rejects the symlinked dir under cache/ (Err) rather than traversing it.
+    let _ = clear_cache(tmp.path());
+    assert!(
+        external.exists(),
+        "JSON in the symlink target must survive prune/clear"
+    );
+}
+
+#[test]
+#[serial]
 fn semantic_prune_sweeps_both_namespaces_against_same_live_set() {
     _reset_stat_index_for_tests();
     let tmp = tempfile::tempdir().expect("tempdir");

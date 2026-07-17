@@ -449,6 +449,11 @@ pub fn to_obsidian(
     // pre-existing file NOT in the manifest is the user's and is left untouched.
     let manifest_path = output_dir.join(".graphify_obsidian_manifest.json");
     let owned = read_owned_manifest(&manifest_path);
+    // Ownership comparisons are case-folded so a case-only rename on a
+    // case-insensitive filesystem (macOS/APFS, Windows/NTFS) does not treat the
+    // current note as a foreign file or a stale orphan (#1453). Original paths
+    // are preserved for writing, the manifest, and deletion.
+    let owned_keys: HashSet<String> = owned.iter().map(|p| p.to_lowercase()).collect();
 
     // #1453: case-fold filename dedup so labels differing only by case still get
     // distinct files on case-insensitive filesystems (macOS/APFS, Windows/NTFS).
@@ -558,13 +563,27 @@ pub fn to_obsidian(
     let mut skipped: Vec<String> = Vec::new();
     let mut node_notes_written = 0usize;
     for (rel, content) in &node_notes {
-        if owned_write(output_dir, rel, content, &owned, &mut written, &mut skipped)? {
+        if owned_write(
+            output_dir,
+            rel,
+            content,
+            &owned_keys,
+            &mut written,
+            &mut skipped,
+        )? {
             node_notes_written += 1;
         }
     }
     let mut community_notes_written = 0usize;
     for (rel, content) in &community_notes {
-        if owned_write(output_dir, rel, content, &owned, &mut written, &mut skipped)? {
+        if owned_write(
+            output_dir,
+            rel,
+            content,
+            &owned_keys,
+            &mut written,
+            &mut skipped,
+        )? {
             community_notes_written += 1;
         }
     }
@@ -572,7 +591,7 @@ pub fn to_obsidian(
         output_dir,
         ".obsidian/graph.json",
         &graph_json,
-        &owned,
+        &owned_keys,
         &mut written,
         &mut skipped,
     )?;
@@ -582,11 +601,14 @@ pub fn to_obsidian(
     // this run is excluded — so a user's own note is never touched (foreign files
     // land in `skipped`, never `owned`). Each rel path is kept inside the vault in
     // case a corrupt/hostile manifest holds `..`/absolute entries.
-    let written_set: HashSet<&str> = written.iter().map(String::as_str).collect();
-    let skipped_set: HashSet<&str> = skipped.iter().map(String::as_str).collect();
+    let written_set: HashSet<String> = written.iter().map(|p| p.to_lowercase()).collect();
+    let skipped_set: HashSet<String> = skipped.iter().map(|p| p.to_lowercase()).collect();
     let mut stale: Vec<&String> = owned
         .iter()
-        .filter(|f| !written_set.contains(f.as_str()) && !skipped_set.contains(f.as_str()))
+        .filter(|f| {
+            let key = f.to_lowercase();
+            !written_set.contains(&key) && !skipped_set.contains(&key)
+        })
         .collect();
     stale.sort();
     let mut pruned = 0usize;
@@ -706,12 +728,14 @@ fn owned_write(
     output_dir: &Path,
     rel: &str,
     content: &str,
-    owned: &HashSet<String>,
+    owned_keys: &HashSet<String>,
     written: &mut Vec<String>,
     skipped: &mut Vec<String>,
 ) -> Result<bool, ExportError> {
     let target = output_dir.join(rel);
-    if (target.exists() && !owned.contains(rel)) || writes_through_symlink(output_dir, rel) {
+    if (target.exists() && !owned_keys.contains(&rel.to_lowercase()))
+        || writes_through_symlink(output_dir, rel)
+    {
         skipped.push(rel.to_string());
         return Ok(false);
     }

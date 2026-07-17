@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::error::CacheError;
 use crate::hash::file_hash;
-use crate::paths::{EXTRACTOR_VERSION, cache_dir_versioned, out_base};
+use crate::paths::{EXTRACTOR_VERSION, cache_dir_versioned, out_base, semantic_cache_dirs};
 
 /// Return the cached extraction result for `path` if its hash matches.
 ///
@@ -129,7 +129,7 @@ pub fn save_cached_versioned(
 
 /// Return the set of file hashes that have at least one cache entry
 /// (legacy flat layout + `ast/` recursively, covering per-version subdirs,
-/// + `semantic/` + `semantic-deep/`).
+/// + every `semantic*` namespace).
 #[must_use]
 pub fn cached_files(root: &Path) -> BTreeSet<String> {
     let mut hashes = BTreeSet::new();
@@ -137,11 +137,13 @@ pub fn cached_files(root: &Path) -> BTreeSet<String> {
 
     // Legacy flat entries directly under cache/.
     collect_json_stems(&base, false, &mut hashes);
-    // AST entries recurse into per-version subdirs; semantic stays flat.
-    // `semantic-deep/` holds `--mode deep` entries (#1894).
+    // AST entries recurse into per-version subdirs.
     collect_json_stems(&base.join("ast"), true, &mut hashes);
-    collect_json_stems(&base.join("semantic"), false, &mut hashes);
-    collect_json_stems(&base.join("semantic-deep"), false, &mut hashes);
+    // Every semantic namespace (`semantic/`, `semantic-deep/`, and any future
+    // `semantic-<mode>/`), enumerated from disk (#1894).
+    for dir in semantic_cache_dirs(root) {
+        collect_json_stems(&dir, false, &mut hashes);
+    }
     hashes
 }
 
@@ -168,7 +170,7 @@ fn collect_json_stems(dir: &Path, recursive: bool, out: &mut BTreeSet<String>) {
 /// Delete every cache entry under `<root>/graphify-out/cache/`.
 ///
 /// Includes the legacy flat layout, the `ast/` tree (recursively, covering
-/// per-version subdirectories), `semantic/`, and `semantic-deep/`.
+/// per-version subdirectories), and every `semantic*` namespace.
 ///
 /// # Errors
 ///
@@ -177,8 +179,9 @@ pub fn clear_cache(root: &Path) -> Result<(), CacheError> {
     let base = out_base(root).join("cache");
     remove_json_files(&base, false)?;
     remove_json_files(&base.join("ast"), true)?;
-    remove_json_files(&base.join("semantic"), false)?;
-    remove_json_files(&base.join("semantic-deep"), false)?;
+    for dir in semantic_cache_dirs(root) {
+        remove_json_files(&dir, false)?;
+    }
     Ok(())
 }
 
@@ -186,11 +189,26 @@ pub fn clear_cache(root: &Path) -> Result<(), CacheError> {
 /// `recursive` is set. Directories themselves are left in place (mirrors
 /// Python's `glob(...).unlink()`).
 fn remove_json_files(dir: &Path, recursive: bool) -> Result<(), CacheError> {
+    // Refuse to traverse a symlinked cache directory: following it could delete
+    // files outside the cache tree. A check-then-use guard (the workspace's
+    // `path_guard` model), consistent with the Obsidian/hook symlink guards.
+    if is_symlink(dir) {
+        return Err(symlink_err(dir));
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return Ok(());
     };
     for entry in entries.flatten() {
         let p = entry.path();
+        // `is_dir()` follows symlinks, so check the link itself first: a
+        // symlinked subdir could redirect deletion outside the cache tree.
+        if is_symlink(&p) {
+            if p.is_dir() {
+                return Err(symlink_err(&p));
+            }
+            // A symlinked file: skip it — never follow the link to its target.
+            continue;
+        }
         if p.is_dir() {
             if recursive {
                 remove_json_files(&p, true)?;
@@ -200,6 +218,22 @@ fn remove_json_files(dir: &Path, recursive: bool) -> Result<(), CacheError> {
         }
     }
     Ok(())
+}
+
+/// True when `p` is a symlink (does not follow it).
+fn is_symlink(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// A [`CacheError`] refusing to traverse a symlinked cache directory.
+fn symlink_err(p: &Path) -> CacheError {
+    CacheError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "{} is a symlink; refusing to traverse the cache through it",
+            p.display()
+        ),
+    ))
 }
 
 /// `true` if `value` is an object with a truthy `nodes`, `edges`, or

@@ -294,8 +294,7 @@ fn seed_surviving_rows(
                 s.contains(f)
                     || Path::new(f)
                         .canonicalize()
-                        .ok()
-                        .is_some_and(|c| s.contains(c.to_string_lossy().as_ref()))
+                        .is_ok_and(|c| s.contains(c.to_string_lossy().as_ref()))
             }
         }
     };
@@ -340,8 +339,10 @@ fn seed_surviving_rows(
 /// (absolute paths). A seeded row for an in-root file that is still alive on
 /// disk but no longer part of the scan (newly excluded via
 /// `.graphifyignore`/`.gitignore`/`--exclude`) is dropped instead of surviving
-/// forever and masquerading as a deletion in `detect_incremental`. Out-of-root
-/// rows are never pruned. Subset callers (changed-paths hooks, #917) pass
+/// forever and masquerading as a deletion in `detect_incremental`. Only rows
+/// still alive on disk are root-scoped: an out-of-root row MISSING from disk is
+/// dropped like any deletion (the loop below is unconditional), while a live
+/// out-of-root row is preserved. Subset callers (changed-paths hooks, #917) pass
 /// `None` so their untouched rows are preserved.
 ///
 /// # Errors

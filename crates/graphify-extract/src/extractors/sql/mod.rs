@@ -65,11 +65,12 @@ static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
     // from tree-sitter ERROR blobs (PL/pgSQL bodies), #1910. Anchored to line
     // start (indentation only) like SQL_END_RE, which drops the common
     // false-positive of a mid-line body statement (`PERFORM 'CREATE FUNCTION
-    // fake()'`). It is a HEURISTIC, not a parser: a line-leading `CREATE` inside
-    // a block comment or a dollar-quoted body can still match. Full comment/
-    // string masking is beyond this fallback's scope (and beyond graphify-py
-    // `sql.py:204`, an unanchored `finditer` that also matches mid-line body
-    // text); the anchor is a strict improvement over the reference.
+    // fake()'`). A dedicated lexical pass (`mask_sql_noise`, applied in `walk.rs`
+    // before this regex) blanks comments and string/dollar-quoted bodies, so a
+    // line-leading `CREATE` inside a block comment or a `$$…$$` body no longer
+    // matches. This goes beyond graphify-py `sql.py:204` (an unanchored
+    // `finditer` that matches mid-line body text); anchor + masking are a strict
+    // improvement over the reference.
     Regex::new(r"(?im)^[ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([\w$.]+)")
         .expect("static sql error-fn regex")
 });
@@ -79,7 +80,9 @@ static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// that lives inside one. A single lexical pass tracks `--` line comments,
 /// nested `/* … */` block comments, `'…'` and `"…"` literals (honouring the
 /// doubled-quote escape), and `$tag$ … $tag$` dollar-quoted bodies. Newlines
-/// are kept in place, so a surviving match's line number is unchanged.
+/// are kept in place and each blanked char is replaced by as many spaces as its
+/// UTF-8 byte length, so the result is byte-for-byte the same length as `text`
+/// and a surviving match's offsets/line number map back to the source.
 // A linear single-pass SQL lexer; the per-state arms belong together for
 // readability, so splitting them into fragments would obscure the flow.
 #[allow(clippy::too_many_lines)]
@@ -221,7 +224,21 @@ pub(super) fn mask_sql_noise(text: &str) -> String {
             }
         }
     }
-    out.into_iter().collect()
+    // Rebuild the masked text: a kept char contributes its own bytes; a blanked
+    // char (`out[k]` now differs from the source) contributes as many spaces as
+    // its UTF-8 byte length, so the masked string is byte-for-byte the same
+    // length as the source and every match offset maps back to the original.
+    let mut masked = String::with_capacity(text.len());
+    for k in 0..n {
+        if out[k] == chars[k] {
+            masked.push(chars[k]);
+        } else {
+            for _ in 0..chars[k].len_utf8() {
+                masked.push(' ');
+            }
+        }
+    }
+    masked
 }
 
 /// If `chars[start] == '$'`, index of the closing `$` of the dollar tag

@@ -936,7 +936,7 @@ fn mts_cts_route_to_typescript_grammar() {
 }
 
 #[test]
-fn cjs_routes_through_dispatch_like_js() {
+fn cjs_routes_through_dispatch_like_js() -> Result<(), Box<dyn std::error::Error>> {
     // .cjs (explicit CommonJS) must route through the extractor dispatch to the
     // JS grammar exactly like .js — same node set modulo the file node's label.
     // Regression lock for the `.cjs` gap in CODE_EXTENSIONS / dispatch (#1922).
@@ -945,19 +945,20 @@ fn cjs_routes_through_dispatch_like_js() {
          class WindowManager {\n  open() { return new BrowserWindow(); }\n}\n\
          function createWindow() {\n  const manager = new WindowManager();\n  return manager.open();\n}\n\
          module.exports = { createWindow };\n";
-    let non_file_labels = |ext: &str| -> std::collections::HashSet<String> {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let f = tmp.path().join(format!("main.{ext}"));
-        fs::write(&f, CJS_SRC).expect("test invariant");
-        let result = extract(&[f], Some(tmp.path()));
-        result
-            .nodes
-            .iter()
-            .filter_map(|n| lookup_str(n, "label"))
-            .filter(|l| !l.ends_with(&format!(".{ext}")))
-            .collect()
-    };
-    let cjs = non_file_labels("cjs");
+    let non_file_labels =
+        |ext: &str| -> Result<std::collections::HashSet<String>, Box<dyn std::error::Error>> {
+            let tmp = tempfile::tempdir()?;
+            let f = tmp.path().join(format!("main.{ext}"));
+            fs::write(&f, CJS_SRC)?;
+            let result = extract(&[f], Some(tmp.path()));
+            Ok(result
+                .nodes
+                .iter()
+                .filter_map(|n| lookup_str(n, "label"))
+                .filter(|l| !l.ends_with(&format!(".{ext}")))
+                .collect())
+        };
+    let cjs = non_file_labels("cjs")?;
     assert!(
         cjs.iter().any(|l| l.contains("WindowManager")),
         ".cjs class declaration missing — not parsed as JS: {cjs:?}"
@@ -968,9 +969,10 @@ fn cjs_routes_through_dispatch_like_js() {
     );
     assert_eq!(
         cjs,
-        non_file_labels("js"),
+        non_file_labels("js")?,
         ".cjs must extract identically to .js"
     );
+    Ok(())
 }
 
 #[test]
@@ -1019,19 +1021,20 @@ fn js_module_path_resolves_mts_cts_direct_and_index() {
 }
 
 #[test]
-fn js_module_path_resolves_cjs_direct() {
+fn js_module_path_resolves_cjs_direct() -> Result<(), Box<dyn std::error::Error>> {
     // `.cjs` was added to `_JS_RESOLVE_EXTS` (#1922): a bare import must resolve
     // to a sibling `.cjs` file directly. (Unlike `.mts`/`.cts`, `.cjs` is NOT in
     // the directory-barrel index set — upstream left `_JS_INDEX_FILES` unchanged.)
     use graphify_extract::tsconfig::resolve_js_module_path;
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("preload.cjs"), "module.exports = {};\n").expect("write");
+    let tmp = tempfile::tempdir()?;
+    fs::write(tmp.path().join("preload.cjs"), "module.exports = {};\n")?;
     let resolved = resolve_js_module_path(&tmp.path().join("preload"));
     assert_eq!(
         resolved,
         tmp.path().join("preload.cjs"),
         "direct .cjs resolution"
     );
+    Ok(())
 }
 
 #[test]

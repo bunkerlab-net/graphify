@@ -32,6 +32,7 @@ pub(crate) fn cmd_cache_check(
     let out_dir = root.join(graphify_out_dir());
     std::fs::create_dir_all(&out_dir)?;
 
+    let cached_path = out_dir.join(".graphify_cached.json");
     if !split.cached_nodes.is_empty()
         || !split.cached_edges.is_empty()
         || !split.cached_hyperedges.is_empty()
@@ -41,10 +42,11 @@ pub(crate) fn cmd_cache_check(
             "edges": split.cached_edges,
             "hyperedges": split.cached_hyperedges,
         });
-        std::fs::write(
-            out_dir.join(".graphify_cached.json"),
-            serde_json::to_string(&cached_json)?,
-        )?;
+        std::fs::write(&cached_path, serde_json::to_string(&cached_json)?)?;
+    } else if cached_path.exists() {
+        // No cached results this run: clear a stale file from a prior deep-cache
+        // hit so a standard-cache miss doesn't serve last run's cached nodes.
+        std::fs::remove_file(&cached_path)?;
     }
     std::fs::write(
         out_dir.join(".graphify_uncached.txt"),
