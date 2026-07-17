@@ -52,6 +52,12 @@ pub(crate) fn stat_index_file(root: &Path) -> PathBuf {
 #[must_use]
 pub(crate) fn semantic_cache_dirs(root: &Path) -> Vec<PathBuf> {
     let cache = out_base(root).join("cache");
+    // Only descend a REAL `cache/` directory: a missing, non-dir, or symlinked
+    // `cache/` yields nothing — a symlinked cache could otherwise redirect the
+    // read_dir below (and any prune/clear) into an external tree.
+    if !fs::symlink_metadata(&cache).is_ok_and(|m| m.is_dir()) {
+        return Vec::new();
+    }
     let mut dirs: Vec<PathBuf> = Vec::new();
     // `symlink_metadata` does not follow links, so a symlinked `semantic` is not
     // treated as a real directory.

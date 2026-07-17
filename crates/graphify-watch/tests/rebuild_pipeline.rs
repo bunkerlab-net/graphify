@@ -1818,11 +1818,17 @@ fn incremental_preserves_semantic_doc(changed: &[PathBuf]) {
         relations.contains(&("guide_doc".into(), "auth_flow".into(), "explains".into())),
         "semantic doc edge dropped by incremental rebuild"
     );
+    let app_id = after["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .find(|n| n.get("source_file").and_then(serde_json::Value::as_str) == Some("app.py"))
+        .and_then(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .expect("app.py code node")
+        .to_string();
     assert!(
-        relations
-            .iter()
-            .any(|(s, _, r)| s == "auth_flow" && r == "implemented_by"),
-        "doc-to-code semantic edge dropped by incremental rebuild"
+        relations.contains(&("auth_flow".into(), app_id, "implemented_by".into())),
+        "doc-to-code semantic edge dropped or retargeted by incremental rebuild"
     );
     for id in AST_GUIDE_IDS {
         assert!(
@@ -1908,6 +1914,16 @@ fn rebuild_code_polluted_graph_self_heals_on_full_rebuild() {
     assert!(
         ids.contains("guide_doc") && ids.contains("auth_flow"),
         "semantic nodes preserved"
+    );
+    let healed = read_graph(&graph_path);
+    let has_semantic_edge = healed["links"].as_array().expect("links").iter().any(|e| {
+        e.get("source").and_then(serde_json::Value::as_str) == Some("guide_doc")
+            && e.get("target").and_then(serde_json::Value::as_str) == Some("auth_flow")
+            && e.get("relation").and_then(serde_json::Value::as_str) == Some("explains")
+    });
+    assert!(
+        has_semantic_edge,
+        "seeded guide_doc→auth_flow `explains` edge must survive the self-heal rebuild"
     );
     for id in AST_GUIDE_IDS {
         assert!(

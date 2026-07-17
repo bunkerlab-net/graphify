@@ -1281,6 +1281,7 @@ fn flush_continues_past_a_failing_root() {
 
 // ── #1894: mode-namespaced semantic cache + #1916 dangling-ref pruning ────────
 
+#[must_use]
 fn ids(nodes: &[Value]) -> Vec<String> {
     nodes
         .iter()
@@ -1288,6 +1289,7 @@ fn ids(nodes: &[Value]) -> Vec<String> {
         .collect()
 }
 
+#[must_use]
 fn deep_opts<'a>() -> SemanticCacheOptions<'a> {
     SemanticCacheOptions {
         mode: Some("deep"),
@@ -1541,8 +1543,12 @@ fn prune_and_clear_never_follow_symlinked_namespace() {
         0,
         "prune must not follow a symlinked namespace"
     );
-    // clear rejects the symlinked dir under cache/ (Err) rather than traversing it.
-    let _ = clear_cache(tmp.path());
+    // clear must reject (Err) the symlinked dir under cache/ rather than
+    // traversing it — it hits the symlink entry before deleting anything real.
+    assert!(
+        clear_cache(tmp.path()).is_err(),
+        "clear must reject a symlinked namespace, not traverse it"
+    );
     assert!(
         external.exists(),
         "JSON in the symlink target must survive prune/clear"

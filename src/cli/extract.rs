@@ -726,6 +726,15 @@ fn run_semantic_phase(
 // yields the same observable contract — only files that actually returned nodes
 // are cached, so an omitted document is not stamped and is retried next run.
 // The `uncovered_files` reconciliation (in graphify-llm) surfaces those omissions.
+// A dispatched file that returns NO records (a `--force` re-extraction, or a
+// transient LLM miss) intentionally keeps its prior entry rather than being
+// tombstoned: on a content change the old entry sits under a now-stale hash key
+// and `prune_semantic_cache_safe` sweeps it on a later run, while on unchanged
+// content the earlier good result is worth more than an empty overwrite from a
+// flaky call. graphify-py does not tombstone dispatched-but-empty files either,
+// so preserving the entry is the reference behaviour. (Disputes CodeRabbit's
+// "remove/replace forced empty entries with tombstones" finding — tombstones
+// would add non-parity complexity and let LLM flakiness erase good cache.)
 fn save_semantic_cache_safe(
     sem_result: &graphify_llm::LlmResponse,
     path: &std::path::Path,
@@ -1009,15 +1018,20 @@ fn persist_manifest(
     root: &std::path::Path,
 ) {
     let manifest_path = out_dir.join("manifest.json");
-    // Pass the COMPLETE detected corpus (absolute) as the scan set so a row for an
-    // in-root file that is now excluded-but-alive is pruned instead of surviving
-    // and being misreported as a deletion on later incremental runs (#1908).
-    // detect_files keys are root-relative; re-anchor to absolute so they match the
-    // manifest's re-anchored keys.
+    // Pass the COMPLETE detected corpus as the scan set so a row for an in-root
+    // file that is now excluded-but-alive is pruned instead of surviving and being
+    // misreported as a deletion on later incremental runs (#1908). detect_files
+    // keys are root-relative; re-anchor against an ABSOLUTE root so every
+    // scan-corpus path satisfies save_manifest_to_path_with_root's documented
+    // absolute-path contract and matches the manifest's canonicalized keys — a
+    // relative CLI root (`graphify extract .`) would otherwise feed a relative
+    // corpus that `seed_surviving_rows` can't match. (Benign today, since the
+    // hash pass re-inserts still-live rows regardless, but the contract must hold.)
+    let root_abs = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let scan_corpus: Vec<String> = detect_files
         .values()
         .flatten()
-        .map(|f| root.join(f).to_string_lossy().into_owned())
+        .map(|f| root_abs.join(f).to_string_lossy().into_owned())
         .collect();
     if let Err(e) = graphify_detect::save_manifest_to_path_with_root(
         detect_files,
