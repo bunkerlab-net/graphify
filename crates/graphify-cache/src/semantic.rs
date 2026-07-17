@@ -370,6 +370,35 @@ pub fn save_semantic_cache(
     Ok(saved)
 }
 
+/// Remove the semantic cache entry in the `mode` namespace for each path in
+/// `files`, best-effort; returns the count actually removed.
+///
+/// The entry key is `file_hash(path)` (content + path, canonicalised the same
+/// way [`check_semantic_cache`]/[`save_semantic_cache`] do), so passing a
+/// dispatched file path targets exactly the entry those two would read/write.
+///
+/// Used by `--force`: the semantic cache is keyed by file content + namespace
+/// only — never by backend/model/prompt — so a forced re-extraction is the one
+/// path that refreshes semantics after those inputs change. A file the new model
+/// now returns nothing for would otherwise keep serving its stale pre-change
+/// entry forever; evicting it makes the next run re-extract. A missing entry (or
+/// a hash failure, e.g. the file vanished) is a no-op.
+#[must_use]
+pub fn remove_semantic_cache_entries(files: &[PathBuf], root: &Path, mode: Option<&str>) -> usize {
+    let kind = semantic_kind(mode);
+    let dir = crate::paths::out_base(root).join("cache").join(&kind);
+    let mut removed = 0;
+    for f in files {
+        let Ok(hash) = crate::hash::file_hash(f, root, None) else {
+            continue;
+        };
+        if std::fs::remove_file(dir.join(format!("{hash}.json"))).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Resolve a `source_file` value to an absolute, canonical path for scope
 /// comparison: absolute values pass through, relative ones anchor at
 /// `root_path`; canonicalisation falls back to a lexical absolute path for

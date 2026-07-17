@@ -9,7 +9,8 @@ use graphify_cache::{
     _reset_stat_index_for_tests, SemanticCacheOptions, StatIndexFlushGuard, body_content,
     cache_dir, cache_dir_versioned, cached_files, cached_word_count, check_semantic_cache,
     clear_cache, file_hash, flush_stat_index, load_cached, load_cached_versioned,
-    prune_semantic_cache, save_cached, save_cached_versioned, save_semantic_cache,
+    prune_semantic_cache, remove_semantic_cache_entries, save_cached, save_cached_versioned,
+    save_semantic_cache,
 };
 use serde_json::{Value, json};
 use serial_test::serial;
@@ -1330,6 +1331,78 @@ fn semantic_cache_deep_mode_roundtrip_under_deep_namespace() {
     );
     assert_eq!(ids(&split.cached_nodes), ["deep_n"]);
     assert!(split.uncached_files.is_empty());
+}
+
+#[test]
+#[serial]
+fn remove_semantic_cache_entries_evicts_only_named_files() {
+    // A forced re-extraction that returns no records for a dispatched file must
+    // evict that file's PRIOR entry so the next run MISSES (re-extracts) instead
+    // of serving a stale (e.g. pre-model-change) result — while a sibling entry
+    // and other namespaces stay intact.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("a.md");
+    write_text(&a, "# A\n\nBody A.\n");
+    let b = tmp.path().join("b.md");
+    write_text(&b, "# B\n\nBody B.\n");
+
+    // Warm the standard namespace for both, plus a deep entry for `a`.
+    save_semantic_cache(
+        &[json!({"id": "na", "source_file": "a.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save a");
+    save_semantic_cache(
+        &[json!({"id": "nb", "source_file": "b.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("save b");
+    save_semantic_cache(
+        &[json!({"id": "da", "source_file": "a.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        deep_opts(),
+    )
+    .expect("save deep a");
+
+    // Evict only `a` from the standard namespace.
+    assert_eq!(
+        remove_semantic_cache_entries(std::slice::from_ref(&a), tmp.path(), None),
+        1
+    );
+    // A second call is a no-op (entry already gone).
+    assert_eq!(
+        remove_semantic_cache_entries(std::slice::from_ref(&a), tmp.path(), None),
+        0
+    );
+
+    // `a` now MISSES in the standard namespace; `b` still hits.
+    let split = check_semantic_cache(
+        &[
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ],
+        tmp.path(),
+        None,
+    );
+    assert_eq!(split.uncached_files, [a.to_string_lossy().into_owned()]);
+    assert_eq!(ids(&split.cached_nodes), ["nb"]);
+
+    // The deep-namespace entry for `a` is untouched (mode-scoped eviction).
+    let deep = check_semantic_cache(
+        &[a.to_string_lossy().into_owned()],
+        tmp.path(),
+        Some("deep"),
+    );
+    assert_eq!(ids(&deep.cached_nodes), ["da"]);
 }
 
 #[test]

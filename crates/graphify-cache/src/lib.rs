@@ -32,7 +32,7 @@ pub use hash::{body_content, cached_word_count, file_hash};
 pub use paths::{EXTRACTOR_VERSION, cache_dir, cache_dir_versioned};
 pub use semantic::{
     SemanticCacheOptions, SemanticCacheSplit, check_semantic_cache, prune_semantic_cache,
-    save_semantic_cache, semantic_kind,
+    remove_semantic_cache_entries, save_semantic_cache, semantic_kind,
 };
 pub use stat_index::{_reset_stat_index_for_tests, StatIndexFlushGuard, flush_stat_index};
 pub use store::{

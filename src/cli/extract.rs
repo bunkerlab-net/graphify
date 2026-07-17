@@ -689,20 +689,15 @@ fn run_semantic_phase(
         );
     }
 
-    // Prune orphaned semantic cache entries against the FULL live document set
-    // (sem_paths), NOT the incremental cache-miss subset, which would delete every
-    // unchanged doc's valid entry. The semantic cache is content-hash-keyed and
-    // unversioned, so it is never swept by the AST version-cleanup: every content
-    // change or file deletion leaves a permanent orphan otherwise (#1527). Prune
-    // runs BEFORE the save so a stale excluded-file entry can't survive to protect
-    // edges this run deletes (mirrors graphify-py's order).
-    prune_semantic_cache_safe(cache_root, &sem_paths);
-    // Scope cache writes to the dispatched (uncached) files: the model may mint
-    // semantic nodes mentioning other corpus files, but must not overwrite a
-    // file's cache entry unless that file was sent for extraction (#1757).
-    // Rust has no per-chunk checkpoint (this single post-hoc save covers the
-    // same contract as Python's `_checkpoint_chunk` scoping, cfc7cf2 included).
-    save_semantic_cache_safe(&sem_result, cache_root, &uncached_files, sem_cache_mode);
+    persist_semantic_cache(
+        &sem_result,
+        &sem_paths,
+        &uncached_files,
+        source_root,
+        cache_root,
+        sem_cache_mode,
+        cfg.force && failed == 0,
+    );
     merge_semantic_with_cache_and_ast(&mut sem_result, cache_split, extraction);
     let extraction_json = serde_json::json!({
         "nodes": sem_result.nodes,
@@ -716,6 +711,97 @@ fn run_semantic_phase(
     })
 }
 
+/// Persist this run's semantic cache in graphify-py's order: prune orphans, save
+/// the fresh results, then (on a clean `--force` pass) evict forced-empty entries.
+fn persist_semantic_cache(
+    sem_result: &graphify_llm::LlmResponse,
+    sem_paths: &[String],
+    uncached_files: &[std::path::PathBuf],
+    source_root: &std::path::Path,
+    cache_root: &std::path::Path,
+    mode: Option<&str>,
+    force_clean: bool,
+) {
+    // Prune orphaned entries against the FULL live document set (`sem_paths`), NOT
+    // the incremental cache-miss subset, which would delete every unchanged doc's
+    // valid entry. The semantic cache is content-hash-keyed and unversioned, so it
+    // is never swept by the AST version-cleanup: every content change or file
+    // deletion leaves a permanent orphan otherwise (#1527). Prune runs BEFORE the
+    // save so a stale excluded-file entry can't survive to protect edges this run
+    // deletes (mirrors graphify-py's order).
+    prune_semantic_cache_safe(cache_root, sem_paths);
+    // Scope writes to the dispatched (uncached) files: the model may mint nodes
+    // mentioning other corpus files, but must not overwrite a file's entry unless
+    // it was sent for extraction (#1757). One post-hoc save covers Python's
+    // per-chunk `_checkpoint_chunk` scoping (cfc7cf2 included).
+    save_semantic_cache_safe(sem_result, cache_root, uncached_files, mode);
+    evict_forced_empty_entries(
+        sem_result,
+        uncached_files,
+        force_clean,
+        source_root,
+        cache_root,
+        mode,
+    );
+}
+
+/// On a fully-successful `--force` pass, drop the semantic cache entry of every
+/// dispatched file that produced no records this run.
+///
+/// `--force` is the only path that re-dispatches unchanged content, and the
+/// semantic cache is keyed by content + namespace but NOT by backend/model/
+/// prompt — so after a model/config change a file the new model now returns
+/// nothing for would keep serving its stale pre-change entry. `run` is
+/// `force && failed == 0`: a zero-failure pass makes an empty result a real "no
+/// records" verdict, not a flaky/partial failure that must not wipe good cache.
+/// A file is "covered" when it appears as a `source_file` in the fresh result;
+/// every other dispatched file is evicted so the next run re-extracts.
+fn evict_forced_empty_entries(
+    sem_result: &graphify_llm::LlmResponse,
+    dispatched: &[std::path::PathBuf],
+    run: bool,
+    source_root: &std::path::Path,
+    cache_root: &std::path::Path,
+    mode: Option<&str>,
+) {
+    if !run {
+        return;
+    }
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let mut covered: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    for bucket in [&sem_result.nodes, &sem_result.edges, &sem_result.hyperedges] {
+        for item in bucket {
+            if let Some(src) = item
+                .get("source_file")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                let p = std::path::Path::new(src);
+                let abs = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    source_root.join(p)
+                };
+                covered.insert(canon(&abs));
+            }
+        }
+    }
+    let stale: Vec<std::path::PathBuf> = dispatched
+        .iter()
+        .filter(|p| !covered.contains(&canon(p)))
+        .cloned()
+        .collect();
+    let evicted = graphify_cache::remove_semantic_cache_entries(&stale, cache_root, mode);
+    if evicted > 0 {
+        eprintln!(
+            "      semantic cache: evicted {evicted} stale --force entr{} \
+             (re-extraction returned no records)",
+            if evicted == 1 { "y" } else { "ies" }
+        );
+    }
+}
+
 /// Best-effort persistence of fresh semantic results into the cache. Warns on
 /// I/O failure instead of bubbling the error up. `allowed` scopes cache writes
 /// to the dispatched files so an out-of-scope `source_file` can't replace
@@ -724,27 +810,19 @@ fn run_semantic_phase(
 // scopes cache writes per chunk file as each chunk lands. Rust performs a single
 // post-hoc `save_semantic_cache` gated by the U4 allowlist (`allowed`), which
 // yields the same observable contract — only files that actually returned nodes
-// are cached. A NEVER-cached file that the model omits is therefore not stamped
-// and is retried on the next run (it stays a cache MISS); the `uncovered_files`
-// reconciliation (in graphify-llm) surfaces those omissions.
+// are cached. A never-cached file the model omits is therefore not stamped and is
+// retried next run (stays a cache MISS); `uncovered_files` (in graphify-llm)
+// surfaces those omissions.
 //
-// A dispatched file with a PRIOR entry that returns no records this run (only
-// possible under `--force`, which bypasses the cache read) keeps that entry — it
-// is NOT evicted or tombstoned. This is safe and matches the reference:
-//   * The cache is content-hash-keyed, so a later hit means the file's current
-//     content equals the cached key — the entry can never be "stale" for that
-//     content. If the content changed, its hash changed too, so the old entry is
-//     an orphan under a dead key (swept by `prune_semantic_cache_safe`) and the
-//     new content is a MISS that re-extracts.
-//   * An empty forced result for unchanged content is almost always LLM flakiness;
-//     preserving the earlier good extraction beats erasing it on a transient miss.
-//   * graphify-py's `save_semantic_cache` (cache.py:707) iterates `by_file`, built
-//     ONLY from files that produced records, so it likewise never evicts a
-//     dispatched-but-empty file.
-// (Disputes CodeRabbit's "remove/tombstone forced empty entries" finding: eviction
-// would diverge from the reference AND let a flaky call wipe valid content-keyed
-// cache. A tombstone would still cache-HIT — serving empty — so it cannot deliver
-// the "retry next run" the finding wants anyway.)
+// This save alone would leave a dispatched-but-empty file's PRIOR entry in place
+// (only reachable under `--force`, which bypasses the read). Since the cache is
+// keyed by content + namespace but NOT by backend/model/prompt, that entry can be
+// stale after a model/config change even though the content is unchanged. So a
+// fully-successful forced pass follows this save with `evict_forced_empty_entries`
+// (see `run_semantic_phase`), which removes those prior entries — a deliberate
+// improvement over graphify-py, whose `save_semantic_cache` (cache.py:707) never
+// evicts them. Eviction is gated on `failed == 0` so a flaky/partial failure
+// can't wipe a good entry.
 fn save_semantic_cache_safe(
     sem_result: &graphify_llm::LlmResponse,
     path: &std::path::Path,

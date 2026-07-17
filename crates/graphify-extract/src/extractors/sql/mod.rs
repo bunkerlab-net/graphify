@@ -71,6 +71,17 @@ static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
     // matches. This goes beyond graphify-py `sql.py:204` (an unanchored
     // `finditer` that matches mid-line body text); anchor + masking are a strict
     // improvement over the reference.
+    //
+    // Quoted qualified names (`app."MixedName"`) are NOT recovered from an ERROR
+    // blob: the masker blanks double-quoted delimited identifiers (a multi-line
+    // one could otherwise embed a line-leading CREATE and false-positive), so the
+    // `"MixedName"` component is already spaces here and `[\w$.]+` sees only the
+    // `app.` prefix. Un-masking just the routine-name identifier would need
+    // header-position-aware masking state — disproportionate for a heuristic that
+    // fires ONLY on malformed SQL; well-formed quoted DDL is parsed by tree-sitter
+    // and its name read from the AST (this path never runs). graphify-py
+    // `sql.py:204` recovers no quoted names either. (Disputes CodeRabbit's
+    // "recover quoted qualified routine declarations" finding.)
     Regex::new(r"(?im)^[ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([\w$.]+)")
         .expect("static sql error-fn regex")
 });
