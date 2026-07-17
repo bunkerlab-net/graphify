@@ -312,8 +312,12 @@ pub fn merge_driver_status(root: &Path) -> String {
     // `merge.graphify.driver` must not read as healthy. DIVERGENCE from
     // graphify-py (`hooks.py:606`, nonempty check), which reports any command as
     // registered (AGENTS.md: fix reference bugs, do not replicate).
-    let cfg_ok = git_config(root, &["--get", "merge.graphify.driver"])
-        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == DRIVER);
+    let cfg_value = git_config(root, &["--get", "merge.graphify.driver"])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty());
+    let cfg_ok = cfg_value.as_deref() == Some(DRIVER);
     let attrs = root.join(".gitattributes");
     let expected = effective_attr_path(root);
     let attr_ok = attrs.exists() && !attrs_is_symlink(&attrs) && has_merge_attr(root, &expected);
@@ -323,7 +327,14 @@ pub fn merge_driver_status(root: &Path) -> String {
             "partially registered (git config set, .gitattributes line missing)".to_string()
         }
         (false, true) => {
-            "partially registered (.gitattributes line set, git config missing)".to_string()
+            // The key is present but not graphify's driver → a mismatch, distinct
+            // from an absent key.
+            let detail = if cfg_value.is_some() {
+                "git config mismatched"
+            } else {
+                "git config missing"
+            };
+            format!("partially registered (.gitattributes line set, {detail})")
         }
         (false, false) => "not registered".to_string(),
     }

@@ -3251,7 +3251,7 @@ fn test_status_rejects_foreign_merge_driver_command() {
     let s = status(&repo);
     assert!(
         s.contains(
-            "merge driver: partially registered (.gitattributes line set, git config missing)"
+            "merge driver: partially registered (.gitattributes line set, git config mismatched)"
         ),
         "foreign driver command read as registered: {s}"
     );

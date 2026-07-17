@@ -806,4 +806,10 @@ fn out_of_scope_drop_count_is_zero_when_all_in_scope() {
         .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
         .collect();
     assert_eq!(ids, ["a_ok"]);
+    // out_of_scope_dropped is observability-only: it must NOT leak into the
+    // serialized graph JSON the build path consumes.
+    assert!(
+        resp.to_value().get("out_of_scope_dropped").is_none(),
+        "out_of_scope_dropped must not be persisted to graph.json"
+    );
 }
