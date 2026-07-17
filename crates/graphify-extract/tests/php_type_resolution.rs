@@ -193,3 +193,28 @@ fn php_plain_no_namespace_inheritance_preserved() {
     );
     assert_eq!(s(tgt, "label"), "Base");
 }
+
+#[test]
+fn php_variant_extensions_are_extracted() {
+    // #1923: `.phtml`/`.php3-7`/`.phps` are PHP and must produce nodes rather
+    // than being silently skipped (graphify-py's extractor dispatch routes only
+    // `.php`, leaving the resolver dead code for the variants).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f = write(
+        &tmp.path().join("legacy.php3"),
+        "<?php\nclass LegacyThing {}\n",
+    );
+    let result = extract(&[f], Some(tmp.path()));
+    assert!(
+        result
+            .nodes
+            .iter()
+            .any(|n| s(n, "label").contains("LegacyThing")),
+        "a .php3 file must be extracted as PHP: {:?}",
+        result
+            .nodes
+            .iter()
+            .map(|n| s(n, "label"))
+            .collect::<Vec<_>>()
+    );
+}

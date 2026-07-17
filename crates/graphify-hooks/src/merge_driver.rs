@@ -19,21 +19,19 @@ const DRIVER: &str = "graphify merge-driver %O %A %B";
 
 /// The repo-relative `graph.json` path graphify assigns the merge driver to,
 /// e.g. `graphify-out/graph.json`. The graph lives under the configured output
-/// dir (`GRAPHIFY_OUT`); gitattributes patterns are repo-relative, so an
-/// absolute override, one with a backslash, or one containing WHITESPACE (which
-/// would split the space-delimited attribute line) cannot be expressed there —
-/// fall back to the default name in that case. DIVERGENCE from graphify-py
-/// `_merge_attr_line` (`hooks.py:508`), which does not reject whitespace and so
-/// emits a malformed line for `GRAPHIFY_OUT="my dir"` (AGENTS.md: fix reference
-/// bugs, do not replicate).
+/// dir (`GRAPHIFY_OUT`); gitattributes patterns are repo-relative, so a value
+/// that cannot be expressed as a literal pattern — absolute, backslash,
+/// whitespace (splits the space-delimited line), or a gitattributes glob
+/// metacharacter (`*`/`?`/`[`, which would turn the path into a wildcard) —
+/// falls back to the default name. DIVERGENCE from graphify-py `_merge_attr_line`
+/// (`hooks.py:508`), which rejects only absolute/backslash and so emits a
+/// malformed or wildcard line for such values (AGENTS.md: fix reference bugs,
+/// do not replicate).
 #[must_use]
 fn merge_attr_path() -> String {
     let raw = std::env::var("GRAPHIFY_OUT").unwrap_or_default();
-    let out = if raw.is_empty()
-        || Path::new(&raw).is_absolute()
-        || raw.contains('\\')
-        || raw.chars().any(char::is_whitespace)
-    {
+    let unsafe_char = |c: char| c.is_whitespace() || matches!(c, '\\' | '*' | '?' | '[');
+    let out = if raw.is_empty() || Path::new(&raw).is_absolute() || raw.contains(unsafe_char) {
         "graphify-out"
     } else {
         &raw
@@ -71,6 +69,44 @@ fn has_merge_attr(content: &str) -> bool {
     })
 }
 
+/// Outcome of classifying a `.gitattributes` line for uninstall.
+enum MergeLine {
+    /// Not graphify's merge attribute — keep the line verbatim.
+    Other,
+    /// The line was ONLY graphify's `<path> merge=graphify` — drop it.
+    OnlyMerge,
+    /// The line carried other attributes — keep the path plus those, dropping
+    /// only the `merge=graphify` token so user attributes (e.g. `text eol=lf`)
+    /// survive. DIVERGENCE from graphify-py, whose uninstall drops the whole
+    /// matching line and loses co-located attributes.
+    Rewritten(String),
+}
+
+/// Classify a `.gitattributes` line for token-level uninstall removal.
+fn strip_graphify_merge_attr(raw: &str, expected_path: &str) -> MergeLine {
+    let line = raw.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return MergeLine::Other;
+    }
+    let mut fields = line.split_whitespace();
+    if fields.next() != Some(expected_path) {
+        return MergeLine::Other;
+    }
+    let rest: Vec<&str> = fields.collect();
+    if !rest.contains(&"merge=graphify") {
+        return MergeLine::Other;
+    }
+    let remaining: Vec<&str> = rest
+        .into_iter()
+        .filter(|f| *f != "merge=graphify")
+        .collect();
+    if remaining.is_empty() {
+        MergeLine::OnlyMerge
+    } else {
+        MergeLine::Rewritten(format!("{expected_path} {}", remaining.join(" ")))
+    }
+}
+
 /// Run `git -C <root> config <args>`.
 fn git_config(root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new("git")
@@ -79,6 +115,33 @@ fn git_config(root: &Path, args: &[&str]) -> std::io::Result<std::process::Outpu
         .arg("config")
         .args(args)
         .output()
+}
+
+/// True when `.gitattributes` is a symlink; following it could read or write a
+/// file outside the repo.
+fn attrs_is_symlink(attrs: &Path) -> bool {
+    attrs
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Refuse to modify a symlinked `.gitattributes`, so `hook install`/`uninstall`
+/// never writes THROUGH the link to a file outside the repo — the same
+/// persistent-symlink guard the Obsidian prune uses. graphify-py follows the
+/// link (`read_text`/`write_text`); this is a deliberate hardening. Rejected at
+/// each function's start, before any git-config mutation, so a symlinked
+/// `.gitattributes` never leaves config partially changed.
+fn reject_symlinked_attrs(attrs: &Path) -> Result<(), crate::error::HooksError> {
+    if attrs_is_symlink(attrs) {
+        return Err(crate::error::HooksError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a symlink; refusing to modify it through the link",
+                attrs.display()
+            ),
+        )));
+    }
+    Ok(())
 }
 
 /// Register the `graph.json` union merge driver in git config + `.gitattributes`
@@ -93,6 +156,8 @@ fn git_config(root: &Path, args: &[&str]) -> std::io::Result<std::process::Outpu
 /// A failed `git config` invocation is reported in the returned status string
 /// (mirroring the reference's caught `CalledProcessError`), not raised.
 pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksError> {
+    let attrs = root.join(".gitattributes");
+    reject_symlinked_attrs(&attrs)?;
     for (key, value) in [
         ("merge.graphify.name", "graphify graph.json union merge"),
         ("merge.graphify.driver", DRIVER),
@@ -110,7 +175,6 @@ pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksE
     }
 
     let line = merge_attr_line();
-    let attrs = root.join(".gitattributes");
     if attrs.exists() {
         let content = std::fs::read_to_string(&attrs)?;
         if has_merge_attr(&content) {
@@ -140,6 +204,8 @@ pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksE
 /// unguarded and raise). A `git config --unset` on an absent key is expected to
 /// exit nonzero and is ignored, matching the reference.
 pub fn unregister_merge_driver(root: &Path) -> Result<String, crate::error::HooksError> {
+    let attrs = root.join(".gitattributes");
+    reject_symlinked_attrs(&attrs)?;
     for key in ["merge.graphify.name", "merge.graphify.driver"] {
         // Best-effort, matching graphify-py `hooks.py:571-579`: `_sp.run(--unset)`
         // runs WITHOUT `check=True` and catches only `OSError`, so every outcome
@@ -150,16 +216,27 @@ pub fn unregister_merge_driver(root: &Path) -> Result<String, crate::error::Hook
         // failures" finding.)
         let _ = git_config(root, &["--unset", key]);
     }
-    let attrs = root.join(".gitattributes");
     if !attrs.exists() {
         return Ok("not registered - nothing to remove.".to_string());
     }
     let content = std::fs::read_to_string(&attrs)?;
-    let kept: Vec<&str> = content.lines().filter(|raw| !has_merge_attr(raw)).collect();
-    if kept.len() == content.lines().count() {
+    let expected = merge_attr_path();
+    let mut changed = false;
+    let mut kept: Vec<String> = Vec::with_capacity(content.lines().count());
+    for raw in content.lines() {
+        match strip_graphify_merge_attr(raw, &expected) {
+            MergeLine::Other => kept.push(raw.to_string()),
+            MergeLine::Rewritten(rewritten) => {
+                changed = true;
+                kept.push(rewritten);
+            }
+            MergeLine::OnlyMerge => changed = true,
+        }
+    }
+    if !changed {
         return Ok("gitattributes entry not found - nothing to remove.".to_string());
     }
-    if kept.is_empty() {
+    if kept.iter().all(|l| l.trim().is_empty()) {
         std::fs::remove_file(&attrs)?;
         return Ok("removed (.gitattributes deleted - no other entries)".to_string());
     }
@@ -178,8 +255,9 @@ pub fn merge_driver_status(root: &Path) -> String {
     let cfg_ok = git_config(root, &["--get", "merge.graphify.driver"])
         .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == DRIVER);
     let attrs = root.join(".gitattributes");
-    let attr_ok =
-        attrs.exists() && std::fs::read_to_string(&attrs).is_ok_and(|c| has_merge_attr(&c));
+    let attr_ok = attrs.exists()
+        && !attrs_is_symlink(&attrs)
+        && std::fs::read_to_string(&attrs).is_ok_and(|c| has_merge_attr(&c));
     match (cfg_ok, attr_ok) {
         (true, true) => "registered".to_string(),
         (true, false) => {

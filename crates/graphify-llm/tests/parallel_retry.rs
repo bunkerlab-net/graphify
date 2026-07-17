@@ -579,6 +579,14 @@ fn out_of_scope_nodes_are_dropped_from_merged_result() {
     }
     assert_eq!(resp.out_of_scope_dropped, 1);
     assert!(
+        resp.edges.iter().any(|e| {
+            e.get("source").and_then(serde_json::Value::as_str) == Some("a_ok")
+                && e.get("target").and_then(serde_json::Value::as_str) == Some("c_sibling")
+        }),
+        "in-scope edge a_ok -> c_sibling was wrongly dropped: {:?}",
+        resp.edges
+    );
+    assert!(
         resp.edges.iter().all(|e| {
             let src = e.get("source").and_then(serde_json::Value::as_str);
             let tgt = e.get("target").and_then(serde_json::Value::as_str);

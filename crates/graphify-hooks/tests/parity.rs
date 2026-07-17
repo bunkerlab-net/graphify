@@ -3256,3 +3256,56 @@ fn test_status_rejects_foreign_merge_driver_command() {
         "foreign driver command read as registered: {s}"
     );
 }
+
+#[test]
+#[serial]
+fn test_uninstall_preserves_coresident_attrs_on_merge_line() {
+    // Token-level removal (#1902): only `merge=graphify` is stripped; other
+    // attributes sharing the line (e.g. `text eol=lf`) survive.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(
+        repo.join(".gitattributes"),
+        "graphify-out/graph.json merge=graphify text eol=lf\n",
+    )
+    .expect("write");
+    uninstall(&repo).expect("uninstall");
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(
+        content.contains("graphify-out/graph.json") && content.contains("text eol=lf"),
+        "co-resident attributes lost: {content}"
+    );
+    assert!(
+        !content.contains("merge=graphify"),
+        "merge token not removed: {content}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[serial]
+fn test_install_rejects_symlinked_gitattributes() {
+    // #1902 hardening: a symlinked `.gitattributes` must not be written THROUGH
+    // to a file outside the repo.
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    let outside = dir.path().join("outside.txt");
+    fs::write(&outside, "precious\n").expect("write");
+    symlink(&outside, repo.join(".gitattributes")).expect("symlink");
+    assert!(
+        install(&repo).is_err(),
+        "install through a symlinked .gitattributes must fail"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).expect("read").trim(),
+        "precious",
+        "the out-of-repo symlink target was modified"
+    );
+    // The symlink preflight must run BEFORE any git-config mutation, so the
+    // merge driver is never left half-registered.
+    assert!(
+        git_config_get(&repo, "merge.graphify.driver").is_none(),
+        "merge-driver config was set despite the symlink rejection"
+    );
+}
