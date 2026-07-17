@@ -100,7 +100,7 @@ pub fn install(path: &Path) -> Result<String, HooksError> {
 
     let commit_msg = install_hook(&hdir, "post-commit", &hook, HOOK_MARKER)?;
     let checkout_msg = install_hook(&hdir, "post-checkout", &checkout, CHECKOUT_MARKER)?;
-    let merge_msg = crate::merge_driver::register_merge_driver(&root);
+    let merge_msg = crate::merge_driver::register_merge_driver(&root)?;
 
     Ok(format!(
         "post-commit: {commit_msg}\npost-checkout: {checkout_msg}\nmerge driver: {merge_msg}"

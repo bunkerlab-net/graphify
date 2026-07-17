@@ -148,6 +148,10 @@ impl FactsBuilder {
 fn walk_php_facts(node: tree_sitter::Node<'_>, source: &[u8], b: &mut FactsBuilder) {
     match node.kind() {
         "namespace_definition" => {
+            // Only a NAMED namespace is recorded; an unnamed global `namespace {}`
+            // block is ignored, matching graphify-py `resolution.py:2328-2332`
+            // (appends only on a `namespace_name` child). Recording the global
+            // block as a distinct namespace would diverge from the reference.
             let mut cursor = node.walk();
             for c in node.children(&mut cursor) {
                 if c.kind() == "namespace_name" {

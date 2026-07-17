@@ -221,8 +221,11 @@ fn attach_validated_hyperedges(
     let (node_ids, norm_to_id) = crate::ingest::build_endpoint_index(graph, ghost_remap);
     let mut kept: Vec<Value> = Vec::with_capacity(arr.len());
     for he in arr.iter_mut() {
+        // A non-object (scalar) hyperedge cannot satisfy the hyperedge schema.
+        // DIVERGENCE (#1916): graphify-py `build.py:768-804` appends such entries
+        // verbatim (`kept_hyperedges.append(he)`), leaking invalid output into
+        // graph.json; we drop them (AGENTS.md: fix reference bugs, not replicate).
         let Some(map) = he.as_object_mut() else {
-            kept.push(he.clone());
             continue;
         };
         normalize_hyperedge_members(map);
@@ -232,29 +235,34 @@ fn attach_validated_hyperedges(
             let normalized = norm_source_file(sf, root_str);
             map.insert("source_file".to_string(), Value::String(normalized));
         }
-        if let Some(members) = map.get("nodes").and_then(Value::as_array) {
-            let original = members.clone();
-            let mut valid: Vec<Value> = Vec::with_capacity(original.len());
-            for m in &original {
-                let Some(s) = m.as_str() else {
-                    continue; // non-string member: unresolvable
-                };
-                let resolved = crate::ingest::resolve_edge_id(s, &node_ids, &norm_to_id);
-                if node_ids.contains(&resolved) {
-                    valid.push(Value::String(resolved));
-                }
+        // After alias normalization a valid hyperedge carries a `nodes` array. An
+        // object still missing it (or with a non-array `nodes`) is malformed and
+        // is dropped rather than copied out — same divergence from the reference's
+        // verbatim append as the scalar case above.
+        let Some(members) = map.get("nodes").and_then(Value::as_array) else {
+            continue;
+        };
+        let original = members.clone();
+        let mut valid: Vec<Value> = Vec::with_capacity(original.len());
+        for m in &original {
+            let Some(s) = m.as_str() else {
+                continue; // non-string member: unresolvable
+            };
+            let resolved = crate::ingest::resolve_edge_id(s, &node_ids, &norm_to_id);
+            if node_ids.contains(&resolved) {
+                valid.push(Value::String(resolved));
             }
-            if valid.is_empty() {
-                let id = map.get("id").and_then(Value::as_str).unwrap_or("?");
-                eprintln!(
-                    "[graphify] WARNING: dropping hyperedge '{id}' — none of its \
-                     members match built nodes."
-                );
-                continue;
-            }
-            if valid != original {
-                map.insert("nodes".to_string(), Value::Array(valid));
-            }
+        }
+        if valid.is_empty() {
+            let id = map.get("id").and_then(Value::as_str).unwrap_or("?");
+            eprintln!(
+                "[graphify] WARNING: dropping hyperedge '{id}' — none of its \
+                 members match built nodes."
+            );
+            continue;
+        }
+        if valid != original {
+            map.insert("nodes".to_string(), Value::Array(valid));
         }
         kept.push(he.clone());
     }

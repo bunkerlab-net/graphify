@@ -135,6 +135,78 @@ fn scalar_key(v: &Value) -> Option<String> {
     }
 }
 
+/// Node ids that live in VALID retained entries of the `kind` namespace and will
+/// still be present after this save (#1916). An on-disk entry is loaded on replay
+/// only when its bucket `source_file` resolves to a live file whose current
+/// content hash still matches the entry filename — the `load_cached` liveness
+/// contract — so a stale/orphaned entry is ignored. Entries for files IN the
+/// current batch survive only under `merge_existing` (otherwise they are
+/// overwritten, and their fresh ids are already in `written_ids`); untouched
+/// entries always survive. A reference to one of these ids is therefore NOT
+/// dangling even when the current batch mis-attributes the id to a skipped
+/// group, so they are unioned into `written_ids` before pruning.
+///
+/// DIVERGENCE (#1916): graphify-py `cache.py:665-681` builds its id sets from the
+/// current batch alone and never consults retained entries, so it prunes an edge
+/// whose endpoint survives in another cache entry — dropping a valid relationship
+/// on replay. We consult them (AGENTS.md: fix reference bugs, do not replicate).
+fn retained_node_ids(
+    root: &Path,
+    root_path: &Path,
+    kind: &str,
+    batch_paths: &HashSet<PathBuf>,
+    merge_existing: bool,
+) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    let Ok(dir) = crate::paths::cache_dir(root, kind) else {
+        return ids;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return ids;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(nodes) = value.get("nodes").and_then(Value::as_array) else {
+            continue;
+        };
+        let Some(sf) = nodes
+            .iter()
+            .find_map(|n| n.get("source_file").and_then(Value::as_str))
+        else {
+            continue;
+        };
+        let src = resolved_source_path(Path::new(sf), root_path);
+        // Liveness: only entries that replay would actually load count.
+        if !src.is_file() || crate::hash::file_hash(&src, root, None).ok().as_deref() != Some(stem)
+        {
+            continue;
+        }
+        // An in-batch file is overwritten (fresh ids already tracked) unless the
+        // caller unions with the prior entry via `merge_existing`.
+        if batch_paths.contains(&src) && !merge_existing {
+            continue;
+        }
+        for n in nodes {
+            if let Some(id) = n.get("id").and_then(scalar_key) {
+                ids.insert(id);
+            }
+        }
+    }
+    ids
+}
+
 /// Dangling-reference pruning (#1916). A node group skipped by the write loop
 /// (ghost path or out-of-scope) contributes node ids that never reach the cache;
 /// an edge/hyperedge in an ALLOWED group referencing such an id would be written
@@ -144,6 +216,7 @@ fn prune_dangling_refs(
     by_file: &mut IndexMap<String, SemanticBuckets>,
     allowed: &HashSet<PathBuf>,
     root_path: &Path,
+    retained: &HashSet<String>,
 ) {
     let mut skipped_ids: HashSet<String> = HashSet::new();
     let mut written_ids: HashSet<String> = HashSet::new();
@@ -159,9 +232,11 @@ fn prune_dangling_refs(
             }
         }
     }
-    // A duplicate-attribution node (defined in a skipped AND a written group)
-    // still reaches the cache — don't over-prune references to it.
-    for id in &written_ids {
+    // An id that still reaches the cache is not dangling: either it is defined in
+    // a written group of THIS batch (duplicate attribution across a skipped and a
+    // written group), or it lives in a valid retained entry that survives the save
+    // (`retained_node_ids`). Don't over-prune references to those.
+    for id in written_ids.iter().chain(retained) {
         skipped_ids.remove(id);
     }
     if skipped_ids.is_empty() {
@@ -233,7 +308,16 @@ pub fn save_semantic_cache(
             .collect()
     });
     if let Some(allowed) = &allowed_paths {
-        prune_dangling_refs(&mut by_file, allowed, &root_path);
+        // Files the write loop will actually overwrite (real + in-scope). A
+        // skipped ghost/out-of-scope group leaves its prior entry untouched, so
+        // it is NOT a batch-overwrite and its ids still count as retained.
+        let batch_paths: HashSet<PathBuf> = by_file
+            .keys()
+            .map(|fpath| resolved_source_path(Path::new(fpath), &root_path))
+            .filter(|p| p.is_file() && allowed.contains(p))
+            .collect();
+        let retained = retained_node_ids(root, &root_path, &kind, &batch_paths, merge_existing);
+        prune_dangling_refs(&mut by_file, allowed, &root_path, &retained);
     }
 
     let mut saved = 0;

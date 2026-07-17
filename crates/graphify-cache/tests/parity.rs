@@ -1631,6 +1631,126 @@ fn save_semantic_cache_drops_edges_to_ghost_file_nodes() {
 
 #[test]
 #[serial]
+fn save_semantic_cache_keeps_edge_to_node_in_retained_entry() {
+    // #1916 divergence from graphify-py: an edge whose endpoint the model
+    // mis-attributes to a skipped (ghost) group in THIS batch must survive when
+    // that id lives in a valid retained entry for another, untouched file — on
+    // replay the id is present, so the ref is not dangling. graphify-py prunes it.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_text(&tmp.path().join("real.md"), "# Real\n");
+    write_text(&tmp.path().join("other.md"), "# Other\n");
+    // Seed real.md (untouched by the next batch) with node "shared".
+    save_semantic_cache(
+        &[json!({"id": "shared", "source_file": "real.md"})],
+        &[],
+        &[],
+        tmp.path(),
+        SemanticCacheOptions::default(),
+    )
+    .expect("seed real");
+    // Batch: write other.md with an edge to "shared", which the model
+    // mis-attributes to a ghost file (a skipped group).
+    let nodes = [
+        json!({"id": "o1", "source_file": "other.md"}),
+        json!({"id": "shared", "source_file": "ghost.md"}),
+    ];
+    let edges = [json!({"source": "o1", "target": "shared", "source_file": "other.md"})];
+    let allowed = [std::path::PathBuf::from("other.md")];
+    save_semantic_cache(&nodes, &edges, &[], tmp.path(), scoped(&allowed)).expect("save");
+
+    let split = check_semantic_cache(
+        &[tmp.path().join("other.md").to_string_lossy().into_owned()],
+        tmp.path(),
+        None,
+    );
+    let pairs: Vec<(String, String)> = split
+        .cached_edges
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                e.get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [("o1".to_string(), "shared".to_string())],
+        "edge to an id in a retained entry must survive"
+    );
+}
+
+#[test]
+#[serial]
+fn save_semantic_cache_keeps_edge_to_merge_existing_node() {
+    // #1916 divergence: under merge_existing the prior slice survives, so an edge
+    // to a node from that slice is not dangling even when the current chunk
+    // mis-attributes the same id to a ghost group.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_text(&tmp.path().join("big.md"), "# Big\n");
+    let allowed = [std::path::PathBuf::from("big.md")];
+    let merged = |n: &[Value], e: &[Value]| {
+        save_semantic_cache(
+            n,
+            e,
+            &[],
+            tmp.path(),
+            SemanticCacheOptions {
+                merge_existing: true,
+                allowed_source_files: Some(&allowed),
+                ..Default::default()
+            },
+        )
+        .expect("save");
+    };
+    // Chunk 1: cache node "shared" for big.md.
+    merged(&[json!({"id": "shared", "source_file": "big.md"})], &[]);
+    // Chunk 2: new node + edge to "shared", which is now mis-attributed to a ghost.
+    merged(
+        &[
+            json!({"id": "b2", "source_file": "big.md"}),
+            json!({"id": "shared", "source_file": "ghost.md"}),
+        ],
+        &[json!({"source": "b2", "target": "shared", "source_file": "big.md"})],
+    );
+
+    let split = check_semantic_cache(
+        &[tmp.path().join("big.md").to_string_lossy().into_owned()],
+        tmp.path(),
+        None,
+    );
+    let pairs: Vec<(String, String)> = split
+        .cached_edges
+        .iter()
+        .map(|e| {
+            (
+                e.get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                e.get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        pairs.contains(&("b2".to_string(), "shared".to_string())),
+        "edge to a merge_existing prior node must survive: {pairs:?}"
+    );
+}
+
+#[test]
+#[serial]
 fn save_semantic_cache_drops_hyperedges_touching_skipped_nodes() {
     _reset_stat_index_for_tests();
     let tmp = tempfile::tempdir().expect("tempdir");

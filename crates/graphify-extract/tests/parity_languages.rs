@@ -197,6 +197,26 @@ fn sql_plpgsql_clean_function_not_double_emitted() {
 }
 
 #[test]
+fn sql_error_node_recovery_ignores_ddl_inside_body() {
+    // #1910 hardening: a CREATE FUNCTION/PROCEDURE embedded inside a PL/pgSQL
+    // body (a string literal, not a top-level statement) must NOT mint a spurious
+    // object — only line-leading CREATE statements are recovered from ERROR blobs.
+    let result = extract_sql(&fixtures().join("sample_body_ddl.sql"));
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert!(
+        labels.iter().any(|l| l.contains("real_fn")),
+        "line-leading function must be extracted: {labels:?}"
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l.contains("fake_fn") || l.contains("fake_proc")),
+        "body-embedded DDL must not mint nodes: {labels:?}"
+    );
+}
+
+#[test]
 fn julia_extractor_produces_nodes() {
     let result = extract_julia(&fixtures().join("sample.jl"));
     assert!(result.error.is_none(), "{:?}", result.error);

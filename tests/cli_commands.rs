@@ -1243,7 +1243,11 @@ fn good_response_body() -> String {
 /// per dispatched run.
 fn mock_extract(dir: &Path, url: &str) -> Command {
     let mut cmd = cli_no_backend();
-    cmd.env("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1")
+    // Scrub GRAPHIFY_FORCE so an env value in the developer's/CI shell can't turn
+    // a warm-cache run into a forced re-dispatch; the env-parity test sets it back
+    // explicitly.
+    cmd.env_remove("GRAPHIFY_FORCE")
+        .env("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1")
         .env("GRAPHIFY_OPENAI_BASE_URL", url)
         .env("OPENAI_API_KEY", "k")
         .arg("extract")

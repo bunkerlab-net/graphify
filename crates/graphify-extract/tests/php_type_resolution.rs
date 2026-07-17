@@ -96,7 +96,11 @@ fn php_external_namespaced_base_does_not_collapse_onto_internal_class() {
 
 #[test]
 fn php_ambiguous_base_disambiguated_by_use() {
-    // Two internal same-named `Page` classes; a `use` picks the right one.
+    // Two internal same-named `Page` classes in different namespaces; `Editor`
+    // lives in a THIRD namespace and only its `use App\Cms\Page` can pick the
+    // right one — the current-namespace fallback would resolve to a nonexistent
+    // `App\Admin\Page`, so a pass proves the `use` (not an incidental
+    // same-namespace match) is what disambiguates.
     let tmp = tempfile::tempdir().expect("tempdir");
     let m = write(
         &tmp.path().join("app/Models/Page.php"),
@@ -107,8 +111,8 @@ fn php_ambiguous_base_disambiguated_by_use() {
         "<?php\nnamespace App\\Cms;\nclass Page {}\n",
     );
     let editor = write(
-        &tmp.path().join("app/Cms/Editor.php"),
-        "<?php\nnamespace App\\Cms;\n\
+        &tmp.path().join("app/Admin/Editor.php"),
+        "<?php\nnamespace App\\Admin;\n\
          use App\\Cms\\Page;\n\
          class Editor extends Page {}\n",
     );
@@ -119,7 +123,7 @@ fn php_ambiguous_base_disambiguated_by_use() {
     let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).expect("target");
     let src = s(tgt, "source_file");
     assert!(!src.is_empty());
-    assert!(src.contains("Cms") && !src.contains("Models"));
+    assert!(src.contains("Cms") && !src.contains("Models") && !src.contains("Admin"));
 }
 
 #[test]

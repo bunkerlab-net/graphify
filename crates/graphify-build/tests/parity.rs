@@ -1878,3 +1878,34 @@ fn build_from_json_prunes_dangling_hyperedge_members() {
         "the ghost member must be pruned"
     );
 }
+
+/// #1916 divergence from graphify-py `build.py:768-804`: a hyperedge that cannot
+/// satisfy the schema — a scalar, an object with no `nodes`, or one whose `nodes`
+/// is not an array — is dropped rather than copied verbatim into `graph.json`.
+#[test]
+fn build_from_json_drops_malformed_hyperedges() {
+    let ext = json!({
+        "nodes": [
+            {"id": "alpha", "label": "alpha", "file_type": "code", "source_file": "a.py"},
+        ],
+        "edges": [],
+        "hyperedges": [
+            "garbage_scalar",
+            {"id": "no_nodes", "source_file": "a.py"},
+            {"id": "str_nodes", "nodes": "alpha", "source_file": "a.py"},
+            {"id": "ok", "nodes": ["alpha"], "source_file": "a.py"},
+        ],
+    });
+    let g = build_from_json(ext, false, None).expect("build");
+    let ids: Vec<String> = g
+        .graph_attrs
+        .get("hyperedges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|h| h.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(ids, ["ok"], "only the well-formed hyperedge must survive");
+}

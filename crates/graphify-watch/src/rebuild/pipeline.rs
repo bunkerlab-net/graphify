@@ -113,10 +113,16 @@ pub(crate) fn rebuild_code_inner(
     // shrink-guard bypass keys off any evicted source (`deleted_paths` now
     // includes reconciliation-discovered removals). Mirrors Python's
     // `had_explicit_deletions=bool(deleted_paths)`.
-    // Full rebuild: every in-corpus source is a legitimate shrink basis (a
-    // semantic-backed doc excluded from extraction still self-heals its stale
-    // AST nodes, #1915). Incremental: only the re-extracted targets. Mirrors
-    // graphify-py watch.py (full → code_files, else → extract_targets).
+    // Full rebuild: every in-corpus source is a legitimate shrink basis. A
+    // semantic-backed doc excluded from AST extraction stays in `code_files`, so
+    // its stale `_origin=="ast"` heading nodes may be shed (self-heal, #1915)
+    // while its SEMANTIC nodes are preserved by the origin-aware reconcile
+    // (`preserved_nodes`/`preserved_edges`), NOT removed by this shrink basis.
+    // Incremental: only the re-extracted targets. Mirrors graphify-py
+    // `watch.py:1035-1041` (full → code_files, else → extract_targets) exactly;
+    // excluding semantic docs here would diverge and wrongly refuse a legitimate
+    // self-heal shrink. (Disputes CodeRabbit's "origin-aware rebuilt basis"
+    // finding — origin-awareness lives in the node reconcile, not the basis.)
     let rebuilt_basis: &[PathBuf] = if changed_paths.is_none() {
         &code_files
     } else {

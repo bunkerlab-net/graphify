@@ -591,14 +591,25 @@ pub fn to_obsidian(
     stale.sort();
     let mut pruned = 0usize;
     for rel in stale {
-        if Path::new(rel).is_absolute() || rel.split(['/', '\\']).any(|c| c == "..") {
-            continue; // never delete outside the vault
+        // Enforce the same containment the write path uses (`owned_write` /
+        // `writes_through_symlink`): refuse an absolute/`..` path or one that
+        // traverses a symlinked component, so a stale-note delete can never
+        // escape the vault. Hardening beyond graphify-py, which follows symlinks
+        // (#1896). `remove_file` unlinks a symlinked leaf itself rather than its
+        // target, so it never reaches outside either.
+        if Path::new(rel).is_absolute()
+            || rel.split(['/', '\\']).any(|c| c == "..")
+            || writes_through_symlink(output_dir, rel)
+        {
+            continue;
         }
         match std::fs::remove_file(output_dir.join(rel)) {
             Ok(()) => pruned += 1,
             // Already gone — Python's `unlink(missing_ok=True)` counts it too.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => pruned += 1,
-            Err(_) => {}
+            // A real deletion failure fails the export like the note/manifest
+            // writes, rather than silently leaving a stale note behind.
+            Err(e) => return Err(e.into()),
         }
     }
     if pruned > 0 {

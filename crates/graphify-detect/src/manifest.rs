@@ -313,7 +313,14 @@ fn seed_surviving_rows(
     let mut manifest: IndexMap<String, ManifestEntry> = IndexMap::new();
     for (f, entry) in existing {
         if !Path::new(f).try_exists().unwrap_or(false) {
-            continue; // genuine deletion
+            // A file gone from disk is a genuine deletion and its row is dropped
+            // regardless of root — mirroring graphify-py `detect.py:1563`
+            // (`if not Path(f).exists(): continue`, unconditional). Only the
+            // excluded-but-alive prune below is root-gated (fail-open when root is
+            // None); preserving out-of-root MISSING rows would resurrect tracking
+            // for deleted files forever. (Disputes CodeRabbit's "prune missing
+            // only inside root" finding — it diverges from the reference.)
+            continue;
         }
         if scan_set.is_some() && !in_scan(f) && in_root(f) {
             continue; // excluded-but-alive: drop the stale row (#1908)

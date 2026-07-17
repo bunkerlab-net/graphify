@@ -600,6 +600,86 @@ fn out_of_scope_nodes_are_dropped_from_merged_result() {
 }
 
 #[test]
+fn out_of_scope_edges_dropped_even_when_all_nodes_in_scope() {
+    // #1895 divergence from graphify-py (`llm.py:2041`): a relationship attributed
+    // to a real, undispatched file must be dropped even when NO node is
+    // out-of-scope. Both nodes here belong to the dispatched A.md; the B.py edge
+    // and hyperedge are out-of-scope and must not survive, while the A.md ones do.
+    let mut server = mockito::Server::new();
+    let inner = json!({
+        "nodes": [
+            {"id": "a_ok", "source_file": "A.md", "file_type": "document"},
+            {"id": "a2_ok", "source_file": "A.md", "file_type": "document"},
+        ],
+        "edges": [
+            {"source": "a_ok", "target": "a2_ok", "source_file": "A.md"},
+            {"source": "a_ok", "target": "a2_ok", "source_file": "B.py"},
+        ],
+        "hyperedges": [
+            {"id": "h_ok", "nodes": ["a_ok", "a2_ok"], "source_file": "A.md"},
+            {"id": "h_stray", "nodes": ["a_ok", "a2_ok"], "source_file": "B.py"},
+        ],
+    })
+    .to_string();
+    let body = json!({
+        "choices": [{"message": {"content": inner}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+    })
+    .to_string();
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_body(body)
+        .expect_at_least(1)
+        .create();
+
+    let mut g = EnvGuard::new();
+    g.set("GRAPHIFY_TEST_ALLOW_PRIVATE_IPS", "1");
+    g.set("GRAPHIFY_OPENAI_BASE_URL", &server.url());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let a = tmp.path().join("A.md");
+    fs::write(&a, "# a\n").expect("write");
+    // B.py exists on disk but is NOT dispatched.
+    fs::write(tmp.path().join("B.py"), "def b():\n    pass\n").expect("write");
+
+    let cfg = CorpusConfig {
+        backend: "openai",
+        api_key: Some("k"),
+        model: Some("m"),
+        root: tmp.path(),
+        chunk_size: 8,
+        token_budget: None,
+        max_concurrency: 1,
+        max_retry_depth: 1,
+        deep_mode: false,
+    };
+    let (resp, _failed) = extract_corpus_parallel(&[a], &cfg, None);
+
+    // No node is out-of-scope, so the node-drop count stays zero ...
+    assert_eq!(resp.out_of_scope_dropped, 0);
+    let ids: std::collections::HashSet<&str> = resp
+        .nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(ids.contains("a_ok") && ids.contains("a2_ok"));
+    // ... but the out-of-scope relationships are still filtered.
+    let edge_files: Vec<&str> = resp
+        .edges
+        .iter()
+        .filter_map(|e| e.get("source_file").and_then(serde_json::Value::as_str))
+        .collect();
+    assert_eq!(edge_files, ["A.md"], "out-of-scope B.py edge survived");
+    let he_ids: Vec<&str> = resp
+        .hyperedges
+        .iter()
+        .filter_map(|h| h.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    assert_eq!(he_ids, ["h_ok"], "out-of-scope B.py hyperedge survived");
+}
+
+#[test]
 fn out_of_scope_drop_count_is_zero_when_all_in_scope() {
     // Counter-test: a clean run records out_of_scope_dropped == 0.
     let mut server = mockito::Server::new();

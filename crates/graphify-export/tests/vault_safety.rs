@@ -321,6 +321,7 @@ fn to_obsidian_community_notes_case_collision() -> TestResult {
 
 // ── #1896: re-export prunes graphify's own notes for dropped nodes ────────────
 
+#[must_use]
 fn four_node_two_community_graph() -> (Graph, IndexMap<i64, Vec<String>>) {
     let g = build(
         json!([
@@ -397,5 +398,36 @@ fn to_obsidian_removed_node_returning_is_writable_again() -> TestResult {
     // The returned node's note exists with current content, written this run.
     assert!(out.join("Server.md").exists());
     assert!(std::fs::read_to_string(out.join("Server.md"))?.contains("# Server"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn to_obsidian_prune_refuses_symlinked_component() -> TestResult {
+    // #1896 hardening: a manifest entry whose path traverses a symlinked
+    // directory must NOT let the stale-note prune delete a file outside the
+    // vault. The write path already refuses such paths; the prune must too.
+    use std::os::unix::fs::symlink;
+    let (g2, comm2) = two_node_graph();
+    let labels: IndexMap<i64, String> = IndexMap::from([(0, "Backend".to_string())]);
+    let tmp = tempfile::tempdir()?;
+    let out = tmp.path().join("obsidian");
+    std::fs::create_dir_all(&out)?;
+    // A victim file outside the vault, reachable via a symlinked component.
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&outside)?;
+    let victim = outside.join("victim.md");
+    std::fs::write(&victim, "precious\n")?;
+    symlink(&outside, out.join("evil"))?;
+    // Pre-seed a manifest that (hostilely) claims to own the traversing path, so
+    // the re-export treats `evil/victim.md` as a stale-note prune candidate.
+    std::fs::write(
+        out.join(".graphify_obsidian_manifest.json"),
+        r#"{"files": ["evil/victim.md"]}"#,
+    )?;
+
+    to_obsidian(&g2, &comm2, &out, Some(&labels), None)?;
+    assert!(victim.exists(), "prune escaped the vault via a symlink");
+    assert_eq!(std::fs::read_to_string(&victim)?.trim(), "precious");
     Ok(())
 }

@@ -168,12 +168,15 @@ fn filter_out_of_scope(merged: &mut LlmResponse, chunks: &[Vec<Unit>], root: &Pa
     }
     let dropped_count = merged.nodes.len() - kept_nodes.len();
     merged.out_of_scope_dropped = dropped_count;
-    if dropped_count == 0 {
-        return;
-    }
     merged.nodes = kept_nodes;
-    // An edge/hyperedge referencing a dropped node's id (or itself attributed to
-    // an undispatched real file) must not survive its endpoint.
+    // Filter relationships unconditionally: an edge/hyperedge that is itself
+    // out-of-scope (attributed to an undispatched real file) or references a
+    // dropped node's id must not survive. DIVERGENCE (#1895): graphify-py gates
+    // this whole block behind `if dropped_node_count` (`llm.py:2041`), so an
+    // out-of-scope hyperedge whose members are all in-scope leaks into its graph
+    // when no node was dropped. The per-item `_out_of_scope` check is meaningful
+    // on its own, so the node-count gate is a reference bug; we always filter
+    // (AGENTS.md: fix reference bugs, do not replicate them).
     let endpoint_dropped = |e: &serde_json::Value, key: &str| {
         e.get(key)
             .and_then(serde_json::Value::as_str)
@@ -195,6 +198,10 @@ fn filter_out_of_scope(merged: &mut LlmResponse, chunks: &[Vec<Unit>], root: &Pa
                 })
     });
 
+    // The warning concerns dropped NODES; only emit it when a node was dropped.
+    if dropped_count == 0 {
+        return;
+    }
     let mut names: Vec<String> = dropped_files
         .iter()
         .map(|f| {

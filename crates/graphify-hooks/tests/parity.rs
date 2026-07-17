@@ -3197,3 +3197,62 @@ fn test_uninstall_removes_merge_driver_keeps_other_attrs() {
         "merge attr not removed: {content}"
     );
 }
+
+#[test]
+#[serial]
+fn test_uninstall_keeps_unrelated_graph_json_merge_attr() {
+    // Exact-path match (#1902): a user's unrelated `othergraph.json merge=graphify`
+    // line ends with `graph.json` but is NOT graphify's `graphify-out/graph.json`
+    // entry, so uninstall must leave it untouched (graphify-py's `endswith` match
+    // would wrongly delete it).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    fs::write(
+        repo.join(".gitattributes"),
+        "othergraph.json merge=graphify\n",
+    )
+    .expect("write");
+    install(&repo).expect("install");
+    uninstall(&repo).expect("uninstall");
+    let content = fs::read_to_string(repo.join(".gitattributes")).expect("read");
+    assert!(
+        content.contains("othergraph.json merge=graphify"),
+        "unrelated merge attr wrongly removed: {content}"
+    );
+    assert!(
+        !content.contains("graphify-out/graph.json"),
+        "graphify's own entry not removed: {content}"
+    );
+}
+
+#[test]
+#[serial]
+fn test_status_rejects_foreign_merge_driver_command() {
+    // Exact-command match (#1902): a `merge.graphify.driver` set to some other
+    // command must not read as a healthy graphify registration (graphify-py's
+    // nonempty check would).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = make_git_repo(dir.path());
+    Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "config",
+            "merge.graphify.driver",
+            "some-other-tool %O %A %B",
+        ])
+        .output()
+        .expect("git config");
+    fs::write(
+        repo.join(".gitattributes"),
+        "graphify-out/graph.json merge=graphify\n",
+    )
+    .expect("write");
+    let s = status(&repo);
+    assert!(
+        s.contains(
+            "merge driver: partially registered (.gitattributes line set, git config missing)"
+        ),
+        "foreign driver command read as registered: {s}"
+    );
+}

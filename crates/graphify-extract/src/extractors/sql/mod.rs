@@ -61,9 +61,13 @@ static SQL_END_RE: LazyLock<Regex> = LazyLock::new(|| {
 #[allow(clippy::expect_used)] // literal pattern; build cannot panic
 static SQL_ERROR_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
     // Schema-qualified names are kept whole (`[\w$.]+` includes `.`), unlike
-    // SQL_FB_HDR_RE. Used only to recover CREATE FUNCTION/PROCEDURE objects from
-    // tree-sitter ERROR blobs (PL/pgSQL bodies), #1910.
-    Regex::new(r"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([\w$.]+)")
+    // SQL_FB_HDR_RE. Used only to recover top-level CREATE FUNCTION/PROCEDURE
+    // objects from tree-sitter ERROR blobs (PL/pgSQL bodies), #1910. Anchored to
+    // line start (indentation only) like SQL_END_RE, so a `CREATE FUNCTION` that
+    // appears inside a body — e.g. `PERFORM 'CREATE FUNCTION fake()'` — does not
+    // mint a spurious object. DIVERGENCE from graphify-py `sql.py:204` (unanchored
+    // `finditer`), whose match false-positives on such bodies.
+    Regex::new(r"(?im)^[ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([\w$.]+)")
         .expect("static sql error-fn regex")
 });
 
