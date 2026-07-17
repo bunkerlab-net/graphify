@@ -20,11 +20,20 @@ const DRIVER: &str = "graphify merge-driver %O %A %B";
 /// The repo-relative `graph.json` path graphify assigns the merge driver to,
 /// e.g. `graphify-out/graph.json`. The graph lives under the configured output
 /// dir (`GRAPHIFY_OUT`); gitattributes patterns are repo-relative, so an
-/// absolute override (or one with a backslash) cannot be expressed there — fall
-/// back to the default name in that case. Mirrors `_merge_attr_line`.
+/// absolute override, one with a backslash, or one containing WHITESPACE (which
+/// would split the space-delimited attribute line) cannot be expressed there —
+/// fall back to the default name in that case. DIVERGENCE from graphify-py
+/// `_merge_attr_line` (`hooks.py:508`), which does not reject whitespace and so
+/// emits a malformed line for `GRAPHIFY_OUT="my dir"` (AGENTS.md: fix reference
+/// bugs, do not replicate).
+#[must_use]
 fn merge_attr_path() -> String {
     let raw = std::env::var("GRAPHIFY_OUT").unwrap_or_default();
-    let out = if raw.is_empty() || Path::new(&raw).is_absolute() || raw.contains('\\') {
+    let out = if raw.is_empty()
+        || Path::new(&raw).is_absolute()
+        || raw.contains('\\')
+        || raw.chars().any(char::is_whitespace)
+    {
         "graphify-out"
     } else {
         &raw
@@ -33,6 +42,7 @@ fn merge_attr_path() -> String {
 }
 
 /// The full `.gitattributes` line assigning the graphify merge driver.
+#[must_use]
 fn merge_attr_line() -> String {
     format!("{} merge=graphify", merge_attr_path())
 }
@@ -131,7 +141,13 @@ pub fn register_merge_driver(root: &Path) -> Result<String, crate::error::HooksE
 /// exit nonzero and is ignored, matching the reference.
 pub fn unregister_merge_driver(root: &Path) -> Result<String, crate::error::HooksError> {
     for key in ["merge.graphify.name", "merge.graphify.driver"] {
-        // `--unset` exits nonzero if the key is absent; that is fine.
+        // Best-effort, matching graphify-py `hooks.py:571-579`: `_sp.run(--unset)`
+        // runs WITHOUT `check=True` and catches only `OSError`, so every outcome
+        // (missing key, launch failure, any nonzero exit) is ignored and the
+        // `.gitattributes` line is then removed regardless. Propagating these
+        // would diverge from the reference and fail uninstall on transient git
+        // errors. (Disputes CodeRabbit's "propagate non-missing-key --unset
+        // failures" finding.)
         let _ = git_config(root, &["--unset", key]);
     }
     let attrs = root.join(".gitattributes");
