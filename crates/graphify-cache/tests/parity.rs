@@ -1889,6 +1889,47 @@ fn save_semantic_cache_keeps_edge_to_node_in_retained_entry() {
 
 #[test]
 #[serial]
+fn dangling_prune_treats_bool_and_numbers_python_equal() {
+    // #1916 / scalar_key: Python hashes `True == 1` and `1 == 1.0` as ONE set
+    // key, so an edge endpoint `1.0`/`false` that resolves to a ghost (skipped)
+    // numeric id must be pruned as dangling — while a STRING "1" stays distinct
+    // and survives.
+    _reset_stat_index_for_tests();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_text(&tmp.path().join("real.md"), "# Real\n");
+    // Ghost (skipped) group contributes numeric ids 1 and 0.
+    let nodes = [
+        json!({"id": "anchor", "source_file": "real.md"}),
+        json!({"id": 1, "source_file": "ghost.md"}),
+        json!({"id": 0, "source_file": "ghost.md"}),
+    ];
+    let edges = [
+        json!({"source": "anchor", "target": 1.0, "source_file": "real.md"}), // == ghost 1 → drop
+        json!({"source": "anchor", "target": false, "source_file": "real.md"}), // == ghost 0 → drop
+        json!({"source": "anchor", "target": "1", "source_file": "real.md"}), // string ≠ 1 → keep
+    ];
+    let allowed = [std::path::PathBuf::from("real.md")];
+    save_semantic_cache(&nodes, &edges, &[], tmp.path(), scoped(&allowed)).expect("save");
+
+    let split = check_semantic_cache(
+        &[tmp.path().join("real.md").to_string_lossy().into_owned()],
+        tmp.path(),
+        None,
+    );
+    let targets: Vec<Value> = split
+        .cached_edges
+        .iter()
+        .filter_map(|e| e.get("target").cloned())
+        .collect();
+    assert_eq!(
+        targets,
+        [json!("1")],
+        "only the string \"1\" edge survives; bool/int/float ghosts are pruned: {targets:?}"
+    );
+}
+
+#[test]
+#[serial]
 fn save_semantic_cache_keeps_edge_to_merge_existing_node() {
     // #1916 divergence: under merge_existing the prior slice survives, so an edge
     // to a node from that slice is not dangling even when the current chunk

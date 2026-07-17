@@ -23,6 +23,7 @@ fn write(path: &Path, text: &str) -> std::io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+#[must_use]
 fn s(m: &Obj, k: &str) -> String {
     m.get(k).and_then(Value::as_str).unwrap_or("").to_string()
 }
@@ -32,6 +33,7 @@ fn node_by_id<'a>(nodes: &'a [Obj], id: &str) -> Option<&'a Obj> {
 }
 
 /// Source-backed class definitions with the given label.
+#[must_use]
 fn class_defs<'a>(nodes: &'a [Obj], label: &str) -> Vec<&'a Obj> {
     nodes
         .iter()
@@ -39,6 +41,7 @@ fn class_defs<'a>(nodes: &'a [Obj], label: &str) -> Vec<&'a Obj> {
         .collect()
 }
 
+#[must_use]
 fn inherits_from<'a>(edges: &'a [Obj], source_needle: &str) -> Vec<&'a Obj> {
     edges
         .iter()

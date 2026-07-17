@@ -121,17 +121,36 @@ fn group_skipped(fpath: &str, allowed: &HashSet<PathBuf>, root_path: &Path) -> b
 }
 
 /// Hashable-scalar key for a JSON id/endpoint value, mirroring Python's use of
-/// the raw value in a `set`. Type-prefixed so the string `"1"` and the number
-/// `1` stay distinct (as they are in Python). `None` for arrays/objects, which
-/// are unhashable in Python — callers treat those as "not a match" so an
-/// untrusted result cannot make the prune misbehave.
+/// the raw value in a `set`. Booleans and numbers collapse to one canonical
+/// numeric key because Python hashes `True`, `1`, and `1.0` as the same key
+/// (and `False`/`0`/`0.0` likewise); the string `"1"` stays distinct from the
+/// number `1`. `None` for arrays/objects, which are unhashable in Python —
+/// callers treat those as "not a match" so an untrusted result cannot make the
+/// prune misbehave.
 fn scalar_key(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(format!("s:{s}")),
-        Value::Number(n) => Some(format!("n:{n}")),
-        Value::Bool(b) => Some(format!("b:{b}")),
+        Value::Number(n) => Some(number_key(n)),
+        // Python: `True == 1`, `False == 0` — share the numeric key.
+        Value::Bool(b) => Some(format!("num:{}", i64::from(*b))),
         Value::Null => Some("null".to_string()),
         Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// Canonical numeric key. An integer keys by its exact value; a float keys by
+/// its `Display` form, where an integral float (`1.0`) renders as `1` and so
+/// shares the integer's key (Python numeric equality), while a fraction keeps
+/// its decimals. `-0.0` is normalized to `0`.
+fn number_key(n: &serde_json::Number) -> String {
+    if let Some(i) = n.as_i64() {
+        format!("num:{i}")
+    } else if let Some(u) = n.as_u64() {
+        format!("num:{u}")
+    } else {
+        let f = n.as_f64().unwrap_or(0.0);
+        let f = if f == 0.0 { 0.0 } else { f };
+        format!("num:{f}")
     }
 }
 
