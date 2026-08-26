@@ -150,7 +150,7 @@ fn normalize_node_uses_index_when_missing_id() {
     let raw = json!({"label": "no_id_node"});
     let m = raw.as_object().expect("object field");
     let n = normalize_node(m, 7);
-    assert!(!n.id.is_empty());
+    assert_ne!(n.id, "");
 }
 
 // ── normalize_edge ──────────────────────────────────────────────────────────
@@ -239,7 +239,7 @@ fn load_labels_reads_object() {
 
 #[test]
 fn load_report_returns_empty_for_missing() {
-    assert!(load_report(None).is_empty());
+    assert_eq!(load_report(None), "");
 }
 
 #[test]
@@ -258,5 +258,5 @@ fn infer_project_name_from_path() {
     let meta: IndexMap<String, serde_json::Value> = IndexMap::new();
     let p = std::path::PathBuf::from("/some/project/path/graphify-out/graph.json");
     let n = infer_project_name(&p, &meta);
-    assert!(!n.is_empty());
+    assert_ne!(n, "");
 }

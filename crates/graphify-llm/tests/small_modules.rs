@@ -67,7 +67,7 @@ fn read_files_skips_missing_files() {
         ],
         tmp.path(),
     );
-    assert!(out.is_empty());
+    assert_eq!(out, "");
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn llm_response_to_value_emits_expected_keys() {
 fn read_files_empty_list_returns_empty() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let out: Vec<PathBuf> = vec![];
-    assert!(read_files(&out, tmp.path()).is_empty());
+    assert_eq!(read_files(&out, tmp.path()), "");
 }
 
 #[test]

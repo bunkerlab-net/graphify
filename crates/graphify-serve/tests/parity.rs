@@ -168,7 +168,7 @@ fn test_communities_from_graph_no_community_attr() {
     )
     .expect("graph");
     let communities = communities_from_graph(&g);
-    assert!(communities.is_empty());
+    assert_eq!(communities.len(), 0);
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn test_score_nodes_exact_label_match() {
     let g = make_graph();
     let mut cache = HashMap::new();
     let scored = score_nodes(&g, &["extract"], &mut cache);
-    assert!(!scored.is_empty());
+    assert_ne!(scored, Vec::<(f64, String)>::new());
     let nids: Vec<&str> = scored.iter().map(|(_, nid)| nid.as_str()).collect();
     assert!(nids.contains(&"n1"));
     assert_eq!(scored[0].1, "n1", "highest score should be n1");
@@ -197,7 +197,7 @@ fn test_score_nodes_no_match() {
     let g = make_graph();
     let mut cache = HashMap::new();
     let scored = score_nodes(&g, &["xyzzy"], &mut cache);
-    assert!(scored.is_empty());
+    assert_eq!(scored, Vec::<(f64, String)>::new());
 }
 
 #[test]
@@ -665,7 +665,7 @@ fn test_bfs_disconnected() {
 fn test_bfs_returns_edges() {
     let g = make_graph();
     let (_, edges) = bfs(&g, &["n1".to_string()], 1);
-    assert!(!edges.is_empty());
+    assert_ne!(edges, Vec::<(String, String)>::new());
     assert!(edges.iter().any(|(u, v)| u == "n1" || v == "n1"));
 }
 
@@ -1081,7 +1081,7 @@ fn test_pick_seeds_close_scores_keeps_multiple() {
 #[test]
 fn test_pick_seeds_empty() {
     let seeds = pick_seeds(&[], 3, 0.2);
-    assert!(seeds.is_empty());
+    assert_eq!(seeds, Vec::<String>::new());
 }
 
 #[test]
@@ -1347,7 +1347,7 @@ fn test_tool_list_prs_handles_empty() {
     let result =
         tool_list_prs_with_clients(&json!({}), &gh, &FakeGitClient).expect("test invariant");
     let prs = result["prs"].as_array().expect("array field");
-    assert!(prs.is_empty());
+    assert_eq!(prs.len(), 0);
     assert_eq!(result["count"], 0);
 }
 

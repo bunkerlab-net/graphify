@@ -334,7 +334,10 @@ fn env_command_args_skips_clumped_unset() {
 
 #[test]
 fn env_command_args_unknown_flag_returns_empty() {
-    assert!(env_command_args(&split(&["--what", "python3"]), true).is_empty());
+    assert_eq!(
+        env_command_args(&split(&["--what", "python3"]), true),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

@@ -171,7 +171,7 @@ async fn notification_returns_202_with_no_body() {
         .await
         .expect("oneshot");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    assert!(body_string(resp).await.is_empty());
+    assert_eq!(body_string(resp).await, "");
 }
 
 #[tokio::test]

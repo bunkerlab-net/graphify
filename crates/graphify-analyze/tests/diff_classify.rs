@@ -100,7 +100,7 @@ fn file_category_doc() {
 fn file_category_unknown() {
     let cat = file_category("random.xyz");
     // Should be some non-empty fallback string.
-    assert!(!cat.is_empty());
+    assert_ne!(cat, "");
 }
 
 // ── is_concept_node ────────────────────────────────────────────────────────

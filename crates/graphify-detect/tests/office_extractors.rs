@@ -18,7 +18,7 @@ use graphify_detect::office::{
 fn extract_pdf_text_returns_empty_on_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let result = extract_pdf_text(&tmp.path().join("nonexistent.pdf"));
-    assert!(result.is_empty());
+    assert_eq!(result, "");
 }
 
 #[test]
@@ -27,13 +27,13 @@ fn extract_pdf_text_returns_empty_on_invalid_bytes() {
     let p = tmp.path().join("bad.pdf");
     fs::write(&p, b"this is not a pdf").expect("write fixture");
     let result = extract_pdf_text(&p);
-    assert!(result.is_empty());
+    assert_eq!(result, "");
 }
 
 #[test]
 fn docx_to_markdown_returns_empty_on_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    assert!(docx_to_markdown(&tmp.path().join("nonexistent.docx")).is_empty());
+    assert_eq!(docx_to_markdown(&tmp.path().join("nonexistent.docx")), "");
 }
 
 #[test]
@@ -41,13 +41,13 @@ fn docx_to_markdown_returns_empty_on_non_zip() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let p = tmp.path().join("bad.docx");
     fs::write(&p, b"definitely not a docx").expect("write fixture");
-    assert!(docx_to_markdown(&p).is_empty());
+    assert_eq!(docx_to_markdown(&p), "");
 }
 
 #[test]
 fn xlsx_to_markdown_returns_empty_on_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    assert!(xlsx_to_markdown(&tmp.path().join("nonexistent.xlsx")).is_empty());
+    assert_eq!(xlsx_to_markdown(&tmp.path().join("nonexistent.xlsx")), "");
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn xlsx_to_markdown_returns_empty_on_non_zip() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let p = tmp.path().join("bad.xlsx");
     fs::write(&p, b"definitely not an xlsx").expect("write fixture");
-    assert!(xlsx_to_markdown(&p).is_empty());
+    assert_eq!(xlsx_to_markdown(&p), "");
 }
 
 #[test]

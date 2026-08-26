@@ -93,7 +93,7 @@ async fn server_lists_tools() {
     let tools = responses[0]["result"]["tools"]
         .as_array()
         .expect("array field");
-    assert!(!tools.is_empty());
+    assert_ne!(tools.len(), 0);
     assert!(
         tools
             .iter()
@@ -136,7 +136,7 @@ async fn server_lists_resources() {
     let resources = responses[0]["result"]["resources"]
         .as_array()
         .expect("array field");
-    assert!(!resources.is_empty());
+    assert_ne!(resources.len(), 0);
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn server_tools_carry_optional_project_path() {
     let input = "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/list\"}\n";
     let responses = run_with_input(&gp, input).await;
     let tools = responses[0]["result"]["tools"].as_array().expect("array");
-    assert!(!tools.is_empty());
+    assert_ne!(tools.len(), 0);
     for t in tools {
         assert_eq!(
             t["inputSchema"]["properties"]["project_path"]["type"].as_str(),

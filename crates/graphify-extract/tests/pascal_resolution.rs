@@ -108,7 +108,7 @@ fn single_file_extraction_reports_unresolved_inherited_call() {
         .iter()
         .find(|rc| rc.callee == "prepare")
         .expect("unresolved `prepare` call must be reported as a raw_call");
-    assert!(!rc.caller_nid.is_empty());
+    assert_ne!(rc.caller_nid, "");
 }
 
 #[test]

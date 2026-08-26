@@ -20,14 +20,14 @@ fn load_graphifyinclude_reads_explicit_patterns() {
     )
     .expect("test invariant");
     let patterns = load_graphifyinclude(tmp.path());
-    assert!(!patterns.is_empty());
+    assert_ne!(patterns, graphify_detect::ignore::IgnorePatterns::new());
 }
 
 #[test]
 fn load_graphifyinclude_returns_empty_when_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let patterns = load_graphifyinclude(tmp.path());
-    assert!(patterns.is_empty());
+    assert_eq!(patterns, graphify_detect::ignore::IgnorePatterns::new());
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn load_graphifyignore_reads_patterns() {
     fs::write(tmp.path().join(".graphifyignore"), "*.tmp\nnode_modules/\n")
         .expect("test invariant");
     let patterns = load_graphifyignore(tmp.path());
-    assert!(!patterns.is_empty());
+    assert_ne!(patterns, graphify_detect::ignore::IgnorePatterns::new());
 }
 
 // ── walk helpers ────────────────────────────────────────────────────────────

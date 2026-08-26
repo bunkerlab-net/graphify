@@ -966,17 +966,15 @@ fn test_save_semantic_cache_rejects_out_of_scope_source_file() {
         .filter_map(|n| n["id"].as_str())
         .collect();
     assert_eq!(pids, HashSet::from(["original"]));
-    assert!(
-        protected_cache["edges"]
-            .as_array()
-            .expect("edges")
-            .is_empty()
+    assert_eq!(
+        protected_cache["edges"].as_array().expect("edges"),
+        &Vec::<Value>::new()
     );
-    assert!(
+    assert_eq!(
         protected_cache["hyperedges"]
             .as_array()
-            .expect("hyperedges")
-            .is_empty()
+            .expect("hyperedges"),
+        &Vec::<Value>::new()
     );
 }
 
@@ -1073,7 +1071,7 @@ fn word_count_augments_existing_hash_entry() {
     let f = tmp.path().join("m.py");
     write_text(&f, "x = 1\n"); // -> ["x", "=", "1"] == 3 tokens
     let h = file_hash(&f, tmp.path(), None).expect("hash");
-    assert!(!h.is_empty());
+    assert_ne!(h, "");
     let wc = cached_word_count(
         &f,
         tmp.path(),
@@ -1330,7 +1328,7 @@ fn semantic_cache_deep_mode_roundtrip_under_deep_namespace() {
         Some("deep"),
     );
     assert_eq!(ids(&split.cached_nodes), ["deep_n"]);
-    assert!(split.uncached_files.is_empty());
+    assert_eq!(split.uncached_files, Vec::<String>::new());
 }
 
 #[test]
@@ -1503,7 +1501,7 @@ fn semantic_cache_mode_none_layout_unchanged() {
     );
     let split = check_semantic_cache(&[f.to_string_lossy().into_owned()], tmp.path(), None);
     assert_eq!(ids(&split.cached_nodes), ["n"]);
-    assert!(split.uncached_files.is_empty());
+    assert_eq!(split.uncached_files, Vec::<String>::new());
 }
 
 #[test]
@@ -1758,7 +1756,7 @@ fn save_semantic_cache_drops_edges_to_out_of_scope_nodes() {
         tmp.path(),
         None,
     );
-    assert!(split.uncached_files.is_empty());
+    assert_eq!(split.uncached_files, Vec::<String>::new());
     let node_ids: HashSet<String> = ids(&split.cached_nodes).into_iter().collect();
     assert_eq!(
         node_ids,

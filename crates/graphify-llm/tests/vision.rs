@@ -38,7 +38,7 @@ fn pdf_is_not_treated_as_vision_image() {
     assert!(!is_vision_image(&pdf));
     let (text, images) = partition_semantic_files(std::slice::from_ref(&pdf));
     assert_eq!(text, vec![pdf]);
-    assert!(images.is_empty());
+    assert_eq!(images, Vec::<PathBuf>::new());
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn build_image_refs_sets_rel_media_and_bytes() {
     );
     assert_eq!(r.media_type, "image/png");
     assert_eq!(r.raw.as_deref(), Some(PNG_BYTES));
-    assert!(!r.b64().is_empty());
+    assert_ne!(r.b64(), "");
     assert_eq!(r.bedrock_format(), "png");
 }
 

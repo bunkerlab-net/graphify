@@ -91,9 +91,9 @@ fn extract_merges_multiple_files() {
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("py"))
         .collect();
-    assert!(!files.is_empty());
+    assert_ne!(files, Vec::<PathBuf>::new());
     let result = extract(&files, None);
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes.len(), 0);
     assert_eq!(result.input_tokens, 0);
 }
 

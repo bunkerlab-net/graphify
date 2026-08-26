@@ -135,9 +135,18 @@ fn extract_files_direct_with_empty_string_api_key_still_errors() {
 #[test]
 fn empty_fragment_has_expected_shape() {
     let v = empty_fragment();
-    assert!(v["nodes"].as_array().expect("array field").is_empty());
-    assert!(v["edges"].as_array().expect("array field").is_empty());
-    assert!(v["hyperedges"].as_array().expect("array field").is_empty());
+    assert_eq!(
+        v["nodes"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
+    assert_eq!(
+        v["edges"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
+    assert_eq!(
+        v["hyperedges"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
 }
 
 // ── LlmResponse merging via retry helpers (only public surface) ───────────

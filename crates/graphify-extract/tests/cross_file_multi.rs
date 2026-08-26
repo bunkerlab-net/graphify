@@ -66,7 +66,7 @@ fn python_cross_file_with_relative_imports() {
         ],
         Some(tmp.path()),
     );
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes, Vec::<CorpusObj>::new());
     // Should produce some imports_from edges across files.
     let imports_from: Vec<_> = result
         .edges
@@ -145,8 +145,8 @@ fn extract_with_blade_and_fortran_and_unknown() {
 #[test]
 fn extract_empty_paths_returns_empty() {
     let result = extract(&[], None);
-    assert!(result.nodes.is_empty());
-    assert!(result.edges.is_empty());
+    assert_eq!(result.nodes, Vec::<CorpusObj>::new());
+    assert_eq!(result.edges, Vec::<CorpusObj>::new());
     assert_eq!(result.input_tokens, 0);
 }
 
@@ -156,7 +156,7 @@ fn extract_single_file_uses_parent_as_root() {
     let path = tmp.path().join("solo.py");
     fs::write(&path, "def x(): pass\n").expect("test invariant");
     let result = extract(&[path], None);
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes, Vec::<CorpusObj>::new());
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn extract_with_cache_root_uses_provided_root() {
     let path = tmp.path().join("cached.py");
     fs::write(&path, "def x(): pass\n").expect("test invariant");
     let result = extract(&[path], Some(tmp.path()));
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes, Vec::<CorpusObj>::new());
 }
 
 /// Python function definitions emit `references` edges with `parameter_type`,
@@ -2326,7 +2326,7 @@ fn cpp_paired_single_class_node() {
         nodes_with_label(&out, "class").is_empty(),
         "no sourceless `class` stub"
     );
-    assert!(nodes_with_label(&out, "foo_foo").is_empty());
+    assert_eq!(nodes_with_label(&out, "foo_foo"), Vec::<&CorpusObj>::new());
 }
 
 /// #1547: `void bar();` in `Foo.h` and `void Foo::bar() {}` in `Foo.cpp` collapse

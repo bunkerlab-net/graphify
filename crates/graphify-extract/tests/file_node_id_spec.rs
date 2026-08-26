@@ -122,7 +122,7 @@ fn top_level_file_symbol_ids_use_bare_stem() -> TestResult {
                 && e.get("target").and_then(Value::as_str) == Some("main_run")
         })
         .collect();
-    assert!(!contains.is_empty());
+    assert_ne!(contains, Vec::<&IndexMap<String, Value>>::new());
     assert_eq!(
         contains[0].get("source").and_then(Value::as_str),
         Some("main")

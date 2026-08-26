@@ -91,7 +91,7 @@ void checkDependencies(BuildContext context) {
     .expect("inherits edge");
     assert_eq!(inherits.target, "bloc");
     let bloc_node = node(nodes, |n| n.id == "bloc").expect("bloc node");
-    assert!(bloc_node.source_file.is_empty());
+    assert_eq!(bloc_node.source_file, "");
 
     assert!(
         edge(edges, |e| e.source == user_bloc.id
@@ -100,7 +100,7 @@ void checkDependencies(BuildContext context) {
         .is_some()
     );
     let event_node = node(nodes, |n| n.id == "userevent").expect("userevent node");
-    assert!(event_node.source_file.is_empty());
+    assert_eq!(event_node.source_file, "");
     assert!(
         edge(edges, |e| e.source == user_bloc.id
             && e.relation == "references"
@@ -111,7 +111,7 @@ void checkDependencies(BuildContext context) {
     // D. Class annotation (global id, empty source_file) + configures edge
     let injectable = node(nodes, |n| n.label == "@injectable").expect("@injectable node");
     assert_eq!(injectable.id, "annotation_injectable");
-    assert!(injectable.source_file.is_empty());
+    assert_eq!(injectable.source_file, "");
     assert!(
         edge(edges, |e| e.source == user_bloc.id
             && e.target == injectable.id
@@ -146,7 +146,7 @@ void checkDependencies(BuildContext context) {
         .is_some()
     );
     let custom = node(nodes, |n| n.id == "customservice").expect("customservice node");
-    assert!(custom.source_file.is_empty());
+    assert_eq!(custom.source_file, "");
     assert!(
         edge(edges, |e| e.source == file_node.id
             && e.target == "networkfactory"
@@ -157,12 +157,12 @@ void checkDependencies(BuildContext context) {
     // H. Imports + exports (global ids, empty source_file)
     let import_node =
         node(nodes, |n| n.id == "package_flutter_material_dart").expect("import node");
-    assert!(import_node.source_file.is_empty());
+    assert_eq!(import_node.source_file, "");
     assert_eq!(import_node.label, "package:flutter/material.dart");
 
     let export_node =
         node(nodes, |n| n.id == "package_flutter_bloc_flutter_bloc_dart").expect("export node");
-    assert!(export_node.source_file.is_empty());
+    assert_eq!(export_node.source_file, "");
     assert_eq!(export_node.label, "package:flutter_bloc/flutter_bloc.dart");
     assert!(
         edge(edges, |e| e.source == file_node.id
