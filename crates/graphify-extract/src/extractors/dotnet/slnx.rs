@@ -1,6 +1,6 @@
 //! `.slnx` (XML solution) extractor.
 
-use super::{CSPROJ_MAX_BYTES, attr_ci, local_name};
+use super::{CSPROJ_MAX_BYTES, attr_ci};
 use crate::ids::make_id1;
 use crate::types::{Edge, FileResult, Node};
 use quick_xml::events::{BytesStart, Event};
@@ -44,7 +44,7 @@ impl SlnxCtx<'_> {
     /// `true` for a `Start` tag (a matching `End` will pop the stack) and
     /// `false` for a self-closing `Empty` tag.
     fn on_element(&mut self, e: &BytesStart<'_>, has_children: bool) {
-        match local_name(e).as_str() {
+        match e.local_name().into_inner() {
             "Project" => {
                 let path_attr = attr_ci(e, "Path").filter(|s| !s.is_empty());
                 let proj_nid = match &path_attr {
@@ -173,18 +173,8 @@ pub fn extract_slnx(path: &Path) -> FileResult {
                 Ok(Event::Eof) => break,
                 Ok(Event::Start(ref e)) => ctx.on_element(e, true),
                 Ok(Event::Empty(ref e)) => ctx.on_element(e, false),
-                Ok(Event::End(ref e)) => {
-                    // `BytesEnd` is a distinct type from `BytesStart`, so strip
-                    // the namespace prefix inline rather than via `local_name`.
-                    let name = e.name();
-                    let raw = name.as_ref();
-                    let local = raw
-                        .iter()
-                        .rposition(|&b| b == b':')
-                        .map_or(raw, |i| &raw[i + 1..]);
-                    if local == b"Project" {
-                        ctx.proj_stack.pop();
-                    }
+                Ok(Event::End(e)) if e.local_name().into_inner() == "Project" => {
+                    ctx.proj_stack.pop();
                 }
                 _ => {}
             }
