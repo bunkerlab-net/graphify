@@ -148,7 +148,7 @@ fn surprising_connections_cross_source_multi_file() {
     let g = make_graph();
     let communities = cluster(&g, 1.0, None);
     let surprises = surprising_connections(&g, &communities, 10);
-    assert!(!surprises.is_empty());
+    assert_ne!(surprises, Vec::<Value>::new());
     for s in &surprises {
         assert_ne!(s["source_files"][0], s["source_files"][1]);
     }
@@ -888,11 +888,9 @@ fn graph_diff_new_nodes() {
     assert_eq!(new_nodes.len(), 1);
     assert_eq!(new_nodes[0]["id"], "n3");
     assert_eq!(new_nodes[0]["label"], "Gamma");
-    assert!(
-        diff["removed_nodes"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["removed_nodes"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
     assert!(
         diff["summary"]
@@ -908,11 +906,9 @@ fn graph_diff_removed_nodes() {
     let g_old = make_simple_graph(&[("n1", "Alpha"), ("n2", "Beta"), ("n3", "Gamma")], &[]);
     let g_new = make_simple_graph(&[("n1", "Alpha"), ("n2", "Beta")], &[]);
     let diff = graph_diff(&g_old, &g_new);
-    assert!(
-        diff["new_nodes"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["new_nodes"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
     let removed = diff["removed_nodes"].as_array().expect("array field");
     assert_eq!(removed.len(), 1);
@@ -943,11 +939,9 @@ fn graph_diff_new_edges() {
     let new_edge = &new_edges[0];
     assert_eq!(new_edge["relation"], "uses");
     assert_eq!(new_edge["confidence"], "INFERRED");
-    assert!(
-        diff["removed_edges"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["removed_edges"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
     assert!(
         diff["summary"]
@@ -965,29 +959,21 @@ fn graph_diff_empty_diff() {
     let g_old = make_simple_graph(&nodes, &edges);
     let g_new = make_simple_graph(&nodes, &edges);
     let diff = graph_diff(&g_old, &g_new);
-    assert!(
-        diff["new_nodes"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["new_nodes"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
-    assert!(
-        diff["removed_nodes"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["removed_nodes"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
-    assert!(
-        diff["new_edges"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["new_edges"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
-    assert!(
-        diff["removed_edges"]
-            .as_array()
-            .expect("array field")
-            .is_empty()
+    assert_eq!(
+        diff["removed_edges"].as_array().expect("array field"),
+        &Vec::<Value>::new()
     );
     assert_eq!(diff["summary"], "no changes");
 }
@@ -1873,9 +1859,9 @@ fn find_import_cycles_skips_deferred_import_edges() {
 fn find_import_cycles_returns_structured_records() {
     let g = make_cycle_graph(GraphKind::DiGraph);
     let cycles = find_import_cycles(&g);
-    assert!(!cycles.is_empty());
+    assert_ne!(cycles, Vec::<graphify_analyze::ImportCycle>::new());
     let first = &cycles[0];
-    assert!(!first.cycle.is_empty());
+    assert_ne!(first.cycle, Vec::<String>::new());
     assert_eq!(first.length, first.cycle.len());
     assert_eq!(first.why, "circular dependency");
 }
@@ -1923,14 +1909,20 @@ fn find_import_cycles_respects_max_cycle_length() {
 #[test]
 fn find_import_cycles_zero_max_length_returns_none() {
     let g = make_cycle_graph(GraphKind::DiGraph);
-    assert!(find_import_cycles_bounded(&g, 0, 20).is_empty());
+    assert_eq!(
+        find_import_cycles_bounded(&g, 0, 20),
+        Vec::<graphify_analyze::ImportCycle>::new()
+    );
 }
 
 /// A zero `top_n` requests no results, so the enumeration short-circuits.
 #[test]
 fn find_import_cycles_zero_top_n_returns_none() {
     let g = make_cycle_graph(GraphKind::DiGraph);
-    assert!(find_import_cycles_bounded(&g, 5, 0).is_empty());
+    assert_eq!(
+        find_import_cycles_bounded(&g, 5, 0),
+        Vec::<graphify_analyze::ImportCycle>::new()
+    );
 }
 
 /// `test_find_import_cycles_skips_nodes_without_source_file`
@@ -1953,7 +1945,7 @@ fn find_import_cycles_handles_undirected_graph_input() {
     let g = make_cycle_graph(GraphKind::Graph);
     let cycles = find_import_cycles(&g);
     // Orientation is still resolved via each edge's `source_file`.
-    assert!(!cycles.is_empty());
+    assert_ne!(cycles, Vec::<graphify_analyze::ImportCycle>::new());
 }
 
 /// `test_find_import_cycles_ignores_non_import_relations`
@@ -1964,7 +1956,10 @@ fn find_import_cycles_ignores_non_import_relations() {
     cycle_node(&mut g, "b", "b.ts", Some("src/b.ts"));
     cycle_edge(&mut g, "a", "b", "calls", "src/a.ts", "INFERRED");
     cycle_edge(&mut g, "b", "a", "contains", "src/b.ts", "EXTRACTED");
-    assert!(find_import_cycles(&g).is_empty());
+    assert_eq!(
+        find_import_cycles(&g),
+        Vec::<graphify_analyze::ImportCycle>::new()
+    );
 }
 
 /// `re_exports` edges are import-like and must close cycles too — Python treats
@@ -1991,7 +1986,10 @@ fn find_import_cycles_detects_re_exports_cycle() {
 #[test]
 fn find_import_cycles_empty_graph() {
     let g = Graph::new(GraphKind::DiGraph);
-    assert!(find_import_cycles(&g).is_empty());
+    assert_eq!(
+        find_import_cycles(&g),
+        Vec::<graphify_analyze::ImportCycle>::new()
+    );
 }
 
 /// `test_find_import_cycles_no_cycles`
@@ -2001,5 +1999,8 @@ fn find_import_cycles_no_cycles() {
     cycle_node(&mut g, "x", "x.ts", Some("x.ts"));
     cycle_node(&mut g, "y", "y.ts", Some("y.ts"));
     cycle_edge(&mut g, "x", "y", "imports_from", "x.ts", "EXTRACTED");
-    assert!(find_import_cycles(&g).is_empty());
+    assert_eq!(
+        find_import_cycles(&g),
+        Vec::<graphify_analyze::ImportCycle>::new()
+    );
 }

@@ -100,8 +100,8 @@ fn degenerate_manifests_return_empty_or_skip_bad_deps() {
     let empty = tmp.path().join("empty");
     write_manifest(&empty.join("Cargo.toml"), "");
     let empty_result = introspect_cargo(&empty).expect("introspect empty");
-    assert!(empty_result.nodes.is_empty());
-    assert!(empty_result.edges.is_empty());
+    assert_eq!(empty_result.nodes, Vec::<Value>::new());
+    assert_eq!(empty_result.edges, Vec::<Value>::new());
 
     // Package without a name → no crate node.
     let nameless = tmp.path().join("nameless");
@@ -110,8 +110,8 @@ fn degenerate_manifests_return_empty_or_skip_bad_deps() {
         "[package]\nversion = \"0.1.0\"\n",
     );
     let nameless_result = introspect_cargo(&nameless).expect("introspect nameless");
-    assert!(nameless_result.nodes.is_empty());
-    assert!(nameless_result.edges.is_empty());
+    assert_eq!(nameless_result.nodes, Vec::<Value>::new());
+    assert_eq!(nameless_result.edges, Vec::<Value>::new());
 
     // Scalar (non-table) dependencies are ignored, the crate node still appears.
     let scalar = tmp.path().join("scalar-dependencies");
@@ -129,7 +129,7 @@ fn degenerate_manifests_return_empty_or_skip_bad_deps() {
             "source_location": "L1",
         })]
     );
-    assert!(scalar_result.edges.is_empty());
+    assert_eq!(scalar_result.edges, Vec::<Value>::new());
 }
 
 /// `test_cargo_introspect_old_manifest_keeps_internal_path_dep_and_skips_external`

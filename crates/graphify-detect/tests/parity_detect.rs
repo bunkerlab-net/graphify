@@ -554,7 +554,7 @@ fn detect_skips_google_workspace_shortcuts_by_default() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join("notes.gdoc"), r#"{"doc_id":"doc-1"}"#).expect("test invariant");
     let result = detect(tmp.path(), None, None);
-    assert!(result.files["document"].is_empty());
+    assert_eq!(result.files["document"], Vec::<String>::new());
     assert!(
         result
             .skipped_sensitive

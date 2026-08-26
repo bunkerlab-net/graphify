@@ -422,7 +422,7 @@ fn test_queue_and_drain_pending_round_trip() {
     assert_eq!(drained, paths);
     // Drain unlinks so subsequent callers see an empty queue.
     assert!(!pending_file.exists());
-    assert!(drain_pending(&out).is_empty());
+    assert_eq!(drain_pending(&out), Vec::<PathBuf>::new());
 }
 
 /// Python: `test_drain_pending_dedupes_and_skips_blank_lines`

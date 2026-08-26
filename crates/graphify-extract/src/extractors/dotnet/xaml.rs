@@ -145,16 +145,6 @@ struct XamlElem {
     children: Vec<usize>,
 }
 
-/// Local name of an XML name: the segment after the last `:` (quick-xml keeps the
-/// `prefix:local` form). Mirrors Python `_xml_local_name` on `{ns}local`.
-fn local_name(raw: &[u8]) -> String {
-    let local = raw
-        .iter()
-        .rposition(|&b| b == b':')
-        .map_or(raw, |i| &raw[i + 1..]);
-    String::from_utf8_lossy(local).into_owned()
-}
-
 /// Parse the XAML into a flat element vec; returns `(elems, root_index)`.
 fn parse_dom(bytes: &[u8]) -> Option<(Vec<XamlElem>, usize)> {
     let mut reader = Reader::from_reader(bytes);
@@ -183,7 +173,7 @@ fn parse_dom(bytes: &[u8]) -> Option<(Vec<XamlElem>, usize)> {
             .attributes()
             .filter_map(Result::ok)
             .map(|a| {
-                let key = local_name(a.key.as_ref());
+                let key = a.key.local_name().into_inner().to_string();
                 let value = a
                     .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                     .map(std::borrow::Cow::into_owned)
@@ -193,7 +183,7 @@ fn parse_dom(bytes: &[u8]) -> Option<(Vec<XamlElem>, usize)> {
             .collect();
         let idx = elems.len();
         elems.push(XamlElem {
-            tag: local_name(start.name().as_ref()),
+            tag: start.local_name().into_inner().to_string(),
             attrs,
             children: Vec::new(),
         });

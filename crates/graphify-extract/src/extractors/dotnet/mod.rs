@@ -29,18 +29,6 @@ use quick_xml::events::BytesStart;
 /// across the Python/Rust pair belongs in a separate parity-bumping change.
 const CSPROJ_MAX_BYTES: u64 = 2_097_152;
 
-/// Strip an XML element's namespace prefix so callers can match on the local
-/// tag name. Matches Python's `tag.split('}')[1]` pattern.
-fn local_name(start: &BytesStart<'_>) -> String {
-    let name = start.name();
-    let raw = name.as_ref();
-    let local = raw
-        .iter()
-        .rposition(|&b| b == b':')
-        .map_or(raw, |i| &raw[i + 1..]);
-    String::from_utf8_lossy(local).into_owned()
-}
-
 /// Find `attr` on a `BytesStart`, falling back to its lowercased variant —
 /// mirrors Python's case-insensitive `Include`/`include` lookup. Returns
 /// `None` when neither attribute is present.

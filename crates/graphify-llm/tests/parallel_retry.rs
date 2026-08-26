@@ -166,7 +166,7 @@ fn extract_with_adaptive_retry_truncated_chunk_bisects() {
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 3, 0)
             .expect("test invariant");
     // Bisect kept partial result; nodes set non-empty.
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes, Vec::<serde_json::Value>::new());
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn extract_with_adaptive_retry_single_file_truncation_keeps_partial() {
     let result =
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 3, 0)
             .expect("test invariant");
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes, Vec::<serde_json::Value>::new());
     assert_eq!(result.finish_reason, "length");
 }
 
@@ -227,7 +227,7 @@ fn extract_with_adaptive_retry_truncation_at_max_depth() {
     let result =
         extract_with_adaptive_retry(&files, "openai", Some("k"), Some("m"), tmp.path(), 2, 2)
             .expect("test invariant");
-    assert!(!result.nodes.is_empty());
+    assert_ne!(result.nodes, Vec::<serde_json::Value>::new());
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn extract_corpus_parallel_happy_path() {
         deep_mode: false,
     };
     let (resp, failed) = extract_corpus_parallel(&files, &cfg, None);
-    assert!(!resp.nodes.is_empty());
+    assert_ne!(resp.nodes, Vec::<serde_json::Value>::new());
     assert_eq!(failed, 0);
 }
 
@@ -323,7 +323,7 @@ fn extract_corpus_parallel_with_token_budget() {
         deep_mode: false,
     };
     let (resp, _failed) = extract_corpus_parallel(&files, &cfg, None);
-    assert!(!resp.nodes.is_empty());
+    assert_ne!(resp.nodes, Vec::<serde_json::Value>::new());
 }
 
 #[test]
@@ -380,7 +380,7 @@ fn extract_corpus_parallel_empty_files() {
         deep_mode: false,
     };
     let (resp, failed) = extract_corpus_parallel(&[], &cfg, None);
-    assert!(resp.nodes.is_empty());
+    assert_eq!(resp.nodes, Vec::<serde_json::Value>::new());
     assert_eq!(failed, 0);
 }
 

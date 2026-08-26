@@ -80,7 +80,7 @@ fn build_edge_rows_captures_rel_type() {
     let rows = build_edge_rows(&g);
     assert_eq!(rows.len(), 2);
     let row = &rows[0];
-    assert!(!row.rel_type.is_empty());
+    assert_ne!(row.rel_type, "");
     assert!(row.props.contains_key("confidence") || row.props.is_empty());
 }
 

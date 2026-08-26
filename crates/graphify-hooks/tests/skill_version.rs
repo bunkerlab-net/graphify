@@ -67,7 +67,10 @@ fn skill_newer_than_package_recommends_upgrade_not_install() {
 fn matching_version_is_silent() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let skill_dst = make_skill(tmp.path(), "0.9.3");
-    assert!(skill_version_warnings(&skill_dst, "0.9.3").is_empty());
+    assert_eq!(
+        skill_version_warnings(&skill_dst, "0.9.3"),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -78,7 +81,10 @@ fn missing_stamp_is_silent() {
     fs::create_dir_all(&dir).expect("mkdir");
     let skill_dst = dir.join("SKILL.md");
     fs::write(&skill_dst, "# skill\n").expect("write");
-    assert!(skill_version_warnings(&skill_dst, "0.9.3").is_empty());
+    assert_eq!(
+        skill_version_warnings(&skill_dst, "0.9.3"),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -173,7 +179,7 @@ fn claude_config_dir_override_applies() {
 #[test]
 fn user_skill_destinations_is_nonempty_and_deduped() {
     let dests = user_skill_destinations();
-    assert!(!dests.is_empty());
+    assert_ne!(dests, Vec::<PathBuf>::new());
     let unique: std::collections::BTreeSet<&PathBuf> = dests.iter().collect();
     assert_eq!(
         unique.len(),

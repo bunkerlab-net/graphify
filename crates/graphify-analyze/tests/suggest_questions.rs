@@ -94,7 +94,7 @@ fn suggest_questions_isolated_node() {
     communities.insert(0, vec!["a".into(), "b".into(), "c".into()]);
     let labels: IndexMap<i64, String> = IndexMap::new();
     let qs = suggest_questions(&g, &communities, &labels, 10);
-    assert!(!qs.is_empty());
+    assert_ne!(qs, Vec::<serde_json::Value>::new());
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn suggest_questions_bridge_node() {
     labels.insert(0, "Group1".into());
     labels.insert(1, "Group2".into());
     let qs = suggest_questions(&g, &communities, &labels, 10);
-    assert!(!qs.is_empty());
+    assert_ne!(qs, Vec::<serde_json::Value>::new());
 }
 
 #[test]

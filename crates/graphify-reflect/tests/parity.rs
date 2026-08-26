@@ -116,7 +116,10 @@ fn parse_handles_crlf() {
 #[test]
 fn load_memory_docs_missing_dir_is_empty() {
     let tmp = tempfile::tempdir().unwrap();
-    assert!(load_memory_docs(&tmp.path().join("nope")).is_empty());
+    assert_eq!(
+        load_memory_docs(&tmp.path().join("nope")),
+        Vec::<MemoryDoc>::new()
+    );
 }
 
 fn write_raw_doc(mem: &std::path::Path, filename: &str, date: &str, outcome: &str, question: &str) {
@@ -200,14 +203,14 @@ fn sources_split_into_preferred_tentative_contested() {
 fn corroboration_threshold_promotes_only_repeated_nodes() {
     let one = agg(&[doc(Some("useful"), &["A"], "q", "", "2026-01-01")]);
     assert_eq!(node_names(&one.tentative), vec!["A"]);
-    assert!(one.preferred.is_empty());
+    assert_eq!(node_names(&one.preferred), Vec::<&str>::new());
 
     let two = agg(&[
         doc(Some("useful"), &["A"], "q", "", "2026-01-01"),
         doc(Some("useful"), &["A"], "q", "", "2026-01-01"),
     ]);
     assert_eq!(node_names(&two.preferred), vec!["A"]);
-    assert!(two.tentative.is_empty());
+    assert_eq!(node_names(&two.tentative), Vec::<&str>::new());
 }
 
 #[test]
@@ -248,7 +251,7 @@ fn node_existence_gate_drops_stale_nodes() {
 #[test]
 fn corroboration_counts_distinct_docs_not_citations() {
     let a = agg(&[doc(Some("useful"), &["A", "A"], "q", "", "2026-01-01")]);
-    assert!(a.preferred.is_empty());
+    assert_eq!(node_names(&a.preferred), Vec::<&str>::new());
     assert_eq!(node_names(&a.tentative), vec!["A"]);
     assert_eq!(a.tentative[0].n, 1);
 }
@@ -262,7 +265,7 @@ fn min_corroboration_is_honored_not_hardcoded() {
     let k2 = aggregate_lessons(&docs, None, now(), 30.0, 2, None);
     assert_eq!(node_names(&k2.preferred), vec!["A"]);
     let k3 = aggregate_lessons(&docs, None, now(), 30.0, 3, None);
-    assert!(k3.preferred.is_empty());
+    assert_eq!(node_names(&k3.preferred), Vec::<&str>::new());
     assert_eq!(node_names(&k3.tentative), vec!["A"]);
 }
 

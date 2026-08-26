@@ -20,7 +20,7 @@ fn valid() -> serde_json::Value {
 
 #[test]
 fn valid_passes() {
-    assert!(validate_extraction(&valid()).is_empty());
+    assert_eq!(validate_extraction(&valid()), Vec::<String>::new());
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn edges_accepts_links_alias() {
              "confidence": "EXTRACTED", "source_file": "a.py"},
         ],
     });
-    assert!(validate_extraction(&data).is_empty());
+    assert_eq!(validate_extraction(&data), Vec::<String>::new());
 }
 
 #[test]

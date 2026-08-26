@@ -335,7 +335,7 @@ fn parse_pom(text: &str) -> Option<ManifestInfo> {
         match event {
             Event::Eof => break,
             Event::Start(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let name = e.name().into_inner().to_owned();
                 if name == "dependency" && stack.last().map(String::as_str) == Some("dependencies")
                 {
                     cur_dep = Some((None, None));
@@ -350,26 +350,24 @@ fn parse_pom(text: &str) -> Option<ManifestInfo> {
                 }
             }
             Event::Text(t) => {
-                if let Ok(raw) = t.decode() {
-                    let val = raw.trim();
-                    if !val.is_empty() {
-                        let cur = stack.last().map(String::as_str);
-                        let parent = stack.len().checked_sub(2).map(|i| stack[i].as_str());
-                        if parent == Some("dependency") {
-                            if let Some(dep) = &mut cur_dep {
-                                match cur {
-                                    Some("groupId") => dep.0 = Some(val.to_string()),
-                                    Some("artifactId") => dep.1 = Some(val.to_string()),
-                                    _ => {}
-                                }
-                            }
-                        } else if parent == Some("project") {
+                let val = t.trim();
+                if !val.is_empty() {
+                    let cur = stack.last().map(String::as_str);
+                    let parent = stack.len().checked_sub(2).map(|i| stack[i].as_str());
+                    if parent == Some("dependency") {
+                        if let Some(dep) = &mut cur_dep {
                             match cur {
-                                Some("groupId") => project_gid = Some(val.to_string()),
-                                Some("artifactId") => project_aid = Some(val.to_string()),
-                                Some("version") => project_ver = Some(val.to_string()),
+                                Some("groupId") => dep.0 = Some(val.to_string()),
+                                Some("artifactId") => dep.1 = Some(val.to_string()),
                                 _ => {}
                             }
+                        }
+                    } else if parent == Some("project") {
+                        match cur {
+                            Some("groupId") => project_gid = Some(val.to_string()),
+                            Some("artifactId") => project_aid = Some(val.to_string()),
+                            Some("version") => project_ver = Some(val.to_string()),
+                            _ => {}
                         }
                     }
                 }

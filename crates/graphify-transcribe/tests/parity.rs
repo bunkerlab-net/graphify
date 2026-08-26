@@ -127,7 +127,7 @@ fn test_build_whisper_prompt_nodes_without_labels() {
     unsafe { std::env::remove_var("GRAPHIFY_WHISPER_PROMPT") };
     let nodes = vec![json!({"id": "1"}), json!({"id": "2", "label": ""})];
     let prompt = build_whisper_prompt(&nodes);
-    assert!(!prompt.is_empty());
+    assert_ne!(prompt, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ fn test_transcribe_missing_whisper_binary() {
 #[test]
 fn test_transcribe_all_empty() {
     let result = transcribe_all(&[], None, None);
-    assert!(result.is_empty());
+    assert_eq!(result, Vec::<String>::new());
 }
 
 #[test]

@@ -158,7 +158,7 @@ fn test_run_benchmark_per_question_list() {
 
     assert!(!result.per_question.is_empty());
     for p in &result.per_question {
-        assert!(!p.question.is_empty());
+        assert_ne!(p.question, "");
         assert!(p.query_tokens > 0);
         assert!(p.reduction > 0.0);
     }
@@ -253,7 +253,7 @@ fn test_hr_length() {
 
 #[test]
 fn test_sample_questions_not_empty() {
-    assert!(!SAMPLE_QUESTIONS.is_empty());
+    assert_ne!(SAMPLE_QUESTIONS.len(), 0);
 }
 
 // ---------------------------------------------------------------------------

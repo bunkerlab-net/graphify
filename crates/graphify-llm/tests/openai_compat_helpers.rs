@@ -178,15 +178,27 @@ fn safe_parse_response_returns_empty_on_oversized() {
     big.push_str(&"\"x\":".repeat(1_000_000));
     big.push_str("\"end\"}");
     let v = safe_parse_response(&big);
-    assert!(v["nodes"].as_array().expect("array field").is_empty());
-    assert!(v["edges"].as_array().expect("array field").is_empty());
-    assert!(v["hyperedges"].as_array().expect("array field").is_empty());
+    assert_eq!(
+        v["nodes"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
+    assert_eq!(
+        v["edges"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
+    assert_eq!(
+        v["hyperedges"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
 }
 
 #[test]
 fn safe_parse_response_handles_markdown_fences() {
     let v = safe_parse_response("```json\n{\"nodes\":[],\"edges\":[]}\n```");
-    assert!(v["nodes"].as_array().expect("array field").is_empty());
+    assert_eq!(
+        v["nodes"].as_array().expect("array field"),
+        &Vec::<serde_json::Value>::new()
+    );
 }
 
 // ── call_openai_compat with bad URL hits SSRF guard ────────────────────────

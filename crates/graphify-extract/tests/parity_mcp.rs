@@ -384,7 +384,7 @@ fn no_package_detected_for_unknown_arg_shape() {
         &json!({"mcpServers": {"x": {"command": "node", "args": ["./local-script.js", "--verbose"]}}}),
     );
     let r = extract_mcp_config(&p);
-    assert!(label_by_kind(&r, "mcp_package").is_empty());
+    assert_eq!(label_by_kind(&r, "mcp_package"), Vec::<&str>::new());
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn server_without_command_still_emits_server_node() {
     );
     let r = extract_mcp_config(&p);
     assert!(label_by_kind(&r, "mcp_server").contains(&"x"));
-    assert!(label_by_kind(&r, "mcp_command").is_empty());
+    assert_eq!(label_by_kind(&r, "mcp_command"), Vec::<&str>::new());
 }
 
 // ── Integration: dispatch routes filename-matched files to mcp_ingest ────────

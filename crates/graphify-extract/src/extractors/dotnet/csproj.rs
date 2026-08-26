@@ -1,6 +1,6 @@
 //! `.csproj` / `.fsproj` / `.vbproj` `MSBuild` project-file extractor.
 
-use super::{CSPROJ_MAX_BYTES, attr_ci, local_name};
+use super::{CSPROJ_MAX_BYTES, attr_ci};
 use crate::ids::{make_id, make_id1};
 use crate::types::{Edge, FileResult, Node};
 use quick_xml::events::Event;
@@ -83,8 +83,8 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                     root_seen = true;
                     root_sdk = attr_ci(e, "Sdk");
                 }
-                let name = local_name(e);
-                match name.as_str() {
+                let name = e.local_name().into_inner();
+                match name {
                     "TargetFramework" if !is_empty => {
                         capture = TextCapture::TargetFramework;
                     }
@@ -180,10 +180,7 @@ pub fn extract_csproj(path: &Path) -> FileResult {
                 }
             }
             Ok(Event::Text(t)) => {
-                let text = match t.decode() {
-                    Ok(s) => s.into_owned(),
-                    Err(_) => continue,
-                };
+                let text = &*t;
                 match capture {
                     TextCapture::TargetFramework => {
                         let fw = text.trim().to_string();

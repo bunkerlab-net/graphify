@@ -299,9 +299,7 @@ fn parse_docx_xml(xml: &str) -> Result<String, DetectError> {
 /// Splitting this out keeps `parse_docx_xml` within the clippy line budget and
 /// makes the start-tag dispatch independently testable.
 fn handle_docx_start(state: &mut DocxState, e: &quick_xml::events::BytesStart) {
-    // Bind the QName so its borrowed bytes outlive the inner `match`.
-    let qname = e.name();
-    match local_name(qname.as_ref()) {
+    match e.local_name().into_inner() {
         "pPr" => state.in_para_pr = true,
         "rPr" => state.in_run_pr = true,
         "p" => {
@@ -330,8 +328,8 @@ fn handle_docx_start(state: &mut DocxState, e: &quick_xml::events::BytesStart) {
         "pStyle" if state.in_para_pr => {
             // The Word style name lives in the `val` attribute of `<w:pStyle>`.
             for attr in e.attributes().flatten() {
-                if local_name(attr.key.as_ref()) == "val" {
-                    state.current_para_style = String::from_utf8_lossy(&attr.value).into_owned();
+                if attr.key.local_name().into_inner() == "val" {
+                    state.current_para_style = attr.value.into_owned();
                 }
             }
         }
@@ -343,8 +341,7 @@ fn handle_docx_start(state: &mut DocxState, e: &quick_xml::events::BytesStart) {
 ///
 /// Splitting this out keeps `parse_docx_xml` within the clippy line budget.
 fn handle_docx_end(state: &mut DocxState, e: &quick_xml::events::BytesEnd) {
-    let qname = e.name();
-    match local_name(qname.as_ref()) {
+    match e.local_name().into_inner() {
         "pPr" => state.in_para_pr = false,
         "rPr" => state.in_run_pr = false,
         "r" => {
@@ -406,8 +403,8 @@ fn flush_docx_paragraph(state: &mut DocxState) {
 /// Append a text event's characters to the run-text scratchpad.
 ///
 /// quick-xml 0.40 dropped `BytesText::unescape()` from the default-features
-/// build, so we decode lossily then call the free `quick_xml::escape::unescape`
-/// to resolve named entities.
+/// build, so we call the free `quick_xml::escape::unescape` to resolve named
+/// entities.
 fn handle_docx_text(state: &mut DocxState, e: &quick_xml::events::BytesText) {
     if state.in_run_pr
         || state.in_para_pr
@@ -415,11 +412,11 @@ fn handle_docx_text(state: &mut DocxState, e: &quick_xml::events::BytesText) {
     {
         return;
     }
-    let raw = String::from_utf8_lossy(e.as_ref()).into_owned();
-    let txt = quick_xml::escape::unescape(&raw)
-        .map(std::borrow::Cow::into_owned)
-        .unwrap_or(raw);
-    state.current_run_text.push_str(&txt);
+    let raw = e.as_ref();
+    match quick_xml::escape::unescape(raw) {
+        Ok(txt) => state.current_run_text.push_str(&txt),
+        Err(_) => state.current_run_text.push_str(raw),
+    }
 }
 
 /// Map a Word paragraph style name to a Markdown prefix and return the full line.
@@ -464,20 +461,6 @@ fn render_table_into(rows: &[Vec<String>], lines: &mut Vec<String>) {
     lines.push(sep);
     for row in rows.iter().skip(1) {
         lines.push(format!("| {} |", row.join(" | ")));
-    }
-}
-
-/// Strip an XML namespace prefix (`w:p` → `p`, `r:t` → `t`).
-///
-/// Word XML uses namespace-prefixed tag names (`w:p`, `w:r`, etc.). Stripping
-/// the prefix lets the event handlers match on the bare local name, which is
-/// language-independent and simpler to read.
-fn local_name(raw: &[u8]) -> &str {
-    let s = std::str::from_utf8(raw).unwrap_or("");
-    if let Some(pos) = s.find(':') {
-        &s[pos + 1..]
-    } else {
-        s
     }
 }
 

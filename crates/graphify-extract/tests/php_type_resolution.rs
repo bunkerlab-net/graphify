@@ -128,7 +128,7 @@ fn php_ambiguous_base_disambiguated_by_use() -> TestResult {
     assert_eq!(inherits.len(), 1);
     let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).ok_or("target missing")?;
     let src = s(tgt, "source_file");
-    assert!(!src.is_empty());
+    assert_ne!(src, "");
     assert!(src.contains("Cms") && !src.contains("Models") && !src.contains("Admin"));
     Ok(())
 }
@@ -149,9 +149,9 @@ fn php_use_alias_resolves() -> TestResult {
     let result = extract(&[bar, x], Some(tmp.path()));
 
     let inherits = inherits_from(&result.edges, "_x");
-    assert!(!inherits.is_empty());
+    assert_ne!(inherits, Vec::<&Obj>::new());
     let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).ok_or("target missing")?;
-    assert!(!s(tgt, "source_file").is_empty());
+    assert_ne!(s(tgt, "source_file"), "");
     assert!(s(tgt, "source_file").contains("Foo"));
     Ok(())
 }
@@ -171,9 +171,9 @@ fn php_fully_qualified_base_resolves() -> TestResult {
     let result = extract(&[page, y], Some(tmp.path()));
 
     let inherits = inherits_from(&result.edges, "_y");
-    assert!(!inherits.is_empty());
+    assert_ne!(inherits, Vec::<&Obj>::new());
     let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).ok_or("target missing")?;
-    assert!(!s(tgt, "source_file").is_empty());
+    assert_ne!(s(tgt, "source_file"), "");
     assert!(s(tgt, "source_file").contains("Models"));
     Ok(())
 }
@@ -194,7 +194,7 @@ fn php_plain_no_namespace_inheritance_preserved() -> TestResult {
         .iter()
         .filter(|e| s(e, "relation") == "inherits")
         .collect();
-    assert!(!inherits.is_empty());
+    assert_ne!(inherits, Vec::<&Obj>::new());
     let tgt = node_by_id(&result.nodes, &s(inherits[0], "target")).ok_or("target missing")?;
     assert!(
         !s(tgt, "source_file").is_empty(),

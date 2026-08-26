@@ -36,7 +36,7 @@ fn make_id_handles_emoji() {
     // *not* `\w`, so they should be replaced with underscores. Just verify
     // it doesn't panic and produces a valid string.
     let id = make_id(&["foo🚀bar"]);
-    assert!(!id.is_empty());
+    assert_ne!(id, "");
 }
 
 #[test]

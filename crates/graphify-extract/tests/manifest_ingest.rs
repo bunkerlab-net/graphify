@@ -159,12 +159,12 @@ fn apm_dependency_collapses_to_single_canonical_node() {
         core[0].get("id").and_then(|v| v.as_str()),
         Some("pkg_coding_standards_core")
     );
-    assert!(
-        !core[0]
+    assert_ne!(
+        core[0]
             .get("source_file")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .is_empty()
+            .unwrap_or(""),
+        ""
     );
 
     let dep_edges = res

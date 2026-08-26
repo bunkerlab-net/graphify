@@ -64,7 +64,7 @@ fn save_manifest_code_file_stamped() {
     let manifest = load_manifest_from_path(&manifest_path).expect("test invariant");
     let key = py.to_str().expect("utf-8 path");
     assert!(manifest.contains_key(key));
-    assert!(!manifest[key].ast_hash.is_empty());
+    assert_ne!(manifest[key].ast_hash, "");
 }
 
 #[test]
@@ -79,8 +79,8 @@ fn detect_incremental_all_new_when_no_manifest() {
         graphify_detect::IncrementalOptions::default(),
     )
     .expect("test invariant");
-    assert!(!changed.is_empty());
-    assert!(deleted.is_empty());
+    assert_ne!(changed, Vec::<std::path::PathBuf>::new());
+    assert_eq!(deleted, Vec::<std::path::PathBuf>::new());
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn detect_incremental_nothing_changed_after_save() {
     )
     .expect("test invariant");
     assert!(changed.is_empty(), "nothing changed, but got: {changed:?}");
-    assert!(deleted.is_empty());
+    assert_eq!(deleted, Vec::<std::path::PathBuf>::new());
 }
 
 #[test]
@@ -1046,7 +1046,7 @@ fn detect_incremental_still_reports_real_deletions() {
         })
         .collect();
     assert_eq!(deleted_names, ["b.py".to_string()]);
-    assert!(inc.excluded_files.is_empty());
+    assert_eq!(inc.excluded_files, Vec::<std::path::PathBuf>::new());
 }
 
 #[test]
@@ -1076,7 +1076,7 @@ fn detect_incremental_exclusion_stable_across_runs() {
         })
         .collect();
     assert_eq!(excl1, ["b.py".to_string()]);
-    assert!(inc1.deleted_files.is_empty());
+    assert_eq!(inc1.deleted_files, Vec::<std::path::PathBuf>::new());
     // The corpus is the FULL live set (changed + unchanged), matching Python's
     // `inc1["files"]` — using only changed_files would be empty here (a.py is
     // unchanged) and wrongly prune a.py.
@@ -1109,6 +1109,6 @@ fn detect_incremental_exclusion_stable_across_runs() {
     // Run 2: steady state — nothing deleted, nothing excluded.
     let inc2 = detect_incremental_with_cache_root(&root, &Manifest::new(), None, Some(&excludes))
         .expect("incremental");
-    assert!(inc2.deleted_files.is_empty());
-    assert!(inc2.excluded_files.is_empty());
+    assert_eq!(inc2.deleted_files, Vec::<std::path::PathBuf>::new());
+    assert_eq!(inc2.excluded_files, Vec::<std::path::PathBuf>::new());
 }

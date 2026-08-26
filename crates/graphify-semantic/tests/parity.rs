@@ -15,7 +15,7 @@ use tempfile::tempdir;
 #[test]
 fn validate_accepts_minimal_fragment() {
     let frag = json!({"nodes": [], "edges": [], "hyperedges": []});
-    assert!(validate_semantic_fragment(&frag).is_empty());
+    assert_eq!(validate_semantic_fragment(&frag), Vec::<String>::new());
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn load_validated_returns_errors_for_invalid_shape() {
     std::fs::write(&path, json!({"nodes": "x"}).to_string()).expect("test invariant");
     let (fragment, errors) = load_validated_semantic_fragment(&path);
     assert!(fragment.is_none());
-    assert!(!errors.is_empty());
+    assert_ne!(errors, Vec::<String>::new());
 }
 
 // ── #1561: hyperedge member-alias keys (members / node_ids) ──────────────────

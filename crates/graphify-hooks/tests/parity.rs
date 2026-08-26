@@ -2074,7 +2074,7 @@ fn test_install_claude_hook_creates_settings() {
 fn test_uninstall_claude_hook_noop_when_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let msg = uninstall_claude_hook(dir.path()).expect("test invariant");
-    assert!(msg.is_empty());
+    assert_eq!(msg, "");
 }
 
 #[test]
@@ -2122,7 +2122,7 @@ fn test_install_gemini_hook_creates_settings() {
 fn test_uninstall_gemini_hook_noop_when_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let msg = uninstall_gemini_hook(dir.path()).expect("test invariant");
-    assert!(msg.is_empty());
+    assert_eq!(msg, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -2149,7 +2149,7 @@ fn test_install_codex_hook_creates_hooks_json() {
 fn test_uninstall_codex_hook_noop_when_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let msg = uninstall_codex_hook(dir.path()).expect("test invariant");
-    assert!(msg.is_empty());
+    assert_eq!(msg, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -2173,7 +2173,7 @@ fn test_install_opencode_plugin_writes_js() {
 fn test_uninstall_opencode_plugin_noop_when_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let msg = uninstall_opencode_plugin(dir.path()).expect("test invariant");
-    assert!(msg.is_empty());
+    assert_eq!(msg, "");
 }
 
 // ---------------------------------------------------------------------------

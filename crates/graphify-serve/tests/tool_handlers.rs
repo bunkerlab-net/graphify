@@ -323,7 +323,7 @@ fn tool_query_graph_runs() {
     let mut cache = HashMap::new();
     let args = arg_map(&[("question", json!("how does alpha use beta?"))]);
     let out = tool_query_graph(&g, &args, &mut cache);
-    assert!(!out.is_empty());
+    assert_ne!(out, "");
 }
 
 #[test]
@@ -347,5 +347,5 @@ fn tool_query_graph_with_filters() {
         ("context_filter", json!(["call"])),
     ]);
     let out = tool_query_graph(&g, &args, &mut cache);
-    assert!(!out.is_empty());
+    assert_ne!(out, "");
 }
