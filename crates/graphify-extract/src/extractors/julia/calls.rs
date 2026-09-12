@@ -64,7 +64,7 @@ pub(super) fn walk_calls_julia(
                     });
                 }
             } else if callee_node.kind() == "field_expression" && callee_node.child_count() >= 3 {
-                let count = u32::try_from(callee_node.child_count()).unwrap_or(0);
+                let count = callee_node.child_count();
                 let method_node = callee_node.child(count - 1);
                 if let Some(mn) = method_node {
                     let method_name = read_text(mn, source);
