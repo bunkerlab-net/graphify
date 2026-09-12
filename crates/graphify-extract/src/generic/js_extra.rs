@@ -589,9 +589,8 @@ pub(super) fn dynamic_import_js(
     loop {
         let arg = cur.node();
         let raw: Option<String> = if arg.kind() == "template_string" {
-            // Skip dynamic template literals with substitutions. tree-sitter 0.26
-            // requires `Node::child` to be called with `u32`; cast the bound.
-            let count = u32::try_from(arg.child_count()).unwrap_or(0);
+            // Skip dynamic template literals with substitutions.
+            let count = arg.child_count();
             let has_sub = (0..count).any(|i| {
                 arg.child(i)
                     .is_some_and(|c| c.kind() == "template_substitution")

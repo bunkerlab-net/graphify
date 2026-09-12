@@ -548,9 +548,8 @@ pub(super) fn walk_julia(
                         deferred: false,
                         metadata: None,
                     });
-                    // Walk RHS only (last child). tree-sitter 0.26 changed
-                    // `child()` to accept `u32`; cast the index explicitly.
-                    let count = u32::try_from(node.child_count()).unwrap_or(0);
+                    // Walk RHS only (last child).
+                    let count = node.child_count();
                     if count >= 3
                         && let Some(rhs) = node.child(count - 1)
                     {

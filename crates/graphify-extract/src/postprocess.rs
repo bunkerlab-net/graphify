@@ -849,10 +849,7 @@ fn collect_swift_extension_names(
     source: &[u8],
     names: &mut HashSet<String>,
 ) {
-    // tree-sitter `child()` takes a `u32` index while `child_count()` returns
-    // `usize`. AST nodes never exceed 2^32 children in practice; truncate
-    // explicitly with the cap so clippy doesn't flag the lossy cast.
-    let child_count: u32 = u32::try_from(node.child_count()).unwrap_or(u32::MAX);
+    let child_count = node.child_count();
     if node.kind() == "class_declaration" {
         let is_extension = (0..child_count)
             .filter_map(|i| node.child(i))
