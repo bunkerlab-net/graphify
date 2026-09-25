@@ -16,11 +16,11 @@ jobs:
 
     strategy:
       matrix:
-        runs-on: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+        runs-on: [ubuntu-26.04, ubuntu-26.04-arm, macos-26]
         include:
-          - runs-on: ubuntu-24.04
+          - runs-on: ubuntu-26.04
             arch: x86-64
-          - runs-on: ubuntu-24.04-arm
+          - runs-on: ubuntu-26.04-arm
             arch: arm64
           - runs-on: macos-26
             arch: arm64
@@ -83,11 +83,11 @@ jobs:
     # `net_*` tests self-skip there (the macOS `run` job leaves the URLs unset).
     strategy:
       matrix:
-        runs-on: [ubuntu-24.04, ubuntu-24.04-arm]
+        runs-on: [ubuntu-26.04, ubuntu-26.04-arm]
         include:
-          - runs-on: ubuntu-24.04
+          - runs-on: ubuntu-26.04
             arch: x86-64
-          - runs-on: ubuntu-24.04-arm
+          - runs-on: ubuntu-26.04-arm
             arch: arm64
 
     permissions:
