@@ -10,30 +10,32 @@ on:
 
 permissions: {}
 
+# actionlint 1.7.12 rejects the self-repository `uses: $/...` syntax, so these
+# calls keep the `./` form and ignore zizmor's self-repository audit.
 jobs:
   audit:
     name: Audit
-    uses: ./.github/workflows/audit.yml
+    uses: ./.github/workflows/audit.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
       issues: write
 
   deny:
     name: Deny
-    uses: ./.github/workflows/deny.yml
+    uses: ./.github/workflows/deny.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
 
   lint:
     name: Lint
-    uses: ./.github/workflows/lint.yml
+    uses: ./.github/workflows/lint.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
 
   test:
     name: Test
     needs: [lint]
-    uses: ./.github/workflows/test.yml
+    uses: ./.github/workflows/test.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
       id-token: write
@@ -41,6 +43,6 @@ jobs:
   build:
     name: Build
     needs: [test]
-    uses: ./.github/workflows/build.yml
+    uses: ./.github/workflows/build.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
