@@ -692,8 +692,8 @@ pub(super) fn resolve_csharp_member_calls(
         } else if receiver.chars().next().is_some_and(char::is_uppercase) {
             // `Type.M()` — the type is named explicitly; fall back to the file
             // table when the receiver name is not itself a unique type.
-            let resolved = unique_type(receiver)
-                .or_else(|| rc.receiver_type.as_deref().and_then(&unique_type));
+            let resolved =
+                unique_type(receiver).or_else(|| rc.receiver_type.as_deref().and_then(unique_type));
             match resolved {
                 Some(t) => (t.to_string(), true),
                 None => continue,
