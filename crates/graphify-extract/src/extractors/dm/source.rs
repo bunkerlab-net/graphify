@@ -24,26 +24,30 @@ fn find_child<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
     node.children(&mut cur).find(|c| c.kind() == kind)
 }
 
-/// Read the include target string from a `preproc_include`'s `file` node.
+/// Read the include target from a `preproc_include`'s `path` (`file_literal`) node.
 fn read_include_path(file_node: Option<Node<'_>>, source: &[u8]) -> String {
-    let Some(node) = file_node else {
-        return String::new();
-    };
-    if node.kind() == "string_literal" {
-        let mut cur = node.walk();
-        let mut parts = String::new();
-        for c in node.children(&mut cur) {
-            if c.kind() == "string_content" {
-                parts.push_str(read_text(c, source));
-            }
-        }
-        parts
-    } else {
+    file_node.map_or_else(String::new, |node| {
         read_text(node, source)
             .trim_matches(|c| c == '\'' || c == '"')
             .to_string()
-    }
+    })
 }
+
+/// Node kinds that define a proc body: `name` identifiers each followed by an
+/// optional `block`. `verb_definition` is grouped here because the previous
+/// grammar parsed `verb` through the same `proc_keyword` rule.
+const PROC_KINDS: [&str; 3] = ["proc_definition", "verb_definition", "proc_override"];
+
+/// Statements whose presence directly under a type-path segment makes that
+/// segment a declared type (it owns procs or vars).
+const TYPE_STATEMENT_KINDS: [&str; 6] = [
+    "proc_definition",
+    "verb_definition",
+    "proc_override",
+    "operator_override",
+    "var_definition",
+    "var_assignment",
+];
 
 // ── .dm / .dme ────────────────────────────────────────────────────────────────
 
@@ -104,128 +108,156 @@ impl<'tree> DmCtx<'_, 'tree> {
         nid
     }
 
-    #[allow(clippy::too_many_lines)] // linear AST dispatch; splitting fragments the type/proc shape
-    fn walk(
-        &mut self,
-        node: Node<'tree>,
-        parent_type_path: Option<&str>,
-        parent_type_nid: Option<&str>,
-    ) {
-        let t = node.kind();
-        let line = line_of(node);
-        let file_nid = self.file_nid;
-        let source = self.source;
+    fn walk(&mut self, node: Node<'tree>, owner: Option<(&str, &str)>, prefix: &str) {
+        match node.kind() {
+            "preproc_include" => self.include(node),
+            "type_definition" | "subtype_definition" => self.walk_type(node, prefix),
+            kind if PROC_KINDS.contains(&kind) => self.walk_procs(node, owner),
+            "operator_override" => {}
+            // Everything else (including ERROR recovery nodes) recurses with
+            // the current type context propagated.
+            _ => {
+                let mut cur = node.walk();
+                for c in node.children(&mut cur) {
+                    self.walk(c, owner, prefix);
+                }
+            }
+        }
+    }
 
-        match t {
-            "preproc_include" => {
-                let raw = read_include_path(node.child_by_field_name("file"), source);
-                if raw.is_empty() {
-                    return;
-                }
-                // graphify-py normalises with `raw.lstrip("./")`, but Python's
-                // str.lstrip treats "./" as a *character set*, so it silently
-                // eats the leading `..` of a parent-relative include
-                // (`../shared.dm` -> `shared.dm`) and mis-resolves it. Strip only
-                // a single leading `/` plus any leading `./` segments, preserving
-                // `../` so parent-relative includes resolve correctly. Divergence
-                // from graphify-py, which carries this lstrip bug.
-                let replaced = raw.replace('\\', "/");
-                let mut norm_slice: &str = replaced.strip_prefix('/').unwrap_or(&replaced);
-                while let Some(rest) = norm_slice.strip_prefix("./") {
-                    norm_slice = rest;
-                }
-                let norm = norm_slice.to_string();
-                let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-                let joined = parent.join(&norm);
-                let (target, relation, external) = if joined.exists() {
-                    let resolved = joined.canonicalize().unwrap_or(joined);
-                    (make_id1(&resolved.to_string_lossy()), "imports_from", false)
-                } else {
-                    (make_id1(&norm), "imports", true)
-                };
-                self.edges.push(Edge {
-                    source: file_nid.to_string(),
-                    target,
-                    relation: relation.to_string(),
-                    confidence: "EXTRACTED".to_string(),
-                    source_file: self.str_path.to_string(),
-                    source_location: Some(format!("L{line}")),
-                    weight: 1.0,
-                    context: Some("import".to_string()),
-                    confidence_score: None,
-                    external,
-                    deferred: false,
-                    metadata: None,
-                });
+    fn include(&mut self, node: Node<'tree>) {
+        let raw = read_include_path(node.child_by_field_name("path"), self.source);
+        if raw.is_empty() {
+            return;
+        }
+        // graphify-py normalises with `raw.lstrip("./")`, but Python's
+        // str.lstrip treats "./" as a *character set*, so it silently
+        // eats the leading `..` of a parent-relative include
+        // (`../shared.dm` -> `shared.dm`) and mis-resolves it. Strip only
+        // a single leading `/` plus any leading `./` segments, preserving
+        // `../` so parent-relative includes resolve correctly. Divergence
+        // from graphify-py, which carries this lstrip bug.
+        let replaced = raw.replace('\\', "/");
+        let mut norm_slice: &str = replaced.strip_prefix('/').unwrap_or(&replaced);
+        while let Some(rest) = norm_slice.strip_prefix("./") {
+            norm_slice = rest;
+        }
+        let norm = norm_slice.to_string();
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let joined = parent.join(&norm);
+        let (target, relation, external) = if joined.exists() {
+            let resolved = joined.canonicalize().unwrap_or(joined);
+            (make_id1(&resolved.to_string_lossy()), "imports_from", false)
+        } else {
+            (make_id1(&norm), "imports", true)
+        };
+        let line = line_of(node);
+        self.edges.push(Edge {
+            source: self.file_nid.to_string(),
+            target,
+            relation: relation.to_string(),
+            confidence: "EXTRACTED".to_string(),
+            source_file: self.str_path.to_string(),
+            source_location: Some(format!("L{line}")),
+            weight: 1.0,
+            context: Some("import".to_string()),
+            confidence_score: None,
+            external,
+            deferred: false,
+            metadata: None,
+        });
+    }
+
+    /// Declare a type node for `path_text` and link it from the file.
+    fn declare_type(&mut self, path_text: &str, line: u32) -> String {
+        let nid = self.ensure_type(path_text, line);
+        let file_nid = self.file_nid;
+        self.add_edge(file_nid, &nid, "contains", line, None);
+        nid
+    }
+
+    /// Walk one segment of a DM path tree. `type_definition` carries the root
+    /// segment and `subtype_definition` each nested one; `name` identifiers
+    /// are leaf subtypes. The grammar treats `/` like an indent, so
+    /// `/datum/weapon/sword` nests three segments.
+    ///
+    /// A segment becomes a type node only when the source declares it: it owns
+    /// statements, has no children (a bare `/datum`), or opens an indented
+    /// block on a later line. Pure path prefixes such as `/datum` in
+    /// `/datum/weapon/proc/attack()` get no node, matching the previous
+    /// grammar, where the whole `type_path` named a single type.
+    fn walk_type(&mut self, node: Node<'tree>, prefix: &str) {
+        let mut cur = node.walk();
+        let children: Vec<(Node<'tree>, Option<&str>)> = node
+            .children(&mut cur)
+            .enumerate()
+            .filter(|(_, c)| c.is_named())
+            .map(|(i, c)| {
+                let field = u32::try_from(i)
+                    .ok()
+                    .and_then(|i| node.field_name_for_child(i));
+                (c, field)
+            })
+            .collect();
+        let Some(seg_idx) = children
+            .iter()
+            .position(|(c, f)| c.kind() == "identifier" && *f != Some("name"))
+        else {
+            return;
+        };
+        let seg = children[seg_idx].0;
+        let path_text = format!("{prefix}/{}", read_text(seg, self.source).trim());
+        let rest = &children[seg_idx + 1..];
+
+        let seg_row = seg.start_position().row;
+        let declared = rest.is_empty()
+            || rest.iter().any(|(c, _)| {
+                TYPE_STATEMENT_KINDS.contains(&c.kind())
+                    || (matches!(c.kind(), "identifier" | "subtype_definition")
+                        && c.start_position().row > seg_row)
+            });
+        let type_nid = declared.then(|| self.declare_type(&path_text, line_of(seg)));
+        let owner = type_nid.as_deref().map(|nid| (path_text.as_str(), nid));
+
+        for &(c, field) in rest {
+            if c.kind() == "identifier" && field == Some("name") {
+                let leaf = format!("{path_text}/{}", read_text(c, self.source).trim());
+                self.declare_type(&leaf, line_of(c));
+            } else {
+                self.walk(c, owner, &path_text);
             }
-            "type_definition" => {
-                let Some(tp_node) = find_child(node, "type_path") else {
-                    return;
-                };
-                let type_path_str = read_text(tp_node, source).trim().to_string();
-                let type_nid = self.ensure_type(&type_path_str, line);
-                self.add_edge(file_nid, &type_nid, "contains", line, None);
-                if let Some(body) = find_child(node, "type_body") {
-                    let mut cur = body.walk();
-                    for c in body.children(&mut cur) {
-                        self.walk(c, Some(&type_path_str), Some(&type_nid));
-                    }
-                }
-            }
-            "type_proc_definition" | "type_proc_override" => {
-                let (Some(ptp), Some(ptn)) = (parent_type_path, parent_type_nid) else {
-                    return;
-                };
-                let Some(name_node) = node.child_by_field_name("name") else {
-                    return;
-                };
-                let proc_name = read_text(name_node, source);
-                let proc_nid = make_id(&[self.stem, ptp, proc_name]);
-                self.add_node(&proc_nid, &format!("{ptp}/{proc_name}()"), line);
-                self.add_edge(ptn, &proc_nid, "method", line, None);
-                if let Some(block) = find_child(node, "block") {
-                    self.function_bodies.push((proc_nid, block));
-                }
-            }
-            "proc_definition" | "proc_override" => {
-                let (owner_path, owner_nid) = match find_child(node, "type_path") {
-                    Some(tp) => {
-                        let op = read_text(tp, source).trim().to_string();
-                        let on = self.ensure_type(&op, line);
-                        self.add_edge(file_nid, &on, "contains", line, None);
-                        (Some(op), Some(on))
-                    }
-                    None => (None, None),
-                };
-                let Some(name_node) = node.child_by_field_name("name") else {
-                    return;
-                };
-                let proc_name = read_text(name_node, source).to_string();
-                let block = find_child(node, "block");
-                let proc_nid = if let (Some(op), Some(on)) = (&owner_path, &owner_nid) {
-                    let nid = make_id(&[self.stem, op, &proc_name]);
+        }
+    }
+
+    /// Emit one proc node per `name` in a proc/verb definition or override,
+    /// pairing each with the `block` that follows it.
+    fn walk_procs(&mut self, node: Node<'tree>, owner: Option<(&str, &str)>) {
+        let file_nid = self.file_nid;
+        let mut current: Option<String> = None;
+        let mut cur = node.walk();
+        for (i, c) in node.children(&mut cur).enumerate() {
+            let field = u32::try_from(i)
+                .ok()
+                .and_then(|i| node.field_name_for_child(i));
+            if field == Some("name") {
+                let proc_name = read_text(c, self.source);
+                let line = line_of(c);
+                let nid = if let Some((op, on)) = owner {
+                    let nid = make_id(&[self.stem, op, proc_name]);
                     self.add_node(&nid, &format!("{op}/{proc_name}()"), line);
                     self.add_edge(on, &nid, "method", line, None);
                     nid
                 } else {
-                    let nid = make_id(&[self.stem, &proc_name]);
+                    let nid = make_id(&[self.stem, proc_name]);
                     self.add_node(&nid, &format!("{proc_name}()"), line);
                     self.add_edge(file_nid, &nid, "contains", line, None);
                     nid
                 };
-                if let Some(block) = block {
-                    self.function_bodies.push((proc_nid, block));
-                }
-            }
-            "operator_override" | "type_operator_override" => {}
-            // Transparent containers (`type_body`, `type_body_intended`,
-            // `type_body_braced`, etc.) and everything else recurse with the
-            // current type context propagated.
-            _ => {
-                let mut cur = node.walk();
-                for c in node.children(&mut cur) {
-                    self.walk(c, parent_type_path, parent_type_nid);
-                }
+                current = Some(nid);
+            } else if c.kind() == "block"
+                && let Some(nid) = current.take()
+            {
+                self.function_bodies.push((nid, c));
             }
         }
     }
@@ -290,36 +322,38 @@ impl CallCtx<'_> {
     fn walk_calls(&mut self, node: Node<'_>, caller_nid: &str) {
         // Never descend into a nested definition — those bodies are walked from
         // their own `function_bodies` entry with their own caller id.
-        if matches!(
-            node.kind(),
-            "proc_definition"
-                | "proc_override"
-                | "type_proc_definition"
-                | "type_proc_override"
-                | "type_definition"
-        ) {
+        let kind = node.kind();
+        if PROC_KINDS.contains(&kind)
+            || matches!(
+                kind,
+                "operator_override" | "type_definition" | "subtype_definition"
+            )
+        {
             return;
         }
-        match node.kind() {
+        match kind {
             "call_expression" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let callee = read_text(name_node, self.source);
-                    // `..` is BYOND's `super` call — not a real callee.
-                    if !callee.is_empty() && callee != ".." {
-                        self.emit_call(caller_nid, callee, line_of(node), false);
-                    }
-                }
-            }
-            "field_proc_expression" => {
-                if let Some(proc_field) = node.child_by_field_name("proc") {
-                    let callee = read_text(proc_field, self.source);
-                    if !callee.is_empty() {
-                        self.emit_call(caller_nid, callee, line_of(node), true);
+                // `..()` (BYOND's `super` call) has a `parent_proc` function
+                // node and falls through here unemitted; so do computed
+                // callees such as `call(o, "x")()`.
+                if let Some(func) = node.child_by_field_name("function") {
+                    match func.kind() {
+                        "identifier" => {
+                            let callee = read_text(func, self.source);
+                            self.emit_call(caller_nid, callee, line_of(node), false);
+                        }
+                        "field_expression" => {
+                            if let Some(field) = func.child_by_field_name("field") {
+                                let callee = read_text(field, self.source);
+                                self.emit_call(caller_nid, callee, line_of(node), true);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
             "new_expression" => {
-                if let Some(tp_node) = find_child(node, "type_path") {
+                if let Some(tp_node) = find_child(node, "type_literal") {
                     let target = read_text(tp_node, self.source).trim().to_lowercase();
                     let single = self
                         .path_to_nids
@@ -395,7 +429,7 @@ pub fn extract_dm(path: &Path) -> FileResult {
         function_bodies: Vec::new(),
     };
     ctx.add_node(&file_nid, &file_label, 1);
-    ctx.walk(tree.root_node(), None, None);
+    ctx.walk(tree.root_node(), None, "");
 
     let DmCtx {
         nodes,

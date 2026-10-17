@@ -28,7 +28,7 @@ shlex = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 lopdf = "0.45"
