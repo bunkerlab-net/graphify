@@ -9,14 +9,14 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-calamine = "0.36"
+calamine = "0.37"
 graphify-cache = { workspace = true }
 graphify-google = { workspace = true }
 graphify-security = { workspace = true }
 hex = { workspace = true }
 ignore_walk = { version = "0.4", package = "ignore" }
 indexmap = { workspace = true }
-lopdf = "0.45"
+lopdf = "0.46"
 md5 = "0.8"
 quick-xml = { workspace = true }
 rayon = { workspace = true }
@@ -31,7 +31,7 @@ unicode-normalization = { workspace = true }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-lopdf = "0.45"
+lopdf = "0.46"
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
