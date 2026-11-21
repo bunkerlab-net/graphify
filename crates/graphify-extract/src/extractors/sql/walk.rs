@@ -19,6 +19,7 @@ pub(super) struct SqlWalkCtx<'a> {
     pub(super) str_path: &'a str,
     pub(super) stem: &'a str,
     pub(super) file_nid: &'a str,
+    pub(super) masked_source: Option<&'a str>,
     pub(super) nodes: &'a mut Vec<Node>,
     pub(super) edges: &'a mut Vec<Edge>,
     pub(super) seen_ids: &'a mut HashSet<String>,
@@ -258,6 +259,15 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
             }
         }
         "create_function" | "create_procedure" => {
+            // The parser can treat CREATE inside a quoted body as a separate
+            // statement. A real routine's opening token is never masked.
+            if ctx
+                .masked_source
+                .and_then(|text| text.as_bytes().get(node.start_byte()))
+                == Some(&b' ')
+            {
+                return;
+            }
             if let Some(name) = obj_name(node, source) {
                 let nid = make_id(&[ctx.stem, name]);
                 add_node(
@@ -410,8 +420,18 @@ pub(super) fn walk_sql(ctx: &mut SqlWalkCtx<'_>, node: tree_sitter::Node<'_>, so
             // line-leading `CREATE` INSIDE a PL/pgSQL body or comment is not
             // recovered as a spurious object (#1910). Newlines are preserved, so
             // the match's line number is computed from the masked copy unchanged.
-            let masked = mask_sql_noise(text);
-            for m in SQL_ERROR_FN_RE.captures_iter(&masked) {
+            let fallback;
+            let masked = if let Some(masked) = ctx
+                .masked_source
+                .and_then(|mask| mask.get(node.byte_range()))
+            {
+                masked
+            } else {
+                // A valid UTF-8 slice can still be recovered from a non-UTF-8 file.
+                fallback = mask_sql_noise(text);
+                &fallback
+            };
+            for m in SQL_ERROR_FN_RE.captures_iter(masked) {
                 let Some(whole) = m.get(0) else { continue };
                 let name = m[1].to_string();
                 let m_line = line + masked[..whole.start()].matches('\n').count();

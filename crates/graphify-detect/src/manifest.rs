@@ -482,10 +482,8 @@ fn manifest_entry_changed(entry: &ManifestEntry, current_mtime: f64, kind: &str,
         };
         if stored_hash.is_empty() {
             true
-        } else if (current_mtime - entry.mtime).abs() > MTIME_TOLERANCE {
-            md5_file(p) != *stored_hash
         } else {
-            false
+            (current_mtime - entry.mtime).abs() > MTIME_TOLERANCE && md5_file(p) != *stored_hash
         }
     }
 }

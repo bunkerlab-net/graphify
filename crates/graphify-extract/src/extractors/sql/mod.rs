@@ -396,6 +396,9 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
     });
 
     let root = tree.root_node();
+    // Error recovery can start inside a quoted body. Mask once from the
+    // beginning so every node range has the correct lexical context.
+    let masked_source = std::str::from_utf8(source).ok().map(mask_sql_noise);
 
     // Walk top-level statements
     let mut cur = root.walk();
@@ -404,6 +407,7 @@ fn extract_sql_from_source(path: &Path, source: &[u8]) -> FileResult {
             str_path: &str_path,
             stem: &stem,
             file_nid: &file_nid,
+            masked_source: masked_source.as_deref(),
             nodes: &mut nodes,
             edges: &mut edges,
             seen_ids: &mut seen_ids,
