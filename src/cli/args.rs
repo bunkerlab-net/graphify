@@ -2,6 +2,12 @@
 //!
 //! Ports the `argparse` setup in `graphify-py/graphify/__main__.py`.
 
+// Clap's flat `Command` derive generates a parser with a large estimated
+// debug stack frame. It runs once before dispatch; splitting off the largest
+// command's arguments did not remove the warning. Keep the CLI shape and scope
+// this exception to these derive-only definitions, not handwritten dispatch.
+#![allow(unknown_lints, clippy::large_unopt_stack_frames)]
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};

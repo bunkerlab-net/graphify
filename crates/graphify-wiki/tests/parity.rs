@@ -766,7 +766,7 @@ fn test_wiki_special_characters_in_label_resolve() {
     let article = std::fs::read_to_string(dir.path().join("Other.md")).expect("Other");
     let targets: Vec<String> = inline_links(&article).into_iter().map(|(_, t)| t).collect();
     assert!(
-        targets.contains(&"C#_&_Auth_(v2).md".to_string()),
+        targets.iter().any(|id| id == "C#_&_Auth_(v2).md"),
         "{targets:?}"
     );
     assert!(dir.path().join("C#_&_Auth_(v2).md").exists());
@@ -832,7 +832,7 @@ fn test_wiki_links_use_collision_suffixed_slug() {
     to_wiki(&g, &comms, dir.path(), Some(&labels), None, None).expect("wiki");
     let index = std::fs::read_to_string(dir.path().join("index.md")).expect("index");
     let targets: Vec<String> = inline_links(&index).into_iter().map(|(_, t)| t).collect();
-    assert!(targets.contains(&"parser_2.md".to_string()), "{targets:?}");
+    assert!(targets.iter().any(|id| id == "parser_2.md"), "{targets:?}");
     for t in &targets {
         assert!(dir.path().join(t).exists(), "{t}");
     }

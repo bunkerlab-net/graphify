@@ -83,9 +83,9 @@ fn norm_casefold_matches_python_for_german_sharp_s() {
 #[test]
 fn test_shingles_produces_trigrams() {
     let s = shingles("hello", 3);
-    assert!(s.contains(&"hel".to_string()));
-    assert!(s.contains(&"ell".to_string()));
-    assert!(s.contains(&"llo".to_string()));
+    assert!(s.iter().any(|part| part == "hel"));
+    assert!(s.iter().any(|part| part == "ell"));
+    assert!(s.iter().any(|part| part == "llo"));
 }
 
 #[test]
