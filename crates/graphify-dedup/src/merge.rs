@@ -736,7 +736,7 @@ pub fn run(
             .filter(|n| {
                 n.get("id")
                     .and_then(Value::as_str)
-                    .is_some_and(|id| members.contains(&id.to_string()))
+                    .is_some_and(|id| members.iter().any(|member| member == id))
             })
             .copied()
             .collect();

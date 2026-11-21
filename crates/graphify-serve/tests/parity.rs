@@ -154,9 +154,9 @@ fn test_communities_from_graph_basic() {
     let communities = communities_from_graph(&g);
     assert!(communities.contains_key(&0));
     assert!(communities.contains_key(&1));
-    assert!(communities[&0].contains(&"n1".to_string()));
-    assert!(communities[&0].contains(&"n2".to_string()));
-    assert!(communities[&1].contains(&"n3".to_string()));
+    assert!(communities[&0].iter().any(|id| id == "n1"));
+    assert!(communities[&0].iter().any(|id| id == "n2"));
+    assert!(communities[&1].iter().any(|id| id == "n3"));
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn test_communities_from_graph_isolated() {
     let g = make_graph();
     let communities = communities_from_graph(&g);
     assert!(communities.contains_key(&2));
-    assert!(communities[&2].contains(&"n5".to_string()));
+    assert!(communities[&2].iter().any(|id| id == "n5"));
 }
 
 // ── _score_nodes ─────────────────────────────────────────────────────────────
@@ -506,9 +506,9 @@ fn test_pick_seeds_german_query_seeds_content_node_not_heading_noise() {
     let mut cache = HashMap::new();
     let scored = score_nodes(&g, &term_refs, &mut cache);
     let seeds = pick_seeds_diverse(&scored, 3, 0.2, &g, &term_refs, &mut cache);
-    assert!(seeds.contains(&"auth".to_string()), "seeds: {seeds:?}");
-    assert!(!seeds.contains(&"cfg".to_string()), "seeds: {seeds:?}");
-    assert!(!seeds.contains(&"sec".to_string()), "seeds: {seeds:?}");
+    assert!(seeds.iter().any(|id| id == "auth"), "seeds: {seeds:?}");
+    assert!(!seeds.iter().any(|id| id == "cfg"), "seeds: {seeds:?}");
+    assert!(!seeds.iter().any(|id| id == "sec"), "seeds: {seeds:?}");
 }
 
 // ── _normalize_context_filters alias resolution ──────────────────────────────
@@ -961,7 +961,7 @@ fn test_maybe_reload_reloads_and_clears_idf_cache() {
     );
     let ids: Vec<_> = graph.nodes().map(|(id, _)| id.clone()).collect();
     assert!(
-        ids.contains(&"gamma".to_string()),
+        ids.iter().any(|id| id == "gamma"),
         "the reloaded graph has the new node"
     );
 }
@@ -1134,11 +1134,11 @@ fn test_pick_seeds_diversity_recovers_starved_term() {
     assert_eq!(pick_seeds(&scored, 3, 0.2), vec!["noise".to_string()]);
     let after = pick_seeds_diverse(&scored, 3, 0.2, &g, &terms, &mut cache);
     assert!(
-        after.contains(&"noise".to_string()),
+        after.iter().any(|id| id == "noise"),
         "exact match kept: {after:?}"
     );
     assert!(
-        after.contains(&"target".to_string()),
+        after.iter().any(|id| id == "target"),
         "starved term recovered: {after:?}"
     );
 }
@@ -1172,7 +1172,7 @@ fn test_pick_seeds_dedups_homonymous_generic_labels() {
         "expected one GET representative, got {get_seeds:?}"
     );
     assert!(
-        seeds.contains(&"um".to_string()),
+        seeds.iter().any(|id| id == "um"),
         "distinct label starved out: {seeds:?}"
     );
 }

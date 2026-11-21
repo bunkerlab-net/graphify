@@ -899,7 +899,7 @@ fn parse_class_header(header: &str) -> (Option<String>, Option<String>, Vec<Stri
             header = rest_header[impl_idx..].to_string();
         } else {
             mixins_list = split_types(&rest_header);
-            header = String::new();
+            header.clear();
         }
     }
 
